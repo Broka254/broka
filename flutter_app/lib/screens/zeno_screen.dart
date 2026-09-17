@@ -32,6 +32,11 @@ import '../widgets/chat_ambient_background.dart';
 import '../widgets/product_card.dart';
 import '../services/api_service.dart';
 import '../models/models.dart';
+// Result.fold is an EXTENSION method (ResultExtension in result.dart), so the
+// defining library has to be imported here for it to resolve - importing the
+// repository that returns a Result is not enough. Omitting this is what turned
+// CI red on the first push of the conversational buying agent.
+import '../core/utils/result.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/listings/domain/models/listing.dart';
 
