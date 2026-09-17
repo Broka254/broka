@@ -173,7 +173,30 @@ class ListingService:
         """
         q = select(Listing).where(Listing.status == ListingStatus.active)
         if category:
-            q = q.where(Listing.category == category)
+            # FIX (buying-agent bug-hunt, 2026-09-17): case-insensitive
+            # equality, not `Listing.category == category`.
+            #
+            # Listing.category is a free-text string the seller typed
+            # (api/schemas.py ListingCreate: plain `str`), while every
+            # caller filtering on it passes a canonical Category.name -
+            # buy_agent/actions.py's SEARCH_PRODUCTS most of all. A plain
+            # `==` meant "electronics" never found a listing filed as
+            # "Electronics" on PostgreSQL, which is what production runs.
+            #
+            # func.lower() rather than .ilike(): ILIKE would treat a '%' or
+            # '_' inside the caller's value as a wildcard (the bind protects
+            # against injection, not against LIKE pattern semantics), and
+            # this filter is reached from a user-supplied query param on
+            # GET /listings. lower() = lower() has no pattern semantics at
+            # all and is portable across SQLite and Postgres.
+            #
+            # Trade-off, stated rather than buried: Listing.category carries
+            # a plain btree index (index=True on the model) that a bare
+            # column comparison could use and an expression comparison
+            # cannot. init_db()'s index_patches now creates the matching
+            # lower(category) expression index so this stays indexed on both
+            # dialects.
+            q = q.where(func.lower(Listing.category) == category.strip().lower())
         if subcategory_id:
             # Most specific filter wins outright.
             q = q.where(Listing.subcategory_id == subcategory_id)

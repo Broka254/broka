@@ -185,8 +185,18 @@ class _BuyAgentSheetState extends State<BuyAgentSheet> {
                   style: TextStyle(color: BrokaColors.textHigh, fontSize: 17, fontWeight: FontWeight.bold)),
             ]),
             const SizedBox(height: 4),
+            // FIX (buying-agent bug-hunt, 2026-09-17): this used to promise
+            // "...and reach out to sellers on your behalf". This sheet never
+            // sets negotiation_authorized (it isn't one of the three fields
+            // it collects), and Design v2 §24 requires genuine
+            // pre-authorization before Zeno messages anyone - so what this
+            // form actually creates is a watch-and-notify request. The
+            // Buying Agent Hub is where a buyer opts into autonomous
+            // messaging, and it says so with a checkbox. Copy now matches
+            // what the request does.
             const Text(
-              "Tell Zeno what you're after — it'll watch new listings and reach out to sellers on your behalf.",
+              "Tell Zeno what you're after — it'll watch new listings and notify you the moment "
+              "something matches. You decide when to open a conversation.",
               style: TextStyle(color: BrokaColors.textLow, fontSize: 12),
             ),
             Expanded(

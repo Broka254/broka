@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean,
-    DateTime, Date, ForeignKey, Enum, Text, UniqueConstraint, Index,
+    DateTime, Date, ForeignKey, Enum, Text, UniqueConstraint, Index, text,
 )
 from datetime import datetime, date
 import enum
@@ -954,6 +954,22 @@ class FraudEvent(Base):
 
 # ─── Init ────────────────────────────────────────────────────────────────────
 
+async def _apply_optional_statements(conn, statements) -> None:
+    """Run best-effort schema statements, each in its own SAVEPOINT.
+
+    These are all "add it if it isn't there" patches, so a failure is
+    normally just "already exists" and is meant to be skipped. Without the
+    nested transaction, skipping one on PostgreSQL poisons the connection
+    for every statement after it - see the comment at the call site.
+    """
+    for stmt in statements:
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(stmt))
+        except Exception:
+            pass  # already applied, or not applicable to this dialect
+
+
 async def init_db():
     # ── Model registration MUST precede create_all ────────────────────────
     # create_all() only creates tables that are present in Base.metadata at
@@ -1012,7 +1028,6 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         # Lightweight forward-compat: add new columns to existing rows-only DBs.
         # SQLite/Postgres ignore the IF NOT EXISTS path via try/except.
-        from sqlalchemy import text
         migrations = [
             # v2.x columns
             "ALTER TABLE thread_read_state ADD COLUMN last_delivered_at DATETIME",
@@ -1122,11 +1137,22 @@ async def init_db():
             # already-listed item stays a personal listing, unchanged.
             "ALTER TABLE listings ADD COLUMN store_id VARCHAR",
         ]
-        for stmt in migrations:
-            try:
-                await conn.execute(text(stmt))
-            except Exception:
-                pass  # column already exists
+        # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
+        # inside its own SAVEPOINT. Previously they shared this function's
+        # single engine.begin() transaction, and `except Exception: pass`
+        # reads as "skip the ones that already exist" only on SQLite, where
+        # a failed statement leaves the transaction usable. On PostgreSQL -
+        # what production actually runs - the FIRST already-exists failure
+        # aborts the whole transaction, so every remaining statement in
+        # this list, and in schema_patches/index_patches below, fails with
+        # InFailedSqlTransaction and is swallowed by that same `pass`. The
+        # visible symptom was buy_agent_requests.match_count (near the end
+        # of the list, and with no Alembic migration behind it until 0020)
+        # never being added on any existing database, which 500s every
+        # query the Buying Agent makes. A SAVEPOINT scopes the rollback to
+        # the one statement that failed, which is what the `pass` always
+        # meant.
+        await _apply_optional_statements(conn, migrations)
 
         # (v5.0 dispute engine models are imported at the top of init_db(),
         # before create_all - see the comment there for why they cannot
@@ -1160,11 +1186,7 @@ async def init_db():
             # Data-driven dispute type (forward-compat, nullable)
             "ALTER TABLE dispute_cases ADD COLUMN dispute_type VARCHAR",
         ]
-        for stmt in schema_patches:
-            try:
-                await conn.execute(text(stmt))
-            except Exception:
-                pass  # column already exists
+        await _apply_optional_statements(conn, schema_patches)
 
         # Indexes have the exact same "not retroactively applied" problem
         # as the missing-column case above: Base.metadata.create_all() only
@@ -1198,10 +1220,23 @@ async def init_db():
             # effect for a table create_all() creates fresh. An already-
             # existing listings table needs it added retroactively here too.
             "CREATE INDEX IF NOT EXISTS ix_listings_store_id ON listings(store_id)",
+            # Buying-agent bug-hunt (2026-09-17): ListingService.list_listings
+            # now compares lower(category) so a search for "electronics"
+            # finds a listing a seller filed as "Electronics" (the column is
+            # free text). An expression comparison cannot use the plain
+            # btree index on listings.category, so this is the index that
+            # keeps it fast. Expression indexes are supported by both
+            # PostgreSQL and SQLite (3.9+).
+            "CREATE INDEX IF NOT EXISTS ix_listings_category_lower ON listings(lower(category))",
         ]
         for stmt in index_patches:
+            # Same SAVEPOINT scoping as the two blocks above - CREATE INDEX
+            # IF NOT EXISTS is portable, but an index over a column an old
+            # deployment doesn't have yet still fails, and on PostgreSQL
+            # that would take every following statement down with it.
             try:
-                await conn.execute(text(stmt))
+                async with conn.begin_nested():
+                    await conn.execute(text(stmt))
             except Exception as exc:
                 print(f"⚠️ Index patch skipped ({stmt[:60]}...): {exc!r}")
 

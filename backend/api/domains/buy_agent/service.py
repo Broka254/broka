@@ -6,6 +6,7 @@ one-active-request-per-buyer cap (Ch.9, Ch.22 — do not relax this).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -15,6 +16,40 @@ from fastapi import HTTPException
 
 from api.database import BuyAgentRequest
 from api.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Statuses that make a request "the buyer's current standing request".
+# Kept here rather than repeated at four call sites, and deliberately the
+# same tuple api/core/buy_agent_subscribers.py watches from - a request
+# this service will hand back, update or cancel is exactly a request the
+# matcher is still working on.
+LIVE_STATUSES: tuple[str, ...] = ("active", "matched")
+
+# Statuses that count against BUY_AGENT_MAX_ACTIVE. Narrower than
+# LIVE_STATUSES on purpose: a request that already found something should
+# not block the buyer from starting a different search, which is the
+# behaviour the cap has always had (see create_request).
+CAPPED_STATUSES: tuple[str, ...] = ("active",)
+
+
+def _validate_price_range(max_price: float | None, min_price: float | None) -> None:
+    """Single choke point for the two price rules, enforced in the service
+    rather than only in buy_agent/actions.py.
+
+    Before this, actions.py validated min<=max for CREATE_BUYING_REQUEST
+    while the plain POST /buy-agent-requests endpoint (which the Flutter
+    sheet still uses) validated nothing at all: a request with
+    max_price=0, or a negative budget, was accepted and stored, and then
+    quietly matched nothing forever because no listing can satisfy it
+    (api/schemas.py's ListingCreate already requires price > 0). Failing
+    at write time says so instead."""
+    if max_price is not None and max_price <= 0:
+        raise HTTPException(status_code=422, detail="max_price must be greater than zero.")
+    if min_price is not None and min_price < 0:
+        raise HTTPException(status_code=422, detail="min_price cannot be negative.")
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status_code=422, detail="min_price cannot be greater than max_price.")
 
 
 class BuyAgentService:
@@ -40,16 +75,13 @@ class BuyAgentService:
         optimization_configuration: dict | None = None,
         negotiation_authorized: bool = False,
     ) -> dict:
+        _validate_price_range(max_price, min_price)
+
         # Cap is settings.buy_agent_max_active (BUY_AGENT_MAX_ACTIVE, default
         # 1 — Appendix C). count()-based rather than an existence check so
         # the env var has real effect; at the documented default of 1 this
         # is exactly equivalent to the old "any active request blocks" check.
-        active_count = (await self.db.execute(
-            select(func.count(BuyAgentRequest.id)).where(
-                BuyAgentRequest.buyer_id == buyer_id, BuyAgentRequest.status == "active"
-            )
-        )).scalar_one()
-        if active_count >= settings.buy_agent_max_active:
+        if await self._active_count(buyer_id) >= settings.buy_agent_max_active:
             raise HTTPException(
                 status_code=409,
                 detail="You already have an active buy request. Cancel it before creating a new one.",
@@ -77,8 +109,39 @@ class BuyAgentService:
             match_count=0,
         )
         self.db.add(req)
+
+        # FIX (buying-agent bug-hunt, 2026-09-17): the count above and the
+        # INSERT below are two statements, so two requests racing (a
+        # double-tapped "Start Buy Request", or the sheet and the Hub
+        # submitting together) could both read active_count=0 and both
+        # insert - leaving a buyer over the cap with no way to get back
+        # under it except cancelling twice, since cancel_request only ever
+        # touches one row. There is no DB constraint to lean on: "active"
+        # is a status, not existence (see the model docstring), and a
+        # partial unique index on (buyer_id) WHERE status='active' is
+        # Postgres-only while this codebase's dev/test default is SQLite.
+        # So: flush the INSERT, re-count inside the same transaction, and
+        # roll back if we lost the race. That closes the window to the
+        # flush-to-count gap on a single connection and turns the failure
+        # into the same honest 409 a serial caller would have got.
+        await self.db.flush()
+        if await self._active_count(buyer_id) > settings.buy_agent_max_active:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="You already have an active buy request. Cancel it before creating a new one.",
+            )
+
         await self.db.commit()
         return self._dict(req)
+
+    async def _active_count(self, buyer_id: str) -> int:
+        return (await self.db.execute(
+            select(func.count(BuyAgentRequest.id)).where(
+                BuyAgentRequest.buyer_id == buyer_id,
+                BuyAgentRequest.status.in_(CAPPED_STATUSES),
+            )
+        )).scalar_one()
 
     async def get_request_row(self, buyer_id: str, statuses: tuple[str, ...]) -> BuyAgentRequest | None:
         """Shared row-fetch behind get_active_for_buyer/update_request/
@@ -90,7 +153,7 @@ class BuyAgentService:
             select(BuyAgentRequest).where(
                 BuyAgentRequest.buyer_id == buyer_id,
                 BuyAgentRequest.status.in_(statuses),
-            ).order_by(BuyAgentRequest.created_at.desc())
+            ).order_by(BuyAgentRequest.created_at.desc(), BuyAgentRequest.id.desc())
         )).scalars().first()
 
     async def get_active_for_buyer(self, buyer_id: str) -> dict | None:
@@ -101,7 +164,7 @@ class BuyAgentService:
         # "Match found!" branch (_buildActiveBuyAgentSection) had real code
         # for this state but GET /buy-agent-requests/me could never actually
         # return it. Now surfaces both.
-        req = await self.get_request_row(buyer_id, statuses=("active", "matched"))
+        req = await self.get_request_row(buyer_id, statuses=LIVE_STATUSES)
         return self._dict(req) if req else None
 
     async def update_request(self, buyer_id: str, **fields: Any) -> dict | None:
@@ -122,7 +185,7 @@ class BuyAgentService:
 
         Returns None if the buyer has no active/matched request to update.
         """
-        req = await self.get_request_row(buyer_id, statuses=("active", "matched"))
+        req = await self.get_request_row(buyer_id, statuses=LIVE_STATUSES)
         if not req:
             return None
 
@@ -153,8 +216,13 @@ class BuyAgentService:
         if "negotiation_authorized" in fields and fields["negotiation_authorized"] is not None:
             req.negotiation_authorized = fields["negotiation_authorized"]
 
-        if req.min_price is not None and req.min_price > req.max_price:
-            raise HTTPException(status_code=422, detail="min_price cannot be greater than max_price.")
+        # Validated against the POST-UPDATE values, not the incoming ones:
+        # "lower my budget to 20k" is only invalid relative to whatever
+        # min_price the request already carries. Raising before the commit
+        # leaves the session dirty but uncommitted - get_db() never commits
+        # on teardown (api/database.py), so closing the session discards
+        # the mutations above.
+        _validate_price_range(req.max_price, req.min_price)
 
         req.status = "active"
         req.updated_at = datetime.utcnow()
@@ -172,7 +240,7 @@ class BuyAgentService:
         "active"/"matched", so a buyer who hit BUY_AGENT_MAX_ACTIVE (default
         1) had no UI escape hatch to ever create a second request.
         """
-        req = await self.get_request_row(buyer_id, statuses=("active", "matched"))
+        req = await self.get_request_row(buyer_id, statuses=LIVE_STATUSES)
         if not req:
             return None
         req.status = "cancelled"
@@ -180,18 +248,42 @@ class BuyAgentService:
         await self.db.commit()
         return self._dict(req)
 
+    @staticmethod
+    def _json(raw: str | None, fallback: Any) -> Any:
+        """Tolerant read of the three JSON-in-a-Text-column fields.
+
+        json.loads() on a malformed value used to take the whole endpoint
+        down with a 500 - and the value it parses is not always ours:
+        must_have_features comes from an LLM parse (ai_broker/service.py)
+        and attributes from client-supplied JSON. A row that somehow holds
+        something unreadable should cost that one field, not the buyer's
+        access to their own standing request."""
+        if not raw:
+            return fallback
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            logger.warning("[buy_agent] unreadable JSON column, falling back: %r", raw[:120])
+            return fallback
+        return value if isinstance(value, type(fallback)) or fallback is None else fallback
+
     def _dict(self, r: BuyAgentRequest) -> dict:
         return {
             "id": r.id, "category": r.category, "max_price": r.max_price,
-            "must_have_features": json.loads(r.must_have_features or "[]"),
-            "status": r.status, "created_at": r.created_at.isoformat(),
+            "must_have_features": self._json(r.must_have_features, []),
+            "status": r.status,
+            # created_at is nullable at the DB level (the model's default
+            # only fires on rows this code inserts), so a row written by
+            # anything else - a manual fix-up, a restored backup - must not
+            # 500 the buyer's own request out of existence.
+            "created_at": r.created_at.isoformat() if r.created_at else None,
             "subcategory_id": r.subcategory_id, "query": r.query, "min_price": r.min_price,
             "location_name": r.location_name, "lat": r.lat, "lng": r.lng,
             "max_distance_km": r.max_distance_km, "condition": r.condition,
-            "attributes": json.loads(r.attributes) if r.attributes else None,
+            "attributes": self._json(r.attributes, None),
             "optimization_code": r.optimization_code,
-            "optimization_configuration": json.loads(r.optimization_configuration) if r.optimization_configuration else None,
-            "negotiation_authorized": r.negotiation_authorized,
+            "optimization_configuration": self._json(r.optimization_configuration, None),
+            "negotiation_authorized": bool(r.negotiation_authorized),
             "match_count": r.match_count or 0,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }

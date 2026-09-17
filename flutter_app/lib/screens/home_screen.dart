@@ -463,7 +463,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // "Zeno is watching for you" (Home Redesign Guide §13).
   Widget _buildActiveBuyAgentSection() {
     final req = _activeBuyAgentRequest!;
-    final matched = req.status == 'matched';
+    // hasMatches, not status == 'matched': "0 matches found!" was reachable
+    // whenever the two ever disagreed.
+    final matched = req.hasMatches;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: GestureDetector(

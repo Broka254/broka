@@ -5,14 +5,18 @@ VALIDATOR + AUTHORIZATION CHECK + EXECUTION stages of the pipeline in §26 -
 "ZENO -> ACTION PARSER -> SCHEMA VALIDATOR -> AUTHORIZATION CHECK ->
 BUSINESS RULE CHECK -> EXECUTION -> RESULT -> ZENO".
 
-Scope of this first pass: the action vocabulary and optimization codes are
-all defined (so an invalid one is rejected by Pydantic before any of our
-code runs, per §17 "do not allow the model to invent unsupported actions"),
-but only SEARCH_PRODUCTS is actually executed. Everything else returns a
-clear NOT_IMPLEMENTED failure rather than silently doing nothing or
-pretending to succeed - §27's "Zeno must never claim success when
-execution failed" applies just as much to "not built yet" as to a real
-runtime error.
+Scope: the action vocabulary and optimization codes are all defined (so an
+invalid one is rejected by Pydantic before any of our code runs, per §17
+"do not allow the model to invent unsupported actions"). EXECUTED_ACTIONS
+below is the authoritative list of what actually runs - SEARCH_PRODUCTS /
+REFINE_SEARCH / SORT_RESULTS, CREATE_BUYING_REQUEST, UPDATE_BUYING_REQUEST
+/ CHANGE_BUDGET, CANCEL_REQUEST and START_NEGOTIATION as of this writing.
+Everything else returns a clear NOT_IMPLEMENTED failure rather than
+silently doing nothing or pretending to succeed - §27's "Zeno must never
+claim success when execution failed" applies just as much to "not built
+yet" as to a real runtime error. (This paragraph said "only
+SEARCH_PRODUCTS is actually executed" long after five more actions had
+been wired up; keep it in step with EXECUTED_ACTIONS.)
 
 SEARCH_PRODUCTS reuses ListingService.list_listings entirely for
 filtering/pagination (§20: "Flutter must not perform large-scale
@@ -121,8 +125,13 @@ class SearchProductsParams(BaseModel):
     max_distance_km: Optional[float] = None
     condition: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None
-    limit: int = 20
-    offset: int = 0
+    # FIX (buying-agent bug-hunt, 2026-09-17): both were unbounded ints
+    # taken straight from whatever JSON Zeno emitted, so limit=1000000 or a
+    # negative offset went through untouched. limit's ceiling is also the
+    # honest one: nothing above POOL_SIZE can ever be returned, because
+    # ranking happens over a bounded candidate pool (see _search_products).
+    limit: int = Field(default=20, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
 
 
 class CreateBuyingRequestParams(BaseModel):
@@ -186,7 +195,10 @@ class StartNegotiationParams(BaseModel):
     opener is used (same style as buy_agent_subscribers.py's auto-match
     opener, not a second AI-authored-message pipeline)."""
     listing_id: str
-    message: Optional[str] = None
+    # Bounded: this is free text that lands in someone else's inbox, and it
+    # arrives as whatever JSON the client sent. negotiate.py's own message
+    # body is Text-backed too, but nothing here capped it at all.
+    message: Optional[str] = Field(default=None, max_length=1000)
 
 
 class ZenoActionRequest(BaseModel):
@@ -289,6 +301,40 @@ def _failure(action: ZenoActionName, error_code: str, message: str) -> dict:
     return {"action": action.value, "status": "FAILED", "error_code": error_code, "message": message}
 
 
+# Candidate pool size for ranking. Ranking has to see everything worth
+# comparing before pagination cuts it down (same reasoning as the
+# attribute/distance post-filter in listings/service.py), so this is the
+# real ceiling on what one SEARCH_PRODUCTS call can ever return - which is
+# why SearchProductsParams.limit is capped well below it and why
+# result_count reports what is actually reachable rather than the raw SQL
+# total (see _search_products).
+POOL_SIZE = 100
+
+
+async def _resolve_category(db: AsyncSession, category: str, subcategory: Optional[str]):
+    """Resolve a top-level category NAME (and optional subcategory name) to
+    the real Category rows, or raise the ZenoActionError the Hub renders.
+    Shared by _search_products and _create_buying_request, which had two
+    copies of this that could drift apart."""
+    cat = (await db.execute(
+        select(Category).where(Category.parent_id.is_(None), Category.name.ilike(category.strip()))
+    )).scalar_one_or_none()
+    if not cat:
+        raise ZenoActionError("INVALID_CATEGORY", f"'{category}' is not a recognized category.")
+
+    sub = None
+    if subcategory:
+        sub = (await db.execute(
+            select(Category).where(Category.parent_id == cat.id, Category.name.ilike(subcategory.strip()))
+        )).scalar_one_or_none()
+        if not sub:
+            raise ZenoActionError(
+                "INVALID_SUBCATEGORY",
+                f"'{subcategory}' is not a recognized subcategory of {cat.name}.",
+            )
+    return cat, sub
+
+
 async def _search_products(
     db: AsyncSession,
     params: SearchProductsParams,
@@ -297,41 +343,46 @@ async def _search_products(
     viewer_lat: Optional[float],
     viewer_lng: Optional[float],
 ) -> dict:
-    category_id = None
+    category_name = None
     subcategory_id = None
 
     if params.category:
-        cat = (await db.execute(
-            select(Category).where(Category.parent_id.is_(None), Category.name.ilike(params.category.strip()))
-        )).scalar_one_or_none()
-        if not cat:
-            raise ZenoActionError("INVALID_CATEGORY", f"'{params.category}' is not a recognized category.")
-        category_id = cat.id
-
-        if params.subcategory:
-            sub = (await db.execute(
-                select(Category).where(Category.parent_id == cat.id, Category.name.ilike(params.subcategory.strip()))
-            )).scalar_one_or_none()
-            if not sub:
-                raise ZenoActionError(
-                    "INVALID_SUBCATEGORY",
-                    f"'{params.subcategory}' is not a recognized subcategory of {cat.name}.",
-                )
+        cat, sub = await _resolve_category(db, params.category, params.subcategory)
+        # FIX (buying-agent bug-hunt, 2026-09-17): this used to pass
+        # category_id=cat.id, which ListingService.list_listings turns into
+        # `Listing.subcategory_id IN (category_id, *child_ids)`. Listings
+        # carry subcategory_id only when the seller picked a subcategory in
+        # the sell wizard - it is nullable and routinely null - so every
+        # category-scoped search silently returned ZERO results for them,
+        # while the identical listing matched fine through
+        # buy_agent_subscribers.py (which compares the legacy
+        # Listing.category string). That is the Hub's primary flow: parse
+        # intent -> category -> SEARCH_PRODUCTS. Verified against a fresh
+        # DB before and after.
+        #
+        # The legacy category string is the filter that actually covers
+        # every listing in a category, so it is what a top-level
+        # category filter uses. A subcategory ask is still the more
+        # specific filter and wins outright (list_listings' own rule), so
+        # the two are never sent together - ANDing them would reintroduce
+        # exactly the hole this fixes for any listing whose free-text
+        # category and structured subcategory disagree.
+        if sub is not None:
             subcategory_id = sub.id
+        else:
+            category_name = cat.name
 
     if params.max_distance_km is not None and (viewer_lat is None or viewer_lng is None):
         # Can't rank/filter by distance without an origin - fail clearly
         # rather than silently ignoring the constraint the user asked for.
         raise ZenoActionError("MISSING_LOCATION", "A location is needed to search within a distance.")
 
+    if params.min_price is not None and params.max_price is not None and params.min_price > params.max_price:
+        raise ZenoActionError("INVALID_PRICE_RANGE", "min_price cannot be greater than max_price.")
+
     svc = ListingService(db)
-    # Fetch a candidate pool sized for ranking, not just the final page -
-    # ranking has to see everything worth comparing before pagination cuts
-    # it down, same reasoning as the attribute/distance post-filter added
-    # in Phase 3.
-    POOL_SIZE = 100
     pool = await svc.list_listings(
-        category_id=category_id,
+        category=category_name,
         subcategory_id=subcategory_id,
         condition=params.condition,
         min_price=params.min_price,
@@ -361,12 +412,24 @@ async def _search_products(
     # _rank's TRUST/BEST_VALUE/BALANCED_MATCH scoring, which uses the full
     # numeric rating/completed_deals, not just the verified flag.
 
+    # FIX (buying-agent bug-hunt, 2026-09-17): result_count used to be the
+    # raw SQL total while only POOL_SIZE rows were ever ranked or
+    # paginated. On a category with 400 live listings the Hub printed "400
+    # results found", showed 20, and returned an empty page for any offset
+    # past 100 - a count the rest of the response cannot back up. It now
+    # reports what is genuinely reachable, with the raw total kept
+    # alongside under its own name so a caller that wants "how many exist"
+    # can still have it without the two being confused.
     return {
         "action": "SEARCH_PRODUCTS",
         "status": "SUCCESS",
         "request_id": f"BA-{uuid.uuid4().hex[:8]}",
         "optimization_code": optimization_code.value,
-        "result_count": total,
+        "result_count": len(ranked),
+        "total_available": total,
+        "truncated": total > len(ranked),
+        "offset": params.offset,
+        "has_more": params.offset + len(page) < len(ranked),
         "matches": page,
     }
 
@@ -380,23 +443,8 @@ async def _create_buying_request(
     viewer_lat: Optional[float],
     viewer_lng: Optional[float],
 ) -> dict:
-    cat = (await db.execute(
-        select(Category).where(Category.parent_id.is_(None), Category.name.ilike(params.category.strip()))
-    )).scalar_one_or_none()
-    if not cat:
-        raise ZenoActionError("INVALID_CATEGORY", f"'{params.category}' is not a recognized category.")
-
-    subcategory_id = None
-    if params.subcategory:
-        sub = (await db.execute(
-            select(Category).where(Category.parent_id == cat.id, Category.name.ilike(params.subcategory.strip()))
-        )).scalar_one_or_none()
-        if not sub:
-            raise ZenoActionError(
-                "INVALID_SUBCATEGORY",
-                f"'{params.subcategory}' is not a recognized subcategory of {cat.name}.",
-            )
-        subcategory_id = sub.id
+    cat, sub = await _resolve_category(db, params.category, params.subcategory)
+    subcategory_id = sub.id if sub else None
 
     if params.min_price is not None and params.min_price > params.max_price:
         raise ZenoActionError("INVALID_PRICE_RANGE", "min_price cannot be greater than max_price.")
@@ -437,7 +485,11 @@ async def _create_buying_request(
             negotiation_authorized=params.negotiation_authorized,
         )
     except HTTPException as e:
-        raise ZenoActionError("ACTIVE_REQUEST_EXISTS", str(e.detail))
+        # BuyAgentService raises 409 for the cap and 422 for the price
+        # rules; mapping both onto ACTIVE_REQUEST_EXISTS would tell a buyer
+        # with a bad budget to go cancel a request they don't have.
+        code = "ACTIVE_REQUEST_EXISTS" if e.status_code == 409 else "INVALID_PARAMETERS"
+        raise ZenoActionError(code, str(e.detail))
 
     return {
         "action": "CREATE_BUYING_REQUEST",
@@ -462,28 +514,12 @@ async def _update_buying_request(
     update_fields: Dict[str, Any] = {}
 
     if params.category is not None:
-        cat = (await db.execute(
-            select(Category).where(Category.parent_id.is_(None), Category.name.ilike(params.category.strip()))
-        )).scalar_one_or_none()
-        if not cat:
-            raise ZenoActionError("INVALID_CATEGORY", f"'{params.category}' is not a recognized category.")
-        update_fields["category"] = cat.name
-
         # A category change invalidates any previously-set subcategory
         # unless a new one is given in the same call - avoids leaving a
         # subcategory_id on the row that belongs to the OLD category.
-        if params.subcategory:
-            sub = (await db.execute(
-                select(Category).where(Category.parent_id == cat.id, Category.name.ilike(params.subcategory.strip()))
-            )).scalar_one_or_none()
-            if not sub:
-                raise ZenoActionError(
-                    "INVALID_SUBCATEGORY",
-                    f"'{params.subcategory}' is not a recognized subcategory of {cat.name}.",
-                )
-            update_fields["subcategory_id"] = sub.id
-        else:
-            update_fields["subcategory_id"] = None
+        cat, sub = await _resolve_category(db, params.category, params.subcategory)
+        update_fields["category"] = cat.name
+        update_fields["subcategory_id"] = sub.id if sub else None
     elif params.subcategory is not None:
         raise ZenoActionError(
             "INVALID_SUBCATEGORY",
@@ -522,6 +558,13 @@ async def _update_buying_request(
     try:
         request_dict = await BuyAgentService(db).update_request(buyer_id, **update_fields)
     except HTTPException as e:
+        # update_request applies the caller's fields to the loaded row
+        # BEFORE validating the resulting price range, so a rejected update
+        # leaves the session dirty. get_db() never commits on teardown, but
+        # this request may still run more queries on the same session (and
+        # SQLAlchemy autoflushes before each one), which would write the
+        # very values just rejected. Discard them explicitly.
+        await db.rollback()
         raise ZenoActionError("INVALID_PRICE_RANGE", str(e.detail))
 
     if request_dict is None:
@@ -571,18 +614,59 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
     in the same NegotiationMessage table negotiate_screen.dart already
     reads, so the thread shows up exactly like any other negotiation.
     """
-    from api.database import Listing, NegotiationMessage
+    from api.database import Listing, ListingStatus, NegotiationMessage
 
     listing = await db.get(Listing, params.listing_id)
     if not listing:
         raise ZenoActionError("LISTING_NOT_FOUND", "That listing could not be found.")
     if listing.seller_id == buyer_id:
         raise ZenoActionError("INVALID_TARGET", "You can't start a negotiation on your own listing.")
+    # FIX (buying-agent bug-hunt, 2026-09-17): nothing checked that the
+    # listing was still live, so Zeno would happily open a negotiation on
+    # something already sold or withdrawn - and the buyer would be told
+    # SUCCESS for a conversation that can go nowhere (§27).
+    if listing.status is not None and listing.status != ListingStatus.active:
+        raise ZenoActionError("LISTING_UNAVAILABLE", "That listing is no longer available.")
 
-    opening = params.message or (
-        f"Hi! I'm Zeno, negotiating on behalf of a buyer interested in your "
-        f"listing \"{listing.name}\" at KES {listing.price:,.0f}. "
-        f"Would you be open to a conversation?"
+    # FIX (buying-agent bug-hunt, 2026-09-17): this action wrote a new
+    # opener every single time it was called. The Hub shows an "Ask Zeno to
+    # negotiate" button on every match card with nothing to mark one as
+    # already-asked, so a buyer tapping twice - or coming back to the same
+    # results - sent the seller two, three, four identical Zeno openers on
+    # the same thread. One opener per (listing, buyer) thread; a repeat
+    # call is reported honestly as already-open and hands back the existing
+    # message id so the Hub still navigates the buyer into the thread.
+    # Reads the id only, and only of the SELLER-facing opener - the exact
+    # row this must not write twice. No message content crosses the
+    # audience line back to the buyer here (the buyer sees the thread
+    # itself through negotiate.py's own audience-scoped history), which is
+    # also why tests/test_message_visibility_guard.py is satisfied by the
+    # recipient_role constraint rather than by a justification marker.
+    existing_id = (await db.execute(
+        select(NegotiationMessage.id).where(
+            NegotiationMessage.listing_id == params.listing_id,
+            NegotiationMessage.buyer_id == buyer_id,
+            NegotiationMessage.role == "broker",
+            NegotiationMessage.recipient_role == "seller",
+            NegotiationMessage.is_agent_initiated.is_(True),
+        ).order_by(NegotiationMessage.created_at.asc()).limit(1)
+    )).scalar_one_or_none()
+    if existing_id is not None:
+        return {
+            "action": "START_NEGOTIATION",
+            "status": "SUCCESS",
+            "already_open": True,
+            "listing_id": params.listing_id,
+            "message_id": existing_id,
+        }
+
+    # The default opener deliberately does not quote the listing price back
+    # at the seller - they set it, so repeating it says nothing, and it is
+    # the same class of detail buy_agent_subscribers.py was leaking in the
+    # other direction (the buyer's ceiling).
+    opening = (params.message or "").strip() or (
+        f"Hi! I'm Zeno, reaching out on behalf of a buyer interested in your "
+        f"listing \"{listing.name}\". Would you be open to a conversation?"
     )
     msg = NegotiationMessage(
         listing_id=params.listing_id, sender_id="broker", role="broker",
@@ -605,6 +689,7 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
     return {
         "action": "START_NEGOTIATION",
         "status": "SUCCESS",
+        "already_open": False,
         "listing_id": params.listing_id,
         "message_id": msg.id,
         "opening_message": opening,
@@ -642,8 +727,11 @@ def _trust_score(listing: dict, trust_by_seller: Dict[str, dict]) -> float:
     # rating is 0-5, completed_deals is uncapped - compress with a log-ish
     # curve so one seller with 500 deals doesn't totally dominate one with
     # 20 solid deals; verification is a flat bonus, not the whole signal.
-    rating_component = (t["rating"] / 5.0) * 0.5
-    deals_component = min(1.0, t["completed_deals"] / 50.0) * 0.35
+    # rating is clamped: User.rating is a plain Float column with no
+    # constraint behind it, and a single out-of-range row would otherwise
+    # let one seller outscore every real signal combined.
+    rating_component = (min(5.0, max(0.0, float(t["rating"]))) / 5.0) * 0.5
+    deals_component = min(1.0, max(0, t["completed_deals"]) / 50.0) * 0.35
     verified_component = 0.15 if t["is_verified"] else 0.0
     return rating_component + deals_component + verified_component
 
@@ -667,13 +755,29 @@ def _distance_score(listing: dict, distances: List[float]) -> float:
     return 1.0 - ((d - lo) / (hi - lo))  # closer = higher score
 
 
-def _freshness_score(listing: dict, created_ats: List[str]) -> float:
+def _freshness_rank_map(created_ats: List[str]) -> Dict[str, float]:
+    """Precomputed created_at -> 0-1 freshness score for the whole candidate
+    pool.
+
+    FIX (buying-agent bug-hunt, 2026-09-17): this used to be a
+    `sorted(created_ats).index(c)` inside the per-listing scorer, i.e. a
+    full sort plus a linear scan for every listing on every comparison the
+    sort below performs - O(n^2 log n) on a 100-item pool, all of it
+    recomputing the same ordering. It also mis-scored ties: .index()
+    returns the FIRST occurrence, so ten listings created in the same
+    second all took the score of the earliest one. Ranked once, with ties
+    sharing a rank by construction.
+    """
+    ordered = sorted(set(created_ats))  # ISO strings sort chronologically
+    span = max(1, len(ordered) - 1)
+    return {c: i / span for i, c in enumerate(ordered)}  # newest = highest
+
+
+def _freshness_score(listing: dict, rank_by_created_at: Dict[str, float]) -> float:
     c = listing.get("created_at")
-    if c is None or not created_ats:
+    if c is None or not rank_by_created_at:
         return 0.5
-    ordered = sorted(created_ats)  # ISO strings sort chronologically
-    idx = ordered.index(c)
-    return idx / max(1, len(ordered) - 1)  # newest = highest index = highest score
+    return rank_by_created_at.get(c, 0.5)
 
 
 def _rank(
@@ -688,7 +792,9 @@ def _rank(
 
     prices = [c["price"] for c in candidates if c.get("price") is not None]
     distances = [c["distance_km"] for c in candidates if c.get("distance_km") is not None]
-    created_ats = [c["created_at"] for c in candidates if c.get("created_at") is not None]
+    freshness_rank = _freshness_rank_map(
+        [c["created_at"] for c in candidates if c.get("created_at") is not None]
+    )
 
     def component(code: OptimizationCode, listing: dict) -> float:
         if code == OptimizationCode.PRICE_ASC:
@@ -700,7 +806,7 @@ def _rank(
         if code == OptimizationCode.TRUST:
             return _trust_score(listing, trust_by_seller)
         if code == OptimizationCode.FRESHNESS:
-            return _freshness_score(listing, created_ats)
+            return _freshness_score(listing, freshness_rank)
         if code == OptimizationCode.BEST_VALUE:
             return (
                 _price_score(listing, prices) * 0.4

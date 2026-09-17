@@ -59,6 +59,18 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
   Map<String, dynamic>? _parsedIntent;
   List<dynamic> _matches = const [];
   int _resultCount = 0;
+  // True when the backend had more live listings than its ranking pool can
+  // compare, so "_resultCount results" is a floor rather than the total -
+  // see _search_products in buy_agent/actions.py.
+  bool _resultsTruncated = false;
+  // FIX (buying-agent bug-hunt, 2026-09-17): "Ask Zeno to negotiate" was a
+  // bare button with no in-flight or already-done state, so a double tap
+  // fired two START_NEGOTIATION calls and the buyer had no way to tell
+  // which matches they had already acted on after coming back to the
+  // results. The action is idempotent server-side now; these make the UI
+  // say so rather than silently re-asking.
+  final Set<String> _negotiating = <String>{};
+  final Set<String> _negotiationOpened = <String>{};
   BuyAgentRequest? _activeRequest;
   bool _busy = false;
   bool _refining = false;
@@ -150,7 +162,8 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
         if (data['status'] == 'SUCCESS') {
           setState(() {
             _matches = data['matches'] as List? ?? [];
-            _resultCount = data['result_count'] as int? ?? _matches.length;
+            _resultCount = (data['result_count'] as num?)?.toInt() ?? _matches.length;
+            _resultsTruncated = data['truncated'] == true;
             _stage = _HubStage.results;
             _busy = false;
           });
@@ -312,7 +325,8 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
           setState(() {
             _parsedIntent = merged;
             _matches = data['matches'] as List? ?? [];
-            _resultCount = data['result_count'] as int? ?? _matches.length;
+            _resultCount = (data['result_count'] as num?)?.toInt() ?? _matches.length;
+            _resultsTruncated = data['truncated'] == true;
             _refining = false;
             _refineController.clear();
           });
@@ -350,11 +364,14 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    setState(() => _negotiating.add(listing.id));
     final result = await buyAgentRepository.startNegotiation(listing.id);
     if (!mounted) return;
+    setState(() => _negotiating.remove(listing.id));
     result.fold(
       onSuccess: (data) {
         if (data['status'] == 'SUCCESS') {
+          setState(() => _negotiationOpened.add(listing.id));
           Navigator.pushNamed(context, '/negotiate', arguments: {'listingId': listing.id});
         } else {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -479,7 +496,9 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
   }
 
   Widget _activeRequestCard(BuyAgentRequest req) {
-    final matched = req.status == 'matched';
+    // hasMatches, not status == 'matched': a request can only be shown as
+    // "N matches found" when N is actually a number worth printing.
+    final matched = req.hasMatches;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -624,7 +643,13 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Expanded(
-          child: Text('$_resultCount result${_resultCount == 1 ? '' : 's'} found',
+          // "100+" rather than a precise number when the backend had more
+          // live listings than it could rank: the count has to describe
+          // what this response can actually show, not a total no page of
+          // it can reach.
+          child: Text(
+              '${_resultsTruncated ? '$_resultCount+' : '$_resultCount'} '
+              'result${_resultCount == 1 && !_resultsTruncated ? '' : 's'} found',
               style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.bold)),
         ),
         TextButton(
@@ -633,7 +658,25 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
         ),
       ]),
       const SizedBox(height: 4),
-      if (!_watching)
+      // FIX (buying-agent bug-hunt, 2026-09-17): with BUY_AGENT_MAX_ACTIVE
+      // at its default of 1, offering "Keep Zeno watching for this" while
+      // the buyer already has a standing request walks them straight into a
+      // 409 with no way to act on it from here. Say what is already being
+      // watched, and give them the cancel that frees the slot.
+      if (!_watching && _activeRequest != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text("Zeno is already watching something for you:",
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+            const SizedBox(height: 8),
+            _activeRequestCard(_activeRequest!),
+            const SizedBox(height: 6),
+            const Text("Cancel it above to have Zeno watch for this search instead.",
+                style: TextStyle(color: BrokaColors.textLow, fontSize: 11.5)),
+          ]),
+        )
+      else if (!_watching)
         Padding(
           padding: const EdgeInsets.only(bottom: 14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -785,16 +828,40 @@ class _BuyAgentHubScreenState extends State<BuyAgentHubScreen> {
           padding: const EdgeInsets.only(top: 8),
           child: SizedBox(
             width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => _startNegotiation(listing),
-              icon: const Icon(Icons.chat_bubble_outline_rounded, size: 15, color: BrokaColors.neonBlue),
-              label: const Text('Ask Zeno to negotiate', style: TextStyle(color: BrokaColors.neonBlue, fontSize: 12.5, fontWeight: FontWeight.w600)),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: BrokaColors.neonBlue.withOpacity(0.4)),
-                padding: const EdgeInsets.symmetric(vertical: 9),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
+            child: _negotiationOpened.contains(listing.id)
+                ? OutlinedButton.icon(
+                    // Already asked. Still tappable - it takes the buyer
+                    // back into the thread - but it no longer reads as a
+                    // fresh ask, and the backend would not send a second
+                    // opener even if it did.
+                    onPressed: () => Navigator.pushNamed(
+                        context, '/negotiate', arguments: {'listingId': listing.id}),
+                    icon: const Icon(Icons.check_rounded, size: 15, color: BrokaColors.success),
+                    label: const Text('Zeno reached out — open chat',
+                        style: TextStyle(color: BrokaColors.success, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: BrokaColors.success.withOpacity(0.4)),
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  )
+                : OutlinedButton.icon(
+                    // null while in flight: the confirmation dialog leaves a
+                    // visible gap before the request returns, and a second
+                    // tap in that gap used to send the seller a second
+                    // identical Zeno opener.
+                    onPressed: _negotiating.contains(listing.id) ? null : () => _startNegotiation(listing),
+                    icon: _negotiating.contains(listing.id)
+                        ? const SizedBox(width: 15, height: 15,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.neonBlue))
+                        : const Icon(Icons.chat_bubble_outline_rounded, size: 15, color: BrokaColors.neonBlue),
+                    label: const Text('Ask Zeno to negotiate', style: TextStyle(color: BrokaColors.neonBlue, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: BrokaColors.neonBlue.withOpacity(0.4)),
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
           ),
         ),
       ]),
