@@ -23,6 +23,18 @@ router = APIRouter()
 
 class OtpRequestIn(BaseModel):
     phone: str
+    # Android SMS Retriever app-signature hash (11 chars), sent by the
+    # Flutter client so the OTP SMS can be matched and auto-filled by the
+    # app with NO user prompt at all. Computed on-device from the package
+    # name + signing certificate, so it differs between debug, release and
+    # Play-signed builds - which is exactly why the client supplies it
+    # rather than the server holding a build-time constant that would be
+    # wrong for two of those three cases.
+    #
+    # Optional: iOS supplies nothing here (it uses the keyboard's own
+    # one-time-code suggestion), and an older client that doesn't send it
+    # still gets a working, human-readable SMS.
+    app_signature: Optional[str] = None
 
 
 class OtpVerifyIn(BaseModel):
@@ -82,7 +94,11 @@ async def request_otp(
     await otp_request_limiter.check_and_record(body.phone)
     await otp_request_limiter.check_and_record(f"ip:{ip}")
     svc = AuthService(db)
-    return await svc.request_otp(body.phone, purpose=OtpPurpose.registration)
+    return await svc.request_otp(
+        body.phone,
+        purpose=OtpPurpose.registration,
+        app_signature=body.app_signature,
+    )
 
 
 @router.post("/otp/verify")

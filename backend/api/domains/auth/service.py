@@ -12,7 +12,9 @@ v6.1 onboarding rework (see CHANGES.md):
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
@@ -29,6 +31,8 @@ from api.core.config import settings
 from api.core.sms import get_sms_provider
 from api.database import AccountType, OtpPurpose, RefreshToken, SellerMetrics
 from .repository import UserRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -83,6 +87,50 @@ def _normalise_gender(value):
     return v if v in VALID_GENDERS else None
 
 
+# ── OTP SMS body ──────────────────────────────────────────────────────────────
+
+# An Android SMS Retriever app-signature hash is exactly 11 characters drawn
+# from the base64 alphabet. This is validated rather than trusted because the
+# value arrives from the client and is interpolated straight into an SMS body
+# we then send to an arbitrary phone number: without the check, any caller
+# could push chosen text (a phishing link, say) through our SMS gateway to any
+# handset. A value that fails the check is dropped, not rejected, so a buggy
+# or outdated client still receives a usable code instead of no SMS at all.
+_APP_SIGNATURE_RE = re.compile(r"^[A-Za-z0-9+/=]{11}$")
+
+# Google's SMS Retriever contract for a message the app can read without any
+# user interaction: it must start with "<#>", contain the code, and end with
+# the app-signature hash, all within 140 bytes.
+# https://developers.google.com/identity/sms-retriever/verify
+_OTP_TEXT = "{code} is your BROKA verification code. It expires in 5 minutes. Don't share it with anyone."
+
+
+def _build_otp_message(code: str, app_signature: Optional[str]) -> str:
+    """Compose the OTP SMS, in SMS-Retriever form when we have a valid hash.
+
+    Without a hash (iOS, or a client predating this) the message is exactly
+    what it has always been, so nothing regresses for those callers.
+    """
+    body = _OTP_TEXT.format(code=code)
+    if not app_signature:
+        return body
+    sig = app_signature.strip()
+    if not _APP_SIGNATURE_RE.match(sig):
+        logger.warning(
+            "[otp] ignoring malformed app_signature (len=%d) - sending a plain OTP SMS",
+            len(sig),
+        )
+        return body
+    retriever = f"<#> {body}\n{sig}"
+    if len(retriever.encode("utf-8")) > 140:
+        # Over the limit the Retriever API silently never matches, which
+        # would look exactly like "autofill randomly doesn't work". Better
+        # to send a message the user can still read and type by hand.
+        logger.warning("[otp] SMS-Retriever body exceeds 140 bytes - sending a plain OTP SMS")
+        return body
+    return retriever
+
+
 class AuthService:
     def __init__(self, db: AsyncSession):
         self.repo = UserRepository(db)
@@ -90,7 +138,12 @@ class AuthService:
 
     # ── Phone OTP ────────────────────────────────────────────────────────────
 
-    async def request_otp(self, phone: str, purpose: OtpPurpose = OtpPurpose.registration) -> dict:
+    async def request_otp(
+        self,
+        phone: str,
+        purpose: OtpPurpose = OtpPurpose.registration,
+        app_signature: Optional[str] = None,
+    ) -> dict:
         phone = _normalize_phone(phone)
         if purpose == OtpPurpose.registration:
             existing = await self.repo.get_by_phone(phone)
@@ -102,7 +155,7 @@ class AuthService:
         await self.repo.create_otp(phone, _hash_otp(code), expires_at, purpose=purpose)
 
         provider = get_sms_provider()
-        message = f"{code} is your BROKA verification code. It expires in 5 minutes. Don't share it with anyone."
+        message = _build_otp_message(code, app_signature)
         sent = await provider.send(phone, message)
         if not sent:
             raise HTTPException(status_code=503, detail="Couldn't send the verification code. Please try again.")

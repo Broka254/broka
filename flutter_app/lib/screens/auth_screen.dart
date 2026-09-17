@@ -14,7 +14,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -22,7 +21,15 @@ import '../main.dart';
 import '../widgets/gradient_button.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
-import '../widgets/particle_field.dart';
+import '../services/sms_autofill_service.dart';
+import '../widgets/constellation_background.dart';
+import '../widgets/country_phone_field.dart';
+import '../widgets/otp_code_field.dart';
+
+/// Primary call-to-action gradient: violet into blue, the left two thirds of
+/// the BROKA logo sweep. BrokaColors.gradMid (a deep purple) is the app-wide
+/// default and reads much flatter at this button size.
+const List<Color> _kCtaGradient = [Color(0xFF8B5CF6), Color(0xFF3B82F6)];
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -51,7 +58,28 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   // can skip it from either step and verify later from Profile.
   String? _phoneVerifyToken;
   bool   _skippedOtp = false; // true only if Step 2 was never reached (see _prevStep)
+
+  /// Seconds until "Resend code" becomes tappable again. Two minutes, not the
+  /// 30s it used to be: every resend is a real SMS we pay for, and a tighter
+  /// window mostly buys repeat sends from people who simply haven't waited
+  /// for the first message to land.
+  static const int _kResendCooldownSeconds = 120;
   int _resendCooldown = 0;
+
+  /// Seconds until the code the server issued stops being accepted, taken
+  /// from the OTP response rather than assumed, so the countdown on screen
+  /// cannot drift away from what the backend will actually honour.
+  int _otpExpiresIn = 0;
+  Timer? _otpExpiryTimer;
+
+  /// Dial code for the phone field. The typed part stays national
+  /// (`0706462869`); `_fullPhone` composes the two into E.164.
+  String _dialCode = '+254';
+
+  /// Android SMS Retriever hash for this build, fetched once and reused for
+  /// every OTP request in this session.
+  String? _appSignature;
+  StreamSubscription<String>? _smsSub;
   Timer? _resendTimer;
 
   // Selfie (step 4)
@@ -65,14 +93,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   String _chosenBiometric     = 'none'; // 'fingerprint' | 'face' | 'none'
   bool   _biometricVerified   = false;  // true after a fresh scan is confirmed
 
-  late AnimationController _bgAnim, _fadeCtrl, _stepAnim;
+  late AnimationController _fadeCtrl, _stepAnim;
   late Animation<double>   _fade, _stepFade;
 
   @override
   void initState() {
     super.initState();
-    _bgAnim   = AnimationController(vsync: this,
-        duration: const Duration(seconds: 12))..repeat(reverse: true);
     _fadeCtrl = AnimationController(vsync: this,
         duration: const Duration(milliseconds: 600))..forward();
     _stepAnim = AnimationController(vsync: this,
@@ -80,6 +106,21 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     _fade     = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _stepFade = CurvedAnimation(parent: _stepAnim, curve: Curves.easeOut);
     _checkBiometrics();
+    _prefetchAppSignature();
+  }
+
+  /// The composed E.164 number, e.g. "+254706462869".
+  String get _fullPhone => composeE164(_dialCode, _phoneCtrl.text);
+
+  /// Digits the user actually typed, used only for length validation.
+  String get _phoneDigits => _phoneCtrl.text.replaceAll(RegExp(r'[^0-9]'), '');
+
+  /// Reads the SMS Retriever app-signature hash up front so requesting a code
+  /// doesn't have to wait on a platform round-trip. Null on iOS and wherever
+  /// Play Services is unavailable, which simply means a plain SMS.
+  Future<void> _prefetchAppSignature() async {
+    final sig = await SmsAutofillService.appSignature();
+    if (mounted) _appSignature = sig;
   }
 
   Future<void> _checkBiometrics() async {
@@ -94,13 +135,22 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         _biometricEnrolled  = enrolled;  // AND biometrics set up in device settings
         _availableTypes     = types;
       });
-    } on PlatformException { /* hardware not supported */ }
+    } catch (_) {
+      // Hardware absent, or no local_auth implementation on this platform at
+      // all. The latter raises MissingPluginException, which is NOT a
+      // PlatformException, so the narrower catch this replaces let it escape
+      // as an unhandled async error and took the whole screen's init with it.
+      // Either way the answer is the same: leave the biometric options off.
+    }
   }
 
   @override
   void dispose() {
-    _bgAnim.dispose(); _fadeCtrl.dispose(); _stepAnim.dispose();
+    _fadeCtrl.dispose(); _stepAnim.dispose();
     _resendTimer?.cancel();
+    _otpExpiryTimer?.cancel();
+    _smsSub?.cancel();
+    SmsAutofillService.stop();
     _phoneCtrl.dispose(); _otpCtrl.dispose(); _emailCtrl.dispose();
     _passwordCtrl.dispose();
     _nameCtrl.dispose(); _nicknameCtrl.dispose();
@@ -109,6 +159,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   void _switchMode(bool toLogin) {
     _resendTimer?.cancel();
+    // The expiry countdown ticks setState every second; leaving Login while
+    // sitting on the verify step would otherwise keep it running against a
+    // screen that no longer shows it.
+    _otpExpiryTimer?.cancel();
+    SmsAutofillService.stop();
     setState(() {
       _isLogin = toLogin;
       _error   = null;
@@ -117,6 +172,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       _phoneVerifyToken   = null;
       _skippedOtp         = false;
       _resendCooldown     = 0;
+      _otpExpiresIn       = 0;
       _capturedPhoto      = null;
       _chosenBiometric    = 'none';
       _biometricVerified  = false;
@@ -133,14 +189,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   Future<void> _nextStep() async {
     if (_step == 1) {
-      final phone = _phoneCtrl.text.trim();
-      if (phone.length < 9) {
+      if (_phoneDigits.length < 9) {
         setState(() => _error = 'Please enter a valid phone number'); return;
       }
       setState(() { _loading = true; _error = null; });
       try {
-        await ApiService.requestOtp(phone);
-        _startResendCooldown();
+        await _sendOtp();
         if (mounted) {
           setState(() { _loading = false; _skippedOtp = false; });
           _animateStep(2);
@@ -158,7 +212,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       }
       setState(() { _loading = true; _error = null; });
       try {
-        _phoneVerifyToken = await ApiService.verifyOtp(_phoneCtrl.text.trim(), code);
+        _phoneVerifyToken = await ApiService.verifyOtp(_fullPhone, code);
         if (mounted) { setState(() => _loading = false); _animateStep(3); }
       } catch (e) {
         if (mounted) setState(() {
@@ -190,8 +244,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// (it's the account's login identifier either way); only *proving* it
   /// becomes optional. Verification can be finished later from Profile.
   void _skipPhoneVerification() {
-    final phone = _phoneCtrl.text.trim();
-    if (phone.length < 9) {
+    if (_phoneDigits.length < 9) {
       setState(() => _error = 'Please enter a valid phone number'); return;
     }
     setState(() {
@@ -223,7 +276,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   void _startResendCooldown() {
     _resendTimer?.cancel();
-    setState(() => _resendCooldown = 30);
+    setState(() => _resendCooldown = _kResendCooldownSeconds);
     _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() => _resendCooldown--);
@@ -231,12 +284,62 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     });
   }
 
+  void _startOtpExpiry(int seconds) {
+    _otpExpiryTimer?.cancel();
+    if (seconds <= 0) { setState(() => _otpExpiresIn = 0); return; }
+    setState(() => _otpExpiresIn = seconds);
+    _otpExpiryTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _otpExpiresIn--);
+      if (_otpExpiresIn <= 0) t.cancel();
+    });
+  }
+
+  static String _fmtMinSec(int seconds) {
+    final s = seconds < 0 ? 0 : seconds;
+    final m = s ~/ 60;
+    return '${m.toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  /// Cooldown label. Reads as plain seconds under a minute ("in 24s") and as
+  /// a clock above it ("in 1:58"), so a two-minute wait doesn't display as an
+  /// unreadable "in 118s".
+  static String _fmtCooldown(int seconds) =>
+      seconds >= 60 ? '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}' : '${seconds}s';
+
+  /// Requests a code and arms automatic capture of the SMS that follows.
+  ///
+  /// The retriever is armed BEFORE the request goes out. Arming covers
+  /// exactly one message, and the SMS can arrive within a second or two, so
+  /// doing this afterwards is a race the message sometimes wins — which is
+  /// precisely the "sometimes it fills, sometimes it doesn't" behaviour this
+  /// replaces.
+  Future<void> _sendOtp() async {
+    await SmsAutofillService.start();
+    _listenForSmsCode();
+    final data = await ApiService.requestOtp(_fullPhone, appSignature: _appSignature);
+    _startResendCooldown();
+    final expiry = data['expires_in_seconds'];
+    _startOtpExpiry(expiry is int ? expiry : int.tryParse('$expiry') ?? 0);
+  }
+
+  /// Pipes a captured code straight into the field. No prompt, no
+  /// confirmation — the code is filled and submitted for the user.
+  void _listenForSmsCode() {
+    _smsSub ??= SmsAutofillService.codes().listen((code) {
+      if (!mounted || _step != 2) return;
+      _otpCtrl.text = code;
+      // OtpCodeField's onCompleted fires off the controller change and calls
+      // _nextStep(), so there is deliberately nothing else to do here.
+    });
+  }
+
   Future<void> _resendOtp() async {
-    if (_resendCooldown > 0) return;
+    if (_resendCooldown > 0 || _loading) return;
     setState(() { _loading = true; _error = null; });
     try {
-      await ApiService.requestOtp(_phoneCtrl.text.trim());
-      _startResendCooldown();
+      _otpCtrl.clear();
+      await _sendOtp();
     } catch (e) {
       if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -337,8 +440,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     // OTP is optional at signup — _phoneVerifyToken is null if the user
     // skipped verification (Step 1 or Step 2). Either way the phone number
     // itself is required; it's always been collected by this point.
-    final phone = _phoneCtrl.text.trim();
-    if (phone.length < 9) {
+    final phone = _fullPhone;
+    if (_phoneDigits.length < 9) {
       setState(() => _error = 'Please enter your phone number again.');
       return;
     }
@@ -381,7 +484,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     setState(() { _loading = true; _error = null; });
     try {
       final data = await ApiService.login(
-        phone: _phoneCtrl.text.trim(), password: _passwordCtrl.text);
+        phone: _fullPhone, password: _passwordCtrl.text);
       if (data['access_token'] == null) {
         throw Exception(data['detail'] ?? 'Login failed');
       }
@@ -401,53 +504,46 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(children: [
-        Positioned.fill(child: AnimatedBuilder(
-          animation: _bgAnim,
-          builder: (_, __) => Container(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment(
-                  sin(_bgAnim.value * 2 * pi) * 0.3,
-                  cos(_bgAnim.value * 2 * pi) * 0.2 - 0.3,
-                ),
-                radius: 1.1,
-                colors: const [
-                  Color(0xFF0A0616), Color(0xFF050310), Color(0xFF03040A),
-                ],
-              ),
-            ),
-          ),
-        )),
-        Positioned.fill(child: CustomPaint(painter: _GridPainter())),
-        FadeTransition(
+      backgroundColor: BrokaColors.bg,
+      // The constellation is the tall element here; letting the view resize
+      // for the keyboard would squeeze it and make the stars visibly jump
+      // every time the field gains focus. The scroll view below handles
+      // keeping the focused field visible instead.
+      resizeToAvoidBottomInset: false,
+      body: ConstellationBackground(
+        child: FadeTransition(
           opacity: _fade,
           child: SafeArea(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+              padding: EdgeInsets.only(
+                left: 24,
+                right: 24,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 28,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 8),
                   _buildLogo(),
-                  const SizedBox(height: 32),
-                  _buildTabToggle(),
                   const SizedBox(height: 28),
+                  _buildTabToggle(),
+                  const SizedBox(height: 26),
                   FadeTransition(
                     opacity: _stepFade,
                     child: _isLogin ? _buildLoginForm() : _buildRegisterStep(),
                   ),
                   const SizedBox(height: 24),
                   _buildDivider(),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 18),
                   _buildSwitchPrompt(),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
         ),
-      ]),
+      ),
     );
   }
 
@@ -456,34 +552,41 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   Widget _buildLoginForm() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const Text('Welcome Back',
-          style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800,
+      const Text('Welcome back',
+          style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800,
               color: BrokaColors.textHigh, letterSpacing: -0.5)),
-      const SizedBox(height: 4),
-      const Text('Access the AI-powered trading network',
-          style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-      const SizedBox(height: 28),
-      _field(_phoneCtrl, 'Phone Number', Icons.phone_outlined,
-          type: TextInputType.phone),
+      const SizedBox(height: 8),
+      const Text('Sign in to continue buying, selling and negotiating on BROKA.',
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 15, height: 1.45)),
+      const SizedBox(height: 24),
+      CountryPhoneField(
+        controller: _phoneCtrl,
+        dialCode: _dialCode,
+        onDialCodeChanged: (c) => setState(() => _dialCode = c),
+        onChanged: (_) => setState(() {}),
+      ),
       const SizedBox(height: 14),
       _buildPasswordField(),
-      const SizedBox(height: 8),
+      const SizedBox(height: 12),
       Align(alignment: Alignment.centerRight,
         child: Text('Forgot password?',
-          style: TextStyle(color: BrokaColors.gold.withOpacity(0.8),
-              fontSize: 12, fontWeight: FontWeight.w600))),
-      const SizedBox(height: 24),
+          style: TextStyle(color: BrokaColors.gold,
+              fontSize: 13, fontWeight: FontWeight.w700))),
+      const SizedBox(height: 22),
       if (_error != null) _buildError(),
       GradientButton(
+        height: 58,
+        borderRadius: 16,
+        colors: _kCtaGradient,
         onPressed: _loading ? null : _submitLogin,
         child: _loading
             ? const SizedBox(width: 22, height: 22,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
             : const Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('Access Network', style: TextStyle(fontSize: 15,
+                Text('Enter BROKA', style: TextStyle(fontSize: 17,
                     fontWeight: FontWeight.w700, color: Colors.white)),
-                SizedBox(width: 8),
-                Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
+                SizedBox(width: 10),
+                Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20),
               ]),
       ),
       if (_biometricAvailable) ...[
@@ -570,8 +673,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   // Step 1 - Phone number
   Widget _buildStep1Phone() => Column(children: [
-    _field(_phoneCtrl, 'Phone Number', Icons.phone_outlined,
-        type: TextInputType.phone),
+    CountryPhoneField(
+      controller: _phoneCtrl,
+      dialCode: _dialCode,
+      onDialCodeChanged: (c) => setState(() => _dialCode = c),
+      onChanged: (_) => setState(() {}),
+      autofocus: true,
+    ),
     const SizedBox(height: 10),
     const Padding(
       padding: EdgeInsets.only(left: 4),
@@ -591,45 +699,52 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     ),
   ]);
 
-  // Step 2 - OTP verification (autofilled by the OS where supported)
+  // Step 2 - OTP verification.
+  //
+  // On Android the code arrives on its own: SmsAutofillService captures the
+  // SMS through the SMS Retriever API and writes it straight into the field,
+  // with no permission and no "Autofill?" prompt. Typing is the fallback, not
+  // the expected path. See services/sms_autofill_service.dart.
   Widget _buildStep2Otp() => Column(children: [
-    Text('Code sent to ${_phoneCtrl.text.trim()}',
-        style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-    const SizedBox(height: 20),
-    AutofillGroup(
-      child: TextField(
-        controller: _otpCtrl,
-        autofocus: true,
-        keyboardType: TextInputType.number,
-        textAlign: TextAlign.center,
-        maxLength: 6,
-        autofillHints: const [AutofillHints.oneTimeCode],
-        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 26,
-            fontWeight: FontWeight.w800, letterSpacing: 10),
-        decoration: const InputDecoration(
-          counterText: '',
-          hintText: '------',
-          hintStyle: TextStyle(color: BrokaColors.textLow, letterSpacing: 10),
-        ),
-        onChanged: (v) {
-          setState(() {}); // refresh so a stray _error clears as they type
-          if (v.trim().length == 6 && !_loading) _nextStep();
-        },
+    Row(children: [
+      const Icon(Icons.sms_outlined, color: BrokaColors.gold, size: 18),
+      const SizedBox(width: 10),
+      Expanded(
+        // The full number, unmasked. The person reading this screen is the
+        // one who just typed it, so hiding digits from them only makes a
+        // typo harder to spot.
+        child: Text('Code sent to $_fullPhone',
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 14)),
       ),
+      if (_otpExpiresIn > 0) ...[
+        const SizedBox(width: 8),
+        const Icon(Icons.schedule_rounded, color: BrokaColors.gold, size: 16),
+        const SizedBox(width: 5),
+        Text(_fmtMinSec(_otpExpiresIn),
+            style: const TextStyle(color: BrokaColors.gold, fontSize: 14,
+                fontWeight: FontWeight.w700)),
+      ],
+    ]),
+    const SizedBox(height: 22),
+    OtpCodeField(
+      controller: _otpCtrl,
+      enabled: !_loading,
+      onChanged: (_) => setState(() {}),   // clears any stale error as they type
+      onCompleted: (_) { if (!_loading) _nextStep(); },
     ),
-    const SizedBox(height: 18),
+    const SizedBox(height: 20),
     Center(
       child: _resendCooldown > 0
-          ? Text('Resend code in ${_resendCooldown}s',
-              style: const TextStyle(color: BrokaColors.textLow, fontSize: 12))
+          ? Text('Resend code in ${_fmtCooldown(_resendCooldown)}',
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 13))
           : GestureDetector(
               onTap: _loading ? null : _resendOtp,
-              child: Text('Resend code',
-                  style: TextStyle(color: BrokaColors.gold.withOpacity(0.9),
-                      fontSize: 13, fontWeight: FontWeight.w700)),
+              child: const Text('Resend code',
+                  style: TextStyle(color: BrokaColors.gold,
+                      fontSize: 14, fontWeight: FontWeight.w700)),
             ),
     ),
-    const SizedBox(height: 12),
+    const SizedBox(height: 14),
     Center(
       child: GestureDetector(
         onTap: _loading ? null : _skipOtpVerification,
@@ -1048,7 +1163,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         const SizedBox(height: 14),
         const Divider(color: BrokaColors.border, height: 1),
         const SizedBox(height: 14),
-        _summaryRow(Icons.phone_outlined, _phoneCtrl.text.trim()),
+        _summaryRow(Icons.phone_outlined, _fullPhone),
         if (_emailCtrl.text.trim().isNotEmpty) ...[
           const SizedBox(height: 8),
           _summaryRow(Icons.email_outlined, _emailCtrl.text.trim()),
@@ -1107,17 +1222,19 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         GestureDetector(
           onTap: _prevStep,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            height: 58,
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: BrokaColors.bgCard,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: BrokaColors.border),
+              color: BrokaColors.bgCard.withOpacity(0.55),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
             ),
             child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.arrow_back_rounded, color: BrokaColors.textMid, size: 18),
-              SizedBox(width: 6),
+              Icon(Icons.arrow_back_rounded, color: BrokaColors.textMid, size: 20),
+              SizedBox(width: 8),
               Text('Back', style: TextStyle(color: BrokaColors.textMid,
-                  fontWeight: FontWeight.w600)),
+                  fontWeight: FontWeight.w600, fontSize: 16)),
             ]),
           ),
         ),
@@ -1125,17 +1242,20 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       ],
       Expanded(
         child: GradientButton(
+          height: 58,
+          borderRadius: 16,
+          colors: _kCtaGradient,
           onPressed: _loading ? null : _nextStep,
           child: _loading
               ? const SizedBox(width: 20, height: 20,
                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : Row(mainAxisSize: MainAxisSize.min, children: [
                   Text(_continueLabel(),
-                      style: const TextStyle(fontSize: 15,
+                      style: const TextStyle(fontSize: 17,
                           fontWeight: FontWeight.w700, color: Colors.white)),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 10),
                   const Icon(Icons.arrow_forward_rounded,
-                      color: Colors.white, size: 18),
+                      color: Colors.white, size: 20),
                 ]),
         ),
       ),
@@ -1176,15 +1296,15 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   ]);
 
   Widget _buildTabToggle() => Container(
-    padding: const EdgeInsets.all(4),
+    padding: const EdgeInsets.all(5),
     decoration: BoxDecoration(
-      color: BrokaColors.bgCard,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: BrokaColors.border),
+      color: BrokaColors.bgCard.withOpacity(0.5),
+      borderRadius: BorderRadius.circular(30),
+      border: Border.all(color: BrokaColors.border.withOpacity(0.7)),
     ),
     child: Row(children: [
-      _tab('Login',   _isLogin,  () => _switchMode(true)),
-      _tab('Sign Up', !_isLogin, () => _switchMode(false)),
+      _tab('Login',          _isLogin,  () => _switchMode(true)),
+      _tab('Create Account', !_isLogin, () => _switchMode(false)),
     ]),
   );
 
@@ -1208,18 +1328,18 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     onTap: _biometricLogin,
     child: Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(vertical: 18),
       decoration: BoxDecoration(
-        color: BrokaColors.bgCard,
+        color: BrokaColors.bgCard.withOpacity(0.45),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrokaColors.gold.withOpacity(0.4)),
+        border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
       ),
       child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.fingerprint, color: BrokaColors.gold, size: 22),
-        SizedBox(width: 10),
-        Text('Login with Biometrics',
+        Icon(Icons.fingerprint, color: BrokaColors.gold, size: 24),
+        SizedBox(width: 12),
+        Text('Login with biometrics',
             style: TextStyle(color: BrokaColors.gold,
-                fontWeight: FontWeight.w700, fontSize: 15)),
+                fontWeight: FontWeight.w600, fontSize: 16)),
       ]),
     ),
   );
@@ -1252,8 +1372,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   Widget _buildSwitchPrompt() => Center(child: GestureDetector(
     onTap: () => _switchMode(!_isLogin),
-    child: RichText(text: TextSpan(
-      style: const TextStyle(fontSize: 14, color: BrokaColors.textMid),
+    // Text.rich, not RichText: RichText ignores DefaultTextStyle entirely, so
+    // this one line was rendering in the platform's default sans while every
+    // other string on the screen used the theme's serif.
+    child: Text.rich(TextSpan(
+      style: const TextStyle(fontSize: 15, color: BrokaColors.textMid),
       children: [
         TextSpan(text: _isLogin ? 'New to BROKA? ' : 'Already a trader? '),
         TextSpan(text: _isLogin ? 'Create account' : 'Sign in',
@@ -1268,17 +1391,17 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
           gradient: active ? const LinearGradient(
-              colors: [BrokaColors.gold, BrokaColors.goldDim],
-              begin: Alignment.topLeft, end: Alignment.bottomRight) : null,
-          borderRadius: BorderRadius.circular(12),
+              colors: _kCtaGradient,
+              begin: Alignment.centerLeft, end: Alignment.centerRight) : null,
+          borderRadius: BorderRadius.circular(26),
           boxShadow: active ? const [BrokaColors.glowGold] : null,
         ),
         child: Text(label, textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                color: active ? Colors.white : BrokaColors.textLow)),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                color: active ? Colors.white : BrokaColors.textMid)),
       ),
     ),
   );
@@ -1293,22 +1416,4 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         prefixIcon: Icon(icon, color: BrokaColors.textLow, size: 18),
       ),
     );
-}
-
-class _GridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF8B5CF6).withOpacity(0.03)
-      ..strokeWidth = 0.5;
-    const step = 40.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-  @override
-  bool shouldRepaint(_) => false;
 }

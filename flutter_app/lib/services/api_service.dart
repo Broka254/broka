@@ -235,11 +235,21 @@ class ApiService {
   /// Step 1 of registration: sends a 6-digit SMS code to [phone].
   /// Throws with the server's error message (e.g. "already registered") if
   /// the request fails — callers should surface `e` to the user as-is.
-  static Future<Map<String, dynamic>> requestOtp(String phone) async {
+  /// [appSignature] is the Android SMS Retriever hash for this build, from
+  /// SmsAutofillService.appSignature(). When supplied, the server formats the
+  /// SMS so the app can read it and fill the code with no user prompt. Null
+  /// (iOS, or Play Services unavailable) simply yields the plain SMS.
+  static Future<Map<String, dynamic>> requestOtp(
+    String phone, {
+    String? appSignature,
+  }) async {
     final response = await http.post(
       Uri.parse('$baseUrl/auth/otp/request'),
       headers: _headers,
-      body: jsonEncode({'phone': phone}),
+      body: jsonEncode({
+        'phone': phone,
+        if (appSignature != null) 'app_signature': appSignature,
+      }),
     ).timeout(const Duration(seconds: 30));
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode != 200) {

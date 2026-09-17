@@ -63,6 +63,12 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
+
+    // SMS Retriever API — lets the OTP screen read the verification SMS
+    // addressed to this app with no SMS permission and no user prompt.
+    // See SmsRetrieverBridge.kt. This is the phone-auth slice of Play
+    // Services only, not the full auth artifact, so it adds very little.
+    implementation "com.google.android.gms:play-services-auth-api-phone:18.1.0"
 }
 
 // FCM (calling-hardening pass). This plugin hard-fails the build if
