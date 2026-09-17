@@ -235,6 +235,20 @@ class Settings:
         "ADMIN_BOOTSTRAP_EMAIL", ""
     ).strip().lower())
 
+    # ── Email (Resend — email OTP delivery) ──────────────────────────────────
+    # RESEND_FROM must be on a domain verified in the Resend dashboard;
+    # Resend refuses a send from anything else. Both must be set before
+    # get_email_provider() will pick Resend over the console fallback.
+    resend_api_key: str = field(default_factory=lambda: os.getenv("RESEND_API_KEY", "").strip())
+    resend_from: str = field(default_factory=lambda: os.getenv(
+        "RESEND_FROM", "BROKA <noreply@broka.app>"
+    ).strip())
+    resend_reply_to: str = field(default_factory=lambda: os.getenv("RESEND_REPLY_TO", "").strip())
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.resend_api_key and self.resend_from)
+
     # ── Redis (for rate-limiting, pub/sub, and distributed workers) ───────────
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
 
@@ -463,6 +477,16 @@ def validate_startup() -> None:
     # worth tightening (defense-in-depth, and this only takes one future
     # cookie-based admin panel to change the calculus) - warning, not a
     # hard fail, since the actual exploitability today is limited.
+    if s.is_production and not s.email_enabled:
+        # Not fatal: email is optional at signup, so registration still
+        # completes without it. But a production deployment where every
+        # verification email is silently logged instead of sent is worth
+        # saying out loud.
+        logger.warning(
+            "[startup] ⚠  RESEND_API_KEY/RESEND_FROM not set — email "
+            "verification codes will be logged, not delivered."
+        )
+
     if s.is_production and s.allowed_origins_raw in ("*", ""):
         logger.warning(
             "[startup] ⚠  ALLOWED_ORIGINS is unset or \"*\" in production — "

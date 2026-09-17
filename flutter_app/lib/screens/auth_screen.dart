@@ -53,6 +53,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   final _passwordCtrl = TextEditingController();
   final _nameCtrl     = TextEditingController();
   final _nicknameCtrl = TextEditingController();
+  final _confirmPasswordCtrl = TextEditingController();
+  final _emailOtpCtrl = TextEditingController();
 
   // Phone verification (steps 1-2) — OTP is optional at signup; the user
   // can skip it from either step and verify later from Profile.
@@ -75,6 +77,20 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// Dial code for the phone field. The typed part stays national
   /// (`0706462869`); `_fullPhone` composes the two into E.164.
   String _dialCode = '+254';
+
+  /// Email verification (step 5). The address is optional, so all of this
+  /// stays null/false when the user skips it.
+  ///
+  /// Step 5 has two phases on one screen rather than two wizard steps: enter
+  /// the address, then enter the code sent to it. `_emailCodeSent` is which
+  /// phase is showing.
+  bool _emailCodeSent = false;
+  String? _emailVerifyToken;
+  int _emailResendCooldown = 0;
+  Timer? _emailResendTimer;
+  int _emailOtpExpiresIn = 0;
+  Timer? _emailOtpExpiryTimer;
+  bool _obscureConfirm = true;
 
   /// Android SMS Retriever hash for this build, fetched once and reused for
   /// every OTP request in this session.
@@ -151,14 +167,19 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     _otpExpiryTimer?.cancel();
     _smsSub?.cancel();
     SmsAutofillService.stop();
+    _emailResendTimer?.cancel();
+    _emailOtpExpiryTimer?.cancel();
     _phoneCtrl.dispose(); _otpCtrl.dispose(); _emailCtrl.dispose();
-    _passwordCtrl.dispose();
+    _passwordCtrl.dispose(); _confirmPasswordCtrl.dispose();
+    _emailOtpCtrl.dispose();
     _nameCtrl.dispose(); _nicknameCtrl.dispose();
     super.dispose();
   }
 
   void _switchMode(bool toLogin) {
     _resendTimer?.cancel();
+    _emailResendTimer?.cancel();
+    _emailOtpExpiryTimer?.cancel();
     // The expiry countdown ticks setState every second; leaving Login while
     // sitting on the verify step would otherwise keep it running against a
     // screen that no longer shows it.
@@ -176,6 +197,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       _capturedPhoto      = null;
       _chosenBiometric    = 'none';
       _biometricVerified  = false;
+      _emailCodeSent      = false;
+      _emailVerifyToken   = null;
+      _emailResendCooldown = 0;
+      _emailOtpExpiresIn  = 0;
+      _emailOtpCtrl.clear();
     });
     _stepAnim.forward(from: 0);
   }
@@ -224,19 +250,156 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       if (_nameCtrl.text.trim().isEmpty) {
         setState(() => _error = 'Please enter your official name'); return;
       }
+      _animateStep(4);
+    } else if (_step == 4) {
+      // Preferred name is optional — an empty field is a valid answer and
+      // means "use my official name".
+      _animateStep(5);
+    } else if (_step == 5) {
+      await _handleEmailStep();
+    } else if (_step == 6) {
       if (_passwordCtrl.text.length < 6) {
         setState(() => _error = 'Password must be at least 6 characters'); return;
       }
-      _animateStep(4);
-    } else if (_step == 4) {
+      if (_passwordCtrl.text != _confirmPasswordCtrl.text) {
+        setState(() => _error = 'Both passwords must match'); return;
+      }
+      _animateStep(7);
+    } else if (_step == 7) {
       if (_capturedPhoto == null) {
         setState(() => _error = 'Please take a selfie to continue'); return;
       }
-      _animateStep(5);
-    } else if (_step == 5) {
-      // Step 5 (biometrics) is optional - user can skip
-      _animateStep(6);
+      _animateStep(8);
+    } else if (_step == 8) {
+      // Biometrics are optional — the user can skip.
+      _animateStep(9);
     }
+  }
+
+  // ── Email step (optional, verified in place) ──────────────────────────────
+
+  /// Drives step 5's two phases. An empty address is a valid answer and moves
+  /// straight on; an address sends a code and swaps the screen to the code
+  /// phase; a code on screen verifies it.
+  Future<void> _handleEmailStep() async {
+    if (_emailCodeSent) {
+      final code = _emailOtpCtrl.text.trim();
+      if (code.length < 4) {
+        setState(() => _error = 'Enter the code we emailed you'); return;
+      }
+      setState(() { _loading = true; _error = null; });
+      try {
+        _emailVerifyToken = await ApiService.verifyEmailOtp(
+            _emailCtrl.text.trim(), code);
+        _emailResendTimer?.cancel();
+        _emailOtpExpiryTimer?.cancel();
+        if (mounted) { setState(() => _loading = false); _animateStep(6); }
+      } catch (e) {
+        if (mounted) setState(() {
+          _loading = false;
+          _error = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
+      return;
+    }
+
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) { _skipEmail(); return; }
+    if (!_looksLikeEmail(email)) {
+      setState(() => _error = 'Please enter a valid email address'); return;
+    }
+
+    setState(() { _loading = true; _error = null; });
+    try {
+      await _sendEmailOtp();
+      if (mounted) setState(() { _loading = false; _emailCodeSent = true; });
+      _stepAnim.forward(from: 0);   // same transition as a step change
+    } catch (e) {
+      if (mounted) setState(() {
+        _loading = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  /// Mirrors the backend's check rather than trying to out-clever it: the
+  /// server decides, and an over-strict client pattern would reject valid
+  /// addresses before they ever got there.
+  static bool _looksLikeEmail(String v) =>
+      RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim());
+
+  Future<void> _sendEmailOtp() async {
+    final data = await ApiService.requestEmailOtp(_emailCtrl.text.trim());
+    _startEmailResendCooldown();
+    final expiry = data['expires_in_seconds'];
+    _startEmailOtpExpiry(expiry is int ? expiry : int.tryParse('$expiry') ?? 0);
+  }
+
+  void _startEmailResendCooldown() {
+    _emailResendTimer?.cancel();
+    setState(() => _emailResendCooldown = _kResendCooldownSeconds);
+    _emailResendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _emailResendCooldown--);
+      if (_emailResendCooldown <= 0) t.cancel();
+    });
+  }
+
+  void _startEmailOtpExpiry(int seconds) {
+    _emailOtpExpiryTimer?.cancel();
+    if (seconds <= 0) { setState(() => _emailOtpExpiresIn = 0); return; }
+    setState(() => _emailOtpExpiresIn = seconds);
+    _emailOtpExpiryTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _emailOtpExpiresIn--);
+      if (_emailOtpExpiresIn <= 0) t.cancel();
+    });
+  }
+
+  Future<void> _resendEmailOtp() async {
+    if (_emailResendCooldown > 0 || _loading) return;
+    setState(() { _loading = true; _error = null; });
+    try {
+      _emailOtpCtrl.clear();
+      await _sendEmailOtp();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// Back to the address field, e.g. after a typo. The pending code is
+  /// abandoned rather than carried over to a different address.
+  void _changeEmailAddress() {
+    _emailResendTimer?.cancel();
+    _emailOtpExpiryTimer?.cancel();
+    setState(() {
+      _emailCodeSent = false;
+      _emailVerifyToken = null;
+      _emailResendCooldown = 0;
+      _emailOtpExpiresIn = 0;
+      _emailOtpCtrl.clear();
+      _error = null;
+    });
+    _stepAnim.forward(from: 0);
+  }
+
+  /// Email is optional. Skipping clears anything half-entered so a typed but
+  /// unverified address is never silently registered.
+  void _skipEmail() {
+    _emailResendTimer?.cancel();
+    _emailOtpExpiryTimer?.cancel();
+    setState(() {
+      _emailCtrl.clear();
+      _emailOtpCtrl.clear();
+      _emailCodeSent = false;
+      _emailVerifyToken = null;
+      _emailResendCooldown = 0;
+      _emailOtpExpiresIn = 0;
+      _error = null;
+    });
+    _animateStep(6);
   }
 
   /// OTP is optional at signup. Called from Step 1 - skips sending an SMS
@@ -267,6 +430,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   }
 
   void _prevStep() {
+    // Within the email step, "back" means the code phase returns to the
+    // address field rather than leaving the step entirely.
+    if (_step == 5 && _emailCodeSent) { _changeEmailAddress(); return; }
     // If OTP was skipped from Step 1, Step 2 (code entry) was never shown
     // and no code was ever sent - going "back" from Step 3 must return to
     // Step 1, not to an OTP screen that would wrongly claim a code is on its way.
@@ -455,6 +621,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                           ? null : _nicknameCtrl.text.trim(),
         email:        _emailCtrl.text.trim().isEmpty
                           ? null : _emailCtrl.text.trim(),
+        // Present only when the address was actually proven at step 5. The
+        // server takes the email from this token when it is set, so a
+        // verified address can't be swapped for another in the same call.
+        emailVerifyToken: _emailVerifyToken,
         password:     _passwordCtrl.text,
         lat:          -1.286389,
         lng:          36.817223,
@@ -604,19 +774,38 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       const SizedBox(height: 24),
       if (_step == 1) _buildStep1Phone(),
       if (_step == 2) _buildStep2Otp(),
-      if (_step == 3) _buildStep3BasicInfo(),
-      if (_step == 4) _buildStep4Selfie(),
-      if (_step == 5) _buildStep5Biometrics(),
-      if (_step == 6) _buildStep6Confirm(),
+      if (_step == 3) _buildStep3Name(),
+      if (_step == 4) _buildStep4Nickname(),
+      if (_step == 5) _buildStep5Email(),
+      if (_step == 6) _buildStep6Password(),
+      if (_step == 7) _buildStep7Selfie(),
+      if (_step == 8) _buildStep8Biometrics(),
+      if (_step == 9) _buildStep9Confirm(),
       if (_error != null) ...[const SizedBox(height: 16), _buildError()],
       const SizedBox(height: 24),
       _buildStepButtons(),
     ]);
   }
 
+  /// Total wizard steps. Each one asks a single thing: a long combined form
+  /// reads as a wall and is much harder to resume after an interruption.
+  static const int _kTotalSteps = 9;
+
+  static const List<String> _kStepTitles = [
+    'Phone',          // 1
+    'Verify Code',    // 2
+    'Your Name',      // 3
+    'Preferred Name', // 4
+    'Email',          // 5 (optional, verified in place)
+    'Password',       // 6
+    'Your Photo',     // 7
+    'Biometrics',     // 8
+    'Confirm',        // 9
+  ];
+
   Widget _buildStepIndicator() {
-    const total = 6;
-    final titles = ['Phone', 'Verify Code', 'Basic Info', 'Your Photo', 'Biometrics', 'Confirm'];
+    const total = _kTotalSteps;
+    const titles = _kStepTitles;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: List.generate(total, (i) {
         final done    = i + 1 < _step;
@@ -624,7 +813,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         return Expanded(child: Row(children: [
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            width: 22, height: 22,
+            // Sized from the step count rather than fixed: nine circles at
+            // the six-step size overflow a narrow phone.
+            width: total > 7 ? 18 : 22,
+            height: total > 7 ? 18 : 22,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: done || current
@@ -637,10 +829,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
             ),
             child: Center(
               child: done
-                  ? const Icon(Icons.check_rounded, color: Colors.white, size: 12)
+                  ? Icon(Icons.check_rounded, color: Colors.white,
+                      size: total > 7 ? 10 : 12)
                   : Text('${i + 1}', style: TextStyle(
                       color: current ? Colors.white : BrokaColors.textLow,
-                      fontSize: 10, fontWeight: FontWeight.w700)),
+                      fontSize: total > 7 ? 9 : 10,
+                      fontWeight: FontWeight.w700)),
             ),
           ),
           if (i < total - 1) Expanded(child: Container(
@@ -650,7 +844,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         ]));
       })),
       const SizedBox(height: 10),
-      Text(titles[_step - 1], style: const TextStyle(
+      Text(
+          _step == 5 && _emailCodeSent ? 'Verify Email' : titles[_step - 1],
+          style: const TextStyle(
           color: BrokaColors.textHigh, fontSize: 20,
           fontWeight: FontWeight.w800, letterSpacing: -0.3)),
       const SizedBox(height: 2),
@@ -663,10 +859,15 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     switch (_step) {
       case 1: return "We'll text you a code to confirm it's really you";
       case 2: return 'Enter the 6-digit code we sent you';
-      case 3: return 'Tell us who you are';
-      case 4: return 'A selfie so buyers and sellers know they\'re dealing with a real person';
-      case 5: return 'Set up BROKA-specific biometric security for payments';
-      case 6: return 'Review and activate your account';
+      case 3: return 'The name on your ID';
+      case 4: return 'What should Zeno call you?';
+      case 5: return _emailCodeSent
+          ? 'Enter the 6-digit code we emailed you'
+          : 'Optional, but recommended — for receipts and account recovery';
+      case 6: return 'Choose something only you would guess';
+      case 7: return 'A selfie so buyers and sellers know they\'re dealing with a real person';
+      case 8: return 'Set up BROKA-specific biometric security for payments';
+      case 9: return 'Review and activate your account';
       default: return '';
     }
   }
@@ -755,30 +956,180 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     ),
   ]);
 
-  // Step 3 - Basic info
-  Widget _buildStep3BasicInfo() => Column(children: [
-    _field(_nameCtrl, 'Official Name', Icons.person_outline_rounded),
-    const SizedBox(height: 4),
+  // Step 3 - Official name
+  Widget _buildStep3Name() => Column(children: [
+    _field(_nameCtrl, 'Official Name', Icons.person_outline_rounded,
+        autofocus: true, onChanged: (_) => setState(() {})),
+    const SizedBox(height: 10),
     const Padding(
-      padding: EdgeInsets.only(left: 4, bottom: 10),
+      padding: EdgeInsets.only(left: 4),
       child: Text('As it appears on your ID — used for trust & verification',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11)),
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
     ),
-    _field(_nicknameCtrl, 'Preferred Name (optional)', Icons.badge_outlined),
-    const SizedBox(height: 4),
-    const Padding(
-      padding: EdgeInsets.only(left: 4, bottom: 10),
-      child: Text('This is how Zeno will address you',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11)),
-    ),
-    _field(_emailCtrl, 'Email (optional)', Icons.alternate_email,
-        type: TextInputType.emailAddress),
-    const SizedBox(height: 14),
-    _buildPasswordField(),
   ]);
 
-  // Step 4 - Selfie
-  Widget _buildStep4Selfie() => Column(children: [
+  // Step 4 - Preferred name (optional)
+  Widget _buildStep4Nickname() => Column(children: [
+    _field(_nicknameCtrl, 'Preferred Name (optional)', Icons.badge_outlined,
+        autofocus: true, onChanged: (_) => setState(() {})),
+    const SizedBox(height: 10),
+    const Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: Text(
+        'This is how Zeno, your AI assistant, will address you. '
+        'Leave it blank and Zeno uses your official name.',
+        style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5),
+      ),
+    ),
+    const SizedBox(height: 16),
+    Center(
+      child: GestureDetector(
+        onTap: _loading ? null : () => _animateStep(5),
+        child: const Text('Skip — use my official name',
+            style: TextStyle(color: BrokaColors.textMid,
+                fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+    ),
+  ]);
+
+  // Step 5 - Email (optional), verified in place.
+  //
+  // Two phases on one screen rather than two wizard steps: the address and
+  // the code that proves it are one task, and someone who skips the address
+  // should never see a code screen for it at all.
+  Widget _buildStep5Email() =>
+      _emailCodeSent ? _buildEmailVerifyPhase() : _buildEmailEntryPhase();
+
+  Widget _buildEmailEntryPhase() => Column(children: [
+    _field(_emailCtrl, 'Email (optional)', Icons.alternate_email,
+        type: TextInputType.emailAddress, autofocus: true,
+        onChanged: (_) => setState(() {})),
+    const SizedBox(height: 10),
+    const Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: Text(
+        'Recommended. It is how you recover your account if you lose your '
+        'phone number, and where your receipts go.',
+        style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5),
+      ),
+    ),
+    // Only worth showing once there is something to skip: with the field
+    // empty the primary button already reads "Skip", and two controls doing
+    // the same thing side by side just asks the user to pick between them.
+    if (_emailCtrl.text.trim().isNotEmpty) ...[
+      const SizedBox(height: 16),
+      Center(
+        child: GestureDetector(
+          onTap: _loading ? null : _skipEmail,
+          child: const Text('Skip for now — add it later',
+              style: TextStyle(color: BrokaColors.textMid,
+                  fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+      ),
+    ],
+  ]);
+
+  Widget _buildEmailVerifyPhase() => Column(children: [
+    Row(children: [
+      const Icon(Icons.mark_email_unread_outlined,
+          color: BrokaColors.gold, size: 18),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text('Code sent to ${_emailCtrl.text.trim()}',
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 14)),
+      ),
+      if (_emailOtpExpiresIn > 0) ...[
+        const SizedBox(width: 8),
+        const Icon(Icons.schedule_rounded, color: BrokaColors.gold, size: 16),
+        const SizedBox(width: 5),
+        Text(_fmtMinSec(_emailOtpExpiresIn),
+            style: const TextStyle(color: BrokaColors.gold, fontSize: 14,
+                fontWeight: FontWeight.w700)),
+      ],
+    ]),
+    const SizedBox(height: 22),
+    OtpCodeField(
+      controller: _emailOtpCtrl,
+      enabled: !_loading,
+      onChanged: (_) => setState(() {}),
+      onCompleted: (_) { if (!_loading) _nextStep(); },
+    ),
+    const SizedBox(height: 20),
+    Center(
+      child: _emailResendCooldown > 0
+          ? Text('Resend code in ${_fmtCooldown(_emailResendCooldown)}',
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 13))
+          : GestureDetector(
+              onTap: _loading ? null : _resendEmailOtp,
+              child: const Text('Resend code',
+                  style: TextStyle(color: BrokaColors.gold,
+                      fontSize: 14, fontWeight: FontWeight.w700)),
+            ),
+    ),
+    const SizedBox(height: 14),
+    Center(
+      child: GestureDetector(
+        onTap: _loading ? null : _changeEmailAddress,
+        child: const Text('Use a different email',
+            style: TextStyle(color: BrokaColors.textMid,
+                fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+    ),
+    const SizedBox(height: 10),
+    Center(
+      child: GestureDetector(
+        onTap: _loading ? null : _skipEmail,
+        child: const Text('Skip for now — add it later',
+            style: TextStyle(color: BrokaColors.textMid,
+                fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+    ),
+  ]);
+
+  // Step 6 - Password + confirmation
+  Widget _buildStep6Password() => Column(children: [
+    _buildPasswordField(),
+    const SizedBox(height: 14),
+    TextField(
+      controller: _confirmPasswordCtrl,
+      obscureText: _obscureConfirm,
+      onChanged: (_) => setState(() {}),
+      style: const TextStyle(color: BrokaColors.textHigh),
+      decoration: InputDecoration(
+        labelText: 'Confirm Password',
+        prefixIcon: const Icon(Icons.lock_outline_rounded,
+            color: BrokaColors.textLow, size: 18),
+        suffixIcon: GestureDetector(
+          onTap: () => setState(() => _obscureConfirm = !_obscureConfirm),
+          child: Icon(_obscureConfirm
+              ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+              color: BrokaColors.textLow, size: 18)),
+      ),
+    ),
+    const SizedBox(height: 10),
+    Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Text(
+        _passwordMismatch
+            ? 'Both passwords must match'
+            : 'At least 6 characters.',
+        style: TextStyle(
+          color: _passwordMismatch ? BrokaColors.danger : BrokaColors.textLow,
+          fontSize: 11,
+          height: 1.5,
+        ),
+      ),
+    ),
+  ]);
+
+  /// Only true once the confirmation has something in it — nagging about a
+  /// mismatch before the second field is touched is just noise.
+  bool get _passwordMismatch =>
+      _confirmPasswordCtrl.text.isNotEmpty &&
+      _passwordCtrl.text != _confirmPasswordCtrl.text;
+
+  // Step 7 - Selfie
+  Widget _buildStep7Selfie() => Column(children: [
     GestureDetector(
       onTap: _openSelfie,
       child: Container(
@@ -853,7 +1204,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   ]);
 
   // Step 5 - BROKA Biometrics (fresh live capture)
-  Widget _buildStep5Biometrics() => Column(children: [
+  Widget _buildStep8Biometrics() => Column(children: [
     // Explanation banner
     Container(
       padding: const EdgeInsets.all(16),
@@ -1124,8 +1475,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   );
 
 
-  // Step 6 - Confirmation
-  Widget _buildStep6Confirm() => Column(children: [
+  // Step 9 - Confirmation
+  Widget _buildStep9Confirm() => Column(children: [
     // Summary card
     Container(
       padding: const EdgeInsets.all(20),
@@ -1210,20 +1561,23 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     switch (_step) {
       case 1: return 'Send Code';
       case 2: return 'Verify';
-      case 5: return _biometricVerified ? 'Continue' : 'Skip for now';
+      case 5: return _emailCodeSent
+          ? 'Verify'
+          : (_emailCtrl.text.trim().isEmpty ? 'Skip' : 'Send Code');
+      case 8: return _biometricVerified ? 'Continue' : 'Skip for now';
       default: return 'Continue';
     }
   }
 
   Widget _buildStepButtons() {
-    if (_step == 6) return const SizedBox.shrink(); // step 6 has its own CTA
+    if (_step == _kTotalSteps) return const SizedBox.shrink(); // final step has its own CTA
     return Row(children: [
       if (_step > 1) ...[
         GestureDetector(
           onTap: _prevStep,
           child: Container(
             height: 58,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: BrokaColors.bgCard.withOpacity(0.55),
@@ -1245,14 +1599,19 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           height: 58,
           borderRadius: 16,
           colors: _kCtaGradient,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           onPressed: _loading ? null : _nextStep,
           child: _loading
               ? const SizedBox(width: 20, height: 20,
                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(_continueLabel(),
-                      style: const TextStyle(fontSize: 17,
-                          fontWeight: FontWeight.w700, color: Colors.white)),
+                  Flexible(
+                    child: Text(_continueLabel(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 17,
+                            fontWeight: FontWeight.w700, color: Colors.white)),
+                  ),
                   const SizedBox(width: 10),
                   const Icon(Icons.arrow_forward_rounded,
                       color: Colors.white, size: 20),
@@ -1407,9 +1766,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   );
 
   Widget _field(TextEditingController ctrl, String label, IconData icon,
-      {TextInputType type = TextInputType.text}) =>
+      {TextInputType type = TextInputType.text,
+       bool autofocus = false,
+       ValueChanged<String>? onChanged}) =>
     TextField(
       controller: ctrl, keyboardType: type,
+      autofocus: autofocus,
+      onChanged: onChanged,
       style: const TextStyle(color: BrokaColors.textHigh),
       decoration: InputDecoration(
         labelText: label,

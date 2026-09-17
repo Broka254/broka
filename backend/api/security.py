@@ -106,6 +106,34 @@ def decode_phone_verify_token(token: str) -> str | None:
     return payload.get("phone")
 
 
+# ── Email-verify token (short-lived, email OTP → /auth/register handoff) ────
+# Exact counterpart of the phone-verify token above, for the optional email
+# step. Kept as its own type so an email token can never stand in for a
+# proven phone number, or the reverse.
+
+def create_email_verify_token(email: str) -> str:
+    from api.core.config import settings as _settings
+    payload = {
+        "email": email,
+        "type": "email_verify",
+        "exp": datetime.now(timezone.utc) + timedelta(
+            minutes=_settings.phone_verify_token_expire_minutes
+        ),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_email_verify_token(token: str) -> str | None:
+    """Returns the verified email address, or None if invalid/expired/wrong type."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("type") != "email_verify":
+        return None
+    return payload.get("email")
+
+
 # ── Call token (short-lived, WebSocket signaling auth) ───────────────────────
 # Issued by POST /calls/initiate (to the caller) and GET /calls/pending/{id}
 # (to the callee) once each is confirmed to be a legitimate participant on a

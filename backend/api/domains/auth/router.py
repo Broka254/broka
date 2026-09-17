@@ -42,6 +42,15 @@ class OtpVerifyIn(BaseModel):
     code: str
 
 
+class EmailOtpRequestIn(BaseModel):
+    email: str
+
+
+class EmailOtpVerifyIn(BaseModel):
+    email: str
+    code: str
+
+
 class RegisterIn(BaseModel):
     # OTP is optional at signup (can be skipped and verified later from
     # Profile). Provide EITHER phone_verify_token (from otp/verify — the
@@ -62,6 +71,10 @@ class RegisterIn(BaseModel):
     # is stored as NULL and treated identically to "prefer_not_to_say".
     gender: Optional[str] = None
     email: Optional[str] = None     # optional, not required
+    # From /auth/email/otp/verify. Present means the address was proven, and
+    # it then wins over any raw `email` above, exactly as the phone token
+    # wins over a raw phone.
+    email_verify_token: Optional[str] = None
     profile_photo: Optional[str] = None  # selfie, base64
 
 
@@ -111,6 +124,33 @@ async def verify_otp(
     return await svc.verify_otp(body.phone, body.code, purpose=OtpPurpose.registration)
 
 
+@router.post("/email/otp/request")
+async def request_email_otp(
+    body: EmailOtpRequestIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    ip = request.client.host if request.client else "unknown"
+    # Limited per address AND per IP, like the SMS route. Email costs less
+    # than an SMS, but an unthrottled endpoint that emails an arbitrary
+    # address on demand is a spam relay wearing our sending domain's
+    # reputation.
+    await otp_request_limiter.check_and_record(f"email:{body.email.strip().lower()}")
+    await otp_request_limiter.check_and_record(f"ip:{ip}")
+    svc = AuthService(db)
+    return await svc.request_email_otp(body.email, purpose=OtpPurpose.registration)
+
+
+@router.post("/email/otp/verify")
+async def verify_email_otp(
+    body: EmailOtpVerifyIn,
+    db: AsyncSession = Depends(get_db),
+):
+    await otp_verify_limiter.check_and_record(f"email:{body.email.strip().lower()}")
+    svc = AuthService(db)
+    return await svc.verify_email_otp(body.email, body.code, purpose=OtpPurpose.registration)
+
+
 @router.post("/register", status_code=201)
 async def register(
     body: RegisterIn,
@@ -130,6 +170,7 @@ async def register(
         nickname=body.nickname,
         gender=body.gender,
         email=body.email,
+        email_verify_token=body.email_verify_token,
         profile_photo=body.profile_photo,
     )
 

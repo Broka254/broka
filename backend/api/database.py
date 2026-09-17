@@ -152,6 +152,7 @@ class User(Base):
     # by the verified (phone_verify_token) path in auth/service.py.
     phone_verified     = Column(Boolean, default=False, nullable=False)
     email              = Column(String, unique=True, nullable=True, index=True)
+    email_verified     = Column(Boolean, default=False, nullable=False)
     password_hash      = Column(String, nullable=False)
     lat                = Column(Float, nullable=True)
     lng                = Column(Float, nullable=True)
@@ -238,6 +239,29 @@ class PhoneOtp(Base):
     __tablename__ = "phone_otps"
     id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     phone       = Column(String, nullable=False, index=True)
+    code_hash   = Column(String, nullable=False)
+    purpose     = Column(Enum(OtpPurpose), default=OtpPurpose.registration, nullable=False)
+    attempts    = Column(Integer, default=0, nullable=False)
+    consumed    = Column(Boolean, default=False, nullable=False)
+    expires_at  = Column(DateTime, nullable=False)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+
+class EmailOtp(Base):
+    """Short-lived OTP for email verification during registration.
+
+    Deliberately a separate table from PhoneOtp rather than a shared one with
+    both columns nullable: nothing would then stop a row with neither
+    identifier set, and every query would have to say which it meant anyway.
+
+    Same stateless handoff as the phone flow — verifying yields a signed
+    `email_verify_token` (api.security.create_email_verify_token) that
+    /auth/register presents, so the row is only needed for the
+    request -> verify round trip.
+    """
+    __tablename__ = "email_otps"
+    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    email       = Column(String, nullable=False, index=True)
     code_hash   = Column(String, nullable=False)
     purpose     = Column(Enum(OtpPurpose), default=OtpPurpose.registration, nullable=False)
     attempts    = Column(Integer, default=0, nullable=False)
@@ -1015,6 +1039,10 @@ async def init_db():
             "ALTER TABLE negotiation_messages ADD COLUMN is_agent_initiated BOOLEAN",
             # OTP-optional signup (0016)
             "ALTER TABLE users ADD COLUMN phone_verified BOOLEAN DEFAULT 0 NOT NULL",
+            # Split-step signup: email is optional but can now be proven with
+            # an emailed code, so a verified address is distinguishable from
+            # a merely typed one.
+            "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT 0 NOT NULL",
             # Redesign-guide audit (Round 4, 2026-08-13): real match count on
             # a standing buy request, incremented by buy_agent_subscribers.py.
             # Added directly to the model without a matching entry here at

@@ -258,6 +258,36 @@ class ApiService {
     return data;
   }
 
+  /// Requests an emailed verification code. Email is optional at signup, so
+  /// this is only called when the user actually supplies an address.
+  static Future<Map<String, dynamic>> requestEmailOtp(String email) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/email/otp/request'),
+      headers: _headers,
+      body: jsonEncode({'email': email}),
+    ).timeout(const Duration(seconds: 30));
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(data['detail']?.toString() ?? 'Could not send the verification email');
+    }
+    return data;
+  }
+
+  /// Verifies an emailed code and returns an `email_verify_token` for
+  /// [register]. Throws on a wrong or expired code.
+  static Future<String> verifyEmailOtp(String email, String code) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/email/otp/verify'),
+      headers: _headers,
+      body: jsonEncode({'email': email, 'code': code}),
+    ).timeout(const Duration(seconds: 30));
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(data['detail']?.toString() ?? 'Incorrect code');
+    }
+    return data['email_verify_token'] as String;
+  }
+
   /// Step 2: verifies the code, returns a `phone_verify_token` to pass to
   /// [register]. Throws on wrong/expired code.
   static Future<String> verifyOtp(String phone, String code) async {
@@ -294,6 +324,9 @@ class ApiService {
     /// skipping the question costs the user nothing.
     String? gender,
     String? email,
+    /// From [verifyEmailOtp]. Present means the address was proven, and the
+    /// server then takes the email from the token rather than [email].
+    String? emailVerifyToken,
     String? profilePhoto,
   }) async {
     final response = await http.post(
@@ -306,6 +339,7 @@ class ApiService {
         if (nickname     != null) 'nickname':      nickname,
         if (gender       != null) 'gender':        gender,
         if (email        != null) 'email':         email,
+        if (emailVerifyToken != null) 'email_verify_token': emailVerifyToken,
         if (profilePhoto != null) 'profile_photo': profilePhoto,
       }),
     ).timeout(const Duration(seconds: 30));

@@ -23,12 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.security import (
     hash_password, verify_password, create_access_token,
-    create_phone_verify_token, decode_phone_verify_token,
+    create_phone_verify_token, decode_phone_verify_token, create_email_verify_token,
+    decode_email_verify_token,
     create_refresh_token,
 )
 from api.core.events import publish, UserRegistered, UserLoggedIn
 from api.core.config import settings
 from api.core.sms import get_sms_provider
+from api.core.email import get_email_provider, build_otp_email
 from api.database import AccountType, OtpPurpose, RefreshToken, SellerMetrics
 from .repository import UserRepository
 
@@ -60,6 +62,19 @@ def _normalize_phone(phone: str) -> str:
     elif p and not p.startswith("+"):
         p = "+" + p
     return p
+
+
+# Deliberately conservative: lowercase and trim, then one structural check.
+# Real deliverability is decided by whether the code actually arrives, not by
+# how clever a local regex is, and over-strict patterns are a well-known way
+# to reject valid addresses.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _normalize_email(email: str) -> str:
+    """Lowercased and trimmed, or "" when it cannot be an address."""
+    e = (email or "").strip().lower()
+    return e if _EMAIL_RE.match(e) else ""
 
 
 def generate_business_display_name(name: str, category: Optional[str], location: Optional[str]) -> str:
@@ -186,6 +201,64 @@ class AuthService:
 
     # ── Registration (buyer-only; seller is a later upgrade) ────────────────
 
+    # ── Email OTP ────────────────────────────────────────────────────────
+    # Email stays optional at signup. These endpoints exist so that when
+    # someone does give an address, it can be proven rather than merely
+    # typed - which is what makes it safe to later use for password
+    # recovery or receipts.
+
+    async def request_email_otp(
+        self, email: str, purpose: OtpPurpose = OtpPurpose.registration,
+    ) -> dict:
+        email = _normalize_email(email)
+        if not email:
+            raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+        if purpose == OtpPurpose.registration:
+            existing = await self.repo.get_by_email(email)
+            if existing:
+                raise HTTPException(status_code=409, detail="That email is already in use")
+
+        code = "".join(secrets.choice("0123456789") for _ in range(settings.otp_length))
+        expires_at = datetime.utcnow() + timedelta(seconds=settings.otp_expiry_seconds)
+        await self.repo.create_email_otp(email, _hash_otp(code), expires_at, purpose=purpose)
+
+        minutes = max(1, settings.otp_expiry_seconds // 60)
+        subject, html, text = build_otp_email(code, minutes)
+        sent = await get_email_provider().send(email, subject, html, text)
+        if not sent:
+            raise HTTPException(
+                status_code=503,
+                detail="Couldn't send the verification email. Please try again.",
+            )
+
+        result = {"ok": True, "email": email, "expires_in_seconds": settings.otp_expiry_seconds}
+        if not settings.is_production:
+            # Dev/CI only, exactly as the phone flow does it.
+            result["debug_code"] = code
+        return result
+
+    async def verify_email_otp(
+        self, email: str, code: str, purpose: OtpPurpose = OtpPurpose.registration,
+    ) -> dict:
+        email = _normalize_email(email)
+        otp = await self.repo.get_latest_email_otp(email, purpose)
+        if not otp:
+            raise HTTPException(
+                status_code=400,
+                detail="No pending verification for this email. Request a new code.",
+            )
+        if otp.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="That code has expired. Request a new one.")
+        if otp.attempts >= settings.otp_max_attempts:
+            raise HTTPException(status_code=429, detail="Too many attempts. Request a new code.")
+        if _hash_otp(code.strip()) != otp.code_hash:
+            await self.repo.increment_otp_attempts(otp)
+            raise HTTPException(status_code=400, detail="Incorrect code")
+
+        await self.repo.consume_otp(otp)
+        return {"ok": True, "email": email, "email_verify_token": create_email_verify_token(email)}
+
     async def register(
         self,
         name: str,
@@ -197,6 +270,7 @@ class AuthService:
         nickname: Optional[str] = None,
         gender: Optional[str] = None,
         email: Optional[str] = None,
+        email_verify_token: Optional[str] = None,
         profile_photo: Optional[str] = None,
     ) -> dict:
         # OTP is optional (Design request: skippable at signup, verify
@@ -226,7 +300,22 @@ class AuthService:
         if existing:
             raise HTTPException(status_code=409, detail="This phone number is already registered")
 
-        email = email.strip().lower() if email and email.strip() else None
+        # Same precedence rule as the phone above: a proven address always
+        # wins over a typed one, so a verified email can never be swapped for
+        # someone else's in the same request.
+        email_verified = False
+        if email_verify_token:
+            decoded_email = decode_email_verify_token(email_verify_token)
+            if not decoded_email:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email verification expired or invalid. Please verify your email again.",
+                )
+            email = decoded_email
+            email_verified = True
+        else:
+            email = _normalize_email(email) if email else None
+
         if email:
             existing_email = await self.repo.get_by_email(email)
             if existing_email:
@@ -248,6 +337,7 @@ class AuthService:
             phone=phone,
             phone_verified=phone_verified,
             email=email,
+            email_verified=email_verified,
             password_hash=pw_hash,
             lat=lat,
             lng=lng,
@@ -437,6 +527,9 @@ class AuthService:
             "name": user.name,
             "nickname": user.nickname,
             "email": user.email,
+            # Lets the app tell a proven address from a merely typed one, so
+            # Profile can offer to finish verification later.
+            "email_verified": user.email_verified,
             "phone": user.phone,
             "phone_verified": user.phone_verified,
             "account_type": user.account_type.value if user.account_type else "buyer",

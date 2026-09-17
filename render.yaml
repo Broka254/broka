@@ -32,6 +32,13 @@ services:
         sync: false          # Legacy fallback - currently a no-op (see OPENROUTER_API_KEY above);
                               # GROQ_MODEL is hardcoded in source, not env-driven, so reactivating
                               # this tier with a still-served Groq model needs a code change too
+      - key: RESEND_API_KEY
+        sync: false          # Resend — email verification codes. Unset is safe:
+                             # email is optional at signup and codes are logged
+                             # instead of sent. See api/core/email.py
+      - key: RESEND_FROM
+        sync: false          # Must be on a domain verified in the Resend
+                             # dashboard, or Resend refuses every send
       - key: AT_USERNAME
         sync: false          # Africa's Talking — "sandbox" for testing, your live username in prod
       - key: AT_API_KEY

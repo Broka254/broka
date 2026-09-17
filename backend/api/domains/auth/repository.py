@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from api.database import User, PhoneOtp, OtpPurpose
+from api.database import User, PhoneOtp, EmailOtp, OtpPurpose
 
 
 class UserRepository:
@@ -46,6 +46,34 @@ class UserRepository:
             .limit(1)
         )
         return r.scalar_one_or_none()
+
+    # ── Email OTP ────────────────────────────────────────────────────────
+    # Separate methods rather than a generic one taking a table: the two
+    # share a shape but not a key, and the callers always know which they
+    # want. increment/consume below are shared, since they only touch
+    # columns both rows have.
+
+    async def create_email_otp(
+        self, email: str, code_hash: str, expires_at,
+        purpose: OtpPurpose = OtpPurpose.registration,
+    ) -> EmailOtp:
+        otp = EmailOtp(email=email.strip().lower(), code_hash=code_hash,
+                       expires_at=expires_at, purpose=purpose)
+        self.db.add(otp)
+        await self.db.commit()
+        await self.db.refresh(otp)
+        return otp
+
+    async def get_latest_email_otp(self, email: str, purpose: OtpPurpose):
+        result = await self.db.execute(
+            select(EmailOtp)
+            .where(EmailOtp.email == email.strip().lower(),
+                   EmailOtp.purpose == purpose,
+                   EmailOtp.consumed.is_(False))
+            .order_by(EmailOtp.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def increment_otp_attempts(self, otp: PhoneOtp) -> None:
         otp.attempts += 1
