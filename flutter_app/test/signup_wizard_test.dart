@@ -53,14 +53,52 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// Create Account, enter a phone, then skip verification — which lands on
-  /// step 3 without touching the network.
-  Future<void> toNameStep(WidgetTester tester) async {
+  /// Create Account, pick an account type, enter a phone, then skip
+  /// verification — which lands on the name step without touching the network.
+  Future<void> toNameStep(
+    WidgetTester tester, {
+    String accountType = 'I want to buy',
+    String? sellerTier,
+  }) async {
     await tester.tap(find.text('Create Account'));
     await settle(tester);
+
+    await tester.tap(find.text(accountType));
+    await settle(tester);
+    await tester.tap(find.text('Continue'));
+    await settle(tester);
+
+    if (sellerTier != null) {
+      await tester.tap(find.text(sellerTier));
+      await settle(tester);
+      await tester.tap(find.text('Continue'));
+      await settle(tester);
+    }
+
     await tester.enterText(find.byType(TextField).first, '0706462869');
     await tester.pump();
     await tester.tap(find.text('Skip for now — verify later'));
+    await settle(tester);
+  }
+
+  /// Walks name -> preferred -> email (skipped) -> password.
+  Future<void> toPasswordStep(WidgetTester tester) async {
+    await tester.enterText(find.byType(TextField).first, 'Xavier');
+    await tester.pump();
+    await tester.tap(find.text('Continue'));
+    await settle(tester);
+    await tester.tap(find.text('Continue'));
+    await settle(tester);
+    await tester.tap(find.text('Skip'));
+    await settle(tester);
+  }
+
+  Future<void> fillPassword(WidgetTester tester) async {
+    final fields = find.byType(TextField);
+    await tester.enterText(fields.at(0), 'secret123');
+    await tester.enterText(fields.at(1), 'secret123');
+    await tester.pump();
+    await tester.tap(find.text('Continue'));
     await settle(tester);
   }
 
@@ -97,7 +135,7 @@ void main() {
       expect(find.text('Confirm Password'), findsOneWidget);
     });
 
-    testWidgets('the indicator shows nine steps', (tester) async {
+    testWidgets('a buyer sees a ten-step dotted indicator', (tester) async {
       await pumpAuth(tester);
       await toNameStep(tester);
       for (final n in ['4', '5', '6', '7', '8', '9']) {
@@ -226,6 +264,155 @@ void main() {
       await settle(tester);
 
       expect(find.text('Xavier Mwangi'), findsOneWidget);
+    });
+  });
+
+  group('account type branching', () {
+    testWidgets('a buyer is never asked what kind of seller they are',
+        (tester) async {
+      await pumpAuth(tester);
+      await tester.tap(find.text('Create Account'));
+      await settle(tester);
+      await tester.tap(find.text('I want to buy'));
+      await settle(tester);
+      await tester.tap(find.text('Continue'));
+      await settle(tester);
+
+      expect(find.text('What kind of seller?'), findsNothing);
+      expect(find.text('Phone'), findsOneWidget);
+    });
+
+    testWidgets('choosing to sell inserts the seller question', (tester) async {
+      await pumpAuth(tester);
+      await tester.tap(find.text('Create Account'));
+      await settle(tester);
+      await tester.tap(find.text('I want to buy and sell'));
+      await settle(tester);
+      await tester.tap(find.text('Continue'));
+      await settle(tester);
+
+      expect(find.text('What kind of seller?'), findsOneWidget);
+      expect(find.text('Just a few items'), findsOneWidget);
+      expect(find.text("I'm running a business"), findsOneWidget);
+    });
+
+    testWidgets('a short-term seller skips business setup entirely',
+        (tester) async {
+      await pumpAuth(tester);
+      await toNameStep(tester,
+          accountType: 'I want to buy and sell',
+          sellerTier: 'Just a few items');
+      await toPasswordStep(tester);
+      await fillPassword(tester);
+
+      // Straight from password to the photo step.
+      expect(find.text('Your Photo'), findsOneWidget);
+      expect(find.text('Business Name'), findsNothing);
+    });
+
+    testWidgets('a long-term seller gets business setup after the password',
+        (tester) async {
+      await pumpAuth(tester);
+      await toNameStep(tester,
+          accountType: 'I want to buy and sell',
+          sellerTier: "I'm running a business");
+      await toPasswordStep(tester);
+      await fillPassword(tester);
+
+      expect(find.text('Business Name'), findsOneWidget);
+      expect(find.text('Your Photo'), findsNothing);
+    });
+  });
+
+  group('business setup', () {
+    /// Drives a long-term seller as far as the business-name step.
+    Future<void> toBusinessStep(WidgetTester tester) async {
+      await toNameStep(tester,
+          accountType: 'I want to buy and sell',
+          sellerTier: "I'm running a business");
+      await toPasswordStep(tester);
+      await fillPassword(tester);
+    }
+
+    testWidgets('business name is required', (tester) async {
+      await pumpAuth(tester);
+      await toBusinessStep(tester);
+      await continueStep(tester);
+
+      expect(find.text('Please enter your business name'), findsOneWidget);
+      expect(find.text('Business Name'), findsOneWidget);
+    });
+
+    testWidgets('each business question is its own screen', (tester) async {
+      await pumpAuth(tester);
+      await toBusinessStep(tester);
+
+      await tester.enterText(find.byType(TextField).first, 'Clanix');
+      await tester.pump();
+      await continueStep(tester);
+      expect(find.text('What You Sell'), findsOneWidget);
+
+      await continueStep(tester); // category has a preselected default
+      expect(find.text('Location'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).first, 'Sira');
+      await tester.pump();
+      await continueStep(tester);
+      expect(find.text('About the Business'), findsOneWidget);
+    });
+
+    testWidgets('the description is optional', (tester) async {
+      await pumpAuth(tester);
+      await toBusinessStep(tester);
+      await tester.enterText(find.byType(TextField).first, 'Clanix');
+      await tester.pump();
+      await continueStep(tester);
+      await continueStep(tester);
+      await tester.enterText(find.byType(TextField).first, 'Sira');
+      await tester.pump();
+      await continueStep(tester);
+
+      await tester.tap(find.text('Skip'));
+      await settle(tester);
+      expect(find.text('Your Business Name'), findsOneWidget);
+    });
+
+    testWidgets('the preview composes name, category and location',
+        (tester) async {
+      await pumpAuth(tester);
+      await toBusinessStep(tester);
+      await tester.enterText(find.byType(TextField).first, 'Clanix');
+      await tester.pump();
+      await continueStep(tester);
+      await continueStep(tester);
+      await tester.enterText(find.byType(TextField).first, 'Sira');
+      await tester.pump();
+      await continueStep(tester);
+      await tester.tap(find.text('Skip'));
+      await settle(tester);
+
+      expect(find.text('Clanix · Electronics · Sira'), findsOneWidget);
+    });
+
+    testWidgets('tapping a preview row jumps back to that question',
+        (tester) async {
+      await pumpAuth(tester);
+      await toBusinessStep(tester);
+      await tester.enterText(find.byType(TextField).first, 'Clanix');
+      await tester.pump();
+      await continueStep(tester);
+      await continueStep(tester);
+      await tester.enterText(find.byType(TextField).first, 'Sira');
+      await tester.pump();
+      await continueStep(tester);
+      await tester.tap(find.text('Skip'));
+      await settle(tester);
+
+      // Correcting a typo must not mean backing out through three screens.
+      await tester.tap(find.text('Location'));
+      await settle(tester);
+      expect(find.text('Location'), findsOneWidget);
+      expect(find.text('The area buyers would come to'), findsOneWidget);
     });
   });
 }

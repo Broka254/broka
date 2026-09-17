@@ -7,11 +7,11 @@
 // - Returns base64-encoded JPEG via Navigator.pop
 
 import 'dart:convert';
-import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
+import '../widgets/lighting_coach.dart';
 
 // ─── Blur / brightness helpers ────────────────────────────────────────────────
 
@@ -56,9 +56,9 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
   bool   _initialising = true;
   String? _initError;
 
-  // Live preview feedback
+  // Live preview feedback. Judgement about what the number means lives in
+  // widgets/lighting_coach.dart, so the screen only has to carry the reading.
   double _brightness   = 128;
-  bool   _tooDark      = false;
 
   // Capture state
   bool    _capturing   = false;
@@ -67,6 +67,7 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
 
   // Brightness polling timer handle
   bool _streamingBrightness = false;
+  int  _lastBrightnessSampleMs = 0;
 
   @override
   void initState() {
@@ -121,15 +122,22 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
     if (_streamingBrightness) return;
     _streamingBrightness = true;
     _controller?.startImageStream((image) {
-      // Only sample every ~500ms to keep it light
+      // Sample at most every 400ms. The previous condition was
+      // `now % 500 < 50`, which sampled on whatever share of frames happened
+      // to land inside that window rather than on a fixed interval, so the
+      // advice updated erratically.
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (now % 500 < 50) {
-        final b = _estimateBrightness(image);
-        if (mounted) setState(() {
-          _brightness = b;
-          _tooDark    = b < 35; // below 35/255 is considered too dark (was 60 - too strict, blocked normal indoor lighting)
-        });
-      }
+      if (now - _lastBrightnessSampleMs < 400) return;
+      _lastBrightnessSampleMs = now;
+
+      final b = _estimateBrightness(image);
+      if (!mounted) return;
+      // Smooth the reading. A raw per-frame value flickers across a
+      // threshold as someone moves, which makes the coach's advice flip
+      // back and forth and read as broken.
+      final smoothed = _brightness + (b - _brightness) * 0.35;
+      if ((smoothed - _brightness).abs() < 0.5) return;
+      setState(() => _brightness = smoothed);
     });
   }
 
@@ -241,130 +249,123 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
 
   // ── Live viewfinder ─────────────────────────────────────────────────────────
   Widget _buildViewfinder() {
-    final size = MediaQuery.of(context).size;
+    final advice = adviceForBrightness(_brightness);
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(children: [
+      body: Stack(
+        // WITHOUT this the Stack collapses. A Stack sizes itself to its
+        // largest NON-positioned child, and every layer here except the top
+        // bar is Positioned — so the whole screen was being laid out at the
+        // height of that one small bar. That is why the preview showed as a
+        // sliver at the top and the shutter, nominally 48px from the bottom,
+        // appeared next to the front camera with your finger over the lens.
+        fit: StackFit.expand,
+        children: [
+          // Camera preview — fills the screen.
+          Positioned.fill(child: CameraPreview(_controller!)),
 
-        // Camera preview - fill screen
-        Positioned.fill(child: CameraPreview(_controller!)),
+          // Darkening vignette outside the face oval.
+          Positioned.fill(child: CustomPaint(painter: _OvalVignette())),
 
-        // Darkening vignette outside the oval
-        Positioned.fill(child: CustomPaint(painter: _OvalVignette())),
-
-        // ── Top bar ──
-        SafeArea(child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(children: [
-            _iconBtn(Icons.close_rounded, () => Navigator.pop(context)),
-            const Spacer(),
-          ]),
-        )),
-
-        // ── Prominent instructional banner ──
-        Positioned(
-          top: size.height * 0.04,
-          left: 24, right: 24,
-          child: const Text(
-            'Complete\nthe selfie scan to protect\nyour account.\nLook directly at the\ncamera',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w500,
-              height: 1.3,
-            ),
-          ),
-        ),
-
-        // ── Lighting warning ──
-        if (_tooDark)
+          // ── Top bar ──
           Positioned(
-            top: 90, left: 20, right: 20,
-            child: AnimatedOpacity(
-              opacity: _tooDark ? 1 : 0,
-              duration: const Duration(milliseconds: 300),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.92),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Row(children: [
-                  Icon(Icons.wb_sunny_rounded, color: Colors.white, size: 18),
-                  SizedBox(width: 10),
-                  Expanded(child: Text(
-                    '⚠️ Too dark! Please move to a brighter place for a clear photo.',
-                    style: TextStyle(color: Colors.white,
-                        fontSize: 12, fontWeight: FontWeight.w700),
-                  )),
+            top: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(children: [
+                  _iconBtn(Icons.close_rounded, () => Navigator.pop(context)),
+                  const Spacer(),
                 ]),
               ),
             ),
           ),
 
-        // ── Face guide label ──
-        Positioned(
-          top: size.height * 0.14,
-          left: 0, right: 0,
-          child: Center(child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white24),
+          // ── Instruction above the oval ──
+          Positioned(
+            top: 0, left: 24, right: 24,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 62),
+                child: Column(children: const [
+                  Text(
+                    'Take a quick selfie',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white, fontSize: 22,
+                        fontWeight: FontWeight.w700),
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'It protects your account and shows buyers and sellers '
+                    'they are dealing with a real person.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 13,
+                        height: 1.35),
+                  ),
+                ]),
+              ),
             ),
-            child: const Text('Position your face in the oval',
-                style: TextStyle(color: Colors.white70, fontSize: 12)),
-          )),
-        ),
+          ),
 
-        // ── Tips at bottom ──
-        Positioned(
-          bottom: 140, left: 20, right: 20,
-          child: Column(children: [
-            _tip(Icons.light_mode_outlined, 'Face a light source - window or lamp'),
-            const SizedBox(height: 6),
-            _tip(Icons.remove_red_eye_outlined, 'Look directly at the camera'),
-            const SizedBox(height: 6),
-            _tip(Icons.straighten_rounded, 'Keep your phone still'),
-          ]),
-        ),
-
-        // ── Shutter button ──
-        Positioned(
-          bottom: 48, left: 0, right: 0,
-          child: Center(child: GestureDetector(
-            onTap: _tooDark ? null : _takePicture,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: 76, height: 76,
+          // ── Face guide label, just under the oval ──
+          Align(
+            alignment: const Alignment(0, 0.46),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: _tooDark
-                    ? null
-                    : const LinearGradient(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: const Text('Position your face in the oval',
+                  style: TextStyle(color: Colors.white70, fontSize: 12)),
+            ),
+          ),
+
+          // ── Zeno's lighting coach, directly above the shutter ──
+          Positioned(
+            left: 20, right: 20, bottom: 150,
+            child: LightingCoachCard(advice: advice),
+          ),
+
+          // ── Shutter ──
+          // Bottom-centred and well clear of the front lens, which sits at
+          // the top of the phone. Reaching for a top-mounted button is what
+          // put a finger over the camera and darkened the frame.
+          Positioned(
+            left: 0, right: 0, bottom: 44,
+            child: Center(
+              child: GestureDetector(
+                // Never gated on lighting. The coach advises; the person
+                // decides. A disabled shutter in a dim room is a dead end,
+                // and the preview after capture already lets them judge the
+                // result and retake.
+                onTap: _capturing ? null : _takePicture,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 78, height: 78,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
                         colors: [BrokaColors.gold, BrokaColors.goldDim],
                         begin: Alignment.topLeft, end: Alignment.bottomRight),
-                color: _tooDark ? Colors.grey.shade800 : null,
-                boxShadow: _tooDark ? [] : const [BrokaColors.glowGold],
-                border: Border.all(color: Colors.white30, width: 3),
+                    boxShadow: const [BrokaColors.glowGold],
+                    border: Border.all(color: Colors.white30, width: 3),
+                  ),
+                  child: _capturing
+                      ? const Padding(
+                          padding: EdgeInsets.all(18),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2.5, color: Colors.white))
+                      : const Icon(Icons.camera_alt_rounded,
+                          color: Colors.white, size: 30),
+                ),
               ),
-              child: _capturing
-                  ? const Padding(
-                      padding: EdgeInsets.all(18),
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2.5, color: Colors.white))
-                  : Icon(
-                      _tooDark
-                          ? Icons.no_photography_outlined
-                          : Icons.camera_alt_rounded,
-                      color: Colors.white, size: 30),
             ),
-          )),
-        ),
-      ]),
+          ),
+        ],
+      ),
     );
   }
 
@@ -481,12 +482,6 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
       child: Icon(icon, color: Colors.white, size: 20),
     ),
   );
-
-  Widget _tip(IconData icon, String text) => Row(children: [
-    Icon(icon, color: Colors.white54, size: 14),
-    const SizedBox(width: 8),
-    Text(text, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-  ]);
 
   Widget _outlineBtn(IconData icon, String label, VoidCallback onTap) =>
     GestureDetector(

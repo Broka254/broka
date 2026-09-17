@@ -31,7 +31,7 @@ from api.core.events import publish, UserRegistered, UserLoggedIn
 from api.core.config import settings
 from api.core.sms import get_sms_provider
 from api.core.email import get_email_provider, build_otp_email
-from api.database import AccountType, OtpPurpose, RefreshToken, SellerMetrics
+from api.database import AccountType, OtpPurpose, RefreshToken, SellerMetrics, SellerTier
 from .repository import UserRepository
 
 logger = logging.getLogger(__name__)
@@ -272,6 +272,17 @@ class AuthService:
         email: Optional[str] = None,
         email_verify_token: Optional[str] = None,
         profile_photo: Optional[str] = None,
+        # Signup-time seller categorisation. account_type "buyer_seller"
+        # creates a selling account outright rather than making the user come
+        # back through Profile -> Become a Seller. Business fields are only
+        # meaningful for a long_term seller; the wizard does not ask a
+        # short_term one for them.
+        account_type: Optional[str] = None,
+        seller_tier: Optional[str] = None,
+        business_name: Optional[str] = None,
+        business_category: Optional[str] = None,
+        business_location: Optional[str] = None,
+        business_description: Optional[str] = None,
     ) -> dict:
         # OTP is optional (Design request: skippable at signup, verify
         # later). A verified token always wins when present — even if a raw
@@ -321,6 +332,42 @@ class AuthService:
             if existing_email:
                 raise HTTPException(status_code=409, detail="That email is already in use")
 
+        # Unrecognised values fall back to a buyer account rather than
+        # failing the registration: losing a signup over a malformed optional
+        # field is a far worse outcome than starting as a buyer, which the
+        # user can upgrade from Profile at any time.
+        resolved_account_type = (
+            AccountType.buyer_seller
+            if (account_type or "").strip() == AccountType.buyer_seller.value
+            else AccountType.buyer
+        )
+        resolved_seller_tier = None
+        if resolved_account_type == AccountType.buyer_seller:
+            raw_tier = (seller_tier or "").strip()
+            resolved_seller_tier = (
+                SellerTier.long_term
+                if raw_tier == SellerTier.long_term.value
+                else SellerTier.short_term
+            )
+
+        # Business identity is only stored for a long-term seller, and only
+        # when the required parts are all present. A half-filled business
+        # would produce a display name like "· Electronics ·", which would
+        # then show up in search and be awkward to correct.
+        biz = {}
+        if resolved_seller_tier == SellerTier.long_term:
+            b_name = (business_name or "").strip()
+            b_cat = (business_category or "").strip()
+            b_loc = (business_location or "").strip()
+            if b_name and b_cat and b_loc:
+                biz = {
+                    "business_name": b_name,
+                    "business_category": b_cat,
+                    "business_location": b_loc,
+                    "business_description": (business_description or "").strip() or None,
+                    "business_display_name": generate_business_display_name(b_name, b_cat, b_loc),
+                }
+
         pw_hash = hash_password(password)
 
         is_admin = bool(settings.admin_bootstrap_email) and email == settings.admin_bootstrap_email
@@ -344,7 +391,9 @@ class AuthService:
             profile_photo=profile_photo,
             is_admin=is_admin,
             trust_score=100,
-            account_type=AccountType.buyer,
+            account_type=resolved_account_type,
+            seller_tier=resolved_seller_tier,
+            **biz,
         )
 
         token = create_access_token({"sub": user.id})
@@ -360,6 +409,7 @@ class AuthService:
             "phone": user.phone,
             "phone_verified": user.phone_verified,
             "account_type": user.account_type.value,
+            "seller_tier": user.seller_tier.value if user.seller_tier else None,
             "profile_photo": user.profile_photo,
         }
 
@@ -432,6 +482,10 @@ class AuthService:
         user = await self.repo.update(
             user,
             account_type=AccountType.buyer_seller,
+            # Filling in a full business identity is what long_term means, so
+            # an upgrade through Profile lands there regardless of what was
+            # chosen at signup.
+            seller_tier=SellerTier.long_term,
             business_name=business_name.strip(),
             business_category=business_category.strip(),
             business_location=business_location.strip(),
@@ -530,6 +584,7 @@ class AuthService:
             # Lets the app tell a proven address from a merely typed one, so
             # Profile can offer to finish verification later.
             "email_verified": user.email_verified,
+            "seller_tier": user.seller_tier.value if user.seller_tier else None,
             "phone": user.phone,
             "phone_verified": user.phone_verified,
             "account_type": user.account_type.value if user.account_type else "buyer",

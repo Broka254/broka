@@ -135,6 +135,21 @@ class AccountType(str, enum.Enum):
     buyer_seller = "buyer_seller"   # buyer permissions + can list/sell
 
 
+class SellerTier(str, enum.Enum):
+    """How long a seller intends to trade here, asked at signup.
+
+    Someone clearing out a few household items and someone running a shop
+    need different onboarding: the first should not be marched through
+    business setup to list one phone, and the second wants a storefront
+    identity from day one. Only long_term sellers are asked for business
+    details during registration.
+
+    NULL for buyer-only accounts.
+    """
+    short_term = "short_term"   # a handful of items, under ~5 listings
+    long_term  = "long_term"    # running a business on BROKA
+
+
 class User(Base):
     __tablename__ = "users"
     id                 = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -210,6 +225,7 @@ class User(Base):
     # separate, later action (POST /auth/upgrade-to-seller) — onboarding never
     # forces the buyer/seller choice up front (see CHANGES.md v6.1).
     account_type          = Column(Enum(AccountType), default=AccountType.buyer, nullable=False)
+    seller_tier           = Column(Enum(SellerTier), nullable=True)
     business_name          = Column(String, nullable=True)   # raw name, e.g. "Clanix"
     business_category      = Column(String, nullable=True)   # e.g. "Wholesale", "Electronics"
     business_location      = Column(String, nullable=True)   # immediate locality, e.g. "Sira"
@@ -1043,6 +1059,8 @@ async def init_db():
             # an emailed code, so a verified address is distinguishable from
             # a merely typed one.
             "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT 0 NOT NULL",
+            # Seller categorisation at signup (short-term vs long-term).
+            "ALTER TABLE users ADD COLUMN seller_tier VARCHAR",
             # Redesign-guide audit (Round 4, 2026-08-13): real match count on
             # a standing buy request, incremented by buy_agent_subscribers.py.
             # Added directly to the model without a matching entry here at

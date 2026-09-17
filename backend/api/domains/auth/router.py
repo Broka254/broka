@@ -75,6 +75,16 @@ class RegisterIn(BaseModel):
     # it then wins over any raw `email` above, exactly as the phone token
     # wins over a raw phone.
     email_verify_token: Optional[str] = None
+    # Seller categorisation, chosen in the first two wizard steps.
+    # account_type: "buyer" (default) or "buyer_seller".
+    # seller_tier:  "short_term" or "long_term" — ignored for a buyer.
+    # The business_* fields are only read for a long_term seller.
+    account_type: Optional[str] = None
+    seller_tier: Optional[str] = None
+    business_name: Optional[str] = None
+    business_category: Optional[str] = None
+    business_location: Optional[str] = None
+    business_description: Optional[str] = None
     profile_photo: Optional[str] = None  # selfie, base64
 
 
@@ -172,6 +182,12 @@ async def register(
         email=body.email,
         email_verify_token=body.email_verify_token,
         profile_photo=body.profile_photo,
+        account_type=body.account_type,
+        seller_tier=body.seller_tier,
+        business_name=body.business_name,
+        business_category=body.business_category,
+        business_location=body.business_location,
+        business_description=body.business_description,
     )
 
 

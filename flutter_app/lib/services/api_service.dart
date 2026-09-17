@@ -327,6 +327,16 @@ class ApiService {
     /// From [verifyEmailOtp]. Present means the address was proven, and the
     /// server then takes the email from the token rather than [email].
     String? emailVerifyToken,
+    /// "buyer" (default) or "buyer_seller", chosen on the first wizard step.
+    String? accountType,
+    /// "short_term" or "long_term". Ignored by the server for a buyer.
+    String? sellerTier,
+    /// Business identity, only collected from a long-term seller. The server
+    /// composes the public display name from these.
+    String? businessName,
+    String? businessCategory,
+    String? businessLocation,
+    String? businessDescription,
     String? profilePhoto,
   }) async {
     final response = await http.post(
@@ -340,6 +350,12 @@ class ApiService {
         if (gender       != null) 'gender':        gender,
         if (email        != null) 'email':         email,
         if (emailVerifyToken != null) 'email_verify_token': emailVerifyToken,
+        if (accountType  != null) 'account_type':  accountType,
+        if (sellerTier   != null) 'seller_tier':   sellerTier,
+        if (businessName != null) 'business_name': businessName,
+        if (businessCategory != null) 'business_category': businessCategory,
+        if (businessLocation != null) 'business_location': businessLocation,
+        if (businessDescription != null) 'business_description': businessDescription,
         if (profilePhoto != null) 'profile_photo': profilePhoto,
       }),
     ).timeout(const Duration(seconds: 30));

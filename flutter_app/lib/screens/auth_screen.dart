@@ -55,6 +55,24 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   final _nicknameCtrl = TextEditingController();
   final _confirmPasswordCtrl = TextEditingController();
   final _emailOtpCtrl = TextEditingController();
+  final _bizNameCtrl = TextEditingController();
+  final _bizLocationCtrl = TextEditingController();
+  final _bizDescriptionCtrl = TextEditingController();
+  final _bizCustomCategoryCtrl = TextEditingController();
+
+  /// 'buyer' | 'buyer_seller' — chosen on the first step.
+  String _accountType = 'buyer';
+
+  /// 'short_term' | 'long_term' — only meaningful when selling.
+  String _sellerTier = 'short_term';
+
+  /// Mirrors BecomeSellerScreen's list so a business set up at signup and one
+  /// set up later from Profile can never land in different category spaces.
+  static const List<String> _kBizCategories = [
+    'Electronics', 'Wholesale', 'Clothing & Fashion', 'Supermarket',
+    'Property', 'Automotive', 'Food & Beverages', 'Services', 'Other',
+  ];
+  String _bizCategory = 'Electronics';
 
   // Phone verification (steps 1-2) — OTP is optional at signup; the user
   // can skip it from either step and verify later from Profile.
@@ -172,6 +190,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     _phoneCtrl.dispose(); _otpCtrl.dispose(); _emailCtrl.dispose();
     _passwordCtrl.dispose(); _confirmPasswordCtrl.dispose();
     _emailOtpCtrl.dispose();
+    _bizNameCtrl.dispose(); _bizLocationCtrl.dispose();
+    _bizDescriptionCtrl.dispose(); _bizCustomCategoryCtrl.dispose();
     _nameCtrl.dispose(); _nicknameCtrl.dispose();
     super.dispose();
   }
@@ -188,7 +208,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     setState(() {
       _isLogin = toLogin;
       _error   = null;
-      _step    = 1;
+      _step    = _sAccountType;
+      _accountType = 'buyer';
+      _sellerTier  = 'short_term';
       _otpCtrl.clear();
       _phoneVerifyToken   = null;
       _skippedOtp         = false;
@@ -214,65 +236,121 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   // ── Step navigation ───────────────────────────────────────────────────────
 
   Future<void> _nextStep() async {
-    if (_step == 1) {
-      if (_phoneDigits.length < 9) {
-        setState(() => _error = 'Please enter a valid phone number'); return;
-      }
-      setState(() { _loading = true; _error = null; });
-      try {
-        await _sendOtp();
-        if (mounted) {
-          setState(() { _loading = false; _skippedOtp = false; });
-          _animateStep(2);
+    switch (_step) {
+      case _sAccountType:
+        // Both options are valid the moment the screen opens, and one is
+        // preselected, so there is nothing to validate here.
+        _goNext();
+        return;
+
+      case _sSellerHorizon:
+        _goNext();
+        return;
+
+      case _sPhone:
+        if (_phoneDigits.length < 9) {
+          setState(() => _error = 'Please enter a valid phone number'); return;
         }
-      } catch (e) {
-        if (mounted) setState(() {
-          _loading = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
-        });
-      }
-    } else if (_step == 2) {
-      final code = _otpCtrl.text.trim();
-      if (code.length < 4) {
-        setState(() => _error = 'Enter the code we texted you'); return;
-      }
-      setState(() { _loading = true; _error = null; });
-      try {
-        _phoneVerifyToken = await ApiService.verifyOtp(_fullPhone, code);
-        if (mounted) { setState(() => _loading = false); _animateStep(3); }
-      } catch (e) {
-        if (mounted) setState(() {
-          _loading = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
-        });
-      }
-    } else if (_step == 3) {
-      if (_nameCtrl.text.trim().isEmpty) {
-        setState(() => _error = 'Please enter your official name'); return;
-      }
-      _animateStep(4);
-    } else if (_step == 4) {
-      // Preferred name is optional — an empty field is a valid answer and
-      // means "use my official name".
-      _animateStep(5);
-    } else if (_step == 5) {
-      await _handleEmailStep();
-    } else if (_step == 6) {
-      if (_passwordCtrl.text.length < 6) {
-        setState(() => _error = 'Password must be at least 6 characters'); return;
-      }
-      if (_passwordCtrl.text != _confirmPasswordCtrl.text) {
-        setState(() => _error = 'Both passwords must match'); return;
-      }
-      _animateStep(7);
-    } else if (_step == 7) {
-      if (_capturedPhoto == null) {
-        setState(() => _error = 'Please take a selfie to continue'); return;
-      }
-      _animateStep(8);
-    } else if (_step == 8) {
-      // Biometrics are optional — the user can skip.
-      _animateStep(9);
+        setState(() { _loading = true; _error = null; });
+        try {
+          await _sendOtp();
+          if (mounted) {
+            setState(() { _loading = false; _skippedOtp = false; });
+            _animateStep(_sVerify);
+          }
+        } catch (e) {
+          if (mounted) setState(() {
+            _loading = false;
+            _error = e.toString().replaceFirst('Exception: ', '');
+          });
+        }
+        return;
+
+      case _sVerify:
+        final code = _otpCtrl.text.trim();
+        if (code.length < 4) {
+          setState(() => _error = 'Enter the code we texted you'); return;
+        }
+        setState(() { _loading = true; _error = null; });
+        try {
+          _phoneVerifyToken = await ApiService.verifyOtp(_fullPhone, code);
+          if (mounted) { setState(() => _loading = false); _animateStep(_sName); }
+        } catch (e) {
+          if (mounted) setState(() {
+            _loading = false;
+            _error = e.toString().replaceFirst('Exception: ', '');
+          });
+        }
+        return;
+
+      case _sName:
+        if (_nameCtrl.text.trim().isEmpty) {
+          setState(() => _error = 'Please enter your official name'); return;
+        }
+        _goNext();
+        return;
+
+      case _sPreferred:
+        // Optional — an empty field means "use my official name".
+        _goNext();
+        return;
+
+      case _sEmail:
+        await _handleEmailStep();
+        return;
+
+      case _sPassword:
+        if (_passwordCtrl.text.length < 6) {
+          setState(() => _error = 'Password must be at least 6 characters'); return;
+        }
+        if (_passwordCtrl.text != _confirmPasswordCtrl.text) {
+          setState(() => _error = 'Both passwords must match'); return;
+        }
+        _goNext();
+        return;
+
+      case _sBizName:
+        if (_bizNameCtrl.text.trim().isEmpty) {
+          setState(() => _error = 'Please enter your business name'); return;
+        }
+        _goNext();
+        return;
+
+      case _sBizCategory:
+        if (_effectiveBizCategory.isEmpty) {
+          setState(() => _error = 'Please say what your business does'); return;
+        }
+        _goNext();
+        return;
+
+      case _sBizLocation:
+        if (_bizLocationCtrl.text.trim().isEmpty) {
+          setState(() => _error = 'Please enter your immediate location'); return;
+        }
+        _goNext();
+        return;
+
+      case _sBizDescription:
+        // Optional, but recommended — Zeno reads it when representing the
+        // business, so an empty one only costs quality, not correctness.
+        _goNext();
+        return;
+
+      case _sBizPreview:
+        _goNext();
+        return;
+
+      case _sPhoto:
+        if (_capturedPhoto == null) {
+          setState(() => _error = 'Please take a selfie to continue'); return;
+        }
+        _goNext();
+        return;
+
+      case _sBiometrics:
+        // Optional — the user can skip.
+        _goNext();
+        return;
     }
   }
 
@@ -293,7 +371,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
             _emailCtrl.text.trim(), code);
         _emailResendTimer?.cancel();
         _emailOtpExpiryTimer?.cancel();
-        if (mounted) { setState(() => _loading = false); _animateStep(6); }
+        if (mounted) { setState(() => _loading = false); _animateStep(_sPassword); }
       } catch (e) {
         if (mounted) setState(() {
           _loading = false;
@@ -399,11 +477,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       _emailOtpExpiresIn = 0;
       _error = null;
     });
-    _animateStep(6);
+    _animateStep(_sPassword);
   }
 
-  /// OTP is optional at signup. Called from Step 1 - skips sending an SMS
-  /// entirely and goes straight to Step 3. The phone is still required
+  /// OTP is optional at signup. Called from the phone step - skips sending an
+  /// SMS entirely and goes straight to the name step. The phone is still
+  /// required
   /// (it's the account's login identifier either way); only *proving* it
   /// becomes optional. Verification can be finished later from Profile.
   void _skipPhoneVerification() {
@@ -415,29 +494,32 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       _skippedOtp = true;
       _error = null;
     });
-    _animateStep(3);
+    _animateStep(_sName);
   }
 
-  /// Called from Step 2 - a code WAS already sent, the user just chooses
-  /// not to enter it right now. _skippedOtp stays false here since Step 2
-  /// was genuinely visited, so "Back" from Step 3 still lands there correctly.
+  /// Called from the verify step - a code WAS already sent, the user just
+  /// chooses not to enter it right now. _skippedOtp stays false here since
+  /// the verify screen was genuinely visited, so "Back" from the name step
+  /// still lands there correctly.
   void _skipOtpVerification() {
     setState(() {
       _phoneVerifyToken = null;
       _error = null;
     });
-    _animateStep(3);
+    _animateStep(_sName);
   }
 
   void _prevStep() {
     // Within the email step, "back" means the code phase returns to the
     // address field rather than leaving the step entirely.
-    if (_step == 5 && _emailCodeSent) { _changeEmailAddress(); return; }
-    // If OTP was skipped from Step 1, Step 2 (code entry) was never shown
-    // and no code was ever sent - going "back" from Step 3 must return to
-    // Step 1, not to an OTP screen that would wrongly claim a code is on its way.
-    if (_step == 3 && _skippedOtp) { _animateStep(1); return; }
-    if (_step > 1) _animateStep(_step - 1);
+    if (_step == _sEmail && _emailCodeSent) { _changeEmailAddress(); return; }
+    // If OTP was skipped from the phone step, the verify screen was never
+    // shown and no code was ever sent - going back from the name step must
+    // return to the phone, not to a code screen that would wrongly claim a
+    // message is on its way.
+    if (_step == _sName && _skippedOtp) { _animateStep(_sPhone); return; }
+    final i = _stepPosition;
+    if (i > 0) _animateStep(_activeSteps[i - 1]);
   }
 
   void _startResendCooldown() {
@@ -625,6 +707,16 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         // server takes the email from this token when it is set, so a
         // verified address can't be swapped for another in the same call.
         emailVerifyToken: _emailVerifyToken,
+        accountType:  _accountType,
+        sellerTier:   _wantsToSell ? _sellerTier : null,
+        businessName: _isLongTermSeller && _bizNameCtrl.text.trim().isNotEmpty
+                          ? _bizNameCtrl.text.trim() : null,
+        businessCategory: _isLongTermSeller && _effectiveBizCategory.isNotEmpty
+                          ? _effectiveBizCategory : null,
+        businessLocation: _isLongTermSeller && _bizLocationCtrl.text.trim().isNotEmpty
+                          ? _bizLocationCtrl.text.trim() : null,
+        businessDescription: _isLongTermSeller && _bizDescriptionCtrl.text.trim().isNotEmpty
+                          ? _bizDescriptionCtrl.text.trim() : null,
         password:     _passwordCtrl.text,
         lat:          -1.286389,
         lng:          36.817223,
@@ -772,81 +864,118 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _buildStepIndicator(),
       const SizedBox(height: 24),
-      if (_step == 1) _buildStep1Phone(),
-      if (_step == 2) _buildStep2Otp(),
-      if (_step == 3) _buildStep3Name(),
-      if (_step == 4) _buildStep4Nickname(),
-      if (_step == 5) _buildStep5Email(),
-      if (_step == 6) _buildStep6Password(),
-      if (_step == 7) _buildStep7Selfie(),
-      if (_step == 8) _buildStep8Biometrics(),
-      if (_step == 9) _buildStep9Confirm(),
+      if (_step == _sAccountType)    _buildAccountTypeStep(),
+      if (_step == _sSellerHorizon)  _buildSellerHorizonStep(),
+      if (_step == _sPhone)          _buildStep1Phone(),
+      if (_step == _sVerify)         _buildStep2Otp(),
+      if (_step == _sName)           _buildStep3Name(),
+      if (_step == _sPreferred)      _buildStep4Nickname(),
+      if (_step == _sEmail)          _buildStep5Email(),
+      if (_step == _sPassword)       _buildStep6Password(),
+      if (_step == _sBizName)        _buildBizNameStep(),
+      if (_step == _sBizCategory)    _buildBizCategoryStep(),
+      if (_step == _sBizLocation)    _buildBizLocationStep(),
+      if (_step == _sBizDescription) _buildBizDescriptionStep(),
+      if (_step == _sBizPreview)     _buildBizPreviewStep(),
+      if (_step == _sPhoto)          _buildStep7Selfie(),
+      if (_step == _sBiometrics)     _buildStep8Biometrics(),
+      if (_step == _sConfirm)        _buildStep9Confirm(),
       if (_error != null) ...[const SizedBox(height: 16), _buildError()],
       const SizedBox(height: 24),
       _buildStepButtons(),
     ]);
   }
 
-  /// Total wizard steps. Each one asks a single thing: a long combined form
-  /// reads as a wall and is much harder to resume after an interruption.
-  static const int _kTotalSteps = 9;
+  // Steps are referred to by name, never by number. The wizard's LENGTH now
+  // depends on what the user picks — a buyer sees ten screens, a long-term
+  // seller sixteen — so hard-coded indices would have to be re-derived at
+  // every branch. `_activeSteps` is the single source of order, and
+  // next/back just walk it.
+  static const int _sAccountType    = 1;
+  static const int _sSellerHorizon  = 2;
+  static const int _sPhone          = 3;
+  static const int _sVerify         = 4;
+  static const int _sName           = 5;
+  static const int _sPreferred      = 6;
+  static const int _sEmail          = 7;
+  static const int _sPassword       = 8;
+  static const int _sBizName        = 9;
+  static const int _sBizCategory    = 10;
+  static const int _sBizLocation    = 11;
+  static const int _sBizDescription = 12;
+  static const int _sBizPreview     = 13;
+  static const int _sPhoto          = 14;
+  static const int _sBiometrics     = 15;
+  static const int _sConfirm        = 16;
 
-  static const List<String> _kStepTitles = [
-    'Phone',          // 1
-    'Verify Code',    // 2
-    'Your Name',      // 3
-    'Preferred Name', // 4
-    'Email',          // 5 (optional, verified in place)
-    'Password',       // 6
-    'Your Photo',     // 7
-    'Biometrics',     // 8
-    'Confirm',        // 9
+  static const Map<int, String> _kStepTitles = {
+    _sAccountType:    'How will you use BROKA?',
+    _sSellerHorizon:  'What kind of seller?',
+    _sPhone:          'Phone',
+    _sVerify:         'Verify Code',
+    _sName:           'Your Name',
+    _sPreferred:      'Preferred Name',
+    _sEmail:          'Email',
+    _sPassword:       'Password',
+    _sBizName:        'Business Name',
+    _sBizCategory:    'What You Sell',
+    _sBizLocation:    'Location',
+    _sBizDescription: 'About the Business',
+    _sBizPreview:     'Your Business Name',
+    _sPhoto:          'Your Photo',
+    _sBiometrics:     'Biometrics',
+    _sConfirm:        'Confirm',
+  };
+
+  /// The steps this particular signup will actually visit, in order.
+  ///
+  /// A buyer is never asked what kind of seller they are, and a short-term
+  /// seller is never marched through business setup to list three household
+  /// items. Those screens are absent from the flow rather than skipped
+  /// through, so the progress indicator tells the truth about how much is
+  /// left.
+  List<int> get _activeSteps => [
+    _sAccountType,
+    if (_wantsToSell) _sSellerHorizon,
+    _sPhone, _sVerify, _sName, _sPreferred, _sEmail, _sPassword,
+    if (_isLongTermSeller) ...[
+      _sBizName, _sBizCategory, _sBizLocation, _sBizDescription, _sBizPreview,
+    ],
+    _sPhoto, _sBiometrics, _sConfirm,
   ];
 
+  bool get _wantsToSell => _accountType == 'buyer_seller';
+  bool get _isLongTermSeller => _wantsToSell && _sellerTier == 'long_term';
+
+  int get _stepPosition => _activeSteps.indexOf(_step);
+  bool get _isFinalStep => _step == _sConfirm;
+
+  /// Moves to the next/previous step on the CURRENT path.
+  void _goNext() {
+    final i = _stepPosition;
+    if (i >= 0 && i + 1 < _activeSteps.length) _animateStep(_activeSteps[i + 1]);
+  }
+
   Widget _buildStepIndicator() {
-    const total = _kTotalSteps;
-    const titles = _kStepTitles;
+    final steps = _activeSteps;
+    final total = steps.length;
+    final pos   = _stepPosition;            // 0-based, -1 if off-path
+    final title = _step == _sEmail && _emailCodeSent
+        ? 'Verify Email'
+        : (_kStepTitles[_step] ?? '');
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: List.generate(total, (i) {
-        final done    = i + 1 < _step;
-        final current = i + 1 == _step;
-        return Expanded(child: Row(children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            // Sized from the step count rather than fixed: nine circles at
-            // the six-step size overflow a narrow phone.
-            width: total > 7 ? 18 : 22,
-            height: total > 7 ? 18 : 22,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: done || current
-                  ? BrokaColors.gold : BrokaColors.bgCard,
-              border: Border.all(
-                color: done || current
-                    ? BrokaColors.gold : BrokaColors.border,
-                width: current ? 2 : 1,
-              ),
-            ),
-            child: Center(
-              child: done
-                  ? Icon(Icons.check_rounded, color: Colors.white,
-                      size: total > 7 ? 10 : 12)
-                  : Text('${i + 1}', style: TextStyle(
-                      color: current ? Colors.white : BrokaColors.textLow,
-                      fontSize: total > 7 ? 9 : 10,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ),
-          if (i < total - 1) Expanded(child: Container(
-            height: 2,
-            color: done ? BrokaColors.gold : BrokaColors.border,
-          )),
-        ]));
-      })),
+      // Ten circles still fit comfortably across a phone, so a buyer keeps
+      // the dotted indicator. Past that they shrink below legibility and the
+      // connectors vanish — a long-term seller sees sixteen steps — so those
+      // paths get a plain bar and an explicit count, which stays readable at
+      // any length.
+      if (total > 10)
+        _buildProgressBar(pos, total)
+      else
+        _buildStepDots(steps, pos),
       const SizedBox(height: 10),
-      Text(
-          _step == 5 && _emailCodeSent ? 'Verify Email' : titles[_step - 1],
-          style: const TextStyle(
+      Text(title, style: const TextStyle(
           color: BrokaColors.textHigh, fontSize: 20,
           fontWeight: FontWeight.w800, letterSpacing: -0.3)),
       const SizedBox(height: 2),
@@ -855,22 +984,416 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     ]);
   }
 
+  Widget _buildStepDots(List<int> steps, int pos) {
+    final total = steps.length;
+    return Row(children: List.generate(total, (i) {
+      final done    = i < pos;
+      final current = i == pos;
+      return Expanded(child: Row(children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          width: total > 7 ? 18 : 22,
+          height: total > 7 ? 18 : 22,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: done || current ? BrokaColors.gold : BrokaColors.bgCard,
+            border: Border.all(
+              color: done || current ? BrokaColors.gold : BrokaColors.border,
+              width: current ? 2 : 1,
+            ),
+          ),
+          child: Center(
+            child: done
+                ? Icon(Icons.check_rounded, color: Colors.white,
+                    size: total > 7 ? 10 : 12)
+                : Text('${i + 1}', style: TextStyle(
+                    color: current ? Colors.white : BrokaColors.textLow,
+                    fontSize: total > 7 ? 9 : 10,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ),
+        if (i < total - 1) Expanded(child: Container(
+          height: 2,
+          color: done ? BrokaColors.gold : BrokaColors.border,
+        )),
+      ]));
+    }));
+  }
+
+  Widget _buildProgressBar(int pos, int total) {
+    final done = pos < 0 ? 0.0 : (pos + 1) / total;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Text('Step ${pos + 1} of $total',
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12,
+                fontWeight: FontWeight.w600)),
+        const Spacer(),
+        Text('${(done * 100).round()}%',
+            style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
+                fontWeight: FontWeight.w700)),
+      ]),
+      const SizedBox(height: 8),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Stack(children: [
+          Container(height: 6, color: BrokaColors.bgCard),
+          LayoutBuilder(builder: (_, c) => AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            height: 6,
+            width: c.maxWidth * done,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: _kCtaGradient),
+            ),
+          )),
+        ]),
+      ),
+    ]);
+  }
+
   String _stepSubtitle() {
     switch (_step) {
-      case 1: return "We'll text you a code to confirm it's really you";
-      case 2: return 'Enter the 6-digit code we sent you';
-      case 3: return 'The name on your ID';
-      case 4: return 'What should Zeno call you?';
-      case 5: return _emailCodeSent
-          ? 'Enter the 6-digit code we emailed you'
-          : 'Optional, but recommended — for receipts and account recovery';
-      case 6: return 'Choose something only you would guess';
-      case 7: return 'A selfie so buyers and sellers know they\'re dealing with a real person';
-      case 8: return 'Set up BROKA-specific biometric security for payments';
-      case 9: return 'Review and activate your account';
-      default: return '';
+      case _sAccountType:
+        return 'You can always change this later from your profile';
+      case _sSellerHorizon:
+        return 'This decides how much setup we ask for now';
+      case _sPhone:
+        return "We'll text you a code to confirm it's really you";
+      case _sVerify:
+        return 'Enter the 6-digit code we sent you';
+      case _sName:
+        return 'The name on your ID';
+      case _sPreferred:
+        return 'What should Zeno call you?';
+      case _sEmail:
+        return _emailCodeSent
+            ? 'Enter the 6-digit code we emailed you'
+            : 'Optional, but recommended — for receipts and account recovery';
+      case _sPassword:
+        return 'Choose something only you would guess';
+      case _sBizName:
+        return 'What is your business called?';
+      case _sBizCategory:
+        return 'Buyers use this to find you';
+      case _sBizLocation:
+        return 'The area buyers would come to';
+      case _sBizDescription:
+        return 'Optional, but recommended — Zeno uses this to represent you';
+      case _sBizPreview:
+        return 'This is how buyers will see your business';
+      case _sPhoto:
+        return 'A selfie so buyers and sellers know they\'re dealing with a real person';
+      case _sBiometrics:
+        return 'Set up BROKA-specific biometric security for payments';
+      case _sConfirm:
+        return 'Review and activate your account';
+      default:
+        return '';
     }
   }
+
+  // ── Account type ──────────────────────────────────────────────────────────
+  // Asked first because it changes the shape of everything after it. A buyer
+  // never sees the seller questions at all.
+
+  Widget _buildAccountTypeStep() => Column(children: [
+    _choiceCard(
+      selected: _accountType == 'buyer',
+      icon: Icons.shopping_bag_outlined,
+      title: 'I want to buy',
+      body: 'Browse, negotiate and buy safely through escrow. '
+            'You can start selling later from your profile.',
+      onTap: () => setState(() => _accountType = 'buyer'),
+    ),
+    const SizedBox(height: 12),
+    _choiceCard(
+      selected: _accountType == 'buyer_seller',
+      icon: Icons.storefront_outlined,
+      title: 'I want to buy and sell',
+      body: 'Everything a buyer gets, plus listing your own items. '
+            'We will ask a couple of extra questions.',
+      onTap: () => setState(() => _accountType = 'buyer_seller'),
+    ),
+  ]);
+
+  Widget _buildSellerHorizonStep() => Column(children: [
+    _choiceCard(
+      selected: _sellerTier == 'short_term',
+      icon: Icons.sell_outlined,
+      title: 'Just a few items',
+      body: 'Under about 5 things — clearing out, or selling one-offs. '
+            'No business setup needed.',
+      onTap: () => setState(() => _sellerTier = 'short_term'),
+    ),
+    const SizedBox(height: 12),
+    _choiceCard(
+      selected: _sellerTier == 'long_term',
+      icon: Icons.business_center_outlined,
+      title: "I'm running a business",
+      body: 'Selling regularly on BROKA. We will set up your business '
+            'name and storefront now so buyers can find you.',
+      onTap: () => setState(() => _sellerTier = 'long_term'),
+    ),
+  ]);
+
+  /// A large, tappable option card. Used for both filtering questions so the
+  /// two screens read as one decision the user is walking through.
+  Widget _choiceCard({
+    required bool selected,
+    required IconData icon,
+    required String title,
+    required String body,
+    required VoidCallback onTap,
+  }) => GestureDetector(
+    onTap: onTap,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(selected ? 0.75 : 0.4),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: selected
+              ? BrokaColors.gold
+              : BrokaColors.border.withOpacity(0.7),
+          width: selected ? 1.6 : 1,
+        ),
+        boxShadow: selected
+            ? [BoxShadow(color: BrokaColors.gold.withOpacity(0.25),
+                blurRadius: 20, spreadRadius: -4)]
+            : null,
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 44, height: 44,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: selected
+                ? BrokaColors.gold.withOpacity(0.18)
+                : BrokaColors.bgMid,
+          ),
+          child: Icon(icon,
+              color: selected ? BrokaColors.gold : BrokaColors.textMid,
+              size: 22),
+        ),
+        const SizedBox(width: 14),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: TextStyle(
+                color: selected ? BrokaColors.textHigh : BrokaColors.textMid,
+                fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(body, style: const TextStyle(
+                color: BrokaColors.textMid, fontSize: 12, height: 1.45)),
+          ],
+        )),
+        const SizedBox(width: 8),
+        Icon(
+          selected
+              ? Icons.radio_button_checked_rounded
+              : Icons.radio_button_unchecked_rounded,
+          color: selected ? BrokaColors.gold : BrokaColors.border,
+          size: 20,
+        ),
+      ]),
+    ),
+  );
+
+  // ── Business setup (long-term sellers only) ───────────────────────────────
+
+  String get _effectiveBizCategory => _bizCategory == 'Other'
+      ? _bizCustomCategoryCtrl.text.trim()
+      : _bizCategory;
+
+  /// Mirrors the server's own composition (see
+  /// generate_business_display_name) so the preview step shows what will
+  /// actually be stored, not a client-side guess.
+  String get _bizDisplayName => [
+    _bizNameCtrl.text.trim(),
+    _effectiveBizCategory,
+    _bizLocationCtrl.text.trim(),
+  ].where((p) => p.isNotEmpty).join(' · ');
+
+  Widget _buildBizNameStep() => Column(children: [
+    _field(_bizNameCtrl, 'Business name', Icons.storefront_outlined,
+        autofocus: true, onChanged: (_) => setState(() {})),
+    const SizedBox(height: 10),
+    const Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: Text('Buying stays exactly the same. This just unlocks listing '
+          'and selling on your account.',
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
+    ),
+  ]);
+
+  Widget _buildBizCategoryStep() => Column(children: [
+    Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: BrokaColors.border.withOpacity(0.7)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _bizCategory,
+          isExpanded: true,
+          dropdownColor: const Color(0xFF0B1020),
+          icon: const Icon(Icons.keyboard_arrow_down_rounded,
+              color: BrokaColors.textMid),
+          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16),
+          items: [
+            for (final c in _kBizCategories)
+              DropdownMenuItem(
+                value: c,
+                child: Text(c, style: const TextStyle(
+                    color: BrokaColors.textHigh, fontSize: 16)),
+              ),
+          ],
+          // The closed button renders through this rather than reusing the
+          // menu item, so the selected value is styled explicitly instead of
+          // inheriting whatever DefaultTextStyle happens to be in scope —
+          // the same inheritance gap that had the sign-in prompt rendering
+          // in the wrong font.
+          selectedItemBuilder: (_) => [
+            for (final c in _kBizCategories)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(c, style: const TextStyle(
+                    color: BrokaColors.textHigh, fontSize: 16,
+                    fontWeight: FontWeight.w500)),
+              ),
+          ],
+          onChanged: (v) => setState(() => _bizCategory = v ?? _bizCategory),
+        ),
+      ),
+    ),
+    if (_bizCategory == 'Other') ...[
+      const SizedBox(height: 14),
+      _field(_bizCustomCategoryCtrl, 'Describe what you sell',
+          Icons.edit_outlined, autofocus: true,
+          onChanged: (_) => setState(() {})),
+    ],
+    const SizedBox(height: 10),
+    const Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: Text('This becomes part of your business name, and it is how '
+          'buyers filter for what you sell.',
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
+    ),
+  ]);
+
+  Widget _buildBizLocationStep() => Column(children: [
+    _field(_bizLocationCtrl, 'Immediate location', Icons.place_outlined,
+        autofocus: true, onChanged: (_) => setState(() {})),
+    const SizedBox(height: 10),
+    const Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: Text('The estate, street or town buyers would come to — not the '
+          'whole county. Specific beats broad here.',
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
+    ),
+  ]);
+
+  Widget _buildBizDescriptionStep() => Column(children: [
+    TextField(
+      controller: _bizDescriptionCtrl,
+      autofocus: true,
+      maxLines: 5,
+      onChanged: (_) => setState(() {}),
+      style: const TextStyle(color: BrokaColors.textHigh),
+      decoration: const InputDecoration(
+        labelText: 'Describe your business (optional)',
+        alignLabelWithHint: true,
+      ),
+    ),
+    const SizedBox(height: 10),
+    const Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: Text('Recommended. Zeno reads this when it represents you in a '
+          'negotiation, so the more it knows, the better it argues your case.',
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
+    ),
+    const SizedBox(height: 16),
+    Center(
+      child: GestureDetector(
+        onTap: _loading ? null : () => _animateStep(_sBizPreview),
+        child: const Text('Skip — add it later',
+            style: TextStyle(color: BrokaColors.textMid,
+                fontSize: 13, fontWeight: FontWeight.w600)),
+      ),
+    ),
+  ]);
+
+  /// Last look before the account is created. Every part is tappable and
+  /// jumps straight back to the step that owns it, so correcting a typo does
+  /// not mean backing out through three screens.
+  Widget _buildBizPreviewStep() => Column(children: [
+    Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Your business will appear as',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+        const SizedBox(height: 8),
+        Text(
+          _bizDisplayName.isEmpty ? '—' : _bizDisplayName,
+          style: const TextStyle(color: BrokaColors.gold, fontSize: 20,
+              fontWeight: FontWeight.w800, height: 1.3),
+        ),
+      ]),
+    ),
+    const SizedBox(height: 18),
+    const Padding(
+      padding: EdgeInsets.only(left: 4, bottom: 10),
+      child: Text('Not quite right? Tap any part to change it.',
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11)),
+    ),
+    _bizEditRow('Business name', _bizNameCtrl.text.trim(), _sBizName),
+    _bizEditRow('What you sell', _effectiveBizCategory, _sBizCategory),
+    _bizEditRow('Location', _bizLocationCtrl.text.trim(), _sBizLocation),
+    _bizEditRow(
+      'Description',
+      _bizDescriptionCtrl.text.trim().isEmpty
+          ? 'Not added'
+          : _bizDescriptionCtrl.text.trim(),
+      _sBizDescription,
+    ),
+  ]);
+
+  Widget _bizEditRow(String label, String value, int step) => GestureDetector(
+    onTap: () => _animateStep(step),
+    child: Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: BrokaColors.border.withOpacity(0.6)),
+      ),
+      child: Row(children: [
+        SizedBox(
+          width: 110,
+          child: Text(label, style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 12)),
+        ),
+        Expanded(child: Text(
+          value.isEmpty ? '—' : value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: BrokaColors.textHigh,
+              fontSize: 13, fontWeight: FontWeight.w600),
+        )),
+        const SizedBox(width: 8),
+        const Icon(Icons.edit_outlined, color: BrokaColors.gold, size: 16),
+      ]),
+    ),
+  );
 
   // Step 1 - Phone number
   Widget _buildStep1Phone() => Column(children: [
@@ -984,7 +1507,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     const SizedBox(height: 16),
     Center(
       child: GestureDetector(
-        onTap: _loading ? null : () => _animateStep(5),
+        onTap: _loading ? null : () => _animateStep(_sEmail),
         child: const Text('Skip — use my official name',
             style: TextStyle(color: BrokaColors.textMid,
                 fontSize: 13, fontWeight: FontWeight.w600)),
@@ -1559,20 +2082,31 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   String _continueLabel() {
     switch (_step) {
-      case 1: return 'Send Code';
-      case 2: return 'Verify';
-      case 5: return _emailCodeSent
-          ? 'Verify'
-          : (_emailCtrl.text.trim().isEmpty ? 'Skip' : 'Send Code');
-      case 8: return _biometricVerified ? 'Continue' : 'Skip for now';
-      default: return 'Continue';
+      case _sAccountType:
+        return 'Continue';
+      case _sPhone:
+        return 'Send Code';
+      case _sVerify:
+        return 'Verify';
+      case _sEmail:
+        return _emailCodeSent
+            ? 'Verify'
+            : (_emailCtrl.text.trim().isEmpty ? 'Skip' : 'Send Code');
+      case _sBizDescription:
+        return _bizDescriptionCtrl.text.trim().isEmpty ? 'Skip' : 'Continue';
+      case _sBizPreview:
+        return 'Looks right';
+      case _sBiometrics:
+        return _biometricVerified ? 'Continue' : 'Skip for now';
+      default:
+        return 'Continue';
     }
   }
 
   Widget _buildStepButtons() {
-    if (_step == _kTotalSteps) return const SizedBox.shrink(); // final step has its own CTA
+    if (_isFinalStep) return const SizedBox.shrink(); // final step has its own CTA
     return Row(children: [
-      if (_step > 1) ...[
+      if (_stepPosition > 0) ...[
         GestureDetector(
           onTap: _prevStep,
           child: Container(
