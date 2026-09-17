@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>BROKA</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>broka</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+	<!-- Camera & gallery permissions -->
+	<key>NSCameraUsageDescription</key>
+	<string>BROKA uses the camera for video calls with buyers and sellers, and to capture verified product photos and videos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>BROKA uses the microphone for voice and video calls with buyers and sellers, and to record voice messages and product verification videos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BROKA requires photo library access to upload advert videos.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>BROKA uses speech recognition so you can send voice messages in negotiations.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>BROKA uses your location to show nearby listings and calculate distances between traders.</string>
+	<!-- ── Calling (iOS calling implementation, 2026-09-14) ──────────────
+	     voip           : lets a PushKit VoIP push wake a terminated app.
+	     audio          : keeps mic/speaker alive while backgrounded or
+	                      screen-locked mid-call - the iOS equivalent of
+	                      Android's CallForegroundService.
+	     remote-notification: FCM data messages for non-call notifications.
+	     fetch          : lets the poller's catch-up run on resume. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>voip</string>
+		<string>audio</string>
+		<string>remote-notification</string>
+		<string>fetch</string>
+	</array>
+	<!-- Required from iOS 10 on for any app that reports calls to CallKit. -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INStartCallIntent</string>
+		<string>INStartAudioCallIntent</string>
+		<string>INStartVideoCallIntent</string>
+	</array>
+	<!-- BROKA never opens arbitrary HTTP; matches usesCleartextTraffic=false
+	     on the Android side. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+	</dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

@@ -1,0 +1,69 @@
+# ─── Core Framework ────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+# HTTP/2 support for httpx. Required by the APNs VoIP push path in
+# api/routers/calls.py - Apple's push endpoint only speaks HTTP/2, so
+# httpx.AsyncClient(http2=True) raises without this.
+h2>=4.1.0
+
+# ─── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]>=2.0.0
+aiosqlite>=0.20.0          # SQLite async (dev/test only)
+asyncpg>=0.29.0            # PostgreSQL async (production)
+alembic>=1.13.0            # Schema migrations
+
+# ─── Auth & Security ──────────────────────────────────────────────────────────
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-dotenv>=1.0.0
+cryptography>=42.0.0       # api/core/secrets_crypto.py — reversible at-rest
+                            # encryption for E-Confirm's confirmation_code.
+                            # Was already an indirect dep via python-jose
+                            # [cryptography] above; pinned directly now
+                            # that it's imported explicitly rather than
+                            # relying on another package's transitive pull.
+
+# ─── Redis (event bus, rate limiting, workers, idempotency) ───────────────────
+redis[hiredis]>=5.0.0      # Async Redis client + fast parser
+
+# ─── Background Workers (v4.0) ────────────────────────────────────────────────
+arq>=0.26.1                # Redis-backed async job queue
+
+# ─── Observability ─────────────────────────────────────────────────────────────
+sentry-sdk[fastapi]>=2.0.0
+prometheus-fastapi-instrumentator>=7.0.0,<7.1.0
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-instrumentation-fastapi>=0.46b0
+opentelemetry-instrumentation-sqlalchemy>=0.46b0
+opentelemetry-exporter-otlp-proto-grpc>=1.25.0
+
+# ─── Push Notifications (optional) ───────────────────────────────────────────
+firebase-admin>=6.5.0
+
+# ─── Structured Logging
+python-json-logger>=2.0.7
+
+# ─── Voice / TTS ───────────────────────────────────────────────────────────────
+edge-tts>=6.1.0            # Microsoft Edge Read-Aloud voices (en-KE, sw-KE)
+
+# ─── Utilities ─────────────────────────────────────────────────────────────────
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+aiofiles>=23.0.0
+pydantic[email]>=2.7.0
+email-validator>=2.0.0
+
+# ─── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+pytest-cov>=5.0.0
+
+# ─── ML layer (Volume 2 §4) - uncomment once a category crosses the ────────────
+# 300-completed-deal threshold in core/ml/feature_extraction.py and
+# train.py is actually invoked. predict.py's heuristic path (what's live
+# today) has no dependency on either and works without these installed.
+# lightgbm>=4.3.0
+# joblib>=1.4.0

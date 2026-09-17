@@ -1,0 +1,169 @@
+name: BROKA CI — Test + Build APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+
+  # ── Backend Tests (v4.0 addition) ───────────────────────────────
+  backend-test:
+    name: Backend Tests (Python 3.11)
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        env:
+          ENV: test
+          SECRET_KEY: ci-test-secret-key-long-enough-for-testing-purposes
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          cd backend
+          pytest tests/ -v \
+            --cov=api \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=35
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+        continue-on-error: true
+
+  # ── Build Flutter APK ─────────────────────────────────────────────
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    needs: backend-test    # APK only builds when tests pass
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Get packages
+        run: |
+          cd flutter_app
+          flutter pub get
+
+      - name: Analyze
+        # Non-blocking: this pass is about hardening calling, not fixing
+        # every pre-existing lint warning across the whole app, and a
+        # sudden strict gate here could block releases over unrelated
+        # findings this change didn't introduce. Still genuinely useful -
+        # a real type error (the exact class of bug the last CI run
+        # caught in webrtc_service.dart) shows up here in seconds instead
+        # of after the full release build.
+        # CI FIX (implementation audit, spec §27): this was
+        # `continue-on-error: true`, which meant a genuine Dart type or
+        # compile error was printed and then ignored - the exact thing §27
+        # rules out ("should not knowingly allow genuine compile/type
+        # failures to pass silently"). The step's own comment already
+        # described it as the place such a bug "shows up in seconds", but
+        # nothing acted on it.
+        #
+        # Now blocking on ERRORS only. flutter analyze treats warnings and
+        # infos as fatal by default, so simply dropping continue-on-error
+        # would have failed the build on pre-existing lint noise - which
+        # §27 equally rules out. --no-fatal-warnings/--no-fatal-infos keeps
+        # that noise informational while making real errors stop the build.
+        run: |
+          cd flutter_app
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Build APK
+        # flutter build apk's own post-build .apk existence check can return
+        # a false failure when used with --split-per-abi (it looks for a
+        # single default filename that doesn't apply to per-ABI output).
+        # We don't gate on this step's exit code — the Locate APK / Verify
+        # APK steps below are the real source of truth on whether files
+        # were actually produced.
+        continue-on-error: true
+        run: |
+          cd flutter_app
+          flutter build apk --release --split-per-abi
+          echo "=== APK files ===" && find . -name "*.apk" 2>/dev/null
+
+      - name: Locate APK
+        id: find_apk
+        run: |
+          APK=$(find $GITHUB_WORKSPACE -name "*arm64-v8a*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then APK=$(find $GITHUB_WORKSPACE -name "*.apk" 2>/dev/null | head -1); fi
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+
+      - name: Verify APK
+        run: |
+          if [ ! -f "${{ steps.find_apk.outputs.apk_path }}" ]; then echo "ERROR: APK not found" && exit 1; fi
+          ls -lh "${{ steps.find_apk.outputs.apk_path }}"
+
+      - name: Delete previous release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete latest-release --yes --repo ${{ github.repository }} 2>/dev/null || true; git push --delete origin latest-release 2>/dev/null || true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create latest-release \
+            "${{ steps.find_apk.outputs.apk_path }}#broka-release.apk" \
+            --repo ${{ github.repository }} \
+            --title "Broka Latest Release" \
+            --notes "Auto-built from commit ${{ github.sha }}" \
+            --latest

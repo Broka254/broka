@@ -1,0 +1,72 @@
+# BROKA v4.0 — Render deployment config
+# Features: Alembic auto-migrations, Redis (Upstash free tier), structured JSON logs
+
+services:
+  - type: web
+    name: broka-api
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: MPESA_CALLBACK_SECRET
+        generateValue: true  # protects /mpesa/callback - see api/routers/mpesa.py
+      - key: GEMINI_API_KEY
+        sync: false          # Primary AI broker (Gemini 2.0 Flash)
+      - key: DEEPSEEK_API_KEY
+        sync: false          # DIRECT DeepSeek API (not OpenRouter) - TESTING for latency vs Nemotron below.
+                              # Safe to leave unset in the dashboard - app skips to OpenRouter/Nemotron without it
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-v4-flash"
+      - key: DEEPSEEK_BASE_URL
+        value: "https://api.deepseek.com"
+      - key: OPENROUTER_API_KEY
+        sync: false          # TESTING: Nemotron 3 Ultra (free) - standing in for Groq below,
+                              # whose llama-3.3-70b-versatile Groq decommissioned 2026-08-16
+      - key: OPENROUTER_MODEL
+        value: "nvidia/nemotron-3-ultra-550b-a55b:free"   # swap here to test other candidates - no redeploy needed
+      - key: GROQ_API_KEY
+        sync: false          # Legacy fallback - currently a no-op (see OPENROUTER_API_KEY above);
+                              # GROQ_MODEL is hardcoded in source, not env-driven, so reactivating
+                              # this tier with a still-served Groq model needs a code change too
+      - key: AT_USERNAME
+        sync: false          # Africa's Talking — "sandbox" for testing, your live username in prod
+      - key: AT_API_KEY
+        sync: false          # Africa's Talking API key — required for OTP + SMS nudges to actually send
+      - key: AT_SENDER_ID
+        sync: false          # Optional: registered AT sender ID, else uses the shared AT number
+      - key: DATABASE_URL
+        fromDatabase:
+          name: broka-db
+          property: connectionString
+      - key: REDIS_URL
+        sync: false          # Upstash Redis free tier: https://upstash.com
+                             # Enables: durable events, idempotency, rate limiting, ARQ workers
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: TOKEN_EXPIRE_MINUTES
+        value: "15"          # Short-lived access tokens — refresh token handles renewal
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "30"
+      - key: JSON_LOGS
+        value: "true"        # v4.0: structured JSON logs for Render log viewer
+      - key: ENV
+        value: "production"
+      - key: SENTRY_DSN
+        sync: false          # Optional: free tier covers 5k errors/month
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false          # Optional: FCM push notifications
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false          # Cloudflare Realtime TURN - see api/core/cloudflare_turn_client.py
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false          # Server-side only - never returned to Flutter (GET /calls/turn-credentials)
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false          # Only needed if a future administrative Cloudflare call requires it
+
+databases:
+  - name: broka-db
+    plan: free
+    region: oregon

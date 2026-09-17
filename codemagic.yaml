@@ -1,0 +1,33 @@
+workflows:
+  android-release:
+    name: Android Release
+    max_build_duration: 60
+    environment:
+      flutter: stable
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Get packages
+        script: |
+          cd flutter_app
+          flutter pub get
+
+      - name: Build APK
+        script: |
+          cd flutter_app
+          flutter build apk --debug
+
+    artifacts:
+      - flutter_app/build/app/outputs/flutter-apk/app-debug.apk
+
+    publishing:
+      email:
+        recipients:
+          - dev@broka.app
+        notify:
+          success: true
+          failure: true

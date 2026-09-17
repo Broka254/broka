@@ -1,0 +1,68 @@
+# ── Environment / secrets ──────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python / FastAPI (backend) ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.Python
+build/
+dist/
+*.db
+*.sqlite3
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+ENV/
+
+# ── Flutter / Dart (flutter_app) ───────────────────────────────────
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.packages
+flutter_app/.pub-cache/
+flutter_app/.pub/
+flutter_app/build/
+flutter_app/android/.gradle/
+flutter_app/android/captures/
+flutter_app/android/gradlew
+flutter_app/android/gradlew.bat
+flutter_app/android/local.properties
+flutter_app/android/key.properties
+flutter_app/android/app/*.jks
+flutter_app/android/app/*.keystore
+flutter_app/android/app/google-services.json
+flutter_app/ios/Flutter/.last_build_id
+flutter_app/ios/Pods/
+flutter_app/ios/.symlinks/
+flutter_app/*.iml
+flutter_app/.idea/
+flutter_app/coverage/
+
+# Generated Dart files (regenerate via build_runner)
+*.g.dart
+*.freezed.dart
+*.mocks.dart
+
+# ── Logs ────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS / Editor ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ── Node (if reintroduced later) ────────────────────────────────────
+node_modules/

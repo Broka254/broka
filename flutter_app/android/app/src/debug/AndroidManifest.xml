@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-build-only override (Phase 12 - security audit).
+
+  The main manifest now ships with usesCleartextTraffic="false", since
+  production always talks to https://broka-dbjd.onrender.com by default
+  (see ApiService.baseUrl) and a release build should never be able to
+  carry unencrypted traffic regardless of how it's configured.
+
+  Local development sometimes points API_URL at a plain HTTP server
+  instead (e.g. a dart-define pointing at a backend on 10.0.2.2 for an
+  emulator) - the Android Gradle Plugin merges this file into the main
+  manifest for debug builds only, so a normal `flutter run` (a debug
+  build unless a release or profile build is explicitly requested) keeps
+  working against an HTTP dev server without weakening what actually
+  ships to users.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>
