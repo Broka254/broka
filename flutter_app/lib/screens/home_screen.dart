@@ -31,7 +31,7 @@ import '../features/categories/domain/models/category.dart';
 import '../features/categories/presentation/category_zone_screen.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/presentation/auction_house_screen.dart';
-import '../features/buy_agent/presentation/buy_agent_hub_screen.dart';
+import 'zeno_screen.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/domain/models/buy_agent_request.dart';
 import 'ai_assistant_screen.dart';
@@ -406,14 +406,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // _buildDiscoveryRail() above, Zeno moved into _buildZenoCompactCta()
   // below.
 
-  // Opens the full Hub screen now that it exists (Design v2 §14: "should
-  // be a full feature, not merely a bottom-sheet form") - this replaced
-  // Home's previous showModalBottomSheet(BuyAgentSheet) call as the entry
-  // point from every Zeno touchpoint on this screen. BuyAgentSheet itself
-  // is untouched and still reachable via its own route, just no longer
-  // linked from here.
+  // Opens Zeno in buying-agent mode: a conversation, not a form.
+  //
+  // This used to open BuyAgentHubScreen, a three-stage wizard - one
+  // sentence in, a confirmation card, a result grid. Typing "iPhone"
+  // searched for the word "iPhone" and returned "0 results found", because
+  // the flow had no way to ask which iPhone, how much RAM, or what budget,
+  // and no way to say what it nearly found. Zeno now asks first and
+  // reports back in conversation (see zeno_screen.dart's header).
   void _openBuyAgentHub() => Navigator.push(
-        context, MaterialPageRoute(builder: (_) => const BuyAgentHubScreen()));
+        context,
+        MaterialPageRoute(
+          builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent),
+        ),
+      );
 
   // ── Zeno Buying Agent (Home Redesign Guide §10, Design v2 §14) ────────────
   // Home-redesign brief §9 (2026-08-16): the previous card (avatar +
@@ -1463,7 +1469,8 @@ class _ListingSearchDelegate extends SearchDelegate<String> {
                   onPressed: () {
                     close(context, '');
                     Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => BuyAgentHubScreen(initialQuery: trimmed),
+                      builder: (_) => ZenoScreen(
+                        mode: ZenoMode.buyingAgent, initialQuery: trimmed),
                     ));
                   },
                   child: const Text('Ask Zeno', style: TextStyle(

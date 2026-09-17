@@ -15,6 +15,7 @@ from api.core.rate_limit import ai_chat_limiter, message_limiter
 from api.domains.ai_broker.service import AIBrokerService
 from .service import BuyAgentService
 from .actions import ZenoActionRequest, ZenoActionError, ZenoActionName, execute_action
+from . import conversation
 
 router = APIRouter()
 
@@ -108,6 +109,57 @@ async def parse_search_intent(
     return await AIBrokerService().parse_search_intent(
         text=body.text, valid_categories=valid_names, subcategories_by_category=subs_by_cat,
         existing_filters=body.existing_filters,
+    )
+
+
+class ConverseTurnIn(BaseModel):
+    """One turn of the conversational Buying Agent.
+
+    Stateless by design - the client sends back the transcript and the
+    criteria gathered so far, the same way the existing Zeno chat already
+    does. `slots` and `questions_asked` are re-validated server-side every
+    turn (see conversation.converse), so a client cannot use them to reach
+    anything outside its own search.
+    """
+    message: str = Field(min_length=1, max_length=1000)
+    history: list[dict] = Field(default_factory=list, max_length=40)
+    slots: Optional[dict] = None
+    # How many questions Zeno has already asked in this conversation. Caps
+    # the interrogation - see conversation.MAX_QUESTIONS.
+    questions_asked: int = Field(default=0, ge=0, le=20)
+
+
+@router.post("/converse")
+async def converse_with_zeno(
+    body: ConverseTurnIn,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The Buying Agent as a conversation rather than a form.
+
+    Replaces the parse -> confirm -> search wizard (/parse-intent plus a
+    SEARCH_PRODUCTS action) for the Zeno buying screen. Each call returns
+    either phase=ASKING with Zeno's next question, or phase=RESULTS with
+    real listings and what Zeno says about them. /parse-intent and /action
+    are untouched - they still back the plain sheet and every programmatic
+    caller.
+
+    Rate-limited on ai_chat_limiter like the other two model-backed
+    endpoints here: a search turn is two LLM round-trips, so this is the
+    most expensive thing in the feature.
+    """
+    await ai_chat_limiter.check_and_record(current_user["id"])
+    return await conversation.converse(
+        db=db,
+        buyer_id=current_user["id"],
+        message=body.message,
+        history=body.history,
+        slots=body.slots,
+        questions_asked=body.questions_asked,
+        viewer_lat=lat,
+        viewer_lng=lng,
     )
 
 

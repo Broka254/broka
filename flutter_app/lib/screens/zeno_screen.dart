@@ -1,12 +1,53 @@
 // BROKA - Zeno AI Assistant
 // Powered by Gemini 2.0 Flash. Supports English, Kiswahili, Dholuo, Kikuyu, Luganda, Sheng.
+//
+// TWO MODES, ONE SURFACE
+// ======================
+// ZenoMode.assistant is the original general market assistant - price
+// checks, scam spotting, negotiation advice.
+//
+// ZenoMode.buyingAgent is the Buying Agent, and it lives here rather than
+// on a screen of its own for a reason. It used to be a three-stage wizard
+// (type one sentence -> a confirmation card -> a result grid), which meant
+// typing "iPhone" searched for the word "iPhone": no model, no storage, no
+// budget, nothing asked, and "0 results found" when it missed. Every
+// advantage of having an agent - that it can ask, compromise, and explain -
+// was engineered out by putting a form in front of it.
+//
+// A buying agent is a conversation, and this screen is already Broka's
+// conversation surface: bubbles, typing state, text-to-speech, dictation,
+// and six languages including Sheng and Dholuo. Rebuilding that next door
+// would have meant a second, worse copy of all of it - and a buyer who can
+// say "nataka iPhone 14" out loud is most of the point in this market.
+// So the Buying Agent is this screen in a different mode, talking to
+// /buy-agent-requests/converse instead of the general chat endpoint, and
+// rendering real listing cards inline when a search comes back.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
+import '../widgets/product_card.dart';
 import '../services/api_service.dart';
 import '../models/models.dart';
+import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
+import '../features/listings/domain/models/listing.dart';
+
+/// What this screen is being used for. See the file header.
+enum ZenoMode { assistant, buyingAgent }
+
+/// One bubble, plus anything attached to it.
+///
+/// Zeno's search results are part of the message that announces them, not a
+/// separate results screen - "here are the three I found" and the three
+/// cards belong to the same turn, and scroll together with it.
+class _Turn {
+  final Message message;
+  final List<dynamic> matches;
+  const _Turn(this.message, {this.matches = const []});
+}
 
 // ── Language definitions ──────────────────────────────────────────────────────
 class _Lang {
@@ -30,7 +71,15 @@ _Lang _langByKey(String key) =>
     _languages.firstWhere((l) => l.key == key, orElse: () => _languages[0]);
 
 class ZenoScreen extends StatefulWidget {
-  const ZenoScreen({super.key});
+  final ZenoMode mode;
+
+  /// Buying-agent mode only: something the buyer already typed elsewhere
+  /// (Home's search bar) so they don't have to say it twice. Sent as their
+  /// first turn the moment the screen opens.
+  final String? initialQuery;
+
+  const ZenoScreen({super.key, this.mode = ZenoMode.assistant, this.initialQuery});
+
   @override
   State<ZenoScreen> createState() => _ZenoScreenState();
 }
@@ -46,8 +95,37 @@ class _ZenoScreenState extends State<ZenoScreen>
   bool _composerFocused = false;
   final _scrollCtrl = ScrollController();
   bool _typing      = false;
-  List<Message> _messages = [];
+  List<_Turn> _turns = [];
   List<Map<String, String>> _history = [];
+
+  bool get _isBuying => widget.mode == ZenoMode.buyingAgent;
+
+  // ── Buying-agent turn state ────────────────────────────────────────────────
+  // The conversation is stateless server-side (same contract as the general
+  // chat), so the criteria Zeno has gathered and how many questions it has
+  // spent ride along with every turn and come back updated.
+  Map<String, dynamic> _slots = {};
+  int _questionsAsked = 0;
+  // Zeno's own read of the last search, used to decide what to offer next -
+  // "EXACT" | "PARTIAL" | "MIXED" | "EMPTY", computed server-side.
+  String? _lastVerdict;
+  bool _watching = false;
+  bool _watchBusy = false;
+  final Set<String> _negotiating = <String>{};
+  final Set<String> _negotiationOpened = <String>{};
+
+  // A search is two model round-trips plus a ranked scan, so it is genuinely
+  // slower than a reply. Three dots for that long reads as a hang; saying
+  // what it is doing reads as work. Purely cosmetic - it advances on a timer
+  // and makes no claim about actual progress.
+  bool _searching = false;
+  int _searchPhase = 0;
+  Timer? _searchTicker;
+  static const _searchPhases = [
+    'Scanning Broka listings…',
+    'Matching against your specs…',
+    'Ranking the closest ones…',
+  ];
 
   String get _langKey => ApiService.currentUserLanguage;
 
@@ -66,7 +144,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     return n != null && n.isNotEmpty ? n.split(' ').first : '';
   }
 
-  final _suggestions = const [
+  static const _assistantSuggestions = [
     ('🚗', 'Is KES 800K fair for a Toyota Axio 2012?'),
     ('📊', 'What\'s the market like for phones right now?'),
     ('🔍', 'How do I spot a fake listing?'),
@@ -74,6 +152,20 @@ class _ZenoScreenState extends State<ZenoScreen>
     ('🏠', 'How does BROKA escrow work?'),
     ('📍', 'Why does location matter in a deal?'),
   ];
+
+  // Openers, not filters: each one is deliberately under-specified so Zeno
+  // has something real to ask about, which is the whole shape of the flow.
+  static const _buyingSuggestions = [
+    ('📱', 'I\'m looking for an iPhone'),
+    ('🚗', 'I need a car for under 1M'),
+    ('💻', 'Find me a laptop for work'),
+    ('🏠', 'Looking for a 2 bedroom to buy'),
+    ('🚜', 'I need farm equipment'),
+    ('🛋️', 'Something for my living room'),
+  ];
+
+  List<(String, String)> get _suggestions =>
+      _isBuying ? _buyingSuggestions : _assistantSuggestions;
 
   @override
   void initState() {
@@ -89,6 +181,10 @@ class _ZenoScreenState extends State<ZenoScreen>
     _initTts();
     _initStt();
     _addWelcome();
+    final initial = widget.initialQuery?.trim();
+    if (_isBuying && initial != null && initial.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _send(initial));
+    }
     // Only rebuild on the empty/non-empty boundary, not per keystroke.
     _msgCtrl.addListener(() {
       final has = _msgCtrl.text.trim().isNotEmpty;
@@ -111,6 +207,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     _composerFocus.dispose();
     _scrollCtrl.dispose();
     _pulseCtrl.dispose();
+    _searchTicker?.cancel();
     _tts.stop();
     super.dispose();
   }
@@ -123,15 +220,29 @@ class _ZenoScreenState extends State<ZenoScreen>
   }
 
   void _addWelcome() {
-    final lang = _langByKey(_langKey);
     final greet = _firstName.isNotEmpty ? ', $_firstName' : '';
+
+    // Buying agent: Zeno speaks first and asks an open question, because
+    // the buyer arriving here has already said what they want by tapping
+    // "Buying Agent" - what they haven't said is what they're after.
+    if (_isBuying) {
+      final opener = switch (_langKey) {
+        'swahili' => 'Mambo$greet! Unatafuta nini leo? Niambie kitu unachotaka — nitakuuliza machache kisha nikitafute.',
+        'luo'     => 'Amosi$greet! Angʼo ma imanyo kawuono? Nyisa gima idwaro — abiro penji matin eka amanyni.',
+        'kikuyu'  => 'Wĩmwega$greet! Nĩ kĩĩ ũracaria ũmũthĩ? Njĩra kĩrĩa ũkwenda — nĩngũkũũria tũnini na thuutha ũcio ngũcarĩrie.',
+        _         => "What's up$greet — need my help finding something? Tell me what you're after and I'll ask a couple of questions before I go looking.",
+      };
+      _turns.add(_Turn(Message(role: 'broker', content: opener)));
+      return;
+    }
+
     final welcomeMsg = switch (_langKey) {
       'swahili' => 'Habari$greet! Mimi ni Zeno, mshauri wako wa biashara wa BROKA. Ninaweza kukusaidia kutathmini bei, kugundua udanganyifu, au kupanga mkakati wa mazungumzo. Niulize chochote! 🤝',
       'luo'     => 'Misawa$greet! An Zeno, jakony mar ohala mar BROKA. Anyalo konyi nyiso nengo maber, neno wach miriambo, kata loso hera. Penj gimoro amora! 🤝',
       'kikuyu'  => 'Wĩmwega$greet! Nĩ niĩ Zeno, mũteithia waku wa biashara wa BROKA. Ngũkuteithia gũthagania thaara, gwĩkira mahinda ma mũrũgamo, kana gũtheria wĩhĩo. Ĩũlĩria kĩndũ kĩothe! 🤝',
       _         => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings, plan your negotiation strategy, and analyse market trends. Ask me anything! 🤝',
     };
-    _messages.add(Message(role: 'broker', content: welcomeMsg));
+    _turns.add(_Turn(Message(role: 'broker', content: welcomeMsg)));
   }
 
   Future<void> _send([String? override]) async {
@@ -139,11 +250,17 @@ class _ZenoScreenState extends State<ZenoScreen>
     if (text.isEmpty || _typing) return;
     _msgCtrl.clear();
     setState(() {
-      _messages.add(Message(role: 'user', content: text));
+      _turns.add(_Turn(Message(role: 'user', content: text)));
       _typing = true;
     });
     _scrollDown();
     _history.add({'role': 'user', 'content': text});
+
+    if (_isBuying) {
+      await _sendBuyingTurn(text);
+      return;
+    }
+
     try {
       final reply = await ApiService.zenoChat(
         message: text,
@@ -153,7 +270,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       if (mounted) {
         _history.add({'role': 'assistant', 'content': reply});
         setState(() {
-          _messages.add(Message(role: 'broker', content: reply));
+          _turns.add(_Turn(Message(role: 'broker', content: reply)));
           _typing = false;
         });
         if (_ttsEnabled) _speak(reply);
@@ -161,13 +278,94 @@ class _ZenoScreenState extends State<ZenoScreen>
     } catch (e) {
       if (mounted) {
         setState(() {
-          _messages.add(Message(role: 'broker',
-              content: '⚠️ Zeno is unavailable right now. Please try again shortly.'));
+          _turns.add(_Turn(Message(role: 'broker',
+              content: '⚠️ Zeno is unavailable right now. Please try again shortly.')));
           _typing = false;
         });
       }
     }
     _scrollDown();
+  }
+
+  /// One turn of the buying conversation.
+  ///
+  /// The screen does not decide whether this is a question or a search -
+  /// the server does, and returns whichever it ran. That keeps the question
+  /// budget, the criteria and the honesty of the result in one place
+  /// instead of split across a client that could drift out of step with it.
+  Future<void> _sendBuyingTurn(String text) async {
+    // When the caption appears, and why it is a guess rather than a fact:
+    // only the server knows whether this turn is a question or a search,
+    // and it says so in the response - which arrives at the END. Two
+    // signals stand in for it. The question budget is exhausted (the server
+    // will search, guaranteed - see conversation.MAX_QUESTIONS), so show it
+    // at once; otherwise wait, because a question is one model call and a
+    // search is two plus a ranked scan, so anything still running after a
+    // couple of seconds is almost certainly the search. A turn that
+    // resolves quickly never shows it at all.
+    if (_questionsAsked >= 2) {
+      _setSearching(true);
+    } else {
+      Future.delayed(const Duration(milliseconds: 2200), () {
+        if (mounted && _typing && !_searching) _setSearching(true);
+      });
+    }
+
+    final result = await buyAgentRepository.converse(
+      message: text,
+      history: _history,
+      slots: _slots.isEmpty ? null : _slots,
+      questionsAsked: _questionsAsked,
+      lat: ApiService.currentUserLat,
+      lng: ApiService.currentUserLng,
+    );
+    _setSearching(false);
+    if (!mounted) return;
+
+    result.fold(
+      onSuccess: (data) {
+        final reply = (data['reply'] as String?)?.trim() ?? '';
+        final matches = (data['matches'] as List?) ?? const [];
+        _history.add({'role': 'assistant', 'content': reply});
+        setState(() {
+          _slots = (data['slots'] as Map?)?.cast<String, dynamic>() ?? _slots;
+          _questionsAsked = (data['questions_asked'] as num?)?.toInt() ?? _questionsAsked;
+          _lastVerdict = data['verdict'] as String?;
+          // A fresh search replaces the old offer to keep watching - the
+          // criteria it would have watched for have moved on.
+          if (data['phase'] == 'RESULTS') _watching = false;
+          _turns.add(_Turn(Message(role: 'broker', content: reply), matches: matches));
+          _typing = false;
+        });
+        if (_ttsEnabled && reply.isNotEmpty) _speak(reply);
+      },
+      onFailure: (msg, code) => setState(() {
+        _turns.add(_Turn(Message(
+          role: 'broker',
+          content: code == 429
+              ? "I need a moment — that's a lot of searching at once. Try me again shortly."
+              : "⚠️ I couldn't get that search through just now. Try me again in a moment.",
+        )));
+        _typing = false;
+      }),
+    );
+    _scrollDown();
+  }
+
+  /// Starts and stops the staged "searching" caption. Cosmetic only - it is
+  /// a timer, and says nothing about how far along the search really is, so
+  /// it never claims a step has finished.
+  void _setSearching(bool on) {
+    _searchTicker?.cancel();
+    if (!on) {
+      if (mounted) setState(() { _searching = false; _searchPhase = 0; });
+      return;
+    }
+    setState(() { _searching = true; _searchPhase = 0; });
+    _searchTicker = Timer.periodic(const Duration(milliseconds: 1600), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _searchPhase = (_searchPhase + 1) % _searchPhases.length);
+    });
   }
 
   Future<void> _speak(String text) async {
@@ -197,6 +395,149 @@ class _ZenoScreenState extends State<ZenoScreen>
     );
   }
 
+  /// START_NEGOTIATION for one result. The confirmation is required before
+  /// Zeno ever messages a seller (Design v2 §24) - the buyer authorises
+  /// this specific conversation, which is a different moment from
+  /// pre-authorising the standing watch to message on their behalf.
+  Future<void> _startNegotiation(BrokaListing listing) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        title: const Text('Start negotiating?',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
+        content: Text(
+          "I'll reach out to the seller of \"${listing.name}\" on your behalf and open a "
+          "conversation. You'll see everything they say and can take over anytime.",
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Not yet', style: TextStyle(color: BrokaColors.textMid))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Yes, start it',
+                  style: TextStyle(color: BrokaColors.neonBlue))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _negotiating.add(listing.id));
+    final result = await buyAgentRepository.startNegotiation(listing.id);
+    if (!mounted) return;
+    setState(() => _negotiating.remove(listing.id));
+    result.fold(
+      onSuccess: (data) {
+        if (data['status'] == 'SUCCESS') {
+          setState(() => _negotiationOpened.add(listing.id));
+          Navigator.pushNamed(context, '/negotiate',
+              arguments: {'listingId': listing.id});
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(data['message'] as String? ??
+                "Couldn't start that negotiation just now."),
+          ));
+        }
+      },
+      onFailure: (msg, __) => ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(msg))),
+    );
+  }
+
+  /// Turns the criteria gathered in conversation into a standing request.
+  ///
+  /// A standing request needs a price ceiling it can match against
+  /// (BuyAgentRequest.max_price is NOT NULL, and a watch with no budget
+  /// matches on category alone), so if the buyer waved the budget away
+  /// during the conversation - which is a perfectly reasonable thing to do
+  /// for a one-off search - this is where it has to be asked for. Asked
+  /// once, at the moment it becomes necessary, rather than demanded up
+  /// front by a form.
+  Future<void> _keepWatching() async {
+    var maxPrice = (_slots['max_price'] as num?)?.toDouble();
+    if (maxPrice == null) {
+      maxPrice = await _askBudget();
+      if (maxPrice == null || !mounted) return;
+      _slots['max_price'] = maxPrice;
+    }
+    if (_slots['category'] == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Tell me roughly what kind of thing it is first, and I can watch for it."),
+      ));
+      return;
+    }
+
+    setState(() => _watchBusy = true);
+    final result = await buyAgentRepository.watchFromSlots(
+      _slots,
+      lat: ApiService.currentUserLat,
+      lng: ApiService.currentUserLng,
+    );
+    if (!mounted) return;
+    setState(() => _watchBusy = false);
+    result.fold(
+      onSuccess: (data) {
+        if (data['status'] == 'SUCCESS') {
+          setState(() => _watching = true);
+        } else {
+          // Most often ACTIVE_REQUEST_EXISTS - say what it means and what
+          // to do, not the raw error code.
+          final code = data['error_code'];
+          setState(() => _turns.add(_Turn(Message(
+            role: 'broker',
+            content: code == 'ACTIVE_REQUEST_EXISTS'
+                ? "I'm already watching for something else for you. Cancel that one from "
+                  "the home screen and I'll pick this up instead."
+                : (data['message'] as String? ?? "I couldn't set that watch up just now."),
+          ))));
+          _scrollDown();
+        }
+      },
+      onFailure: (msg, __) => ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(msg))),
+    );
+  }
+
+  Future<double?> _askBudget() async {
+    final ctrl = TextEditingController();
+    return showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        title: const Text("What's your ceiling?",
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text("To keep watching I need a top price, so I only bring you things "
+              "you'd actually consider.",
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: BrokaColors.textHigh),
+            decoration: const InputDecoration(
+              prefixText: 'KES ',
+              prefixStyle: TextStyle(color: BrokaColors.textMid),
+              hintText: '80000',
+              hintStyle: TextStyle(color: BrokaColors.textLow),
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid))),
+          TextButton(
+            onPressed: () {
+              final v = double.tryParse(ctrl.text.trim().replaceAll(',', ''));
+              Navigator.pop(ctx, (v != null && v > 0) ? v : null);
+            },
+            child: const Text('Watch for it', style: TextStyle(color: BrokaColors.gold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _scrollDown() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
@@ -222,8 +563,8 @@ class _ZenoScreenState extends State<ZenoScreen>
         child: Column(children: [
           _buildHeader(),
           Expanded(child: _buildMessages()),
-          if (_typing) _buildTypingIndicator(),
-          if (_messages.length <= 1) _buildSuggestions(),
+          if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
+          if (_turns.length <= 1) _buildSuggestions(),
           _buildInputBar(),
         ]),
       ),
@@ -274,7 +615,9 @@ class _ZenoScreenState extends State<ZenoScreen>
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Zeno', style: TextStyle(
               color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w800)),
-          Text('AI Market Assistant · ${_langByKey(_langKey).flag} ${_langByKey(_langKey).name}',
+          Text(
+              '${_isBuying ? 'Buying Agent' : 'AI Market Assistant'} · '
+              '${_langByKey(_langKey).flag} ${_langByKey(_langKey).name}',
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
         ])),
         // TTS toggle
@@ -301,8 +644,218 @@ class _ZenoScreenState extends State<ZenoScreen>
   Widget _buildMessages() => ListView.builder(
     controller: _scrollCtrl,
     padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-    itemCount: _messages.length,
-    itemBuilder: (_, i) => _ZenoBubble(message: _messages[i]),
+    itemCount: _turns.length,
+    itemBuilder: (_, i) {
+      final turn = _turns[i];
+      final isLast = i == _turns.length - 1;
+      if (turn.matches.isEmpty) {
+        // The offer to keep watching belongs on the last turn even when it
+        // found nothing - an empty search is exactly when a standing watch
+        // is worth the most.
+        final offerWatch = _isBuying && isLast && _lastVerdict == 'EMPTY';
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _ZenoBubble(message: turn.message),
+          if (offerWatch) _buildWatchOffer(),
+        ]);
+      }
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _ZenoBubble(message: turn.message),
+        ...turn.matches.map((m) => _buildMatchCard(m as Map<String, dynamic>)),
+        if (isLast) _buildWatchOffer(),
+        const SizedBox(height: 4),
+      ]);
+    },
+  );
+
+  /// One result, with what it falls short on stated on its face.
+  ///
+  /// Design v2 §23 rules out invented match percentages, and the score this
+  /// is ordered by is not a calibrated probability of anything - so what
+  /// the buyer is shown is the concrete shortfall the backend measured
+  /// ("8GB RAM, you wanted 12GB"), which is a fact about the listing, not a
+  /// number about our confidence.
+  Widget _buildMatchCard(Map<String, dynamic> match) {
+    final listing = BrokaListing.fromJson(match);
+    final misses = (match['match_misses'] as List?) ?? const [];
+    final isExact = match['match_is_exact'] == true;
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 38, bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          height: 210,
+          child: ProductCard(
+            item: listing,
+            onTap: () => Navigator.pushNamed(
+                context, '/product', arguments: {'listingId': listing.id}),
+          ),
+        ),
+        if (isExact)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(children: const [
+              Icon(Icons.check_circle_rounded, size: 13, color: BrokaColors.success),
+              SizedBox(width: 5),
+              Text('Matches everything you asked for',
+                  style: TextStyle(color: BrokaColors.success, fontSize: 11.5,
+                      fontWeight: FontWeight.w600)),
+            ]),
+          )
+        else if (misses.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final raw in misses.take(3))
+                _shortfallChip(raw as Map<String, dynamic>),
+            ]),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: SizedBox(
+            width: double.infinity,
+            child: _negotiationOpened.contains(listing.id)
+                ? OutlinedButton.icon(
+                    onPressed: () => Navigator.pushNamed(
+                        context, '/negotiate', arguments: {'listingId': listing.id}),
+                    icon: const Icon(Icons.check_rounded, size: 15, color: BrokaColors.success),
+                    label: const Text('Zeno reached out — open chat',
+                        style: TextStyle(color: BrokaColors.success, fontSize: 12.5,
+                            fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: BrokaColors.success.withOpacity(0.4)),
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  )
+                : OutlinedButton.icon(
+                    onPressed: _negotiating.contains(listing.id)
+                        ? null
+                        : () => _startNegotiation(listing),
+                    icon: _negotiating.contains(listing.id)
+                        ? const SizedBox(width: 15, height: 15,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: BrokaColors.neonBlue))
+                        : const Icon(Icons.chat_bubble_outline_rounded,
+                            size: 15, color: BrokaColors.neonBlue),
+                    label: const Text('Ask Zeno to negotiate this one',
+                        style: TextStyle(color: BrokaColors.neonBlue, fontSize: 12.5,
+                            fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: BrokaColors.neonBlue.withOpacity(0.4)),
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _shortfallChip(Map<String, dynamic> miss) {
+    final field = _prettyField(miss['field'] as String? ?? '');
+    final wanted = miss['wanted']?.toString() ?? '';
+    final actual = miss['actual']?.toString();
+    final label = actual == null
+        ? "$field not stated (you wanted $wanted)"
+        : "$field $actual, you wanted $wanted";
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: BrokaColors.gold.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: BrokaColors.gold.withOpacity(0.35)),
+      ),
+      child: Text(label, style: const TextStyle(
+          color: BrokaColors.gold, fontSize: 10.5, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  static String _prettyField(String field) => switch (field) {
+        'max_price' => 'Price',
+        'min_price' => 'Price',
+        'max_distance_km' => 'Distance',
+        'condition' => 'Condition',
+        'ram' => 'RAM',
+        _ => field.isEmpty
+            ? field
+            : field.replaceAll('_', ' ')[0].toUpperCase() +
+                field.replaceAll('_', ' ').substring(1),
+      };
+
+  /// "Keep watching for me" - the standing request, offered in conversation
+  /// rather than as a checkbox on a results screen. This is what keeps the
+  /// Buy-Agent request feature reachable now the wizard that used to create
+  /// it is gone.
+  Widget _buildWatchOffer() {
+    if (!_isBuying) return const SizedBox.shrink();
+    if (_slots['category'] == null && _slots['query'] == null) return const SizedBox.shrink();
+
+    if (_watching) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 38, bottom: 14),
+        child: Row(children: const [
+          Icon(Icons.visibility_rounded, size: 14, color: BrokaColors.success),
+          SizedBox(width: 6),
+          Flexible(child: Text("I'll keep watching and tell you when something turns up.",
+              style: TextStyle(color: BrokaColors.success, fontSize: 12,
+                  fontWeight: FontWeight.w600))),
+        ]),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 38, bottom: 14),
+      child: OutlinedButton.icon(
+        onPressed: _watchBusy ? null : _keepWatching,
+        icon: _watchBusy
+            ? const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.gold))
+            : const Icon(Icons.visibility_outlined, size: 15, color: BrokaColors.gold),
+        label: const Text('Keep watching for me',
+            style: TextStyle(color: BrokaColors.gold, fontSize: 12.5,
+                fontWeight: FontWeight.w600)),
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: BrokaColors.gold.withOpacity(0.4)),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchingIndicator() => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    child: Row(children: [
+      AnimatedBuilder(
+        animation: _pulseCtrl,
+        builder: (_, __) => Container(
+          width: 32, height: 32,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+                colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+            boxShadow: [BoxShadow(
+              color: BrokaColors.neonBlue.withOpacity(0.25 + 0.35 * _pulseCtrl.value),
+              blurRadius: 10 + 10 * _pulseCtrl.value,
+            )],
+          ),
+          child: const Icon(Icons.travel_explore_rounded, color: Colors.white, size: 16),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 320),
+          child: Text(
+            _searchPhases[_searchPhase],
+            key: ValueKey(_searchPhase),
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5,
+                fontStyle: FontStyle.italic),
+          ),
+        ),
+      ),
+    ]),
   );
 
   Widget _buildTypingIndicator() => Padding(
@@ -419,10 +972,12 @@ class _ZenoScreenState extends State<ZenoScreen>
                       keyboardType: TextInputType.multiline,
                       textInputAction: TextInputAction.newline,
                       cursorColor: BrokaColors.gold,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         isDense: true,
-                        hintText: 'Ask Zeno anything',
-                        hintStyle: TextStyle(color: BrokaColors.textLow, fontSize: 15),
+                        hintText: _isBuying
+                            ? "Tell Zeno what you're looking for"
+                            : 'Ask Zeno anything',
+                        hintStyle: const TextStyle(color: BrokaColors.textLow, fontSize: 15),
                         border: InputBorder.none,
                         contentPadding:
                             EdgeInsets.symmetric(horizontal: 6, vertical: 13),
