@@ -28,6 +28,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../features/listings/domain/models/listing.dart' show BrokaListing;
 import '../utils/backend_time.dart';
+import '../utils/price_format.dart';
 
 class ProductCard extends StatelessWidget {
   final dynamic item; // Listing or BrokaListing
@@ -59,14 +60,12 @@ class ProductCard extends StatelessWidget {
     'Livestock': '🐄',
   };
 
-  String _formatKes(num v) {
-    if (v >= 1000000) return 'KES ${(v / 1000000).toStringAsFixed(1)}M';
-    // Kept in sync with BrokaListing.priceFormatted - see that getter for
-    // why sub-10K prices need a decimal instead of rounding to the K.
-    if (v >= 10000) return 'KES ${(v / 1000).toStringAsFixed(0)}K';
-    if (v >= 1000) return 'KES ${(v / 1000).toStringAsFixed(1)}K';
-    return 'KES ${v.toStringAsFixed(0)}';
-  }
+  // Home collapsing-scroll pass (2026-09-18, brief §5): the K/M ladder that
+  // used to live here is gone - see utils/price_format.dart, which is now
+  // the one implementation this, BrokaListing.priceFormatted and HomeScreen's
+  // filter panel all share. The extra width a full price needs is handled by
+  // scaling the text down in the layout below, not by shortening the number.
+  String _formatKes(num v) => formatKes(v);
 
   String get _title {
     try {
@@ -616,13 +615,32 @@ class ProductCard extends StatelessWidget {
                   // first stop for the eye, ahead of the CTA below it -
                   // previously both price and button used the same gold
                   // color/weight and visually competed.
-                  Text(
-                    _priceText,
-                    style: TextStyle(
-                      color: BrokaColors.gold,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 16,
-                      shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.5), blurRadius: 10)],
+                  // Home collapsing-scroll pass (2026-09-18, brief §5/§14):
+                  // prices are full digit-grouped amounts now ("KES 125,000",
+                  // not "KES 125K"), so the string can be roughly twice as
+                  // wide as before on an expensive listing. FittedBox scales
+                  // it down to fit the card instead of ellipsizing it - a
+                  // truncated price ("KES 1,500,0…") would be worse than a
+                  // smaller one, and a wrapped one would push the CTA out of
+                  // the card. Cheap prices are unaffected: scaleDown only
+                  // ever shrinks, never enlarges, so KES 250 still renders at
+                  // the full 16px.
+                  SizedBox(
+                    width: double.infinity,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _priceText,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                          color: BrokaColors.gold,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.5), blurRadius: 10)],
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 5),
@@ -752,13 +770,26 @@ class _ViewDealButton extends StatelessWidget {
             onTap: onTap,
             borderRadius: BorderRadius.circular(9),
             splashColor: Colors.white.withOpacity(0.2),
+            // FittedBox (collapsing-scroll pass, 2026-09-18, brief §27/§28):
+            // "View Deal →" needs ~123px and a card column on a 320dp phone
+            // is 119.6px wide, so this Row overflowed by 3.2px on every card
+            // on a small Android screen. Scaling down is the right answer
+            // rather than shortening the label or ellipsizing a 9-character
+            // CTA; on every wider screen scaleDown is a no-op and the button
+            // renders exactly as before.
             child: const Center(
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Text('View Deal', style: TextStyle(
-                    color: BrokaColors.bg, fontWeight: FontWeight.w800, fontSize: 11.5)),
-                SizedBox(width: 4),
-                Icon(Icons.arrow_forward_rounded, size: 13, color: BrokaColors.bg),
-              ]),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Text('View Deal', style: TextStyle(
+                        color: BrokaColors.bg, fontWeight: FontWeight.w800, fontSize: 11.5)),
+                    SizedBox(width: 4),
+                    Icon(Icons.arrow_forward_rounded, size: 13, color: BrokaColors.bg),
+                  ]),
+                ),
+              ),
             ),
           ),
         ),

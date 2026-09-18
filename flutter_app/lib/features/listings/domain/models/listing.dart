@@ -1,4 +1,6 @@
 // BROKA v3.0 - Listing domain model
+import '../../../../utils/price_format.dart';
+
 class BrokaListing {
   final String id;
   final String sellerId;
@@ -123,14 +125,11 @@ class BrokaListing {
   bool get isActive  => status == 'active';
   bool get hasStore  => storeId != null;
 
-  String get priceFormatted {
-    if (price >= 1000000) return 'KES ${(price / 1000000).toStringAsFixed(1)}M';
-    // Below 10K, whole-thousand rounding is too lossy to be trustworthy -
-    // KES 1,500 was rounding to "KES 2K", a third more than the real price.
-    // One decimal keeps it accurate (1,500 -> "1.5K") without the clutter
-    // of full digit-grouped prices once listings get into five figures.
-    if (price >= 10000)   return 'KES ${(price / 1000).toStringAsFixed(0)}K';
-    if (price >= 1000)    return 'KES ${(price / 1000).toStringAsFixed(1)}K';
-    return 'KES ${price.toStringAsFixed(0)}';
-  }
+  // Home collapsing-scroll pass (2026-09-18, brief §5): no more K/M
+  // abbreviation. The old ladder here rounded five-figure prices to the
+  // nearest thousand ("KES 15K" for anything from 14,500 to 15,499), which
+  // is exactly the range a buyer compares within. utils/price_format.dart
+  // is now the single implementation - ProductCard and HomeScreen's filter
+  // panel each carried their own drifting copy of the same ladder.
+  String get priceFormatted => formatKes(price);
 }

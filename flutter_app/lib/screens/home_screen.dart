@@ -10,6 +10,21 @@
 // in the old version of the line above stopped being true, so it's been
 // removed rather than left stale. Full rationale at _detectLocation()'s
 // old call site and in CHANGES.md.
+//
+// Collapsing-scroll pass (2026-09-18): Home used to be a Column - a fixed
+// header, rail and Zeno CTA, with the product feed squeezed into whatever
+// Expanded space was left and scrolling inside its own ScrollController.
+// That meant the marketplace only ever owned the bottom two-thirds of the
+// screen no matter how far you scrolled, and two vertical scrollables sat
+// in the same screen. Home is now ONE CustomScrollView: the header is a
+// SliverPersistentHeader that collapses to a compact sticky search bar, the
+// rail/Zeno/Buy Agent sections are ordinary slivers that scroll away, and
+// the feed is ProductGridView in its new `sliver: true` mode, so the
+// listings progressively inherit the screen. Pull-to-refresh moved up to
+// the one scroll view (see _onRefresh + ProductGridController) and the
+// bottom nav stays outside it, fixed. Background is the same
+// ConstellationBackground the auth screens use, so Home and sign-in read as
+// one app.
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -22,7 +37,8 @@ import '../main.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/api_service.dart';
 import '../utils/auth_gate.dart';
-import '../widgets/particle_field.dart';
+import '../utils/price_format.dart';
+import '../widgets/constellation_background.dart';
 import '../widgets/product_grid_view.dart';
 import '../widgets/zeno_avatar.dart';
 import '../widgets/product_card.dart';
@@ -50,7 +66,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _navIndex = 0;
   String? _locationLabel;
   bool _gettingLocation = false;
-  late AnimationController _pulseCtrl;
+
+  // The single vertical scroll owner for the whole screen (collapsing-scroll
+  // pass, brief §3). Nothing below it scrolls vertically on its own - the
+  // discovery rail is horizontal, and ProductGridView runs in sliver mode
+  // precisely so it does not bring a second controller into this viewport.
+  final ScrollController _scrollController = ScrollController();
+
+  // Lets this screen's RefreshIndicator - which now lives above the whole
+  // CustomScrollView rather than inside the grid - drive the feed's refetch
+  // and await it.
+  final ProductGridController _feedController = ProductGridController();
 
   // Search history
   List<String> _searchHistory = [];
@@ -151,15 +177,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // data only once TrendingScreen/AuctionHouseScreen actually opens.
     // Calling their APIs here was work Home paid for and never used.
     _loadActiveBuyAgentRequest();
-    _pulseCtrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
+    // The Zeno CTA's breathing glow and its rotating message now live inside
+    // _ZenoCompactCta (bottom of this file) instead of an AnimationController
+    // owned here. A controller at this level drove a ~4-frames-per-second
+    // setState() over the ENTIRE HomeScreen - header, rail, and every
+    // product card - for an effect confined to one 56px row (brief §7/§15).
   }
 
   @override
   void dispose() {
-    _pulseCtrl.dispose();
     _railScrollController.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  // Pull-to-refresh for the whole screen (brief §16). Refreshes the feed and
+  // the two other things Home actually shows, so a pull that visibly reloads
+  // the listings also picks up a new category or a Buy Agent match rather
+  // than leaving them stale.
+  Future<void> _onRefresh() async {
+    await Future.wait([
+      _feedController.refresh(),
+      _loadTopCategories(),
+      _loadActiveBuyAgentRequest(),
+    ]);
+  }
+
+  // The filter panel is a sliver below the header now, so opening it while
+  // scrolled down would drop it somewhere off-screen. Returning to the top
+  // keeps "tap tune -> see filters" true at any scroll position.
+  void _toggleFilters() {
+    setState(() => _showFilters = !_showFilters);
+    if (_showFilters && _scrollController.hasClients && _scrollController.offset > 0) {
+      _scrollController.animateTo(0,
+          duration: const Duration(milliseconds: 320), curve: Curves.easeOutCubic);
+    }
   }
 
   final ScrollController _railScrollController = ScrollController();
@@ -240,8 +292,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // (_nudgeDiscoveryRail(), 0→56px→0) is also gone, replaced by a static
   // right-edge fade so the rail no longer moves on its own; the user
   // controls it entirely now.
+  //
+  // Collapsing-scroll pass (2026-09-18): the rail is unchanged in structure -
+  // still one horizontal strip, still one pill shape - but its height is
+  // computed from its own contents now instead of a hardcoded 80. It was
+  // overflowing by 10px on any two-line label ("Beauty & Personal Care",
+  // "Business & Industrial" - i.e. most of the real taxonomy), which the new
+  // Home widget test caught on the very first pump. Deriving the height from
+  // the circle size, the label's own line height and the text scale means it
+  // cannot silently go wrong again on a smaller phone or at a larger
+  // accessibility text size (brief §14/§28).
   Widget _buildDiscoveryRail() {
-    if (_topCategories.isEmpty && !_categoriesLoaded) return const SizedBox(height: 80);
+    final width = MediaQuery.sizeOf(context).width;
+    final narrow = width < 360;
+    final textScale = MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.3);
+    final circle = narrow ? 48.0 : 52.0;
+    final labelSize = narrow ? 9.0 : 9.5;
+    const labelLines = 2;
+    const labelHeight = 1.15;
+    final railHeight = circle +
+        4 + // gap under the circle
+        (labelSize * labelHeight * labelLines * textScale) +
+        12 + // the ListView's own vertical padding
+        2; // slack, so a font metric rounding up never costs a pixel
+
+    if (_topCategories.isEmpty && !_categoriesLoaded) {
+      return SizedBox(height: railHeight);
+    }
     final items = <_RailItem>[
       ..._topCategories.map((c) => _RailItem(
             emoji: _categoryEmoji(c.name), label: c.name,
@@ -290,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // correct against the header's gradient (BrokaColors.headerGradColors)
     // without hardcoding a fade-to color that could drift from it.
     return SizedBox(
-      height: 80,
+      height: railHeight,
       child: ShaderMask(
         blendMode: BlendMode.dstIn,
         shaderCallback: (bounds) => const LinearGradient(
@@ -308,10 +385,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             // Divider sits only at the one category→destination boundary,
             // never between two categories or between two destinations.
             final showDivider = i > 0 && items[i].isDestination && !items[i - 1].isDestination;
-            if (!showDivider) return _railPill(items[i]);
+            final pill = _railPill(items[i], circle: circle, labelSize: labelSize);
+            if (!showDivider) return pill;
             return Row(mainAxisSize: MainAxisSize.min, children: [
-              _railDivider(),
-              _railPill(items[i]),
+              _railDivider(circle),
+              pill,
             ]);
           },
         ),
@@ -322,9 +400,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // Final HomeScreen polish pass (2026-08-19): the one visual cue that
   // categories and Trending/Auctions/Traders aren't quite the same kind of
   // thing - a plain hairline, not a card border, a label, or a new row.
-  Widget _railDivider() => Container(
+  Widget _railDivider(double circle) => Container(
         width: 1,
-        height: 44,
+        height: circle * 0.85,
         margin: const EdgeInsets.symmetric(horizontal: 6),
         color: BrokaColors.textLow,
       );
@@ -336,15 +414,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // 3-word category name could still overflow 2 lines on a 320px-wide
   // device), but most of the real category names in categories/seed.py
   // now fit without cutting off mid-word.
-  Widget _railPill(_RailItem item) => GestureDetector(
+  Widget _railPill(_RailItem item,
+          {required double circle, required double labelSize}) =>
+      GestureDetector(
         onTap: item.onTap,
         child: Container(
-          width: 74,
+          width: circle + 22,
           margin: const EdgeInsets.symmetric(horizontal: 4),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Container(
-              width: 52,
-              height: 52,
+              width: circle,
+              height: circle,
               padding: const EdgeInsets.all(2),
               decoration: BoxDecoration(
                 gradient: LinearGradient(colors: item.colors),
@@ -353,16 +433,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               child: Container(
                 decoration: const BoxDecoration(color: BrokaColors.bgCard, shape: BoxShape.circle),
-                child: Center(child: Text(item.emoji, style: const TextStyle(fontSize: 20))),
+                child: Center(
+                    child: Text(item.emoji,
+                        style: TextStyle(fontSize: circle * 0.38))),
               ),
             ),
             const SizedBox(height: 4),
-            Text(
-              item.label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: BrokaColors.textMid, fontSize: 9.5, height: 1.15),
+            Flexible(
+              child: Text(
+                item.label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: BrokaColors.textMid, fontSize: labelSize, height: 1.15),
+              ),
             ),
           ]),
         ),
@@ -426,45 +511,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // headline + description + full-width button, ~180px tall) is replaced
   // with a single compact row, targeting ~50-70px, since Zeno already has
   // its own bottom-nav destination and doesn't need a second large
-  // promotional block on Home. Reuses _pulseCtrl (created in initState,
-  // previously unused by anything) for a slow, gentle breathing glow -
-  // brief §26: "3-5 seconds... do NOT pulse aggressively."
-  Widget _buildZenoCompactCta() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-      child: GestureDetector(
-        onTap: _openBuyAgentHub,
-        child: AnimatedBuilder(
-          animation: _pulseCtrl,
-          builder: (context, child) {
-            final glow = 0.14 + 0.10 * _pulseCtrl.value;
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1A1040), Color(0xFF0E1B3D)],
-                  begin: Alignment.topLeft, end: Alignment.bottomRight,
-                ),
-                border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.4)),
-                boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(glow), blurRadius: 16, spreadRadius: 1)],
-              ),
-              child: child,
-            );
-          },
-          child: Row(children: [
-            const ZenoAvatar(size: 28, glow: true),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text('✨ Find it for me with Zeno',
-                  style: TextStyle(color: BrokaColors.textHigh, fontSize: 13.5, fontWeight: FontWeight.w700)),
-            ),
-            const Icon(Icons.arrow_forward_rounded, color: BrokaColors.neonBlue, size: 18),
-          ]),
-        ),
-      ),
-    );
-  }
+  // promotional block on Home. That compact row is unchanged in spirit and
+  // size; collapsing-scroll pass (2026-09-18, brief §6/§7) only moved its
+  // animation into _ZenoCompactCta at the bottom of this file, where the
+  // breathing glow and the rotating message rebuild 56px instead of the
+  // whole screen. The large promotional card is NOT coming back.
+  Widget _buildZenoCompactCta() => _ZenoCompactCta(onTap: _openBuyAgentHub);
 
   // "Zeno is watching for you" (Home Redesign Guide §13).
   Widget _buildActiveBuyAgentSection() {
@@ -491,7 +543,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 const Text('Zeno is watching for you',
                     style: TextStyle(color: BrokaColors.textLow, fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
                 const SizedBox(height: 2),
-                Text('${req.category} · Under KES ${req.maxPrice.toStringAsFixed(0)}',
+                Text('${req.category} · Under ${formatKes(req.maxPrice)}',
                     style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w600),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
@@ -747,30 +799,96 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
+  // One scroll owner, top to bottom (brief §1/§3/§18).
+  //
+  // Everything that used to sit in a fixed Column above the feed is a sliver
+  // now, in the same viewport as the listings, so scrolling moves the header,
+  // the rail and Zeno up and off while the grid takes over the screen. The
+  // only thing that survives a full scroll is the collapsed header's compact
+  // search bar (~58px), which brief §2/§10 explicitly allows - and the bottom
+  // nav, which is outside the scroll view entirely (brief §11).
   @override
   Widget build(BuildContext context) {
     if (_variant == 'B') return _buildVariantB();
+    final media = MediaQuery.of(context);
+    // Header geometry is computed here, where there IS a context, and handed
+    // to the delegate: SliverPersistentHeaderDelegate.maxExtent has no
+    // context of its own, and a header sized without knowing the device's
+    // text scale is exactly how a header overflows on someone's phone
+    // (brief §14/§27).
+    final textScale = media.textScaler.scale(1.0).clamp(1.0, 1.35);
+    final narrow = media.size.width < 360;
+
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(colors: BrokaColors.headerGradColors,
-              begin: Alignment.topCenter, end: Alignment.bottomCenter)),
-        child: SafeArea(child: Column(children: [
-          _buildHeader(),
-          if (_showFilters) _buildFilterPanel(),
-          // Home-redesign brief, both rounds (2026-08-16, 2026-08-17): the
-          // Goods/Traders toggle, the permanent location row, the Trending
-          // grid, and the Live Auctions carousel are all gone from here -
-          // Traders/Trending/Auctions are rail destinations that navigate
-          // to their own screens (see _buildDiscoveryRail), not Home
-          // content blocks. Location detection itself is untouched - this
-          // is a display/composition change, not a functionality removal.
-          _Entrance(delay: const Duration(milliseconds: 0), child: _buildDiscoveryRail()),
-          _Entrance(delay: const Duration(milliseconds: 60), child: _buildZenoCompactCta()),
-          if (_activeBuyAgentRequest != null)
-            _Entrance(delay: const Duration(milliseconds: 100), child: _buildActiveBuyAgentSection()),
-          Expanded(child: _buildFeed()),
-        ])),
+      backgroundColor: BrokaColors.bg,
+      // Same constellation field as auth_screen.dart, so signing in and
+      // landing on Home read as one continuous surface (brief §9). It owns
+      // its own controller and paints inside RepaintBoundaries, so the mesh
+      // animating never rebuilds or repaints the feed scrolling over it.
+      body: ConstellationBackground(
+        child: SafeArea(
+          bottom: false,
+          child: RefreshIndicator(
+            onRefresh: _onRefresh,
+            color: BrokaColors.gold,
+            backgroundColor: BrokaColors.bgCard,
+            // Clear of the pinned header so the spinner isn't half-hidden
+            // behind the collapsed search bar.
+            displacement: 72,
+            child: CustomScrollView(
+              controller: _scrollController,
+              // Keeps the pull-to-refresh gesture alive even when the feed
+              // is short enough not to overflow the screen (an empty
+              // marketplace still has to be refreshable).
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _HomeHeaderDelegate(
+                    greeting: _greetingText,
+                    filtersOpen: _showFilters,
+                    onToggleFilters: _toggleFilters,
+                    onOpenSearch: _openSearch,
+                    narrow: narrow,
+                    textScale: textScale.toDouble(),
+                  ),
+                ),
+                if (_showFilters)
+                  SliverToBoxAdapter(child: _buildFilterPanel()),
+                // Home-redesign brief, both rounds (2026-08-16, 2026-08-17):
+                // the Goods/Traders toggle, the permanent location row, the
+                // Trending grid, and the Live Auctions carousel are all gone
+                // from here - Traders/Trending/Auctions are rail destinations
+                // that navigate to their own screens (see
+                // _buildDiscoveryRail), not Home content blocks. Location
+                // detection itself is untouched - this is a display
+                // composition change, not a functionality removal.
+                SliverToBoxAdapter(
+                  child: _Entrance(
+                      delay: const Duration(milliseconds: 0),
+                      child: _buildDiscoveryRail()),
+                ),
+                SliverToBoxAdapter(
+                  child: _Entrance(
+                      delay: const Duration(milliseconds: 60),
+                      child: _buildZenoCompactCta()),
+                ),
+                // Brief §12: the active Buy Agent section scrolls with
+                // everything else rather than claiming a permanent band of
+                // the screen.
+                if (_activeBuyAgentRequest != null)
+                  SliverToBoxAdapter(
+                    child: _Entrance(
+                        delay: const Duration(milliseconds: 100),
+                        child: _buildActiveBuyAgentSection()),
+                  ),
+                SliverToBoxAdapter(child: _buildFeedHeading()),
+                _buildFeedSliver(),
+                const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              ],
+            ),
+          ),
+        ),
       ),
       bottomNavigationBar: _buildNav(),
     );
@@ -853,80 +971,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // of swapping Home's body via MarketplaceState. MarketplaceState itself
   // is untouched (still registered in main.dart) in case anything else
   // ever needs it - just no longer read from this screen.
-
-  Widget _buildHeader() => Container(
-    padding: const EdgeInsets.fromLTRB(20, 14, 16, 10),
-    decoration: BoxDecoration(
-      border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.5))),
-    ),
-    child: Row(children: [
-      // BROKA brand mark - matches auth_screen.dart's _buildLogo() exactly
-      // (same asset, size, corner radius, glow) so the icon that
-      // identifies the app on the login screen also appears on Home,
-      // which previously only ever showed the wordmark, no icon.
-      Container(
-        width: 44, height: 44,
-        margin: const EdgeInsets.only(right: 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(13),
-          boxShadow: const [BrokaColors.glowGold],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(13),
-          child: Image.asset('assets/images/broka_icon.png', fit: BoxFit.cover),
-        ),
-      ),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(width: 6, height: 6, decoration: const BoxDecoration(
-              shape: BoxShape.circle, color: BrokaColors.neonGreen)),
-          const SizedBox(width: 5),
-          Text(_greetingText, style: const TextStyle(
-              color: BrokaColors.textMid, fontSize: 12, letterSpacing: 0.3)),
-        ]),
-        const SizedBox(height: 3),
-        ShaderMask(
-          shaderCallback: (b) => const LinearGradient(
-              colors: [BrokaColors.gold, BrokaColors.neonBlue])
-              .createShader(b),
-          child: const Text('BROKA', style: TextStyle(
-              color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900,
-              letterSpacing: 2.0)),
-        ),
-      ])),
-      // Filter toggle
-      GestureDetector(
-        onTap: () => setState(() => _showFilters = !_showFilters),
-        child: Container(
-          width: 38, height: 38, margin: const EdgeInsets.only(right: 8),
-          decoration: BoxDecoration(
-            color: _showFilters
-                ? BrokaColors.gold.withOpacity(0.2) : BrokaColors.bgCard,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _showFilters
-                ? BrokaColors.gold : BrokaColors.border),
-          ),
-          child: Icon(Icons.tune_rounded,
-              color: _showFilters ? BrokaColors.gold : BrokaColors.textMid,
-              size: 18),
-        ),
-      ),
-      // Search
-      GestureDetector(
-        onTap: _openSearch,
-        child: Container(
-          width: 38, height: 38,
-          decoration: BoxDecoration(
-            color: BrokaColors.bgCard,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: BrokaColors.border),
-          ),
-          child: const Icon(Icons.search_rounded,
-              color: BrokaColors.textMid, size: 20),
-        ),
-      ),
-    ]),
-  );
+  //
+  // Collapsing-scroll pass (2026-09-18, brief §2): the header is no longer a
+  // Container at the top of a Column - it is _HomeHeaderDelegate at the
+  // bottom of this file, driven by a SliverPersistentHeader. It carries the
+  // same two controls it always had (the filter toggle and the search
+  // entry), the same brand mark, and the same greeting; what is new is that
+  // it CONTRACTS as you scroll instead of standing still forever. Built as a
+  // sliver rather than a Transform on a fixed box so the scroll view itself
+  // owns the collapse (brief §2's explicit requirement) and pull-to-refresh
+  // and pagination keep working through it.
 
   // Standalone location row removed (home-redesign brief §7/§8, 2026-08-16).
   // _detectLocation()/_locationLabel/_gettingLocation methods/fields are
@@ -1078,59 +1132,72 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  String _formatPrice(double v) {
-    if (v >= 1000000) return 'KES ${(v/1000000).toStringAsFixed(1)}M';
-    if (v >= 1000)    return 'KES ${(v/1000).toStringAsFixed(0)}K';
-    return 'KES ${v.toStringAsFixed(0)}';
-  }
+  // Brief §5: the K/M ladder that used to live here is gone - the slider
+  // read "KES 5.0M" for a max of 5,000,000 and "KES 30K" for anything
+  // between 29,500 and 30,499, which is not a price filter a buyer can aim
+  // with. utils/price_format.dart is the one implementation now, shared with
+  // ProductCard and BrokaListing.priceFormatted.
+  String _formatPrice(double v) => formatKes(v);
 
   // ── Feed ──────────────────────────────────────────────────────────────────
 
-  Widget _buildFeed() {
-    // ProductGridView loads once in initState and exposes no public reload
-    // method, so a ValueKey covering every input that should trigger a
-    // refetch is the supported way to force one: changing the key remounts
-    // fresh state, matching the old per-filter _loadListings() calls.
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // FIX (redesign-guide audit, revised round 2 - 2026-08-17): "Popular
-      // near you" implied two things that aren't actually true. "Near
-      // you": _fetchListingsPage sends lat/lng but never max_km, and
-      // listings/service.py only applies distance *filtering* when max_km
-      // is provided alongside coordinates (grepped directly) - without it,
-      // lat/lng only annotates each result with a distance_km value, it
-      // doesn't restrict the result set to nearby listings at all.
-      // "Popular": with no sort selected this is the backend's default
-      // order (newest first), not a popularity ranking.
-      // Final HomeScreen polish pass (2026-08-19, product review): "Discover
-      // on Broka" made no false claim, but it also didn't say anything -
-      // renamed to "Fresh on Broka," true for the same reason as above
-      // (default order is newest-first) and it actually communicates that.
-      // Still leaves room for a real recommendation engine later without
-      // needing another label change - do NOT rename this to "Recommended
-      // for you" / "Popular near you" / "Trending near you" until the
-      // backend genuinely computes that signal (no browsing-history-based
-      // ranking exists anywhere yet) - never fabricate personalization or
-      // geographic relevance the app doesn't actually have.
-      const Padding(
-        padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-        child: Text('Fresh on Broka', style: TextStyle(
-            color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.bold)),
-      ),
-      Expanded(
-        child: ProductGridView(
-          key: ValueKey('goods|$_committedPriceFilter|$_locationFilter|$_conditionFilter|$_sortFilter|$_feedRefreshNonce'),
-          fetchPage: _fetchListingsPage,
-          onTapItem: (item) {
-            Navigator.pushNamed(context, '/product', arguments: {'listingId': (item as BrokaListing).id}).then((_) {
-              if (mounted) setState(() => _feedRefreshNonce++);
-            });
-          },
-          emptyStateBuilder: (_) => _emptyState(),
-          onViewStore: (storeId, storeSlug) =>
-              Navigator.pushNamed(context, '/store-view', arguments: {'storeId': storeId}),
-        ),
-      ),
-    ]);
+  // Heading and grid are two separate slivers now (they used to be a Column
+  // whose second child was an Expanded ProductGridView with its own
+  // scrollable). "Fresh on Broka" therefore scrolls away with everything
+  // above it, and the grid below shares the screen's one viewport.
+  Widget _buildFeedHeading() => const Padding(
+        // FIX (redesign-guide audit, revised round 2 - 2026-08-17): "Popular
+        // near you" implied two things that aren't actually true. "Near
+        // you": _fetchListingsPage sends lat/lng but never max_km, and
+        // listings/service.py only applies distance *filtering* when max_km
+        // is provided alongside coordinates (grepped directly) - without it,
+        // lat/lng only annotates each result with a distance_km value, it
+        // doesn't restrict the result set to nearby listings at all.
+        // "Popular": with no sort selected this is the backend's default
+        // order (newest first), not a popularity ranking.
+        // Final HomeScreen polish pass (2026-08-19, product review):
+        // "Discover on Broka" made no false claim, but it also didn't say
+        // anything - renamed to "Fresh on Broka," true for the same reason
+        // as above (default order is newest-first) and it actually
+        // communicates that. Still leaves room for a real recommendation
+        // engine later without needing another label change - do NOT rename
+        // this to "Recommended for you" / "Popular near you" / "Trending
+        // near you" until the backend genuinely computes that signal (no
+        // browsing-history-based ranking exists anywhere yet) - never
+        // fabricate personalization or geographic relevance the app doesn't
+        // actually have.
+        padding: EdgeInsets.fromLTRB(16, 6, 16, 8),
+        child: Row(children: [
+          Text('🔥 ', style: TextStyle(fontSize: 14)),
+          Text('Fresh on Broka',
+              style: TextStyle(
+                  color: BrokaColors.textHigh,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold)),
+        ]),
+      );
+
+  Widget _buildFeedSliver() {
+    // ProductGridView loads once in initState, so a ValueKey covering every
+    // input that should trigger a refetch is still how a filter change forces
+    // one: changing the key remounts fresh state, matching the old
+    // per-filter _loadListings() calls. _feedController is the other half -
+    // it refetches WITHOUT remounting, which is what pull-to-refresh needs
+    // (a remount would throw away the scroll position mid-gesture).
+    return ProductGridView(
+      key: ValueKey('goods|$_committedPriceFilter|$_locationFilter|$_conditionFilter|$_sortFilter|$_feedRefreshNonce'),
+      sliver: true,
+      controller: _feedController,
+      fetchPage: _fetchListingsPage,
+      onTapItem: (item) {
+        Navigator.pushNamed(context, '/product', arguments: {'listingId': (item as BrokaListing).id}).then((_) {
+          if (mounted) setState(() => _feedRefreshNonce++);
+        });
+      },
+      emptyStateBuilder: (_) => _emptyState(),
+      onViewStore: (storeId, storeSlug) =>
+          Navigator.pushNamed(context, '/store-view', arguments: {'storeId': storeId}),
+    );
   }
 
   // Home-redesign brief round 3 (2026-08-18): added a tappable Sell CTA -
@@ -1624,6 +1691,434 @@ class _EntranceState extends State<_Entrance> {
         duration: const Duration(milliseconds: 320),
         curve: Curves.easeOut,
         child: widget.child,
+      ),
+    );
+  }
+}
+
+// ── Collapsing Home header (collapsing-scroll pass, 2026-09-18) ───────────────
+//
+// Brief §2/§18: at rest this is the full BROKA identity - brand mark,
+// wordmark, greeting, and a full-width search bar. As the user scrolls, the
+// brand block slides up under the status bar and fades, and what stays
+// behind is a ~60px sticky search row with the filter toggle beside it. Scroll
+// back and it comes down again, smoothly, because the scroll view itself is
+// driving the collapse.
+//
+// Two decisions worth stating, because both were explicitly asked for:
+//
+//  * This is a SliverPersistentHeader delegate, not a Transform over a fixed
+//    box. Sliver geometry is what makes the listings actually inherit the
+//    freed space; translating a fixed header would move pixels while the grid
+//    below kept exactly the viewport it always had.
+//  * Collapsing happens by SHRINKING this delegate's child, so the child's
+//    height is always exactly `maxExtent - shrinkOffset`. That keeps the
+//    pinned header's own geometry honest (no overlap artefacts, no fighting
+//    with RefreshIndicator) and means there is never a tall empty band above
+//    the first row of products.
+//
+// The layout is deliberately measured rather than intrinsic: maxExtent has no
+// BuildContext, so HomeScreen passes in the device's text scale and whether
+// the screen is narrow, and the heights below are derived from those. Every
+// height leaves headroom over its content, so a large accessibility text
+// scale makes the header taller instead of overflowing it (brief §14/§27).
+class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
+  _HomeHeaderDelegate({
+    required this.greeting,
+    required this.filtersOpen,
+    required this.onToggleFilters,
+    required this.onOpenSearch,
+    required this.narrow,
+    required this.textScale,
+  });
+
+  final String greeting;
+  final bool filtersOpen;
+  final VoidCallback onToggleFilters;
+  final VoidCallback onOpenSearch;
+
+  /// Small-Android layout (< 360dp wide): smaller logo, wordmark and labels.
+  final bool narrow;
+
+  /// Already clamped by the caller to 1.0-1.35 - the header grows with the
+  /// user's text size, but a 3x accessibility scale can't eat the whole
+  /// screen before a single listing is visible.
+  final double textScale;
+
+  double get _fieldHeight => (narrow ? 44.0 : 46.0) * textScale;
+
+  /// The sticky part: the search field plus its 14px of breathing room. This
+  /// is what survives a full scroll, and all that survives it.
+  double get _searchRowHeight => _fieldHeight + 14.0;
+
+  /// The part that collapses: brand mark, wordmark, greeting, tagline.
+  double get _brandBlockHeight => (narrow ? 88.0 : 96.0) * textScale;
+
+  @override
+  double get maxExtent => _brandBlockHeight + _searchRowHeight;
+
+  @override
+  double get minExtent => _searchRowHeight;
+
+  static double _lerp(double a, double b, double t) => a + (b - a) * t;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    final range = maxExtent - minExtent;
+    final t = range <= 0 ? 1.0 : (shrinkOffset / range).clamp(0.0, 1.0);
+    // The brand is gone by ~70% of the collapse, so the last stretch is a
+    // clean slide of the search bar into place rather than a long fade.
+    final brandOpacity = (1.0 - t * 1.4).clamp(0.0, 1.0);
+    // Opaque quickly: a half-transparent header with product cards sliding
+    // under it reads as a rendering bug, not as glass. By a third of the way
+    // through the collapse it is solid.
+    final backdrop = (t * 3.0).clamp(0.0, 1.0);
+
+    return ClipRect(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          // Transparent at rest so the constellation shows through the
+          // header exactly as it does behind the rest of Home.
+          color: BrokaColors.bg.withOpacity(0.94 * backdrop),
+          border: Border(
+            bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6 * backdrop)),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Align + heightFactor is what does the moving: the block keeps
+            // its full height with its BOTTOM edge pinned, so shrinking the
+            // factor slides its top up out of the clip rect. Same read as a
+            // header scrolling away, but expressed as layout, so the sliver
+            // below it genuinely gains the pixels.
+            Align(
+              alignment: Alignment.bottomCenter,
+              heightFactor: 1.0 - t,
+              child: Opacity(
+                opacity: brandOpacity,
+                child: SizedBox(
+                  height: _brandBlockHeight,
+                  child: _brandBlock(context),
+                ),
+              ),
+            ),
+            SizedBox(height: _searchRowHeight, child: _searchRow(context, t)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _brandBlock(BuildContext context) {
+    final logo = narrow ? 38.0 : 42.0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 6, 16, 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            // BROKA brand mark - the same asset, corner radius and glow as
+            // auth_screen.dart's _buildLogo(), so the icon that identifies the
+            // app at sign-in is the icon at the top of Home.
+            Container(
+              width: logo,
+              height: logo,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(logo * 0.3),
+                boxShadow: const [BrokaColors.glowGold],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(logo * 0.3),
+                child: Image.asset('assets/images/broka_icon.png', fit: BoxFit.cover),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ShaderMask(
+                    shaderCallback: (b) => const LinearGradient(
+                        colors: [BrokaColors.gold, BrokaColors.neonBlue]).createShader(b),
+                    child: Text('BROKA',
+                        maxLines: 1,
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: narrow ? 21 : 24,
+                            height: 1.0,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: narrow ? 1.6 : 2.2)),
+                  ),
+                  const SizedBox(height: 2),
+                  Text('INTELLIGENT COMMERCE',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: BrokaColors.textMid,
+                          fontSize: narrow ? 7.5 : 8,
+                          height: 1.2,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: narrow ? 1.8 : 2.4)),
+                ],
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: const BoxDecoration(
+                  shape: BoxShape.circle, color: BrokaColors.neonGreen),
+            ),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(greeting,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: BrokaColors.textHigh,
+                      fontSize: narrow ? 12.5 : 13.5,
+                      height: 1.2,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2)),
+            ),
+          ]),
+          const SizedBox(height: 2),
+          Text('Better deals. Smarter choices.',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  color: BrokaColors.textMid,
+                  height: 1.2,
+                  fontSize: narrow ? 10.5 : 11.5)),
+        ],
+      ),
+    );
+  }
+
+  /// The sticky control. Tapping the field opens the same `showSearch`
+  /// delegate the old header's search button opened (history, listing/trader
+  /// modes, the Zeno handoff - all unchanged); the button beside it is the
+  /// same filter toggle, in the same active/inactive states it always had.
+  Widget _searchRow(BuildContext context, double t) {
+    final h = _lerp(_fieldHeight, _fieldHeight - 6, t);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+      child: Row(children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: onOpenSearch,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              height: h,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: BrokaColors.bgCard.withOpacity(0.86),
+                borderRadius: BorderRadius.circular(h / 2),
+                border: Border.all(
+                    color: BrokaColors.neonBlue.withOpacity(_lerp(0.35, 0.55, t))),
+              ),
+              child: Row(children: [
+                const Icon(Icons.search_rounded, size: 18, color: BrokaColors.textMid),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    narrow
+                        ? 'Search products, sellers…'
+                        : 'Search for products, sellers or categories…',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: BrokaColors.textMid, fontSize: narrow ? 12 : 12.5),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onToggleFilters,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            width: h,
+            height: h,
+            decoration: BoxDecoration(
+              color: filtersOpen
+                  ? BrokaColors.gold.withOpacity(0.2)
+                  : BrokaColors.bgCard.withOpacity(0.86),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: filtersOpen ? BrokaColors.gold : BrokaColors.border),
+            ),
+            child: Icon(Icons.tune_rounded,
+                color: filtersOpen ? BrokaColors.gold : BrokaColors.textMid, size: 18),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _HomeHeaderDelegate old) =>
+      old.greeting != greeting ||
+      old.filtersOpen != filtersOpen ||
+      old.narrow != narrow ||
+      old.textScale != textScale ||
+      old.onOpenSearch != onOpenSearch ||
+      old.onToggleFilters != onToggleFilters;
+}
+
+// ── Compact Zeno CTA (brief §6/§7) ───────────────────────────────────────────
+//
+// One row, ~56px, exactly as the 2026-08-16 redesign left it - not the old
+// ~180px promotional card, and not a second Zeno hero on a screen that
+// already has Zeno in the bottom nav.
+//
+// It is its own StatefulWidget purely for the animation budget. Both moving
+// parts (a 4-second breathing glow and a message that crossfades every few
+// seconds) previously would have had to live on HomeScreen's own
+// AnimationController, rebuilding the header, the rail and every product card
+// along with them. Scoped here, a frame of Zeno costs one row.
+class _ZenoCompactCta extends StatefulWidget {
+  const _ZenoCompactCta({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  State<_ZenoCompactCta> createState() => _ZenoCompactCtaState();
+}
+
+class _ZenoCompactCtaState extends State<_ZenoCompactCta>
+    with SingleTickerProviderStateMixin {
+  // Written as Zeno offering to help, never as a claim about what Zeno has
+  // already found - it hasn't been asked anything yet at this point.
+  static const _messages = <String>[
+    'Need my help?',
+    'Let me search for you',
+    "Tell me what you're looking for",
+    'I can find the deal',
+  ];
+
+  late final AnimationController _glow = AnimationController(
+      vsync: this, duration: const Duration(seconds: 4))
+    ..repeat(reverse: true);
+  Timer? _rotate;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Brief §7: subtle. A message every 5 seconds with a slow crossfade,
+    // rather than anything that pulses for attention.
+    _rotate = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) setState(() => _index = (_index + 1) % _messages.length);
+    });
+  }
+
+  @override
+  void dispose() {
+    _rotate?.cancel();
+    _glow.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final narrow = MediaQuery.sizeOf(context).width < 360;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        // RepaintBoundary so the glow's repaint stops here instead of
+        // travelling out into the scroll view it sits in.
+        child: RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: _glow,
+            // `child` is built once and handed back on every frame - the row
+            // below never rebuilds, only the decoration around it repaints.
+            builder: (context, child) {
+              final glow = 0.12 + 0.10 * _glow.value;
+              return Container(
+                padding: EdgeInsets.symmetric(
+                    horizontal: narrow ? 12 : 14, vertical: 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF1A1040), Color(0xFF0E1B3D)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.40)),
+                  boxShadow: [
+                    BoxShadow(
+                        color: BrokaColors.neonBlue.withOpacity(glow),
+                        blurRadius: 16,
+                        spreadRadius: 1),
+                  ],
+                ),
+                child: child,
+              );
+            },
+            child: Row(children: [
+              const ZenoAvatar(size: 30, glow: true),
+              SizedBox(width: narrow ? 8 : 11),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 420),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  // Plain crossfade. A slide or a scale on a 56px row that
+                  // changes every five seconds is movement in the corner of
+                  // the eye while someone is trying to read listings.
+                  transitionBuilder: (child, animation) =>
+                      FadeTransition(opacity: animation, child: child),
+                  child: Column(
+                    key: ValueKey<int>(_index),
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_messages[_index],
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: BrokaColors.textHigh,
+                              fontSize: narrow ? 13 : 14,
+                              height: 1.2,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 1),
+                      Text('Ask Zeno to find and negotiate it',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: BrokaColors.textMid,
+                              fontSize: narrow ? 10.5 : 11,
+                              height: 1.2)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                      colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                ),
+                child: const Icon(Icons.arrow_forward_rounded,
+                    color: Colors.white, size: 16),
+              ),
+            ]),
+          ),
+        ),
       ),
     );
   }
