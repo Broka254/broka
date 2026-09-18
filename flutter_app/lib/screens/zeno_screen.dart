@@ -26,7 +26,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+import '../services/zeno_voice_controller.dart';
+import '../widgets/zeno_voice_card.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/product_card.dart';
@@ -138,9 +139,19 @@ class _ZenoScreenState extends State<ZenoScreen>
   bool _ttsEnabled = true;
   bool _speaking   = false;
 
-  final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _sttAvailable = false;
-  bool _listening    = false;
+  // Voice input (Deepgram voice-card pass, 2026-09-18).
+  //
+  // This replaced speech_to_text's SpeechToText/_sttAvailable/_listening
+  // trio outright rather than sitting beside it. Two STT engines on one
+  // screen is two microphone owners: whichever one starts second wins the
+  // device, the other's callbacks keep firing into a dead session, and the
+  // composer ends up showing whichever one happened to finish last.
+  //
+  // The controller owns the Deepgram session and the transcript. This screen
+  // still owns what a transcript MEANS - _submitVoice below hands it to the
+  // same _send() a typed message goes through, so Zeno's history, the
+  // buying-agent branch, the language handling and the TTS are all untouched.
+  late final ZenoVoiceController _voice;
 
   late AnimationController _pulseCtrl;
 
@@ -184,7 +195,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       ));
     };
     _initTts();
-    _initStt();
+    _initVoice();
     _addWelcome();
     final initial = widget.initialQuery?.trim();
     if (_isBuying && initial != null && initial.isNotEmpty) {
@@ -214,14 +225,23 @@ class _ZenoScreenState extends State<ZenoScreen>
     _pulseCtrl.dispose();
     _searchTicker?.cancel();
     _tts.stop();
+    _voice.dispose();
     super.dispose();
   }
 
   Future<void> _initTts() async => await _tts.init();
 
-  Future<void> _initStt() async {
-    _sttAvailable = await _speech.initialize();
-    if (mounted) setState(() {});
+  /// Voice input goes through exactly the path a typed message does.
+  Future<void> _submitVoice(String text) => _send(text);
+
+  /// Built once, not per tap. Nothing here opens a microphone - the
+  /// controller only touches the device when the user taps the mic (brief
+  /// §23: no permission prompt on screen entry).
+  void _initVoice() {
+    _voice = ZenoVoiceController(
+      onSubmit: _submitVoice,
+      languageKey: () => _langKey,
+    );
   }
 
   void _addWelcome() {
@@ -376,29 +396,20 @@ class _ZenoScreenState extends State<ZenoScreen>
   Future<void> _speak(String text) async {
     if (!_ttsEnabled) return;
     setState(() => _speaking = true);
-    final lang = _langByKey(_langKey);
+    // The same playback the screen already did, with the voice card told
+    // about it so it can show "Zeno is speaking..." and then go back to
+    // listening. The existing TTS toggle still governs whether this runs at
+    // all - voice input does not force spoken replies on anyone.
+    _voice.setZenoSpeaking(true);
     await _tts.speak(text, language: _langKey);
+    _voice.setZenoSpeaking(false);
     if (mounted) setState(() => _speaking = false);
   }
 
-  void _toggleListening() async {
-    if (_listening) {
-      await _speech.stop();
-      setState(() => _listening = false);
-      return;
-    }
-    if (!_sttAvailable) return;
-    setState(() => _listening = true);
-    _speech.listen(
-      onResult: (r) {
-        if (r.finalResult) {
-          setState(() { _listening = false; _msgCtrl.text = r.recognizedWords; });
-        }
-      },
-      localeId: _langByKey(_langKey).ttsLocale,
-      cancelOnError: true,
-    );
-  }
+  /// Opens the floating voice card. Guarded inside the controller, so a
+  /// double tap cannot open two Deepgram sessions.
+  void _openVoice() => _voice.open();
+
 
   /// START_NEGOTIATION for one result. The confirmation is required before
   /// Zeno ever messages a seller (Design v2 §24) - the buyer authorises
@@ -563,15 +574,22 @@ class _ZenoScreenState extends State<ZenoScreen>
       // thread, at slightly higher intensity: this is Zeno's own surface,
       // it carries less dense content than a buyer/seller thread, and the
       // visual continuity with "BOOTING ZENO" on the splash is the point.
-      body: ChatAmbientBackground(
-        intensity: 1.0,
-        child: Column(children: [
-          _buildHeader(),
-          Expanded(child: _buildMessages()),
-          if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
-          if (_turns.length <= 1) _buildSuggestions(),
-          _buildInputBar(),
-        ]),
+      // The voice card floats OVER this conversation rather than replacing
+      // it: the Column below stays mounted, at its scroll position, with its
+      // history intact, and closing the card puts the user back exactly where
+      // they were (brief §33).
+      body: ZenoVoiceOverlay(
+        controller: _voice,
+        child: ChatAmbientBackground(
+          intensity: 1.0,
+          child: Column(children: [
+            _buildHeader(),
+            Expanded(child: _buildMessages()),
+            if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
+            if (_turns.length <= 1) _buildSuggestions(),
+            _buildInputBar(),
+          ]),
+        ),
       ),
     );
   }
@@ -948,13 +966,14 @@ class _ZenoScreenState extends State<ZenoScreen>
               decoration: BoxDecoration(
                 color: BrokaColors.bgCard,
                 borderRadius: BorderRadius.circular(24),
+                // The composer no longer highlights for listening - the
+                // voice card above owns that state now, and a second
+                // "recording" outline down here read as a competing session.
                 border: Border.all(
-                  color: _listening
-                      ? BrokaColors.danger.withOpacity(0.6)
-                      : (_composerFocused
-                          ? BrokaColors.gold.withOpacity(0.55)
-                          : BrokaColors.border),
-                  width: (_listening || _composerFocused) ? 1.4 : 1,
+                  color: _composerFocused
+                      ? BrokaColors.gold.withOpacity(0.55)
+                      : BrokaColors.border,
+                  width: _composerFocused ? 1.4 : 1,
                 ),
               ),
               child: Row(
@@ -989,16 +1008,26 @@ class _ZenoScreenState extends State<ZenoScreen>
                       ),
                     ),
                   ),
-                  if (_sttAvailable && !_hasDraft)
+                  // Opens the Zeno voice card over this conversation. The
+                  // composer stays exactly where it is underneath - voice is
+                  // another way in, not a replacement for typing.
+                  if (!_hasDraft)
                     InkResponse(
-                      onTap: _toggleListening,
+                      onTap: _openVoice,
                       radius: 22,
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(8, 11, 12, 11),
-                        child: Icon(
-                          _listening ? Icons.mic_rounded : Icons.mic_none_rounded,
-                          size: 22,
-                          color: _listening ? BrokaColors.danger : BrokaColors.textMid,
+                        child: AnimatedBuilder(
+                          animation: _voice,
+                          builder: (_, __) => Icon(
+                            _voice.isOpen
+                                ? Icons.mic_rounded
+                                : Icons.mic_none_rounded,
+                            size: 22,
+                            color: _voice.isOpen
+                                ? BrokaColors.neonBlue
+                                : BrokaColors.textMid,
+                          ),
                         ),
                       ),
                     ),

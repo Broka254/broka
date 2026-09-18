@@ -40,6 +40,12 @@ services:
         sync: false          # Legacy fallback - currently a no-op (see OPENROUTER_API_KEY above);
                               # GROQ_MODEL is hardcoded in source, not env-driven, so reactivating
                               # this tier with a still-served Groq model needs a code change too
+      - key: DEEPGRAM_API_KEY
+        sync: false          # Deepgram streaming speech-to-text, for the Zeno voice card.
+                             # Unset is safe: /stt/deepgram-token returns 503 and the app
+                             # keeps its text composer. This is the PERMANENT key and must
+                             # never reach the Flutter build - the phone only ever receives
+                             # the short-lived token minted from it by /stt/deepgram-token.
       - key: RESEND_API_KEY
         sync: false          # Resend — email verification codes. Unset is safe:
                              # email is optional at signup and codes are logged

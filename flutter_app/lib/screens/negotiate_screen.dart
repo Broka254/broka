@@ -9,7 +9,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/broka_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+import '../services/zeno_voice_controller.dart';
+import '../widgets/zeno_voice_card.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
@@ -52,9 +53,18 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   bool _speaking   = false;
 
   // STT
-  final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _sttAvailable = false;
-  bool _listening    = false;
+  // Voice input (Deepgram voice-card pass, 2026-09-18). Same shared card as
+  // ZenoScreen, over this room's own conversation. It replaced
+  // speech_to_text outright rather than sitting alongside it - see the note
+  // in zeno_screen.dart on why two STT engines on one screen fight over the
+  // microphone.
+  //
+  // Voice is only another way to enter a message here: a spoken
+  // "tell the seller I can only pay eighteen thousand" becomes exactly the
+  // message a typed one would, through the same _send(). The deal state
+  // machine, the action bar, escrow controls, roles and the broker replies
+  // are all untouched by this.
+  late final ZenoVoiceController _voice;
 
   String get _myName     => ApiService.currentUserName ?? 'You';
   String get _myFirst    => _myName.split(' ').first;
@@ -115,7 +125,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
   void _finishInit() {
     _initTts();
-    _initStt();
+    _initVoice();
     _loadHistory();
     _loadCounterparty();
     // Register this thread as on-screen so the 7s poller does not notify
@@ -189,8 +199,13 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   // ── TTS / STT ──────────────────────────────────────────────────────────────
   Future<void> _initTts() async {
     await _tts.init();
-    _tts.onStart    = () { if (mounted) setState(() => _speaking = true);  };
-    _tts.onDone     = () { if (mounted) setState(() => _speaking = false); };
+    // The card's "Zeno is speaking..." rides the TTS callbacks this screen
+    // already had, so the existing TTS toggle still decides whether anything
+    // is spoken at all.
+    _tts.onStart    = () { _voice.setZenoSpeaking(true);
+                           if (mounted) setState(() => _speaking = true);  };
+    _tts.onDone     = () { _voice.setZenoSpeaking(false);
+                           if (mounted) setState(() => _speaking = false); };
     _tts.onFallback = () {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -201,9 +216,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     };
   }
 
-  Future<void> _initStt() async {
-    _sttAvailable = await _speech.initialize();
-    if (mounted) setState(() {});
+  /// Built once. Opens no microphone until the user taps the mic button.
+  void _initVoice() {
+    _voice = ZenoVoiceController(
+      onSubmit: (text) => _send(text),
+      languageKey: () => ApiService.currentUserLanguage,
+    );
   }
 
   // ── Counterparty map ───────────────────────────────────────────────────────
@@ -374,7 +392,8 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     if (lid != null) GlobalPollerService.instance
         .markScreenInactive(lid, buyerId: _buyerId);
     _msgCtrl.dispose(); _scrollCtrl.dispose();
-    _tts.stop(); _speech.stop();
+    _tts.stop();
+    _voice.dispose();
     _heartbeatTimer?.cancel();
     super.dispose();
   }
@@ -384,36 +403,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     await _tts.speak(text, language: ApiService.currentUserLanguage);
   }
 
-  Future<void> _toggleListen() async {
-    if (!_sttAvailable) return;
-    if (_listening) {
-      await _speech.stop();
-      if (mounted) setState(() => _listening = false);
-    } else {
-      setState(() => _listening = true);
-      await _speech.listen(
-        onResult: (r) {
-          if (mounted) setState(() {
-            _msgCtrl.text = r.recognizedWords;
-            _msgCtrl.selection = TextSelection.fromPosition(
-                TextPosition(offset: _msgCtrl.text.length));
-          });
-        },
-        listenFor:    const Duration(seconds: 30),
-        pauseFor:     const Duration(seconds: 3),
-        cancelOnError: false,
-        partialResults: true,
-      );
-    }
-  }
+  /// Opens the floating voice card over this negotiation.
+  void _openVoice() => _voice.open();
+
 
   // ── Core message sender ────────────────────────────────────────────────────
   Future<void> _send([String? quickText]) async {
-    if (_listening) {
-      await _speech.stop();
-      if (mounted) setState(() => _listening = false);
-      await Future.delayed(const Duration(milliseconds: 150));
-    }
     final text = (quickText ?? _msgCtrl.text).trim();
     if (text.isEmpty) return;
     setState(() { _messages.add(Message(role: _role, content: text)); _typing = true; });
@@ -1071,16 +1066,21 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     // Container decoration is gone rather than layered underneath: two
     // stacked gradients would have muddied the field and cost a full
     // extra screen-sized paint per frame.
-    body: ChatAmbientBackground(
-      intensity: 1.0,
-      child: SafeArea(child: Column(children: [
-        _buildHeader(),
-        if (_listing != null) _buildInfoStrip(),
-        Expanded(child: _buildChat()),
-        _buildActionBar(),
-        _buildActionProposal(),
-        _buildInputBar(),
-      ])),
+    // The voice card floats over this room; the negotiation underneath keeps
+    // its scroll position, its messages, its action bar and its deal state.
+    body: ZenoVoiceOverlay(
+      controller: _voice,
+      child: ChatAmbientBackground(
+        intensity: 1.0,
+        child: SafeArea(child: Column(children: [
+          _buildHeader(),
+          if (_listing != null) _buildInfoStrip(),
+          Expanded(child: _buildChat()),
+          _buildActionBar(),
+          _buildActionProposal(),
+          _buildInputBar(),
+        ])),
+      ),
     ),
   );
 
@@ -1518,14 +1518,15 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
               color: BrokaColors.bgCard, border: Border.all(color: BrokaColors.border.withOpacity(0.7))),
             child: const Icon(Icons.sell_outlined, size: 19, color: BrokaColors.textMid))),
-        if (_sttAvailable)
-          GestureDetector(onTap: _toggleListen,
-            child: Container(width: 44, height: 44, margin: const EdgeInsets.only(right: 8),
+        GestureDetector(onTap: _openVoice,
+          child: AnimatedBuilder(
+            animation: _voice,
+            builder: (_, __) => Container(width: 44, height: 44, margin: const EdgeInsets.only(right: 8),
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
-                color: _listening ? BrokaColors.danger.withOpacity(0.15) : BrokaColors.bgCard,
-                border: Border.all(color: _listening ? BrokaColors.danger : BrokaColors.border.withOpacity(0.7))),
-              child: Icon(_listening ? Icons.mic_rounded : Icons.mic_none_rounded, size: 20,
-                  color: _listening ? BrokaColors.danger : BrokaColors.textMid))),
+                color: _voice.isOpen ? BrokaColors.neonBlue.withOpacity(0.15) : BrokaColors.bgCard,
+                border: Border.all(color: _voice.isOpen ? BrokaColors.neonBlue : BrokaColors.border.withOpacity(0.7))),
+              child: Icon(_voice.isOpen ? Icons.mic_rounded : Icons.mic_none_rounded, size: 20,
+                  color: _voice.isOpen ? BrokaColors.neonBlue : BrokaColors.textMid)))),
         Expanded(child: Container(
           decoration: BoxDecoration(color: BrokaColors.bgCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: BrokaColors.border)),
           child: TextField(
@@ -1534,7 +1535,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
             maxLines: 5, minLines: 1,
             textCapitalization: TextCapitalization.sentences,
             decoration: InputDecoration(
-              hintText: _listening ? '⬤  Listening...' : 'Message...',
+              hintText: 'Message...',
               hintStyle: TextStyle(color: BrokaColors.textLow.withOpacity(0.6)),
               border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none,
               isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13)),

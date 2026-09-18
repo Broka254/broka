@@ -18,7 +18,10 @@ dependencies:
   camera: ^0.11.0
   flutter_tts: ^4.0.2
   audioplayers: ^6.1.0
-  speech_to_text: ^6.6.2
+  # speech_to_text removed (Deepgram voice-card pass, 2026-09-18). Deepgram is
+  # the single production STT provider now; nothing in lib/ imported this any
+  # more, and shipping a second, unused speech engine means a second set of
+  # microphone permissions and platform plugins for code that never runs.
   cached_network_image: ^3.3.1
   provider: ^6.1.2
   flutter_map: ^6.1.0
