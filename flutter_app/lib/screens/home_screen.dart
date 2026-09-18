@@ -303,17 +303,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // cannot silently go wrong again on a smaller phone or at a larger
   // accessibility text size (brief §14/§28).
   Widget _buildDiscoveryRail() {
-    final width = MediaQuery.sizeOf(context).width;
-    final narrow = width < 360;
+    final narrow = _narrow(context);
     final textScale = MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.3);
     final circle = narrow ? 48.0 : 52.0;
-    final labelSize = narrow ? 9.0 : 9.5;
+    // Polish pass (2026-09-18, brief §3): 9.5/9 -> 10.5/10 and w600. At 9.5px
+    // the labels under the circles were decorative rather than readable, and
+    // the rail's job is to be read. The extra ~2px per line is paid for out of
+    // the strip's vertical padding (12 -> 8), so the rail gets MORE legible
+    // and slightly SHORTER at the same time - it should read as a lightweight
+    // strip, not a section.
+    final labelSize = narrow ? 10.0 : 10.5;
     const labelLines = 2;
-    const labelHeight = 1.15;
+    const labelHeight = 1.12;
     final railHeight = circle +
         4 + // gap under the circle
         (labelSize * labelHeight * labelLines * textScale) +
-        12 + // the ListView's own vertical padding
+        8 + // the ListView's own vertical padding
         2; // slack, so a font metric rounding up never costs a pixel
 
     if (_topCategories.isEmpty && !_categoriesLoaded) {
@@ -379,7 +384,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: ListView.builder(
           controller: _railScrollController,
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          // 12 here + each pill's own 4px margin puts the first circle's
+          // edge at 16 - the same content edge as the search bar, the Zeno
+          // CTA, the Fresh heading and the grid (brief §16).
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           itemCount: items.length,
           itemBuilder: (_, i) {
             // Divider sits only at the one category→destination boundary,
@@ -446,7 +454,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    color: BrokaColors.textMid, fontSize: labelSize, height: 1.15),
+                    color: BrokaColors.textMid,
+                    fontSize: labelSize,
+                    height: 1.12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.05),
               ),
             ),
           ]),
@@ -817,7 +829,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // text scale is exactly how a header overflows on someone's phone
     // (brief §14/§27).
     final textScale = media.textScaler.scale(1.0).clamp(1.0, 1.35);
-    final narrow = media.size.width < 360;
+    final narrow = _narrow(context);
 
     return Scaffold(
       backgroundColor: BrokaColors.bg,
@@ -1145,7 +1157,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // whose second child was an Expanded ProductGridView with its own
   // scrollable). "Fresh on Broka" therefore scrolls away with everything
   // above it, and the grid below shares the screen's one viewport.
-  Widget _buildFeedHeading() => const Padding(
+  Widget _buildFeedHeading() => Padding(
         // FIX (redesign-guide audit, revised round 2 - 2026-08-17): "Popular
         // near you" implied two things that aren't actually true. "Near
         // you": _fetchListingsPage sends lat/lng but never max_km, and
@@ -1166,16 +1178,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         // browsing-history-based ranking exists anywhere yet) - never
         // fabricate personalization or geographic relevance the app doesn't
         // actually have.
-        padding: EdgeInsets.fromLTRB(16, 6, 16, 8),
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
         child: Row(children: [
-          Text('🔥 ', style: TextStyle(fontSize: 14)),
+          Text('🔥 ', style: TextStyle(fontSize: _narrow(context) ? 14 : 15)),
           Text('Fresh on Broka',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: BrokaColors.textHigh,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold)),
+                  // Brief §5: 16-18px on a normal phone, stepped down rather
+                  // than ellipsised on a small one.
+                  fontSize: _narrow(context) ? 15.5 : 17,
+                  height: 1.1,
+                  letterSpacing: -0.2,
+                  fontWeight: FontWeight.w800)),
         ]),
       );
+
+  /// Small-Android breakpoint, shared by every responsive size on this screen
+  /// so they all step down together rather than at four different widths.
+  static bool _narrow(BuildContext context) =>
+      MediaQuery.sizeOf(context).width < 360;
 
   Widget _buildFeedSliver() {
     // ProductGridView loads once in initState, so a ValueKey covering every
@@ -1187,6 +1210,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return ProductGridView(
       key: ValueKey('goods|$_committedPriceFilter|$_locationFilter|$_conditionFilter|$_sortFilter|$_feedRefreshNonce'),
       sliver: true,
+      // 16px page gutter, matching every section above it, with the grid's
+      // own 12px inter-card spacing untouched (brief §16). The default
+      // EdgeInsets.all(12) every other caller uses is unchanged - this is
+      // Home lining its feed up with its own header, not a new default.
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
       controller: _feedController,
       fetchPage: _fetchListingsPage,
       onTapItem: (item) {
@@ -1228,34 +1256,71 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Bottom Nav ────────────────────────────────────────────────────────────
 
+  // Polish pass (2026-09-18, brief §10). Same five destinations, same routes,
+  // same auth gating, same Zeno avatar - three contrast fixes:
+  //   * Unselected was BrokaColors.textLow (#2E3D5A) on #070B16. That is
+  //     roughly 1.6:1 - four of the five destinations were effectively
+  //     invisible, which reads as "disabled", not "not current". textMid
+  //     gives them a real presence while selected still wins outright.
+  //   * Selected now carries a small violet pill behind it and a 2px
+  //     indicator above the label, so "you are on Home" survives a glance.
+  //   * A shadow along the top edge lifts the bar off the feed, so cards
+  //     scrolling past it read as passing UNDER a fixed bar.
   Widget _buildNav() => Container(
     decoration: BoxDecoration(
       color: BrokaColors.bgMid,
       border: const Border(top: BorderSide(color: BrokaColors.border)),
+      boxShadow: [
+        BoxShadow(
+            color: Colors.black.withOpacity(0.45),
+            blurRadius: 16,
+            offset: const Offset(0, -3)),
+      ],
     ),
     child: SafeArea(top: false, child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: List.generate(_navItems.length, (i) {
           final item = _navItems[i];
           final selected = _navIndex == i;
-          return GestureDetector(
-            onTap: () => _onNav(i),
-            behavior: HitTestBehavior.opaque,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              item['label'] == 'Zeno'
-                  ? ZenoAvatar(size: 24, selected: selected, glow: selected)
-                  : Icon(item['icon'] as IconData,
-                      size: 24,
-                      color: selected ? BrokaColors.gold : BrokaColors.textLow),
-              const SizedBox(height: 3),
-              Text(item['label'] as String,
-                  style: TextStyle(
-                      fontSize: 10,
-                      color: selected ? BrokaColors.gold : BrokaColors.textLow,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w400)),
-            ]),
+          final tint = selected ? BrokaColors.gold : BrokaColors.textMid;
+          // Expanded, not spaceAround with intrinsically-sized children: five
+          // items whose widths are set by their own labels add up to more
+          // than a 320dp row ("Profile" is the one that tips it over), and a
+          // Row has no way to give back the difference - it just overflows.
+          // An even fifth each also means the whole column below an icon is
+          // the tap target, not just the glyph.
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => _onNav(i),
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? BrokaColors.gold.withOpacity(0.16)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: item['label'] == 'Zeno'
+                        ? ZenoAvatar(size: 23, selected: selected, glow: selected)
+                        : Icon(item['icon'] as IconData, size: 23, color: tint),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(item['label'] as String,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 10,
+                          height: 1.1,
+                          color: tint,
+                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+                ]),
+              ),
+            ),
           );
         }),
       ),
@@ -1745,14 +1810,22 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
   /// screen before a single listing is visible.
   final double textScale;
 
-  double get _fieldHeight => (narrow ? 44.0 : 46.0) * textScale;
+  double get _fieldHeight => (narrow ? 42.0 : 44.0) * textScale;
 
-  /// The sticky part: the search field plus its 14px of breathing room. This
-  /// is what survives a full scroll, and all that survives it.
-  double get _searchRowHeight => _fieldHeight + 14.0;
+  /// The sticky part: the search field plus its breathing room. This is what
+  /// survives a full scroll, and all that survives it - a marketplace nav bar,
+  /// not a second header (brief §1).
+  double get _searchRowHeight => _fieldHeight + 12.0;
 
   /// The part that collapses: brand mark, wordmark, greeting, tagline.
-  double get _brandBlockHeight => (narrow ? 88.0 : 96.0) * textScale;
+  ///
+  /// Polish pass (2026-09-18, brief §1/§2): trimmed from 96/88 to 88/82. The
+  /// block carried ~14px of slack over its own contents, which bought nothing
+  /// and pushed the first product row down by that much on every phone. What
+  /// is left is ~7px of headroom, enough that a font metric rounding up can't
+  /// overflow it, and the internal gaps came down with it rather than the
+  /// type sizes - the header is tighter, not smaller.
+  double get _brandBlockHeight => (narrow ? 82.0 : 88.0) * textScale;
 
   @override
   double get maxExtent => _brandBlockHeight + _searchRowHeight;
@@ -1769,20 +1842,35 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
     // The brand is gone by ~70% of the collapse, so the last stretch is a
     // clean slide of the search bar into place rather than a long fade.
     final brandOpacity = (1.0 - t * 1.4).clamp(0.0, 1.0);
-    // Opaque quickly: a half-transparent header with product cards sliding
-    // under it reads as a rendering bug, not as glass. By a third of the way
-    // through the collapse it is solid.
-    final backdrop = (t * 3.0).clamp(0.0, 1.0);
+    // Brief §1: "Do not allow product cards to visually bleed through a
+    // partially transparent collapsing header" AND "keep the constellation
+    // background visible while the header is expanded." Those only conflict
+    // if the fade is tied to the collapse. It isn't: at scroll offset 0 there
+    // is nothing underneath the header to bleed through, so it can be fully
+    // transparent and show the constellation; the instant content starts
+    // moving under it, it goes opaque. Eighteen pixels of scroll is long
+    // enough not to flash and short enough that no card is ever half-visible
+    // through it.
+    final backdrop = (shrinkOffset / 18.0).clamp(0.0, 1.0);
 
     return ClipRect(
       child: DecoratedBox(
         decoration: BoxDecoration(
-          // Transparent at rest so the constellation shows through the
-          // header exactly as it does behind the rest of Home.
-          color: BrokaColors.bg.withOpacity(0.94 * backdrop),
+          // Fully opaque once scrolled - a clean dark surface, not glass.
+          color: BrokaColors.bg.withOpacity(backdrop),
           border: Border(
-            bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6 * backdrop)),
+            bottom: BorderSide(color: BrokaColors.border.withOpacity(0.7 * backdrop)),
           ),
+          // A whisper of a drop shadow so the bar sits above the feed rather
+          // than being pasted onto it. Only once it is opaque, or it would
+          // smudge the constellation at rest.
+          boxShadow: backdrop <= 0
+              ? null
+              : [BoxShadow(
+                  color: Colors.black.withOpacity(0.35 * backdrop),
+                  blurRadius: 12,
+                  offset: const Offset(0, 2),
+                )],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1811,9 +1899,12 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   Widget _brandBlock(BuildContext context) {
-    final logo = narrow ? 38.0 : 42.0;
+    final logo = narrow ? 36.0 : 40.0;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 6, 16, 4),
+      // 16 on the left, matching the search bar, the rail, the Zeno CTA, the
+      // Fresh heading and the grid - one content edge down the whole screen
+      // (brief §16). This was 18 and was the only thing that broke the line.
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
@@ -1867,7 +1958,7 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
               ),
             ),
           ]),
-          const SizedBox(height: 6),
+          const SizedBox(height: 5),
           Row(children: [
             Container(
               width: 6,
@@ -1888,7 +1979,7 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
                       letterSpacing: 0.2)),
             ),
           ]),
-          const SizedBox(height: 2),
+          const SizedBox(height: 1),
           Text('Better deals. Smarter choices.',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -1908,7 +1999,7 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
   Widget _searchRow(BuildContext context, double t) {
     final h = _lerp(_fieldHeight, _fieldHeight - 6, t);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
       child: Row(children: [
         Expanded(
           child: GestureDetector(
@@ -2016,7 +2107,7 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
     super.initState();
     // Brief §7: subtle. A message every 5 seconds with a slow crossfade,
     // rather than anything that pulses for attention.
-    _rotate = Timer.periodic(const Duration(seconds: 5), (_) {
+    _rotate = Timer.periodic(const Duration(seconds: 6), (_) {
       if (mounted) setState(() => _index = (_index + 1) % _messages.length);
     });
   }
@@ -2032,7 +2123,7 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
   Widget build(BuildContext context) {
     final narrow = MediaQuery.sizeOf(context).width < 360;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
       child: GestureDetector(
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
@@ -2044,10 +2135,15 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
             // `child` is built once and handed back on every frame - the row
             // below never rebuilds, only the decoration around it repaints.
             builder: (context, child) {
-              final glow = 0.12 + 0.10 * _glow.value;
+              // Polish pass (2026-09-18, brief §4): 0.12-0.22 -> 0.09-0.15.
+              // A 10-point swing on a shadow next to a feed of product photos
+              // was a light pulsing in the corner of the eye while someone
+              // was trying to read prices. Zeno should earn attention by
+              // looking considered, not by moving.
+              final glow = 0.09 + 0.06 * _glow.value;
               return Container(
                 padding: EdgeInsets.symmetric(
-                    horizontal: narrow ? 12 : 14, vertical: 10),
+                    horizontal: narrow ? 12 : 14, vertical: 9),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
                   gradient: const LinearGradient(
@@ -2071,7 +2167,7 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
               SizedBox(width: narrow ? 8 : 11),
               Expanded(
                 child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 420),
+                  duration: const Duration(milliseconds: 520),
                   switchInCurve: Curves.easeOut,
                   switchOutCurve: Curves.easeIn,
                   // Plain crossfade. A slide or a scale on a 56px row that
@@ -2106,15 +2202,15 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
               ),
               const SizedBox(width: 8),
               Container(
-                width: 30,
-                height: 30,
+                width: 28,
+                height: 28,
                 decoration: const BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: LinearGradient(
                       colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
                 ),
                 child: const Icon(Icons.arrow_forward_rounded,
-                    color: Colors.white, size: 16),
+                    color: Colors.white, size: 15),
               ),
             ]),
           ),

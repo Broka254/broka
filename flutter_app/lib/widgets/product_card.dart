@@ -384,19 +384,26 @@ class ProductCard extends StatelessWidget {
     final photo = _sellerPhotoBase64;
     if (photo != null && photo.isNotEmpty) {
       try {
-        return CircleAvatar(radius: 12, backgroundImage: MemoryImage(base64Decode(photo)));
+        return CircleAvatar(radius: 10, backgroundImage: MemoryImage(base64Decode(photo)));
       } catch (_) {}
     }
     final initial = (_sellerName?.isNotEmpty ?? false) ? _sellerName![0].toUpperCase() : '?';
     return CircleAvatar(
-      radius: 12,
+      radius: 10,
       backgroundColor: BrokaColors.gold.withOpacity(0.3),
-      child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+      child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    // Small-Android type scale (polish pass, 2026-09-18, brief §7/§8). A card
+    // column on a 320dp phone is ~120px wide; the same 13.5px title and 17.5px
+    // price that read as confident on a 430dp phone read as cramped there.
+    // Screen width rather than a LayoutBuilder on purpose - ProductGridView
+    // sizes its tiles from the same number, so the two stay in agreement and
+    // this costs no extra layout pass per card.
+    final compact = MediaQuery.sizeOf(context).width < 360;
     // Home-redesign brief round 3 (2026-08-18): "make it super attractive
     // and futuristic" - a thin gradient edge (purple -> blue, matching the
     // app's own brand gradient) instead of a flat single-color border,
@@ -559,10 +566,11 @@ class ProductCard extends StatelessWidget {
                   if (_sellerName != null && _sellerName!.isNotEmpty) ...[
                     Row(children: [
                       _traderAvatar(),
-                      const SizedBox(width: 5),
+                      const SizedBox(width: 6),
                       Expanded(
                         child: Text(_sellerName!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: BrokaColors.textMid, fontSize: 10.5, fontWeight: FontWeight.w600)),
+                            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11,
+                                height: 1.1, fontWeight: FontWeight.w600)),
                       ),
                       if (_showVerifiedBadge) ...[
                         const SizedBox(width: 3),
@@ -574,9 +582,16 @@ class ProductCard extends StatelessWidget {
                         Text(_sellerRating.toStringAsFixed(1),
                             style: const TextStyle(color: BrokaColors.gold, fontSize: 10, fontWeight: FontWeight.w700)),
                       ] else if (_sellerCompletedDeals == 0) ...[
-                        const SizedBox(width: 3),
+                        const SizedBox(width: 4),
+                        // Polish pass (2026-09-18, brief §6): secondary, not
+                        // invisible. This was BrokaColors.textLow (#2E3D5A) on
+                        // a #111D35 card - about 1.4:1 contrast, which is past
+                        // "de-emphasised" and into "cannot be read at all".
+                        // A dimmed white keeps it clearly subordinate to the
+                        // seller name beside it while staying legible.
                         Text('New seller', style: TextStyle(
-                            color: BrokaColors.textLow, fontSize: 9.5, fontStyle: FontStyle.italic)),
+                            color: Colors.white.withOpacity(0.40), fontSize: 9.5,
+                            height: 1.1, fontStyle: FontStyle.italic)),
                       ],
                     ]),
                     const SizedBox(height: 5),
@@ -602,12 +617,24 @@ class ProductCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 5),
                   ],
+                  // Polish pass (2026-09-18, brief §6/§8): the product name is
+                  // the strongest text on the card after the price, and it now
+                  // gets two lines. One line ellipsised "Samsung Galaxy A54
+                  // 128GB Dual SIM" down to "Samsung Galaxy A5…", which is the
+                  // half of the title that says least. ProductGridView reserves
+                  // the second line in its tile height whether a listing needs
+                  // it or not, so allowing it here never costs the photo on a
+                  // card whose title is short.
                   Text(
                     _title,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        height: 1.22,
+                        letterSpacing: -0.1,
+                        fontSize: compact ? 12.5 : 13.5),
                   ),
                   const SizedBox(height: 4),
                   // Home-redesign brief round 3 (2026-08-18): bumped size
@@ -637,27 +664,46 @@ class ProductCard extends StatelessWidget {
                         style: TextStyle(
                           color: BrokaColors.gold,
                           fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.5), blurRadius: 10)],
+                          height: 1.1,
+                          letterSpacing: -0.2,
+                          fontSize: compact ? 16 : 17.5,
+                          // Softer than the previous 0.5/10 glow. At full
+                          // strength the halo bled into the location row
+                          // underneath and made the whole panel look hazy;
+                          // the price still reads first because of size and
+                          // weight, which is a steadier way to win than bloom.
+                          shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.32), blurRadius: 8)],
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(height: 5),
+                  // Metadata line: kept, but deliberately the quietest thing
+                  // in the panel (brief §6/§8). Name and price are what a
+                  // buyer scans a grid for; where and when are what they check
+                  // once something has already caught their eye.
                   Row(children: [
-                    const Icon(Icons.location_on_outlined, size: 12, color: Colors.white54),
-                    const SizedBox(width: 2),
+                    Icon(Icons.location_on_outlined,
+                        size: 11, color: Colors.white.withOpacity(0.42)),
+                    const SizedBox(width: 3),
                     Expanded(
                       child: Text(
                         _locationText,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white54, fontSize: 11),
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(0.48),
+                            height: 1.15,
+                            fontSize: compact ? 10 : 10.5),
                       ),
                     ),
                     if (_freshnessText != null) ...[
-                      const SizedBox(width: 4),
-                      Text(_freshnessText!, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                      const SizedBox(width: 5),
+                      Text(_freshnessText!,
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.34),
+                              height: 1.15,
+                              fontSize: compact ? 9.5 : 10)),
                     ],
                   ]),
                   const SizedBox(height: 8),
@@ -756,7 +802,10 @@ class _ViewDealButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: double.infinity,
-      height: 32,
+      // 32 -> 30 (polish pass, brief §6). Two pixels back to the photo on
+      // every card; the CTA is still a comfortable target, and the entire
+      // card behind it already navigates to the same place.
+      height: 30,
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(9),

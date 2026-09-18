@@ -213,28 +213,51 @@ class _ProductGridViewState extends State<ProductGridView> {
     }
   }
 
-  // Two columns on every device (brief §4: keep the existing two-column
-  // marketplace layout), but a taller tile on a narrow one. The card's photo
-  // sits in an Expanded above a text block whose height is fixed by its
-  // content, so on a 320px-wide phone a 0.68 ratio leaves the image almost
-  // nothing and risks a vertical overflow in the text block itself. Giving
-  // narrow screens a taller tile spends the extra pixels on the photo and
-  // keeps the price/CTA intact (brief §14/§27). Normal phones (>=360dp, the
-  // overwhelming majority) keep the exact 0.68 they had before.
-  double _childAspectRatio(double width) {
-    if (width < 340) return 0.56;
-    if (width < 360) return 0.60;
-    if (width < 400) return 0.64;
-    return 0.68;
+  static const double _crossAxisSpacing = 12;
+  static const double _mainAxisSpacing = 12;
+
+  /// Height ProductCard's text panel needs below the photo, at a text scale
+  /// of 1.
+  ///
+  /// Measured against the card rather than guessed (polish pass, 2026-09-18):
+  /// 18px of panel padding, a 20px seller row, a title allowed to run to two
+  /// lines (~33), the price (~20), the location/freshness row (~15), the 30px
+  /// CTA, and the four gaps between them. Two lines of title are reserved
+  /// whether or not a given listing needs them, which is deliberate: the photo
+  /// sits in an Expanded, so a one-line title spends the difference on a
+  /// bigger image instead of leaving a hole.
+  static const double _cardTextBlock = 156;
+
+  /// How much of the card's width the photo gets as height. Slightly wider
+  /// than tall, which is the shape most listing photos are actually taken in,
+  /// so BoxFit.cover crops the least.
+  static const double _cardImageShare = 0.75;
+
+  // Two columns on every device (brief §4/§6: keep the existing two-column
+  // marketplace layout). The RATIO, though, is computed from the real card
+  // width and the real text-block height rather than picked off a ladder of
+  // screen-width guesses. A fixed ratio means the text panel eats the photo
+  // as the screen narrows - at 320dp the old 0.68 left the image almost
+  // nothing - and it can only be corrected by adding another rung to the
+  // ladder every time the card's contents change. This derives the tile
+  // height instead: photo + text, so a narrow phone gets a taller tile and
+  // the extra height goes where §7 says it should, into the image.
+  double _childAspectRatio(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final textScale = MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.35);
+    final cardWidth =
+        (width - widget.padding.horizontal - _crossAxisSpacing) / 2;
+    if (cardWidth <= 0) return 0.68;
+    final tileHeight = cardWidth * _cardImageShare + _cardTextBlock * textScale;
+    return cardWidth / tileHeight;
   }
 
   SliverGridDelegate _gridDelegate(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
     return SliverGridDelegateWithFixedCrossAxisCount(
       crossAxisCount: 2,
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: _childAspectRatio(width),
+      mainAxisSpacing: _mainAxisSpacing,
+      crossAxisSpacing: _crossAxisSpacing,
+      childAspectRatio: _childAspectRatio(context),
     );
   }
 

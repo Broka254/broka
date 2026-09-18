@@ -26,6 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:broka/screens/home_screen.dart';
 import 'package:broka/widgets/product_card.dart';
 import 'package:broka/widgets/product_grid_view.dart';
+import 'package:broka/widgets/zeno_avatar.dart';
 import 'package:broka/features/listings/domain/models/listing.dart';
 import 'package:broka/utils/price_format.dart';
 
@@ -303,6 +304,10 @@ void main() {
 
       expect(find.text('Agriculture'), findsNothing,
           reason: 'the category rail must scroll completely off-screen');
+      expect(find.text('Fresh on Broka'), findsNothing,
+          reason: 'the feed heading scrolls away with everything else');
+      expect(find.byType(ZenoAvatar), findsOneWidget,
+          reason: 'the only Zeno left on screen is the one in the bottom nav');
       final collapsed = _headerHeight(tester);
       expect(collapsed, lessThan(headerAtRest * 0.55),
           reason: 'the collapsed header must be a fraction of the full one');
@@ -386,6 +391,119 @@ void main() {
       expect(find.text('BROKA'), findsOneWidget);
     });
 
+    // ── Polish pass (2026-09-18) ───────────────────────────────────────────
+
+    testWidgets('step 19: no overflow at any of the widths the brief names',
+        (tester) async {
+      // 320 and 340 are the small-Android band, 360 the old Android default,
+      // 390-430 the current mainstream. Each one gets the full walk, because
+      // an overflow that only appears once the header has collapsed is still
+      // an overflow.
+      for (final width in const [320.0, 340.0, 360.0, 390.0, 430.0]) {
+        tester.view.physicalSize = Size(width * 2.0, 760 * 2.0);
+        tester.view.devicePixelRatio = 2.0;
+
+        await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+        await _settle(tester);
+        expect(tester.takeException(), isNull, reason: 'at rest, ${width}dp');
+        expect(find.byType(ProductCard), findsWidgets, reason: '${width}dp');
+
+        await _scrollHome(tester, -900);
+        expect(tester.takeException(), isNull, reason: 'scrolled, ${width}dp');
+
+        await _scrollHome(tester, 2000);
+        expect(tester.takeException(), isNull,
+            reason: 'back at the top, ${width}dp');
+      }
+      tester.view.reset();
+    });
+
+    testWidgets('brief §1: the header is transparent at rest and opaque the '
+        'moment anything scrolls under it', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+
+      // At rest nothing is behind the header but the constellation, which is
+      // meant to show through.
+      expect(_headerBackdropOpacity(tester), 0.0);
+
+      // One nudge - far less than the collapse range - and it must already be
+      // solid, or a product card would be visible through it.
+      await _scrollHome(tester, -20);
+      expect(_headerBackdropOpacity(tester), 1.0,
+          reason: 'cards must never bleed through the collapsing header');
+
+      await _scrollHome(tester, -1200);
+      expect(_headerBackdropOpacity(tester), 1.0);
+
+      await _scrollHome(tester, 3000);
+      expect(_headerBackdropOpacity(tester), 0.0,
+          reason: 'the constellation comes back when the header is expanded');
+    });
+
+    testWidgets('brief §16: one content edge down the whole screen',
+        (tester) async {
+      tester.view.physicalSize = const Size(390 * 3.0, 844 * 3.0);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+
+      // Sections that sit flush against the 16px page gutter.
+      expect(tester.getTopLeft(find.text('🔥 ')).dx, 16);
+      expect(tester.getTopLeft(find.byType(ProductCard).first).dx, 16);
+      // The rail's first circle: 12px of ListView padding + each pill's own
+      // 4px margin.
+      expect(tester.getTopLeft(find.text('Agriculture')).dx, 16);
+
+      // The search field and the Zeno CTA are boxes rather than bare text, so
+      // measure the box, not its contents - their own padding and 1px border
+      // would otherwise read as misalignment when they are in fact flush.
+      final searchField = find
+          .ancestor(
+              of: find.byIcon(Icons.search_rounded),
+              matching: find.byType(Container))
+          .first;
+      final zenoCta = find
+          .ancestor(
+              of: find.byType(ZenoAvatar).first, matching: find.byType(Container))
+          .first;
+      expect(tester.getTopLeft(searchField).dx, 16);
+      expect(tester.getTopLeft(zenoCta).dx, 16);
+    });
+
+    testWidgets('brief §2: the first product row starts in the top half of '
+        'the screen', (tester) async {
+      tester.view.physicalSize = const Size(390 * 3.0, 844 * 3.0);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+
+      final viewport = tester.getSize(find.byType(CustomScrollView));
+      final firstCardTop = tester.getTopLeft(find.byType(ProductCard).first).dy;
+      // A regression guard on the spacing, not a pixel spec: header +
+      // rail + Zeno + heading must leave the listings starting above the
+      // halfway line, so the feed - not the chrome - is what Home is.
+      expect(firstCardTop / viewport.height, lessThan(0.47),
+          reason: 'chrome above the feed has crept back up to '
+              '${(firstCardTop / viewport.height * 100).round()}% of the screen');
+    });
+
+    testWidgets('brief §13: tapping the search bar opens the search delegate',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+
+      await tester.tap(find.byIcon(Icons.search_rounded));
+      await _settle(tester);
+      // Empty history state of _ListingSearchDelegate.
+      expect(find.text('Search for listings, traders, or locations'),
+          findsOneWidget);
+    });
+
     testWidgets('the filter panel still opens from the collapsed header',
         (tester) async {
       await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
@@ -415,6 +533,18 @@ Future<void> _scrollHome(WidgetTester tester, double dy) async {
       .clamp(0.0, state.position.maxScrollExtent);
   state.position.jumpTo(target);
   await _settle(tester);
+}
+
+/// Alpha of the pinned header's own backdrop. 0 means the constellation shows
+/// through it; 1 means nothing behind it can.
+double _headerBackdropOpacity(WidgetTester tester) {
+  final box = tester.widget<DecoratedBox>(find
+      .descendant(
+        of: find.byType(SliverPersistentHeader),
+        matching: find.byType(DecoratedBox),
+      )
+      .first);
+  return (box.decoration as BoxDecoration).color!.opacity;
 }
 
 /// The rendered height of the pinned Home header, which is what "the header
