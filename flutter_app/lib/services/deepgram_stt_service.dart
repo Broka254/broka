@@ -64,48 +64,64 @@ class VoiceSessionException implements Exception {
 
 /// How one BROKA language maps onto Deepgram's model/language pair.
 ///
-/// [verified] records whether that mapping was confirmed against Deepgram's
-/// own language list, and it matters: BROKA's language picker offers English,
-/// Kiswahili, Dholuo, Kikuyu, Luganda and Sheng, and a UI listing a language
-/// is not evidence that a transcription vendor supports it. Only English is
-/// marked verified here.
+/// [supported] records whether Deepgram's streaming API can actually
+/// transcribe that language, and it matters: BROKA's language picker offers
+/// English, Kiswahili, Dholuo, Kikuyu, Luganda and Sheng, and a UI listing a
+/// language is not evidence that a transcription vendor supports it.
 ///
-/// Unverified languages still attempt a session - Deepgram's multilingual
-/// model keeps gaining languages and refusing outright would remove voice for
-/// five of six BROKA languages on an assumption - but they are flagged so the
-/// card can say so, and so this table is the single place to correct once the
-/// real list is checked. Do NOT flip a `verified` flag without checking
-/// Deepgram's current language documentation.
+/// Checked against Deepgram's own statements (Sept 2026): Nova-3's
+/// `language=multi` is a code-switching mode over a fixed European/Asian set -
+/// Deepgram staff listed it as English, Spanish, French, German, Hindi,
+/// Russian, Portuguese, Japanese, Italian and Dutch, and the 2026 expansions
+/// that took Nova-3 past 36 languages were Europe, South Asia, East Asia,
+/// South-East Asia and Arabic. No Bantu or Nilotic language appears in any of
+/// them. Deepgram transcribes Kiswahili only through Whisper Cloud, which is
+/// pre-recorded audio only and cannot stream.
+///
+/// So the five non-English BROKA languages run on `en`, not `multi`. That is
+/// not a claim they are supported - it is the least-wrong option of three:
+///   * `multi` would hand Kiswahili to a model that must answer in Spanish,
+///     Italian or Dutch, producing confident text in a language the user
+///     does not read;
+///   * refusing the session would remove voice from five of six BROKA
+///     languages outright;
+///   * `en` catches the English half of the code-switched sentences Kenyan
+///     conversation is actually made of, which is the part Zeno can act on,
+///     and leaves the rest for the user to correct in an editable box.
+/// The card says as much on screen rather than letting anyone conclude
+/// BROKA's Dholuo is broken.
+///
+/// Do NOT flip a `supported` flag without re-checking Deepgram's current
+/// language documentation.
 class DeepgramLanguage {
   const DeepgramLanguage({
     required this.model,
     required this.language,
-    required this.verified,
+    required this.supported,
   });
 
   final String model;
   final String language;
-  final bool verified;
+
+  /// True only where Deepgram is documented to transcribe this language.
+  final bool supported;
 
   /// BROKA language key (ApiService.currentUserLanguage) -> Deepgram config.
   static const Map<String, DeepgramLanguage> _byBrokaKey = {
     'english': DeepgramLanguage(
-        model: 'nova-3', language: 'en', verified: true),
-    // Kiswahili, Dholuo, Kikuyu, Luganda and Sheng are routed to Nova-3's
-    // multilingual/code-switching mode. Kenyan conversation is heavily
-    // code-switched with English in practice, so `multi` is the best
-    // available configuration even where the language itself may not be in
-    // Deepgram's set - but see the class doc: this is not a claim of support.
+        model: 'nova-3', language: 'en', supported: true),
+    // See the class doc: Deepgram has no streaming model for any of these, so
+    // they run on English and are flagged so the card can say so.
     'swahili': DeepgramLanguage(
-        model: 'nova-3', language: 'multi', verified: false),
+        model: 'nova-3', language: 'en', supported: false),
     'sheng': DeepgramLanguage(
-        model: 'nova-3', language: 'multi', verified: false),
+        model: 'nova-3', language: 'en', supported: false),
     'luo': DeepgramLanguage(
-        model: 'nova-3', language: 'multi', verified: false),
+        model: 'nova-3', language: 'en', supported: false),
     'kikuyu': DeepgramLanguage(
-        model: 'nova-3', language: 'multi', verified: false),
+        model: 'nova-3', language: 'en', supported: false),
     'luganda': DeepgramLanguage(
-        model: 'nova-3', language: 'multi', verified: false),
+        model: 'nova-3', language: 'en', supported: false),
   };
 
   static DeepgramLanguage forBrokaLanguage(String? key) =>

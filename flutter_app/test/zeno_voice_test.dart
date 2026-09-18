@@ -272,20 +272,24 @@ void main() {
   });
 
   group('language mapping', () {
-    test('English is the one verified mapping', () {
+    test('English is the one supported mapping', () {
       final en = DeepgramLanguage.forBrokaLanguage('english');
       expect(en.language, 'en');
-      expect(en.verified, isTrue);
+      expect(en.model, 'nova-3');
+      expect(en.supported, isTrue);
     });
 
-    test('the other BROKA languages are flagged unverified', () {
-      // The card shows a note for these. If someone later confirms a real
-      // Deepgram language for Kiswahili and flips the flag, this test is the
-      // reminder that the note disappears with it.
+    test('the other BROKA languages run on English and are flagged', () {
+      // Deepgram has no streaming model for Kiswahili, Sheng, Dholuo, Kikuyu
+      // or Luganda, and `multi` is a European/Asian code-switching set that
+      // would answer Kiswahili in Spanish. These run on `en` and the card
+      // shows a note. If Deepgram ever ships one of them, flipping the flag
+      // here is what removes the note - this test is the reminder.
       for (final key in const ['swahili', 'sheng', 'luo', 'kikuyu', 'luganda']) {
         final m = DeepgramLanguage.forBrokaLanguage(key);
-        expect(m.verified, isFalse, reason: key);
-        expect(m.language, 'multi', reason: key);
+        expect(m.supported, isFalse, reason: key);
+        expect(m.language, 'en', reason: key);
+        expect(m.language, isNot('multi'), reason: key);
       }
     });
 
@@ -464,12 +468,12 @@ void main() {
       final sent = <String>[];
       final c = build(sent: sent, language: 'luo');
       await c.open();
-      expect(c.languageUnverified, isTrue);
+      expect(c.languageUnsupported, isTrue);
       c.dispose();
 
       final c2 = build(sent: sent, language: 'english');
       await c2.open();
-      expect(c2.languageUnverified, isFalse);
+      expect(c2.languageUnsupported, isFalse);
       c2.dispose();
     });
   });

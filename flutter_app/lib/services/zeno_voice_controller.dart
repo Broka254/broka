@@ -80,7 +80,7 @@ class ZenoVoiceController extends ChangeNotifier {
   String? _errorMessage;
   bool _open = false;
   bool _userEdited = false;
-  bool _languageUnverified = false;
+  bool _languageUnsupported = false;
   double _level = 0;
 
   VoiceSessionState get state => _state;
@@ -96,10 +96,10 @@ class ZenoVoiceController extends ChangeNotifier {
   /// 0..1 microphone loudness, for the waveform.
   double get level => _level;
 
-  /// True when this session is running on a Deepgram language mapping that
-  /// has not been verified against Deepgram's own language list. The card
+  /// True when the user's BROKA language is one Deepgram cannot transcribe,
+  /// so this session is running on English (see [DeepgramLanguage]). The card
   /// says so rather than letting a user conclude BROKA's Dholuo is broken.
-  bool get languageUnverified => _languageUnverified;
+  bool get languageUnsupported => _languageUnsupported;
 
   bool get hasSendableText => transcript.text.trim().isNotEmpty;
 
@@ -117,8 +117,8 @@ class ZenoVoiceController extends ChangeNotifier {
     _set(VoiceSessionState.connecting);
 
     final language = _languageKey();
-    _languageUnverified =
-        !DeepgramLanguage.forBrokaLanguage(language).verified;
+    _languageUnsupported =
+        !DeepgramLanguage.forBrokaLanguage(language).supported;
 
     _listen();
 

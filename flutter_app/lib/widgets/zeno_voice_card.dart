@@ -187,9 +187,9 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
           _statusLine(c, accent, narrow),
           const SizedBox(height: 8),
           _transcriptRow(c, accent, narrow),
-          if (c.languageUnverified && c.state != VoiceSessionState.error) ...[
+          if (c.languageUnsupported && c.state != VoiceSessionState.error) ...[
             const SizedBox(height: 7),
-            _unverifiedLanguageNote(narrow),
+            _unsupportedLanguageNote(narrow),
           ],
         ]),
       ),
@@ -356,18 +356,18 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
     );
   }
 
-  /// Said plainly rather than hidden: BROKA offers six languages and only the
-  /// English mapping is confirmed against Deepgram's language list. A user
-  /// getting poor Dholuo transcription should know it is the transcriber, not
-  /// their speech.
-  Widget _unverifiedLanguageNote(bool narrow) => Row(children: [
+  /// Said plainly rather than hidden: BROKA offers six languages and the
+  /// transcriber handles one of them. A user getting poor Dholuo transcription
+  /// should know it is the transcriber, not their speech - and should know
+  /// before they speak that the box is where they fix it.
+  Widget _unsupportedLanguageNote(bool narrow) => Row(children: [
         Icon(Icons.info_outline_rounded,
             size: 13, color: BrokaColors.textMid.withOpacity(0.9)),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
-            'Voice is tuned for English. Other languages may transcribe poorly '
-            '— you can edit before sending.',
+            'Voice transcribes English for now — it will catch the English '
+            'parts. Edit anything it gets wrong before sending.',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
