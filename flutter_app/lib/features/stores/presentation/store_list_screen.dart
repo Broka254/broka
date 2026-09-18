@@ -7,9 +7,20 @@
 // No rating/completed-deals shown on a store card, unlike TraderCard -
 // Store has no such field (spec §7/§19: never fabricate one), only a
 // real listingCount.
+//
+// Destination-alignment pass (2026-09-18): restyled onto the same system as
+// Home and the Category Zones - ConstellationBackground, one CustomScrollView
+// with the shared collapsing header, and Home's search control in place of a
+// filled TextField whose textLow placeholder was effectively unreadable on a
+// bgCard surface. The search now scrolls away with the rest of the header
+// content instead of sitting in a fixed band above an Expanded list. Same
+// repository call, same routes.
 import 'package:flutter/material.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
+import '../../../widgets/collapsing_screen_header.dart';
+import '../../../widgets/constellation_background.dart';
+import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import 'store_media_image.dart';
@@ -47,85 +58,198 @@ class _StoreListScreenState extends State<StoreListScreen> {
     );
   }
 
+  static const _visual = DestinationVisuals.stores;
+
+  final _scrollController = ScrollController();
+
+  bool get _narrow => MediaQuery.sizeOf(context).width < 360;
+
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     return Scaffold(
       backgroundColor: BrokaColors.bg,
-      appBar: AppBar(
-        backgroundColor: BrokaColors.bg,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: BrokaColors.textHigh),
-        title: const Text('Stores',
-            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.bold)),
-      ),
-      body: Column(children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-          child: TextField(
-            controller: _searchCtrl,
-            onSubmitted: (_) => _load(),
-            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14),
-            decoration: InputDecoration(
-              hintText: 'Search stores',
-              hintStyle: const TextStyle(color: BrokaColors.textLow),
-              prefixIcon: const Icon(Icons.search, color: BrokaColors.textLow, size: 20),
-              filled: true,
-              fillColor: BrokaColors.bgCard,
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: BrokaColors.border),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: BrokaColors.border),
+      body: ConstellationBackground(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.25,
+              colors: [
+                _visual.gradient.first.withOpacity(0.15),
+                Colors.transparent
+              ],
+              stops: const [0.0, 0.62],
+            ),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: RefreshIndicator(
+              onRefresh: _load,
+              color: BrokaColors.gold,
+              backgroundColor: BrokaColors.bgCard,
+              displacement: 72,
+              child: CustomScrollView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverPersistentHeader(
+                    pinned: true,
+                    delegate: CollapsingScreenHeader(
+                      title: _visual.title,
+                      emoji: _visual.emoji,
+                      gradient: _visual.gradient,
+                      onBack: () => Navigator.pop(context),
+                      narrow: media.size.width < 360,
+                      textScale: media.textScaler
+                          .scale(1.0)
+                          .clamp(1.0, 1.35)
+                          .toDouble(),
+                    ),
+                  ),
+                  SliverToBoxAdapter(child: _searchBar()),
+                  ..._bodySlivers(),
+                  const SliverToBoxAdapter(child: SizedBox(height: 12)),
+                ],
               ),
             ),
           ),
         ),
-        Expanded(child: _buildBody()),
-      ]),
+      ),
     );
   }
 
-  Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: BrokaColors.gold));
-    if (_error != null) {
-      return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.cloud_off_rounded, color: BrokaColors.textLow, size: 48),
-          const SizedBox(height: 12),
-          Text(_error!, style: const TextStyle(color: BrokaColors.textMid)),
-          const SizedBox(height: 8),
-          TextButton(onPressed: _load, child: const Text('Retry', style: TextStyle(color: BrokaColors.gold))),
-        ]),
-      );
-    }
-    if (_stores.isEmpty) {
-      return const Center(
-        child: Text('No stores yet', style: TextStyle(color: BrokaColors.textMid)),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      color: BrokaColors.gold,
-      backgroundColor: BrokaColors.bgCard,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _stores.length,
-        itemBuilder: (_, i) => _StoreCard(
-          store: _stores[i],
-          onTap: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => const StoreViewScreen(),
-              settings: RouteSettings(arguments: {'storeId': _stores[i].id}))),
+  /// Home's search pill. The previous field used BrokaColors.textLow for its
+  /// hint on a bgCard fill - about 1.4:1, so "Search stores" was the one
+  /// piece of text explaining the control and it could not be read.
+  Widget _searchBar() {
+    final narrow = _narrow;
+    final height = narrow ? 42.0 : 44.0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+      child: Container(
+        height: height,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.86),
+          borderRadius: BorderRadius.circular(height / 2),
+          border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
         ),
+        child: Row(children: [
+          const Icon(Icons.search_rounded, size: 18, color: BrokaColors.textMid),
+          const SizedBox(width: 9),
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              style: TextStyle(
+                  color: BrokaColors.textHigh, fontSize: narrow ? 12.5 : 13),
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) => _load(),
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Search stores',
+                hintStyle: TextStyle(
+                    color: BrokaColors.textMid, fontSize: narrow ? 12 : 12.5),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+          if (_searchCtrl.text.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                _searchCtrl.clear();
+                _load();
+                setState(() {});
+              },
+              behavior: HitTestBehavior.opaque,
+              child: const Padding(
+                padding: EdgeInsets.only(left: 6),
+                child: Icon(Icons.close_rounded,
+                    color: BrokaColors.textMid, size: 17),
+              ),
+            ),
+        ]),
       ),
     );
+  }
+
+  List<Widget> _bodySlivers() {
+    if (_loading) {
+      return const [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+              child: Padding(
+            padding: EdgeInsets.only(bottom: 80),
+            child: CircularProgressIndicator(color: BrokaColors.gold),
+          )),
+        ),
+      ];
+    }
+    if (_error != null) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: BrokaEmptyState(
+              emoji: '📡',
+              gradient: _visual.gradient,
+              headline: "Couldn't load stores",
+              body: _error!,
+              action:
+                  OutlinedButton(onPressed: _load, child: const Text('Retry')),
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_stores.isEmpty) {
+      final searching = _searchCtrl.text.trim().isNotEmpty;
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: BrokaEmptyState(
+              emoji: _visual.emoji,
+              gradient: _visual.gradient,
+              headline: searching
+                  ? 'No stores match "${_searchCtrl.text.trim()}"'
+                  : _visual.emptyHeadline,
+              body: searching
+                  ? 'Try a shorter or different search'
+                  : _visual.emptyBody,
+            ),
+          ),
+        ),
+      ];
+    }
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) => _StoreCard(
+              store: _stores[i],
+              onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const StoreViewScreen(),
+                      settings: RouteSettings(
+                          arguments: {'storeId': _stores[i].id}))),
+            ),
+            childCount: _stores.length,
+          ),
+        ),
+      ),
+    ];
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 }

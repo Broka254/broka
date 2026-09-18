@@ -7,11 +7,21 @@
 // just for this one screen would mean adding a layout toggle to a shared
 // component for a single caller. Duplicating the ~20 lines of pagination
 // logic here is the smaller, safer change.
+//
+// Destination-alignment pass (2026-09-18): restyled onto the same system as
+// Home and the Category Zones - ConstellationBackground, one CustomScrollView
+// with the shared collapsing header, a 16px content edge, and the destination
+// registry's own blue identity instead of a flat AppBar that shared nothing
+// with the rail pill that opens it. `embedded` still returns a bare body with
+// no Scaffold, unchanged, for a caller that wants to host the list itself.
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
 import '../../../services/api_service.dart';
+import '../../../widgets/collapsing_screen_header.dart';
+import '../../../widgets/constellation_background.dart';
+import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/traders_repository.dart';
 import '../domain/models/trader.dart';
 import 'trader_profile_screen.dart';
@@ -65,39 +75,79 @@ class _TraderListScreenState extends State<TraderListScreen> {
     );
   }
 
+  static const _visual = DestinationVisuals.traders;
+
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (widget.embedded) return _buildBody();
+    if (widget.embedded) return _buildEmbedded();
+    final media = MediaQuery.of(context);
     return Scaffold(
       backgroundColor: BrokaColors.bg,
-      appBar: AppBar(
-        backgroundColor: BrokaColors.bg,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: BrokaColors.textHigh),
-        title: const Text('Traders',
-            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.bold)),
+      body: ConstellationBackground(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.25,
+              colors: [
+                _visual.gradient.first.withOpacity(0.15),
+                Colors.transparent
+              ],
+              stops: const [0.0, 0.62],
+            ),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: RefreshIndicator(
+              onRefresh: _load,
+              color: BrokaColors.gold,
+              backgroundColor: BrokaColors.bgCard,
+              displacement: 72,
+              child: CustomScrollView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverPersistentHeader(
+                    pinned: true,
+                    delegate: CollapsingScreenHeader(
+                      title: _visual.title,
+                      emoji: _visual.emoji,
+                      gradient: _visual.gradient,
+                      onBack: () => Navigator.pop(context),
+                      narrow: media.size.width < 360,
+                      textScale: media.textScaler
+                          .scale(1.0)
+                          .clamp(1.0, 1.35)
+                          .toDouble(),
+                    ),
+                  ),
+                  ..._bodySlivers(),
+                  const SliverToBoxAdapter(child: SizedBox(height: 12)),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
-      body: _buildBody(),
     );
   }
 
-  Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: BrokaColors.gold));
-    if (_error != null) {
-      return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.cloud_off_rounded, color: BrokaColors.textLow, size: 48),
-          const SizedBox(height: 12),
-          Text(_error!, style: const TextStyle(color: BrokaColors.textMid)),
-          const SizedBox(height: 8),
-          TextButton(onPressed: _load, child: const Text('Retry', style: TextStyle(color: BrokaColors.gold))),
-        ]),
-      );
+  /// The pre-existing embedded mode: just the list, for a caller that brings
+  /// its own Scaffold and scroll view. Kept working exactly as before.
+  Widget _buildEmbedded() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: BrokaColors.gold));
     }
-    if (_traders.isEmpty) {
-      return const Center(
-        child: Text('No traders yet', style: TextStyle(color: BrokaColors.textMid)),
-      );
+    if (_error != null || _traders.isEmpty) {
+      return Center(child: _stateCard());
     }
     return RefreshIndicator(
       onRefresh: _load,
@@ -106,14 +156,67 @@ class _TraderListScreenState extends State<TraderListScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.all(12),
         itemCount: _traders.length,
-        itemBuilder: (_, i) => _TraderCard(
-          trader: _traders[i],
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => TraderProfileScreen(traderId: _traders[i].id))),
-        ),
+        itemBuilder: (_, i) => _card(i),
       ),
     );
   }
+
+  List<Widget> _bodySlivers() {
+    if (_loading) {
+      return const [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+              child: Padding(
+            padding: EdgeInsets.only(bottom: 80),
+            child: CircularProgressIndicator(color: BrokaColors.gold),
+          )),
+        ),
+      ];
+    }
+    if (_error != null || _traders.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: _stateCard()),
+        ),
+      ];
+    }
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) => _card(i),
+            childCount: _traders.length,
+          ),
+        ),
+      ),
+    ];
+  }
+
+  Widget _stateCard() => _error != null
+      ? BrokaEmptyState(
+          emoji: '📡',
+          gradient: _visual.gradient,
+          headline: "Couldn't load traders",
+          body: _error!,
+          action: OutlinedButton(onPressed: _load, child: const Text('Retry')),
+        )
+      : BrokaEmptyState(
+          emoji: _visual.emoji,
+          gradient: _visual.gradient,
+          headline: _visual.emptyHeadline,
+          body: _visual.emptyBody,
+        );
+
+  Widget _card(int i) => _TraderCard(
+        trader: _traders[i],
+        onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => TraderProfileScreen(traderId: _traders[i].id))),
+      );
 }
 
 class _TraderCard extends StatelessWidget {
@@ -177,8 +280,9 @@ class _TraderCard extends StatelessWidget {
               if (trader.locationName != null || trader.distanceKm != null) ...[
                 const SizedBox(height: 3),
                 Row(children: [
-                  const Icon(Icons.location_on_outlined, size: 12, color: BrokaColors.textLow),
-                  const SizedBox(width: 2),
+                  Icon(Icons.location_on_outlined,
+                      size: 12, color: Colors.white.withOpacity(0.42)),
+                  const SizedBox(width: 3),
                   Flexible(
                     child: Text(
                       [
@@ -186,24 +290,42 @@ class _TraderCard extends StatelessWidget {
                         if (trader.distanceKm != null) '${trader.distanceKm!.toStringAsFixed(1)} km away',
                       ].join(' · '),
                       maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: BrokaColors.textLow, fontSize: 11),
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.48), fontSize: 11),
                     ),
                   ),
                 ]),
               ],
-              const SizedBox(height: 4),
-              Row(children: [
-                const Icon(Icons.star_rounded, size: 14, color: BrokaColors.gold),
-                const SizedBox(width: 2),
-                Text(trader.rating.toStringAsFixed(1),
-                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-                const SizedBox(width: 10),
-                Text('${trader.completedDeals} deals',
-                    style: const TextStyle(color: BrokaColors.textLow, fontSize: 12)),
-                const SizedBox(width: 10),
-                Text('${trader.listingCount} listings',
-                    style: const TextStyle(color: BrokaColors.textLow, fontSize: 12)),
-              ]),
+              const SizedBox(height: 5),
+              // Wrap, not Row (destination-alignment pass, 2026-09-18): three
+              // fixed-width stats in a Row overflowed the card by 125px on a
+              // 390dp phone once a trader had two-digit counts, and by more
+              // at 320dp - a Row has no way to give the space back. Wrapping
+              // lets the third stat drop to a second line on a narrow card
+              // instead. textLow was also below the legibility floor for two
+              // of the three; these are secondary, not invisible.
+              Wrap(
+                spacing: 12,
+                runSpacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.star_rounded, size: 14, color: BrokaColors.gold),
+                    const SizedBox(width: 3),
+                    Text(trader.rating.toStringAsFixed(1),
+                        style: const TextStyle(
+                            color: BrokaColors.textMid,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                  Text('${trader.completedDeals} deals',
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.45), fontSize: 12)),
+                  Text('${trader.listingCount} listings',
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.45), fontSize: 12)),
+                ],
+              ),
             ]),
           ),
           const Icon(Icons.chevron_right_rounded, color: BrokaColors.textLow),

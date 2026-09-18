@@ -45,6 +45,7 @@ import '../widgets/product_card.dart';
 import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/models/category.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../features/discovery/domain/destination_visual.dart';
 import '../features/categories/presentation/category_zone_screen.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/presentation/auction_house_screen.dart';
@@ -337,15 +338,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           onTap: () => _openCategoryZone(c),
         );
       }),
+      // The four fixed destinations, from the same registry the screens they
+      // open read their own title, icon and gradient from - so the pill and
+      // its destination cannot drift apart (they had: a pink 🔥 pill opened a
+      // plain white-on-black AppBar with no trace of either).
       _RailItem(
-        emoji: '🔥', label: 'Trending',
-        colors: const [BrokaColors.neonPink, Color(0xFFFF6B9D)],
+        emoji: DestinationVisuals.trending.emoji,
+        label: DestinationVisuals.trending.label,
+        colors: DestinationVisuals.trending.gradient,
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TrendingScreen())),
       ),
       _RailItem(
-        emoji: '🔨', label: 'Auctions',
-        colors: const [BrokaColors.danger, Color(0xFFFF8C42)],
+        emoji: DestinationVisuals.auctions.emoji,
+        label: DestinationVisuals.auctions.label,
+        colors: DestinationVisuals.auctions.gradient,
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AuctionHouseScreen())),
       ),
@@ -356,8 +363,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // Goods/Traders toggle used in embedded mode, just reached by
       // pushing a route instead of swapping Home's body via MarketplaceState.
       _RailItem(
-        emoji: '👤', label: 'Traders',
-        colors: const [BrokaColors.neonBlue, Color(0xFF60A5FA)],
+        emoji: DestinationVisuals.traders.emoji,
+        label: DestinationVisuals.traders.label,
+        colors: DestinationVisuals.traders.gradient,
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TraderListScreen())),
       ),
@@ -367,8 +375,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // entry point is a listing's own store badge (ProductCard) or
       // Profile once you own a store.
       _RailItem(
-        emoji: '🏬', label: 'Stores',
-        colors: const [BrokaColors.gold, BrokaColors.neonPurple],
+        emoji: DestinationVisuals.stores.emoji,
+        label: DestinationVisuals.stores.label,
+        colors: DestinationVisuals.stores.gradient,
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StoreListScreen())),
       ),

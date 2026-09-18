@@ -18,6 +18,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../main.dart';
+import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
 import '../domain/category_visual.dart';
@@ -90,6 +91,8 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
   /// Small-Android breakpoint, the same 360dp Home uses so both screens step
   /// their type down together.
   bool get _narrow => MediaQuery.sizeOf(context).width < 360;
+
+  bool get _hasActiveFilters => _appliedFilters.values.any((v) => v != null);
 
   Future<void> _loadSubcategories() async {
     final result = await categoriesRepository.getSubcategories(widget.categoryId);
@@ -215,18 +218,30 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                 slivers: [
                   SliverPersistentHeader(
                     pinned: true,
-                    delegate: _ZoneHeaderDelegate(
+                    // _ZoneHeaderDelegate moved to
+                    // widgets/collapsing_screen_header.dart when Trending,
+                    // Auctions, Traders and Stores needed the same header -
+                    // four more copies of it is how the category tables went
+                    // wrong. The Zone's only difference is the filter button
+                    // it hands to `trailing`.
+                    delegate: CollapsingScreenHeader(
                       title: '${widget.categoryName ?? 'Category'} Zone',
-                      visual: visual,
-                      hasActiveFilters:
-                          _appliedFilters.values.any((v) => v != null),
+                      emoji: visual.emoji,
+                      gradient: zoneColors,
                       onBack: () => Navigator.pop(context),
-                      onOpenFilters: _openFilters,
                       narrow: _narrow,
                       textScale: MediaQuery.textScalerOf(context)
                           .scale(1.0)
                           .clamp(1.0, 1.35)
                           .toDouble(),
+                      trailingKey: _hasActiveFilters,
+                      trailing: BrokaHeaderButton(
+                        icon: Icons.tune_rounded,
+                        onTap: _openFilters,
+                        active: _hasActiveFilters,
+                        dotGradient: zoneColors,
+                        tooltip: 'Filters',
+                      ),
                     ),
                   ),
                   SliverToBoxAdapter(child: _buildSearchBar()),
@@ -255,7 +270,13 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                     ),
                     onViewStore: (storeId, storeSlug) => Navigator.pushNamed(
                         context, '/store-view', arguments: {'storeId': storeId}),
-                    emptyStateBuilder: (_) => _emptyState(visual),
+                    emptyStateBuilder: (_) => BrokaEmptyState(
+                      emoji: visual.emoji,
+                      gradient: zoneColors,
+                      headline:
+                          'No ${widget.categoryName ?? 'listings'} listings yet',
+                      body: 'Try adjusting your filters',
+                    ),
                   ),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
                 ],
@@ -453,230 +474,5 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
           ),
         ),
       );
-
-  /// Compact, centred, and wearing the category's own visual rather than a
-  /// generic package (brief §10). ProductGridView's sliver mode hands this to
-  /// a SliverFillRemaining, so it centres in whatever viewport is left under
-  /// the sort row instead of sitting near the bottom of the phone.
-  Widget _emptyState(CategoryVisual visual) => Padding(
-        padding: const EdgeInsets.fromLTRB(32, 8, 32, 40),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 74,
-            height: 74,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(colors: [
-                visual.gradient.first.withOpacity(0.22),
-                visual.gradient.last.withOpacity(0.10),
-              ]),
-              border: Border.all(
-                  color: visual.gradient.first.withOpacity(0.45)),
-            ),
-            child: Center(
-                child: Text(visual.emoji, style: const TextStyle(fontSize: 32))),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'No ${widget.categoryName ?? 'listings'} listings yet',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                color: BrokaColors.textHigh,
-                fontSize: 14.5,
-                fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 5),
-          const Text('Try adjusting your filters',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
-        ]),
-      );
 }
 
-// ── Collapsing Zone header ───────────────────────────────────────────────────
-//
-// Same technique as HomeScreen's _HomeHeaderDelegate, for the same reason: the
-// Zone has one scroll owner, so its header has to be a sliver that genuinely
-// gives its pixels back to the grid rather than a fixed box the feed scrolls
-// underneath.
-//
-// What it does differently is the title. "BEAUTY & PERSONAL CARE ZONE" and
-// "BUSINESS & INDUSTRIAL ZONE" are the names that broke the old header: a flat
-// 22px glow, one line, no wrap, and a category name long enough to shove the
-// filter button off the right edge. Here the title wraps to two lines at rest,
-// condenses to one as the header collapses, and the break point is whatever
-// the width dictates - nothing is hardcoded per category, so a new category
-// with a long name needs no change here.
-//
-// Back and filter are pinned at every scroll position on purpose: they are the
-// two things a user on a deep screen always needs within reach.
-class _ZoneHeaderDelegate extends SliverPersistentHeaderDelegate {
-  _ZoneHeaderDelegate({
-    required this.title,
-    required this.visual,
-    required this.hasActiveFilters,
-    required this.onBack,
-    required this.onOpenFilters,
-    required this.narrow,
-    required this.textScale,
-  });
-
-  final String title;
-  final CategoryVisual visual;
-  final bool hasActiveFilters;
-  final VoidCallback onBack;
-  final VoidCallback onOpenFilters;
-  final bool narrow;
-  final double textScale;
-
-  /// Brief §4: 20-22 on a normal phone, 18-20 on a narrow one.
-  double get _titleFont => narrow ? 19.0 : 21.0;
-
-  /// Two lines reserved at rest, so a long name wraps instead of ellipsising.
-  double get _titleBlock => _titleFont * 1.12 * 2;
-
-  static const double _control = 40;
-
-  @override
-  double get maxExtent => ((_titleBlock > _control ? _titleBlock : _control) + 16) * textScale;
-
-  @override
-  double get minExtent => (_control + 12) * textScale;
-
-  static double _lerp(double a, double b, double t) => a + (b - a) * t;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    final range = maxExtent - minExtent;
-    final t = range <= 0 ? 1.0 : (shrinkOffset / range).clamp(0.0, 1.0);
-    final height = (maxExtent - shrinkOffset).clamp(minExtent, maxExtent);
-    // Same rule as Home: transparent at rest so the constellation and the
-    // zone wash read through, opaque within 18px of scroll so no product card
-    // is ever half-visible behind it.
-    final backdrop = (shrinkOffset / 18.0).clamp(0.0, 1.0);
-    // Past the halfway mark the row is no longer tall enough for two lines, so
-    // the title drops to one. For eleven of the sixteen categories the name is
-    // one line at rest anyway and nothing visibly changes.
-    final lines = t > 0.5 ? 1 : 2;
-    final badge = _lerp(34, 26, t);
-
-    return SizedBox(
-      height: height,
-      child: ClipRect(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: BrokaColors.bg.withOpacity(backdrop),
-            border: Border(
-              bottom: BorderSide(
-                  color: BrokaColors.border.withOpacity(0.7 * backdrop)),
-            ),
-            boxShadow: backdrop <= 0
-                ? null
-                : [BoxShadow(
-                    color: Colors.black.withOpacity(0.35 * backdrop),
-                    blurRadius: 12,
-                    offset: const Offset(0, 2),
-                  )],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(6, 4, 16, 6),
-            child: Row(children: [
-              GestureDetector(
-                onTap: onBack,
-                behavior: HitTestBehavior.opaque,
-                child: const SizedBox(
-                  width: _control,
-                  height: _control,
-                  child: Icon(Icons.arrow_back_ios_new_rounded,
-                      color: BrokaColors.textHigh, size: 19),
-                ),
-              ),
-              // The category's own visual, from the same resolver Home's rail
-              // and the empty state use - so the icon you tapped on Home is
-              // the icon at the top of the Zone it opened.
-              Container(
-                width: badge,
-                height: badge,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(colors: [
-                    visual.gradient.first.withOpacity(0.28),
-                    visual.gradient.last.withOpacity(0.14),
-                  ]),
-                  border: Border.all(
-                      color: visual.gradient.first.withOpacity(0.5)),
-                ),
-                child: Center(
-                    child: Text(visual.emoji,
-                        style: TextStyle(fontSize: badge * 0.46))),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ZoneGlowText(
-                  title,
-                  gradient: visual.gradient,
-                  fontSize: _lerp(_titleFont, _titleFont * 0.82, t),
-                  maxLines: lines,
-                  letterSpacing: narrow ? 0.8 : 1.1,
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Home's filter control, not a second filter language: dark card
-              // surface, subtle border, violet when something is applied.
-              GestureDetector(
-                onTap: onOpenFilters,
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  width: _control,
-                  height: _control,
-                  decoration: BoxDecoration(
-                    color: hasActiveFilters
-                        ? BrokaColors.gold.withOpacity(0.2)
-                        : BrokaColors.bgCard.withOpacity(0.86),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: hasActiveFilters
-                            ? BrokaColors.gold
-                            : BrokaColors.border),
-                  ),
-                  child: Stack(clipBehavior: Clip.none, children: [
-                    Center(
-                      child: Icon(Icons.tune_rounded,
-                          size: 18,
-                          color: hasActiveFilters
-                              ? BrokaColors.gold
-                              : BrokaColors.textMid),
-                    ),
-                    if (hasActiveFilters)
-                      Positioned(
-                        top: 5,
-                        right: 5,
-                        child: Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: visual.gradient),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                  ]),
-                ),
-              ),
-            ]),
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  bool shouldRebuild(covariant _ZoneHeaderDelegate old) =>
-      old.title != title ||
-      old.visual.categoryName != visual.categoryName ||
-      old.hasActiveFilters != hasActiveFilters ||
-      old.narrow != narrow ||
-      old.textScale != textScale ||
-      old.onBack != onBack ||
-      old.onOpenFilters != onOpenFilters;
-}

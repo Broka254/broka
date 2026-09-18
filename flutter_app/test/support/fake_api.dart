@@ -98,9 +98,56 @@ Object? defaultRoute(Uri uri) {
     }
     return items;
   }
+  if (path.startsWith('/trending')) {
+    return [for (int i = 0; i < 12; i++) fakeListingJson(i, price: 15000)];
+  }
+  if (path.startsWith('/auctions')) {
+    final status = uri.queryParameters['status'] ?? 'live';
+    return [
+      for (int i = 0; i < 14; i++) fakeAuctionJson(i, status: status),
+    ];
+  }
+  if (path.startsWith('/traders')) {
+    return [for (int i = 0; i < 14; i++) fakeTraderJson(i)];
+  }
+  if (path.startsWith('/stores')) {
+    return [for (int i = 0; i < 14; i++) fakeStoreJson(i)];
+  }
   // Buy-agent "no active request" and anything else.
   return null;
 }
+
+Map<String, dynamic> fakeAuctionJson(int i,
+        {String status = 'live', double? currentBid = 1500000}) =>
+    {
+      'id': 'auction-$i',
+      'name': 'Auction item $i',
+      'status': status,
+      'current_bid': currentBid,
+      'bid_count': i,
+      'min_bid_increment': 500.0,
+      // Far enough out that the countdown is stable across a test run.
+      'ends_at': '2030-01-01T00:00:00Z',
+    };
+
+Map<String, dynamic> fakeTraderJson(int i) => {
+      'id': 'trader-$i',
+      'business_name': 'Trader $i',
+      'is_verified': i.isEven,
+      'rating': 4.5,
+      'completed_deals': 7,
+      'listing_count': 12,
+      'location_name': 'Nairobi',
+    };
+
+Map<String, dynamic> fakeStoreJson(int i) => {
+      'id': 'store-$i',
+      'name': 'Store $i',
+      'slug': 'store-$i',
+      'specialization': 'Electronics',
+      'county': 'Nairobi',
+      'listing_count': 9,
+    };
 
 // ── Plumbing ─────────────────────────────────────────────────────────────────
 // Only the slice http's IOClient actually touches: openUrl, a request whose
