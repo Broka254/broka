@@ -47,6 +47,11 @@ from api.core.rate_limit import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _time_now() -> float:
+    import time as _t
+    return _t.time()
+
 # How long (seconds) to wait for ANY inbound WS activity before proactively
 # pinging, and how many consecutive missed pings before the connection is
 # treated as dead and closed (Phase 5 - previously absent entirely, so a
@@ -96,6 +101,25 @@ WS_RELAYABLE_TYPES = frozenset({"offer", "answer", "ice", "hangup", "video_state
 # not-yet-detected-as-dead connection.
 _rooms: Dict[str, Dict[str, WebSocket]] = {}
 
+def _owns_room(room_id: str, room: Dict[str, WebSocket]) -> bool:
+    """True when `room` is still the dict registered under `room_id`.
+
+    A signaling handler captures its room dict once, at join, and tears it
+    down much later in a `finally` that has awaited several times in
+    between. In that window the room can be popped by the other
+    participant's handler and a RECONNECT can create a brand new dict under
+    the same key - so "my room is empty" and "the registry's room for this
+    id is empty" are not the same statement. Acting on the first while
+    meaning the second deletes a live call's socket registry: the two peers
+    end up in dicts nothing can find each other through, and no offer,
+    answer, ICE candidate or restart ever crosses again.
+
+    Extracted rather than inlined so the invariant is testable directly -
+    the handler it guards can only be reached through a real WebSocket.
+    """
+    return _rooms.get(room_id) is room
+
+
 # ── Firebase Admin (optional - gracefully disabled if not configured) ──────────
 _fcm_app = None
 
@@ -142,7 +166,21 @@ class FcmResult:
         return self.sent
 
 
-async def _send_fcm(token: str, title: str, body: str, data: dict, *, data_only: bool = False) -> FcmResult:
+# How long an incoming-call push stays worth delivering. FCM's default TTL
+# is FOUR WEEKS: a phone that is off, out of coverage or in deep Doze when
+# someone calls gets the push whenever it next reaches the network, and -
+# because the client rings on receipt - rings for a call that ended hours
+# ago. Matching the TTL to the ring window makes FCM discard it instead,
+# which is what "this notification is only useful right now" means on the
+# wire. Slightly longer than the 45s client ring timer so a push delivered
+# at the edge of the window still has a call to join.
+CALL_PUSH_TTL_SECONDS = 60
+
+
+async def _send_fcm(
+    token: str, title: str, body: str, data: dict, *,
+    data_only: bool = False, ttl_seconds: Optional[int] = None,
+) -> FcmResult:
     """Send an FCM push notification. Returns an FcmResult (truthy on success).
 
     PERFORMANCE FIX (calling audit, 2026-09-14): firebase_admin's
@@ -171,23 +209,44 @@ async def _send_fcm(token: str, title: str, body: str, data: dict, *, data_only:
         logger.info("[calls] FCM not configured - skipping push")
         return FcmResult(False)
     try:
+        from datetime import timedelta
         from firebase_admin import messaging
+
+        # FIX (calling audit, 2026-09-18): the APNs half of this was
+        # hardcoded to a BACKGROUND push regardless of `data_only`, with a
+        # `sound` on it - a combination Apple does not honour. A background
+        # push is a silent wake-up: it displays nothing. So every visible
+        # notification this helper has ever sent to an iOS device (the deal
+        # reminders and nudges in core/workers.py, which call it with
+        # data_only=False) was delivered as a silent push and shown to
+        # nobody. The push type now follows what the message actually is:
+        # data-only -> background (the app draws its own UI, which is the
+        # whole point of data_only for an incoming call), otherwise alert,
+        # at the priority each type is allowed.
+        if data_only:
+            apns_headers = {"apns-push-type": "background", "apns-priority": "5"}
+            aps = messaging.Aps(content_available=True)
+        else:
+            apns_headers = {"apns-push-type": "alert", "apns-priority": "10"}
+            aps = messaging.Aps(
+                alert=messaging.ApsAlert(title=title, body=body),
+                sound="default",
+            )
+        if ttl_seconds is not None:
+            # APNs wants an absolute unix expiry; FCM wants a duration.
+            apns_headers["apns-expiration"] = str(int(_time_now()) + ttl_seconds)
+
         msg = messaging.Message(
             notification=None if data_only else messaging.Notification(title=title, body=body),
             data={k: str(v) for k, v in data.items()},
             token=token,
-            android=messaging.AndroidConfig(priority="high"),
+            android=messaging.AndroidConfig(
+                priority="high",
+                ttl=timedelta(seconds=ttl_seconds) if ttl_seconds is not None else None,
+            ),
             apns=messaging.APNSConfig(
-                # apns-push-type/apns-priority are required by APNs for a
-                # silent (content-available) push to be accepted at all;
-                # without them Apple can reject or heavily throttle it.
-                headers={"apns-push-type": "background", "apns-priority": "5"},
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        content_available=True,
-                        sound="default",
-                    )
-                ),
+                headers=apns_headers,
+                payload=messaging.APNSPayload(aps=aps),
             ),
         )
         await asyncio.to_thread(messaging.send, msg)
@@ -520,6 +579,9 @@ async def initiate_call(
             "callType":    payload.call_type,
         },
         data_only=True,
+        # An incoming call is the definitive "only useful right now"
+        # notification - see CALL_PUSH_TTL_SECONDS.
+        ttl_seconds=CALL_PUSH_TTL_SECONDS,
     )
     if getattr(pushed, "unregistered", False):
         # FCM has told us this exact token is permanently dead. Leaving it
@@ -932,7 +994,19 @@ async def call_signaling(
         if room.get(uid) is websocket:
             del room[uid]
             await call_state.set_participant_connected(room_id, uid, False)
-        if not room:
+        # RACE FIX (calling audit, 2026-09-18): `room` is this handler's
+        # captured reference to the dict that WAS registered under room_id.
+        # Between the removal above (which awaits) and this check, a peer
+        # can reconnect - and if another handler already popped room_id in
+        # that window, that reconnect created a BRAND NEW dict under the
+        # same key. Popping unconditionally then deleted the live call's
+        # registry out from under it: the two peers each end up in a dict
+        # nothing else can find, so no offer, answer, ICE candidate or
+        # restart ever reaches the other side again, and the state machine
+        # gets told the call ended. The identity check makes both the pop
+        # and the terminal transition apply only to the room this handler
+        # is actually tearing down.
+        if not room and _owns_room(room_id, room):
             _rooms.pop(room_id, None)
             current_session = await call_state.get_session(room_id)
             if current_session and not call_state.is_terminal(current_session.state):
@@ -971,7 +1045,8 @@ async def call_signaling(
             # recovery state instead, until either the peer rejoins (the
             # "reconnected" message sent at join above) or its own bounded
             # timer gives up.
-            if room.get(uid) is None or room.get(uid) is websocket:
+            if (room.get(uid) is None or room.get(uid) is websocket) \
+                    and _owns_room(room_id, room):
                 current_session = await call_state.get_session(room_id)
                 if current_session and not call_state.is_terminal(current_session.state):
                     await call_state.update_state(room_id, CallState.disconnected)

@@ -157,6 +157,12 @@ Outgoing video is capped at 320kbps / 24fps via `RTCRtpSender` parameters
 bounds capture, not what the encoder spends). Uncapped, libwebrtc ramps a
 640x480 stream past 1Mbps and starves the audio sharing the same connection.
 
+The cap is applied **after negotiation completes** (from `_handleOffer`'s
+answer and from `_handleAnswer`), reading the sender back through
+`getSenders()`. It cannot be applied at `addTrack` time, which is where it
+used to live and why it never actually took effect — see the 2026-09-18
+pass below.
+
 Mic and camera are requested explicitly before `getUserMedia`. A denied
 camera degrades the call to audio-only rather than failing it.
 
@@ -173,9 +179,12 @@ the shape the tuner expects, the **original** description is used unchanged
 at all.
 
 The platform is put into communication/telephony audio mode at call start
-(`Helper.setAndroidAudioConfiguration`), which is what makes the hardware
-volume keys control *call* volume, routes through the voice-call stream, and
-engages the device's hardware echo canceller. Voice calls start on the
+(`Helper.setAndroidAudioConfiguration`), **awaited before `getUserMedia`**,
+which is what makes the hardware volume keys control *call* volume, routes
+through the voice-call stream, and engages the device's hardware echo
+canceller — that last one only applies to a stream opened while the mode is
+already in force, hence the await. The mode is put **back to `media` on
+teardown**; the speaker flag alone never did that. Voice calls start on the
 earpiece, video calls on the speaker.
 
 Call quality shown in the UI is measured — inbound audio packet loss and
@@ -364,3 +373,102 @@ Re-announced on `ready`, which fires again after a WS reconnect: a
 picture would stay stuck on whatever it was before the drop. Defaults to
 `true` for peers on older builds who never send it, so their behaviour is
 unchanged.
+
+
+---
+
+# Calling audit (2026-09-18)
+
+Seven defects, found by reading the call path against what this document
+already claimed it did. Several were things the code *described* correctly
+and did not actually do, which is why they survived the previous pass — the
+comment explaining the intent sat directly above the line that missed it.
+
+## Call quality
+
+**The video bitrate cap never applied.** `_applyVideoBitrateCap` ran once
+from `_createPc`, straight after `addTrack`. In that position it could not
+work: it read the sender's `parameters`, which in flutter_webrtc is a Dart
+field cached from `addTrack`'s response rather than a live read; before the
+transceiver is negotiated that cache's `encodings` list is empty, so the old
+code fabricated one; and libwebrtc rejects a `setParameters()` that changes
+the *number* of encodings. So the call threw and was swallowed — and even
+where it didn't, `setLocalDescription` re-derives the real parameters
+immediately afterwards. The cap that exists specifically to stop video
+starving the audio on the same uplink was a no-op. Now applied after
+negotiation, against senders re-read from native.
+
+**The audio mode switch was not awaited.** `Helper.setAndroidAudioConfiguration`
+returns a Future that was dropped, so `getUserMedia` could open the mic
+while the platform was still in MEDIA mode. Android engages its hardware
+AEC/NS based on the mode in force *when the stream is opened*, so losing
+that race gives a call with software echo cancellation only — the
+speakerphone echo the call is configured to avoid. Dropping the Future also
+meant the surrounding `try/catch` caught nothing.
+
+**The audio mode was never restored.** Teardown called
+`setSpeakerphoneOn(false)` under a comment claiming it handed the route back
+"so the next media playback (a voice note, the ringtone) isn't stuck in
+earpiece/communication mode". The speaker flag is not the audio *mode*: the
+device stayed in `VOICE_COMMUNICATION` for the rest of the app session, so
+the hardware volume keys kept adjusting call volume and later media played
+on the voice-call stream.
+
+**An ICE restart could strip TURN from a live call.** `_fetchIceConfiguration`
+does not throw when the credential fetch fails — it returns the STUN-only
+fallback. The pre-restart refresh then pushed *that* onto the live
+connection via `setConfiguration()`, removing the relay from a call that was
+in all likelihood only up because of the relay. On carrier-grade NAT (normal
+on Kenyan mobile data) that turns a recovery attempt into a disconnect. The
+refresh is now skipped unless real credentials came back.
+
+**The quality meter reported `bad` on the second call of a session.**
+`_lastPacketsReceived` / `_lastPacketsLost` / `_quality` survived teardown,
+so the next call's first sample subtracted the previous call's cumulative
+totals — a negative delta, which fell into the "no audio arrived" branch.
+Reset on teardown, and deltas are clamped (an ICE restart re-creates the
+inbound stream, and `packetsLost` is signed in the stats spec).
+
+## Notifications
+
+**Incoming-call pushes had no TTL**, so FCM's four-week default applied. A
+phone that was off or out of coverage when someone called received the push
+whenever it next reached the network and rang for a call that had ended
+hours before. Now `CALL_PUSH_TTL_SECONDS` (60s), with the APNs equivalent
+(`apns-expiration`). Foregrounded, the client additionally re-checks
+`GET /calls/pending/{listing_id}` before ringing, and fails *open* — only a
+definite "no call" suppresses the ring, since swallowing a real call is far
+worse than an occasional late one.
+
+**Every visible iOS notification was sent as a silent background push.**
+`_send_fcm` hardcoded `apns-push-type: background` with `content_available`
+regardless of the `data_only` argument. That is correct for an incoming call
+(the app draws its own UI) and wrong for everything else: the deal reminders
+and nudges in `core/workers.py` call this helper with `data_only=False` and
+were delivered to iOS devices as pushes that display nothing. The push type
+now follows the message.
+
+## Signaling
+
+**A reconnect could have its room deleted out from under it.** The relay's
+`finally` popped `_rooms[room_id]` whenever *its own* captured room dict was
+empty. Between removing itself and that check it awaits, and in that window
+another handler can pop the room and a reconnecting peer can create a brand
+new dict under the same key — which the stale handler then deleted, leaving
+both peers registered in a dict nothing can find each other through. No
+offer, answer, ICE candidate or restart crosses again, and the session is
+marked `ended`. The pop and the terminal transition are now guarded by
+`_owns_room()`, extracted so the invariant is testable without a live socket.
+
+## Verification
+
+`backend/tests/test_call_push_and_teardown.py` covers the push shaping and
+the room-ownership predicate; five of its seven assertions fail against the
+pre-fix code. The full backend suite passes (618), and `flutter analyze`
+reports no errors.
+
+The client-side fixes are **not device-verified** — same standing caveat as
+the rest of this document. They are reasoned from the flutter_webrtc 0.11.7
+source (`getSenders()` round-trips to native, `parameters` is a cached
+field, `AndroidAudioConfiguration.media` exists) rather than from a call
+placed on real hardware.

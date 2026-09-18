@@ -21,6 +21,10 @@
 
 import 'dart:async';
 import 'dart:convert';
+// Platform, for the Android-only audio-mode switch in _setAudioMode. Same
+// `show Platform` narrow import ringtone_service.dart already uses for its
+// own Android-only platform channel.
+import 'dart:io' show Platform;
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -780,7 +784,23 @@ class WebRtcService {
       if (stale && _pc != null) {
         try {
           final freshConfig = await _fetchIceConfiguration();
-          if (gen == _generation && _pc != null) {
+          // FIX (calling audit, 2026-09-18): only push a refreshed
+          // configuration onto a LIVE connection when it actually contains
+          // TURN servers.
+          //
+          // _fetchIceConfiguration does not throw when the credential fetch
+          // fails - it logs and returns the STUN-only fallback. The catch
+          // below therefore never fired for the most likely failure, and
+          // the code went on to setConfiguration() that fallback, STRIPPING
+          // TURN from a connection that in all likelihood was only up
+          // because of TURN. That turned a recovery attempt into a
+          // downgrade, on exactly the networks (carrier-grade NAT on
+          // Kenyan mobile data) where the relay is the only path that
+          // works at all. Keeping the existing configuration is what the
+          // comment above always intended.
+          if (_iceConfigIsFallback) {
+            debugPrint('WebRTC: TURN refresh unavailable - keeping existing ICE config');
+          } else if (gen == _generation && _pc != null) {
             await _pc!.setConfiguration(freshConfig);
             debugPrint('WebRTC: ICE_CONFIG_REFRESHED room=$roomId');
           }
@@ -900,6 +920,10 @@ class WebRtcService {
       await _pc!.setLocalDescription(tunedAnswer);
       _lastLocalAnswer = tunedAnswer; // cache for resend - see 'ready' handler in _onSignal
       debugPrint('WebRTC: ANSWER_SET_LOCAL room=$roomId');
+      // Negotiation is complete on this side, so the sender now has real
+      // encodings to cap. See _applyVideoBitrateCap.
+      await _applyVideoBitrateCap();
+      if (gen != _generation || _ws == null) return;
       if (gen != _generation || _ws == null) return;
       _ws!.sink.add(jsonEncode({
         'type': 'answer', 'room_id': roomId, 'sdp': tunedAnswer.sdp,
@@ -939,6 +963,11 @@ class WebRtcService {
       _remoteDescriptionSet = true;
       _awaitingRestartAnswer = false;
       await _flushPendingIce();
+      if (gen != _generation) return;
+      // Caller side: the answer completes negotiation, so this is the first
+      // moment the video sender has real encodings. See
+      // _applyVideoBitrateCap.
+      await _applyVideoBitrateCap();
     } catch (e, st) {
       // Same fix as _sendOffer() above - see that method's comment.
       if (gen == _generation) {
@@ -1134,13 +1163,21 @@ class WebRtcService {
   /// back to STUN-only (_fallbackIceConfig) if the fetch fails for any
   /// reason - direct P2P connectivity can still work without TURN, just
   /// not for callers behind carrier-grade NAT.
+  /// True when the last _fetchIceConfiguration() call could NOT get real
+  /// TURN credentials and handed back the STUN-only fallback. Checked
+  /// before setConfiguration() on a live connection - see
+  /// _attemptIceRestart.
+  bool _iceConfigIsFallback = false;
+
   Future<Map<String, dynamic>> _fetchIceConfiguration() async {
     final creds = await ApiService.getTurnCredentials();
     final iceServers = creds?['ice_servers'];
     if (creds == null || iceServers is! List || iceServers.isEmpty) {
       debugPrint('WebRTC: TURN credentials unavailable, using STUN-only ICE');
+      _iceConfigIsFallback = true;
       return _fallbackIceConfig;
     }
+    _iceConfigIsFallback = false;
     final expiresIn = creds['expires_in'];
     if (expiresIn is int) {
       _iceCredentialsExpireAt = DateTime.now().add(Duration(seconds: expiresIn));
@@ -1166,13 +1203,14 @@ class WebRtcService {
     // offer with no media in it, and (b) there was no handle on the video
     // sender to apply a send-side bitrate cap to.
     for (final t in (_local?.getTracks() ?? const <MediaStreamTrack>[])) {
-      final sender = await _pc!.addTrack(t, _local!);
-      if (t.kind == 'video') _videoSender = sender;
+      await _pc!.addTrack(t, _local!);
       debugPrint('WebRTC: ${t.kind == "video" ? "LOCAL_VIDEO_TRACK_ADDED" : "LOCAL_AUDIO_TRACK_ADDED"} room=$roomId');
     }
     if (gen != _generation) return;
-    await _applyVideoBitrateCap();
-    if (gen != _generation) return;
+    // NOT capping the bitrate here. Encodings don't exist until the
+    // transceiver is negotiated - see _applyVideoBitrateCap's doc comment.
+    // It is applied from the two places where negotiation has just
+    // completed instead (_handleOffer's answer, _handleAnswer).
 
     // Send ICE candidates to remote peer
     _pc!.onIceCandidate = (c) {
@@ -1321,7 +1359,6 @@ class WebRtcService {
     };
   }
 
-  RTCRtpSender? _videoSender;
   MediaStreamTrack? _remoteVideoTrack;
   // Peer's camera state, as last announced by them. Defaults to true: a
   // peer on an older build never sends video_state, and assuming their
@@ -1341,27 +1378,61 @@ class WebRtcService {
   /// is the reliable way to bound an outgoing stream - the `b=AS:` SDP line
   /// is honoured inconsistently across platforms, and a getUserMedia
   /// constraint only bounds capture, not what the encoder decides to spend.
+  ///
+  /// FIX (calling audit, 2026-09-18): this used to run exactly once, from
+  /// _createPc, immediately after addTrack - and in that position it could
+  /// not work:
+  ///
+  ///   1. It read the addTrack-returned sender's `parameters`, which in
+  ///      flutter_webrtc is a CACHED Dart field populated from addTrack's
+  ///      response, not a live read of native state.
+  ///   2. Before the transceiver is negotiated that cache's `encodings`
+  ///      list is empty, so the old code fabricated one. libwebrtc rejects
+  ///      a setParameters() that changes the NUMBER of encodings
+  ///      (InvalidModificationError) - so on the common path this threw and
+  ///      was swallowed by the catch below.
+  ///   3. Even where it didn't, setLocalDescription re-derives the sender's
+  ///      real parameters from the negotiated SDP afterwards, discarding it.
+  ///
+  /// So the cap that exists specifically to stop video starving the audio
+  /// sharing the same uplink was, in practice, never applied - which is the
+  /// failure its own comment describes. It now runs AFTER negotiation and
+  /// reads the sender back through getSenders(), which does hit native and
+  /// returns the real, post-negotiation encodings to modify in place.
   Future<void> _applyVideoBitrateCap() async {
     if (!isVideo) return;
-    final sender = _videoSender;
-    if (sender == null) return;
+    final pc = _pc;
+    if (pc == null) return;
+    final gen = _generation;
     try {
-      final params = sender.parameters;
+      // Fresh from native - see the doc comment. The sender object
+      // addTrack returned carries a stale Dart-side `parameters` cache and
+      // must not be used here; getSenders() round-trips to native.
+      final senders = await pc.getSenders();
+      if (gen != _generation) return;
+      RTCRtpSender? videoSender;
+      for (final s in senders) {
+        if (s.track?.kind == 'video') { videoSender = s; break; }
+      }
+      if (videoSender == null) {
+        debugPrint('WebRTC: no video sender yet - bitrate cap deferred');
+        return;
+      }
+
+      final params = videoSender.parameters;
       final encodings = params.encodings;
       if (encodings == null || encodings.isEmpty) {
-        params.encodings = [
-          RTCRtpEncoding(
-            maxBitrate: _videoMaxBitrateBps,
-            maxFramerate: _videoMaxFramerate,
-          ),
-        ];
-      } else {
-        for (final e in encodings) {
-          e.maxBitrate = _videoMaxBitrateBps;
-          e.maxFramerate = _videoMaxFramerate;
-        }
+        // Still un-negotiated. Adding an encoding here is exactly the
+        // invalid modification described above, so don't - the post-answer
+        // call will catch it once the real encodings exist.
+        debugPrint('WebRTC: video encodings not negotiated yet - cap deferred');
+        return;
       }
-      await sender.setParameters(params);
+      for (final e in encodings) {
+        e.maxBitrate = _videoMaxBitrateBps;
+        e.maxFramerate = _videoMaxFramerate;
+      }
+      await videoSender.setParameters(params);
       debugPrint('WebRTC: VIDEO_BITRATE_CAPPED room=$roomId '
           'max=${_videoMaxBitrateBps ~/ 1000}kbps fps=$_videoMaxFramerate');
     } catch (e) {
@@ -1474,24 +1545,52 @@ class WebRtcService {
     }
   }
 
-  Future<void> _configureAudioSession() async {
+  /// Puts the platform into (or back out of) telephony audio mode.
+  ///
+  /// Helper.setAndroidAudioConfiguration is the live, mid-call-safe way to
+  /// switch Android's audio mode. Deliberately NOT going through
+  /// WebRTC.initialize()'s androidAudioConfiguration option: that only
+  /// applies once at engine startup, and its exact argument shape has moved
+  /// between plugin versions - this call has been stable and does the same
+  /// job at the moment it's actually needed.
+  ///
+  /// FIX (calling audit, 2026-09-18), two bugs in one line:
+  ///
+  ///   • It was not awaited. The method returns a Future (it is a platform
+  ///     channel round trip), so _initMedia went straight on to
+  ///     getUserMedia - and the mic could open while the platform was still
+  ///     in MEDIA mode. Android engages its hardware acoustic echo
+  ///     canceller and noise suppressor based on the mode in force when the
+  ///     stream is opened, so losing that race gives you a call with
+  ///     software AEC only: the exact speakerphone echo this call exists to
+  ///     prevent. Dropping the Future also meant the try/catch around it
+  ///     caught nothing (a Dart try only guards the synchronous prefix),
+  ///     so a failure was an unhandled rejection rather than the logged,
+  ///     survivable event the catch intends.
+  ///
+  ///   • Nothing ever put it back. _cleanup called setSpeakerphoneOn(false)
+  ///     and its comment claims that hands the route back "so the next
+  ///     media playback (a voice note, the ringtone) isn't stuck in
+  ///     earpiece/communication mode" - but the speaker flag is not the
+  ///     audio MODE. The device stayed in VOICE_COMMUNICATION for the rest
+  ///     of the app session: the hardware volume keys kept adjusting call
+  ///     volume instead of media volume, and voice notes and the next
+  ///     incoming-call ringtone played on the voice-call stream.
+  Future<void> _setAudioMode({required bool inCall}) async {
+    if (kIsWeb || !Platform.isAndroid) return;
     try {
-      // Helper.setAndroidAudioConfiguration is the live, mid-call-safe way
-      // to put the platform into VOICE_COMMUNICATION mode. Deliberately
-      // NOT going through WebRTC.initialize()'s androidAudioConfiguration
-      // option: that only applies once at engine startup, and its exact
-      // argument shape has moved between plugin versions - this call has
-      // been stable and does the same job at the moment it's actually
-      // needed.
-      Helper.setAndroidAudioConfiguration(
-          AndroidAudioConfiguration.communication);
+      await Helper.setAndroidAudioConfiguration(inCall
+          ? AndroidAudioConfiguration.communication
+          : AndroidAudioConfiguration.media);
+      debugPrint('WebRTC: AUDIO_MODE_${inCall ? "COMMUNICATION" : "MEDIA"} room=$roomId');
     } catch (e) {
-      // Not fatal, and a no-op on non-Android platforms - the call still
-      // works, it just falls back to the platform default routing
-      // described above.
+      // Not fatal - the call still works, it just falls back to the
+      // platform default routing described above.
       debugPrint('WebRTC: audio session configuration unavailable: $e');
     }
   }
+
+  Future<void> _configureAudioSession() => _setAudioMode(inCall: true);
 
   // ── Diagnostics (Sections 13-15) ──────────────────────────────────────────
 
@@ -1628,8 +1727,19 @@ class WebRtcService {
 
       // Deltas since the previous sample, so a burst of loss early in the
       // call doesn't permanently colour the rest of it.
-      final dReceived = packetsReceived - (_lastPacketsReceived ?? 0);
-      final dLost = packetsLost - (_lastPacketsLost ?? 0);
+      //
+      // FIX (calling audit, 2026-09-18): clamped at zero, and the counters
+      // are reset in _cleanup. Both halves of the same bug: these fields
+      // survived a call, so the FIRST sample of the SECOND call in an app
+      // session subtracted the previous call's cumulative totals from this
+      // one's - a large negative delta, which fell into the `total <= 0`
+      // branch below and reported a perfectly healthy call as "bad" for its
+      // first few seconds. The clamp additionally covers a counter reset
+      // mid-call (an ICE restart re-creates the inbound stream) and the
+      // fact that packetsLost is a SIGNED field in the WebRTC stats spec -
+      // it can legitimately decrease when duplicates arrive.
+      final dReceived = max(0, packetsReceived - (_lastPacketsReceived ?? 0));
+      final dLost = max(0, packetsLost - (_lastPacketsLost ?? 0));
       _lastPacketsReceived = packetsReceived;
       _lastPacketsLost = packetsLost;
 
@@ -1693,16 +1803,23 @@ class WebRtcService {
       await _local?.dispose();
     } catch (_) {}
     try { await _ws?.sink.close(); } catch (_) {}
-    // Hand the audio route back to the platform so the next media playback
-    // (a voice note, the ringtone) isn't stuck in earpiece/communication
-    // mode for the rest of the session.
+    // Hand the audio route AND the audio mode back to the platform, so the
+    // next media playback (a voice note, the next call's ringtone) isn't
+    // stuck on the voice-call stream for the rest of the session. The
+    // speaker flag alone never did this - see _setAudioMode.
     try { await Helper.setSpeakerphoneOn(false); } catch (_) {}
+    await _setAudioMode(inCall: false);
     _pc = null; _local = null; _ws = null;
     _iceCredentialsExpireAt = null;
     _pendingIce.clear();
     _peerSignalingDown = false;
     _awaitingRestartAnswer = false;
-    _videoSender = null;
+    // Per-call quality state. Left over, these make the NEXT call's first
+    // sample a negative delta against this call's totals - see
+    // _sampleQuality.
+    _lastPacketsReceived = null;
+    _lastPacketsLost = null;
+    _quality = CallQuality.unknown;
     _remoteVideoTrack = null;
     _cameraDenied = false;
     debugPrint('WebRTC: DISPOSE_COMPLETED room=$roomId');

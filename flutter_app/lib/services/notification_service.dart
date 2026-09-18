@@ -140,6 +140,39 @@ class NotificationService {
     if (data['type'] != 'incoming_call') return;
     final roomId = data['roomId'] as String?;
     if (roomId == null) return;
+
+    // FIX (calling audit, 2026-09-18): verify the call is STILL RINGING
+    // before making the phone ring.
+    //
+    // A push says "this was true when it was sent", never "this is true
+    // now". Nothing here checked, so any late-delivered push rang the
+    // phone for a call that was already over - the caller gave up, the
+    // user answered on another device, the ring simply timed out. The
+    // backend now gives incoming-call pushes a short TTL
+    // (CALL_PUSH_TTL_SECONDS in api/routers/calls.py) so FCM discards
+    // rather than delivers a stale one, which is the only defence
+    // available for the terminated-app case; foregrounded, the app has a
+    // live session and can just ask, so it does. The same GET the poller
+    // uses, and it is authoritative: /calls/pending only answers for a
+    // session that is still `initiating` or `ringing`.
+    //
+    // Deliberately fail OPEN: only a definite "no call" suppresses the
+    // ring. A network blip must not swallow a real incoming call, which
+    // would be a far worse failure than an occasional late ring.
+    final listingId = data['listingId'] as String?;
+    if (listingId != null) {
+      try {
+        final live = await ApiService.checkIncomingCall(listingId);
+        if (live == null) {
+          debugPrint('[Notifications] stale incoming-call push for $roomId - not ringing');
+          await cancelIncomingCall(roomId);
+          return;
+        }
+      } catch (e) {
+        debugPrint('[Notifications] could not verify call $roomId ($e) - ringing anyway');
+      }
+    }
+
     await showIncomingCall(
       roomId: roomId,
       callerName: data['callerName'] as String? ?? 'Someone',
