@@ -823,10 +823,28 @@ async def due_for_deal_retry(db: AsyncSession, limit: int = 100) -> list[str]:
     return list(rows)
 
 
+# How many times the ending-soon reminder may be attempted before the sweep
+# gives up on it. Three is enough to ride out a transient push/Redis
+# failure across three minutes of 60-second sweeps, and small enough that a
+# permanently broken delivery cannot produce an unbounded number of
+# duplicate reminders if the failure is actually in the confirmation rather
+# than the send.
+MAX_ENDING_SOON_ATTEMPTS = 3
+
+
 async def due_for_ending_soon(db: AsyncSession, limit: int = 100) -> list[AuctionMeta]:
-    """Live auctions inside the ending-soon window that haven't been
-    reminded yet. ending_soon_notified_at is what keeps it to one reminder
-    rather than one per sweep."""
+    """Live auctions inside the ending-soon window still owed a reminder.
+
+    "Owed" means ending_soon_notified_at IS NULL - the reminder has not
+    been CONFIRMED sent. It used to mean the same column, but the sweep
+    wrote it before sending, so the column really meant "we intended to
+    send this", and an emission that failed left the auction excluded from
+    this query forever with no reminder ever delivered.
+
+    Now the column is written only after a successful emit, and this query
+    keeps returning the auction until that happens or the attempt budget
+    runs out. See claim_ending_soon_attempt.
+    """
     now = datetime.utcnow()
     horizon = now + timedelta(minutes=settings.auction_ending_soon_minutes)
     rows = (await db.execute(
@@ -834,6 +852,7 @@ async def due_for_ending_soon(db: AsyncSession, limit: int = 100) -> list[Auctio
         .where(
             AuctionMeta.closed_at.is_(None),
             AuctionMeta.ending_soon_notified_at.is_(None),
+            AuctionMeta.ending_soon_attempts < MAX_ENDING_SOON_ATTEMPTS,
             AuctionMeta.ends_at.is_not(None),
             AuctionMeta.ends_at > now,
             AuctionMeta.ends_at <= horizon,
@@ -841,6 +860,67 @@ async def due_for_ending_soon(db: AsyncSession, limit: int = 100) -> list[Auctio
         .limit(limit)
     )).scalars().all()
     return list(rows)
+
+
+async def claim_ending_soon_attempt(db: AsyncSession, listing_id: str) -> bool:
+    """Take ownership of one ending-soon delivery attempt.
+
+    The durable half of the outbox. A compare-and-swap increments
+    ending_soon_attempts against the value just observed, so:
+
+      * two workers sweeping the same tick cannot both send - the loser's
+        WHERE matches nothing and it skips the auction;
+      * the attempt is recorded BEFORE the send, so a process that dies
+        mid-emit has still spent its attempt and cannot retry forever;
+      * the reminder stays owed (ending_soon_notified_at still NULL) until
+        confirm_ending_soon_sent runs, so a failed send IS retried.
+
+    Delivery is therefore at-least-once with a hard ceiling of
+    MAX_ENDING_SOON_ATTEMPTS: the duplicate window is a send that succeeded
+    but whose confirmation did not commit, and it can repeat at most twice
+    more rather than indefinitely.
+
+    Returns False when the claim was lost or the auction no longer
+    qualifies - the caller must not send in that case.
+    """
+    meta = (await db.execute(
+        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+    )).scalar_one_or_none()
+    if meta is None or meta.ending_soon_notified_at is not None:
+        return False
+    observed = meta.ending_soon_attempts or 0
+    if observed >= MAX_ENDING_SOON_ATTEMPTS:
+        return False
+
+    claim = await db.execute(
+        update(AuctionMeta)
+        .where(
+            AuctionMeta.listing_id == listing_id,
+            AuctionMeta.ending_soon_notified_at.is_(None),
+            AuctionMeta.ending_soon_attempts == observed,
+        )
+        .values(ending_soon_attempts=observed + 1)
+    )
+    await db.commit()
+    return claim.rowcount > 0
+
+
+async def confirm_ending_soon_sent(db: AsyncSession, listing_id: str) -> None:
+    """Mark the reminder delivered. Called only after a successful emit.
+
+    Guarded on the column still being NULL so a late confirmation from a
+    retry cannot overwrite the timestamp of the attempt that actually
+    landed first.
+    """
+    await db.execute(
+        update(AuctionMeta)
+        .where(
+            AuctionMeta.listing_id == listing_id,
+            AuctionMeta.ending_soon_notified_at.is_(None),
+        )
+        .values(ending_soon_notified_at=datetime.utcnow())
+    )
+    await db.commit()
 
 
 async def due_for_payment_lapse(db: AsyncSession, limit: int = 100) -> list[AuctionMeta]:

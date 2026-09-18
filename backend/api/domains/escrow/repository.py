@@ -8,6 +8,22 @@ from api.database import Deal, DealStatus, MpesaTransaction, MpesaStatus
 from api.models.external_escrow import ExternalEscrow
 
 
+# A deal in one of these is finished. It is history: it settled, it was
+# reversed, or it was abandoned. Nothing about it can be advanced, and
+# nothing about it should stop the same two people transacting again on the
+# same listing months later.
+#
+# Everything NOT listed here - negotiating, agreed, paid, disputed, and the
+# four awaiting_* post-delivery sub-states - is a live transaction with
+# money or an obligation still attached to it. That is the deal a second
+# finalize attempt means to join, not to duplicate.
+TERMINAL_DEAL_STATUSES = frozenset({
+    DealStatus.released,    # buyer confirmed delivery, seller paid out
+    DealStatus.refunded,    # dispute resolved for the buyer
+    DealStatus.cancelled,   # abandoned, or an auction win that lapsed unpaid
+})
+
+
 class DealRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -17,13 +33,54 @@ class DealRepository:
         return r.scalar_one_or_none()
 
     async def get_by_listing_buyer(self, listing_id: str, buyer_id: str) -> Optional[Deal]:
+        """The MOST RECENT deal for this pair, whatever state it is in.
+
+        Used to be a bare scalar_one_or_none() over an unordered, unlimited
+        query. A repeat purchase - the same buyer buying from the same
+        listing twice, which this marketplace explicitly allows and
+        test_completion_rate.py relies on - puts two rows here, and
+        scalar_one_or_none() raises MultipleResultsFound on two rows. So
+        the second deal between any pair turned this into a 500 rather than
+        returning anything at all.
+
+        Ordering newest-first and taking one makes it answer the question
+        it is named for. Callers deciding whether to REUSE a deal want
+        get_active_by_listing_buyer below instead.
+        """
         r = await self.db.execute(
-            select(Deal).where(
+            select(Deal)
+            .where(
                 Deal.listing_id == listing_id,
                 Deal.buyer_id == buyer_id,
             )
+            .order_by(Deal.created_at.desc(), Deal.id.desc())
+            .limit(1)
         )
-        return r.scalar_one_or_none()
+        return r.scalars().first()
+
+    async def get_active_by_listing_buyer(
+        self, listing_id: str, buyer_id: str,
+    ) -> Optional[Deal]:
+        """The live deal for this pair, if there is one.
+
+        This is what duplicate protection needs: it stops a second deal
+        being created for a transaction that is still running, and says
+        nothing about transactions that have finished. A released deal from
+        March is not a reason to refuse a new one in September - and when
+        the buyer wins the same seller's relisted item at auction, refusing
+        is exactly what the old check did.
+        """
+        r = await self.db.execute(
+            select(Deal)
+            .where(
+                Deal.listing_id == listing_id,
+                Deal.buyer_id == buyer_id,
+                Deal.status.not_in(tuple(TERMINAL_DEAL_STATUSES)),
+            )
+            .order_by(Deal.created_at.desc(), Deal.id.desc())
+            .limit(1)
+        )
+        return r.scalars().first()
 
     async def create(self, **kwargs) -> Deal:
         deal = Deal(**kwargs)

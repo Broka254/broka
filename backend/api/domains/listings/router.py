@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # failing. Found by an auction terms-lock test that expected a 409 and got a
 # 500; no existing test covered this endpoint at all.
 from api.database import get_db, Listing
+from api.domains.auctions.lifecycle import AuctionError
 from api.security import get_current_user
 from .service import ListingService
 
@@ -150,8 +151,19 @@ async def create_listing(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Create a listing. Auction terms are validated server-side here by
+    the same lifecycle.validate_terms the terms PATCH uses, so a window
+    that cannot be edited into existence cannot be created either."""
     svc = ListingService(db)
-    return await svc.create_listing(current_user["id"], body.model_dump())
+    try:
+        return await svc.create_listing(current_user["id"], body.model_dump())
+    except AuctionError as e:
+        # Same structured shape the auction endpoints return, so the client
+        # reacts to the code instead of parsing English out of `detail`.
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={"code": e.code, "message": e.message},
+        )
 
 
 # ── Seller edits ────────────────────────────────────────────────────────────
@@ -694,8 +706,28 @@ async def get_seller_revenue(
     return await svc.get_seller_revenue(seller_id, period if period in ("week", "month") else "week")
 
 
+@router.get("/{listing_id}/private")
+async def get_own_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller's own view of their listing, reserve price included.
+
+    GET /{listing_id} below is unauthenticated - it is the buyer-facing
+    feed detail - so it serves the public payload, which deliberately has
+    no reserve_price in it. A seller editing an auction still needs to see
+    the reserve they set; this is where they get it, after proving they own
+    the listing.
+    """
+    svc = ListingService(db)
+    return await svc.get_own_listing(listing_id, current_user["id"])
+
+
 @router.get("/{listing_id}")
 async def get_listing(listing_id: str, db: AsyncSession = Depends(get_db)):
+    """PUBLIC listing detail. No authentication, so no private fields -
+    see ListingService._listing_dict."""
     svc = ListingService(db)
     return await svc.get_listing(listing_id)
 

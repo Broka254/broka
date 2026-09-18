@@ -145,9 +145,22 @@ class EscrowService:
                 detail="Only the listing's seller, or the buyer accepting it, can finalize this deal",
             )
 
-        # Prevent duplicate deals
-        existing = await self.deals.get_by_listing_buyer(listing_id, buyer_id)
-        if existing and existing.status not in (DealStatus.cancelled,):
+        # Duplicate protection, scoped to the transaction that is actually
+        # running. The check used to be "any deal for this (listing, buyer)
+        # that is not cancelled", which treated a RELEASED deal - one that
+        # completed and paid out months ago - as a reason to refuse a new
+        # one. A buyer who buys from the same seller twice, or wins the
+        # seller's relisted item at auction, would have been handed the old
+        # finished deal's id and told it already existed; for an auction
+        # that means the winner is pointed at a deal they have already paid
+        # and the win they just made has nothing to pay against.
+        #
+        # An ACTIVE deal is still reused, which is what makes two
+        # simultaneous finalize attempts - or two workers racing to create
+        # the winner's deal after a close - converge on one deal instead of
+        # two. See TERMINAL_DEAL_STATUSES for where the line sits.
+        existing = await self.deals.get_active_by_listing_buyer(listing_id, buyer_id)
+        if existing:
             return {"deal_id": existing.id, "status": existing.status.value, "existed": True}
 
         commission = _commission(agreed_price)

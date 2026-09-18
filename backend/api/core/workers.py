@@ -1695,7 +1695,15 @@ async def task_close_due_auctions(ctx: dict) -> None:
 
 
 async def task_notify_auctions_ending_soon(ctx: dict) -> None:
-    """One reminder per auction, to everyone who has bid on it."""
+    """One reminder per auction, to everyone who has bid on it.
+
+    Delivery is at-least-once with a bounded duplicate window, not
+    at-most-once: the reminder stays owed until an emit actually succeeds
+    (lifecycle.claim_ending_soon_attempt / confirm_ending_soon_sent), and
+    the attempt counter caps how many times it can be re-sent. Losing a
+    reminder is worse than a rare repeat of one - the whole point is
+    reaching a bidder before the auction closes on them.
+    """
     from api.database import AsyncSessionLocal, Bid, Listing
     from datetime import datetime
     from sqlalchemy import select
@@ -1716,21 +1724,45 @@ async def task_notify_auctions_ending_soon(ctx: dict) -> None:
                     select(Bid.bidder_id).where(Bid.listing_id == meta.listing_id)
                 )).scalars().all() if r})
 
-                # Marked before sending, not after: a send that throws
-                # halfway through a bidder list must not cause the whole
-                # reminder to be re-sent to everyone on the next pass.
-                meta.ending_soon_notified_at = datetime.utcnow()
-                await db.commit()
+                if not bidder_ids:
+                    # Nobody to remind. Confirm it so the auction stops
+                    # being picked up every tick until it closes.
+                    await lifecycle.confirm_ending_soon_sent(db, meta.listing_id)
+                    continue
 
-                if bidder_ids:
-                    minutes_left = max(
-                        1, int((meta.ends_at - datetime.utcnow()).total_seconds() // 60)
-                    ) if meta.ends_at else settings.auction_ending_soon_minutes
-                    await auction_events.emit_ending_soon(
-                        listing_id=meta.listing_id,
-                        listing_name=listing.name,
-                        user_ids=bidder_ids,
-                        minutes_left=minutes_left,
+                # Claim one attempt BEFORE sending. This is the durable
+                # part: it stops two workers on the same tick both sending,
+                # and it bounds how many times a permanently failing
+                # delivery can be retried.
+                #
+                # It replaces writing ending_soon_notified_at here. That
+                # write committed and then the send was attempted, so a
+                # failed send - and emit_ending_soon swallows its own
+                # exceptions, so most failures were silent - left the
+                # auction marked as reminded with no reminder delivered and
+                # no way for the next sweep to notice.
+                if not await lifecycle.claim_ending_soon_attempt(db, meta.listing_id):
+                    continue
+
+                minutes_left = max(
+                    1, int((meta.ends_at - datetime.utcnow()).total_seconds() // 60)
+                ) if meta.ends_at else settings.auction_ending_soon_minutes
+                sent = await auction_events.emit_ending_soon(
+                    listing_id=meta.listing_id,
+                    listing_name=listing.name,
+                    user_ids=bidder_ids,
+                    minutes_left=minutes_left,
+                )
+                if sent:
+                    # Only now is the reminder no longer owed.
+                    await lifecycle.confirm_ending_soon_sent(db, meta.listing_id)
+                else:
+                    logger.warning(
+                        "[sweep] ending-soon emit failed listing=%s - retrying next pass "
+                        "(attempt %d of %d)",
+                        meta.listing_id,
+                        (meta.ending_soon_attempts or 0) + 1,
+                        lifecycle.MAX_ENDING_SOON_ATTEMPTS,
                     )
             except Exception as exc:
                 logger.error(

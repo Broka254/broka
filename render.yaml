@@ -1,5 +1,13 @@
 # BROKA v4.0 — Render deployment config
-# Features: Alembic auto-migrations, Redis (Upstash free tier), structured JSON logs
+# Features: Redis (Upstash free tier), structured JSON logs
+#
+# SCHEMA: created by init_db() from main.py's FastAPI lifespan, on every
+# boot. Alembic does NOT run on deploy - the container command is uvicorn
+# alone. It used to be `alembic upgrade head && uvicorn ...`, which failed
+# before uvicorn was reached (asyncpg is installed, the migration env needs
+# psycopg2) and would still fail with the driver present, because the
+# migration chain is internally inconsistent from 0001 to 0002. See
+# backend/Dockerfile and backend/migrations/README.md.
 
 services:
   - type: web

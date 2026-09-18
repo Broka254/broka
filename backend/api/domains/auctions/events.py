@@ -26,11 +26,22 @@ from api.database import Bid
 logger = logging.getLogger(__name__)
 
 
-async def _safe_emit(event_type: EventType, **kwargs) -> None:
+async def _safe_emit(event_type: EventType, **kwargs) -> bool:
+    """Emit without ever raising. Returns whether it worked.
+
+    Fire-and-forget is right for most of these - a push that fails must not
+    roll back the bid or close that caused it - but "never raises" and
+    "nobody can tell it failed" are different things, and the ending-soon
+    reminder needs the second one: its sweep retries a failed delivery, and
+    it can only do that if it is told. Callers that genuinely do not care
+    ignore the return value, exactly as before.
+    """
     try:
         await emit(event_type, **kwargs)
+        return True
     except Exception as exc:
         logger.error("[auction] event emit failed type=%s: %s", event_type.value, exc)
+        return False
 
 
 async def emit_outbid(
@@ -52,8 +63,13 @@ async def emit_outbid(
 
 async def emit_ending_soon(
     listing_id: str, listing_name: str, user_ids: list[str], minutes_left: int,
-) -> None:
-    await _safe_emit(
+) -> bool:
+    """Returns True only if the event was actually emitted.
+
+    The ending-soon sweep uses this to decide whether the reminder is still
+    owed - see lifecycle.confirm_ending_soon_sent.
+    """
+    return await _safe_emit(
         EventType.AUCTION_ENDING_SOON,
         aggregate="listing",
         aggregate_id=listing_id,

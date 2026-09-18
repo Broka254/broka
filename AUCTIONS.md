@@ -69,6 +69,34 @@ what the reserve is, by binary search.
 `reserve_price`**. Buyers need to know whether the reserve has been met in
 order to bid sensibly; they must not learn what it is.
 
+That rule has to hold on every surface, not just the auction endpoints.
+`ListingService._listing_dict()` — which backs the unauthenticated
+`GET /listings/` and `GET /listings/{id}` — returned `reserve_price`
+outright, so the number the auction API went to some trouble to hide was
+one anonymous request away. There are now two serializers:
+
+| serializer | used by | carries the reserve |
+|---|---|---|
+| `_listing_dict` | `GET /listings/`, `GET /listings/{id}` | no |
+| `_owner_listing_dict` | `POST /listings/`, `GET /listings/{id}/private`, the store attach/detach endpoints | yes |
+
+Separate methods rather than an `include_private=True` flag, because a
+flag has a default and a default is what leaked it. A caller that has not
+thought about the question can only reach the safe one by name. Owner
+paths must have established ownership first — `_get_owned_listing_or_403`,
+or the listing having just been created by the authenticated seller.
+
+`GET /listings/{id}/private` is the authenticated counterpart a seller
+uses to read back their own reserve; the public detail route stays
+unauthenticated and stays reserve-free.
+
+Every other surface was checked rather than assumed: the auctions grid and
+detail, the auction WebSocket snapshot, the negotiate thread payloads and
+the featured/store routes all carry `has_reserve`/`reserve_met` at most.
+`api/routers/listings.py` also serializes listings but is dead code, never
+mounted — `api/routers/auction.py`, which *is* mounted at `/auction`, is
+covered by `TestEveryRouteObeysTheLifecycle`.
+
 ---
 
 ## 3. Concurrency: compare-and-swap, not row locks
@@ -163,12 +191,39 @@ case where the deal was written but `deal_id` was never persisted. When it
 adopts a pre-existing deal whose id differs from the claimed one, the claim is
 overwritten with the real id, again under CAS.
 
+### Which existing deal counts as a duplicate
+
+`finalize_deal` reuses an existing deal for a `(listing, buyer)` pair rather
+than creating a second one — but only while that deal is **live**:
+
+| statuses | meaning | on a new finalize |
+|---|---|---|
+| `released`, `refunded`, `cancelled` (`TERMINAL_DEAL_STATUSES`) | finished — settled, reversed or abandoned | ignored; a new deal is created |
+| everything else (`negotiating`, `agreed`, `paid`, `disputed`, the four `awaiting_*`) | live, money or an obligation still attached | reused |
+
+The check used to be "any deal that is not `cancelled`", which counted a
+`released` deal — one that completed and paid out months ago — as a reason
+to refuse a new one. For a repeat purchase that hands the buyer a stale
+deal id; for an auction win it is worse, because the winner is pointed at a
+deal they have already paid while the auction they just won has nothing to
+pay against.
+
+The live-deal half is what still makes two simultaneous finalizes, or two
+workers racing to create a winner's deal, converge on one deal. A status
+added later falls on the "live" side by default, which fails safe: it
+dedupes rather than duplicates.
+
+`get_by_listing_buyer` also used `scalar_one_or_none()` over an unordered,
+unlimited query, so the second deal between any pair turned it into
+`MultipleResultsFound` — a 500 rather than a wrong answer. It now orders
+newest-first and takes one.
+
 > **Note for anyone tempted by a unique index on `deals(listing_id, buyer_id)`:**
 > don't. The same buyer legitimately deals on the same listing more than once
 > (a repeat purchase months later), and
 > `tests/test_completion_rate.py::test_earlier_deal_evidence_does_not_contaminate_later_deal`
-> depends on exactly that. Uniqueness here is enforced by the CAS above, not
-> by the schema.
+> depends on exactly that. Uniqueness here is enforced by the CAS above and
+> the active-deal check, not by the schema.
 
 ---
 
@@ -196,7 +251,12 @@ The lock is enforced on **both** doors:
 
 `validate_terms()` re-checks every rule server-side, because the client is not
 the authority on any of it and a request that skips the app entirely has to
-hit the same wall:
+hit the same wall. It runs on **creation as well as edit** — `POST /listings`
+goes through `resolve_auction_terms()` before the Listing row is written, so
+a rejected auction leaves no orphan listing behind. Creation used to skip it
+entirely, which meant an auction could be *created* with an end before its
+start, or a reserve under its starting price, and then become uneditable in
+that state the moment it went live:
 
 | code | rule |
 |---|---|
@@ -205,6 +265,14 @@ hit the same wall:
 | `INVALID_RESERVE` | reserve > 0 (empty = no reserve) |
 | `INVALID_WINDOW` | `ends_at` > `starts_at` |
 | `RESERVE_BELOW_START` | a reserve under the starting price is met by the first bid, so it protects nothing while the seller believes it does |
+| `INVALID_TIMESTAMP` | a supplied `auction_starts_at` / `auction_ends_at` that cannot be parsed (creation only — `validate_terms` itself takes datetimes) |
+
+That last one is a rejection where there used to be a silent substitution.
+`_coerce_dt` turned anything unparseable into `None`, and `None` means "use
+the default window" — so a seller who sent a malformed `auction_ends_at` was
+told the auction was created and got a *different* auction, closing 72 hours
+out instead of when they said. Omitted still defaults; only a value that was
+sent and cannot be read is an error.
 
 ---
 
@@ -218,7 +286,7 @@ something a marketplace can argue about.
 | task | what it does |
 |---|---|
 | `task_close_due_auctions` | closes auctions past `ends_at`; **then, unconditionally**, retries stranded winner deals |
-| `task_notify_auctions_ending_soon` | one reminder per auction to everyone who has bid, inside `settings.auction_ending_soon_minutes` |
+| `task_notify_auctions_ending_soon` | one reminder per auction to everyone who has bid, inside `settings.auction_ending_soon_minutes`; retries a failed delivery — see below |
 | `task_lapse_unpaid_auction_wins` | cancels wins past `payment_deadline`, relists the listing |
 
 The word *unconditionally* is load-bearing. The retry pass originally sat
@@ -229,6 +297,31 @@ tick that also had an auction closing — on a quiet marketplace, never.
 Each sweep isolates per-auction failures: one bad auction logs and is retried
 next pass rather than stopping the rest. Everything they call is idempotent,
 so a duplicated tick is harmless.
+
+### The ending-soon reminder is an outbox, not a flag
+
+Two columns on `auction_meta`, and the split is the point:
+
+* `ending_soon_attempts` — incremented by a compare-and-swap **before** each
+  send. It claims the attempt, so two workers on the same tick cannot both
+  send, and it bounds retries at `MAX_ENDING_SOON_ATTEMPTS`.
+* `ending_soon_notified_at` — written **only after** a successful emit.
+  While it is NULL the reminder is still owed, so `due_for_ending_soon`
+  keeps returning the auction and the next sweep retries it.
+
+It used to be one column, written and committed *before* the send — and
+`emit` swallows its own exceptions, so most failures were silent. A failed
+delivery left the auction marked as reminded, excluded from the query
+forever, with nobody ever told their auction was closing. `_safe_emit` now
+returns whether it worked; `emit_ending_soon` passes that up, and callers
+that genuinely do not care still ignore it.
+
+Delivery is therefore **at-least-once with a bounded duplicate window**: the
+only way to repeat a reminder is a send that succeeded while its
+confirmation did not commit, and that can happen at most
+`MAX_ENDING_SOON_ATTEMPTS` times. A lost reminder is worse than a rare
+repeated one — the whole purpose is reaching a bidder before the auction
+closes on them.
 
 ---
 
@@ -333,7 +426,36 @@ because it is the authority — see §6.
 
 ---
 
-## 11. Deliberately not built
+## 11. Deployment
+
+The deployed image is `backend/Dockerfile` (`render.yaml` names it, with
+`dockerContext: ./backend`). Its command is **uvicorn alone**. The schema is
+created by `init_db()` from `main.py`'s FastAPI lifespan on every boot.
+
+All three Dockerfiles used to start with
+`alembic upgrade head && uvicorn ...`, which could never succeed:
+
+* `requirements.txt` installs `asyncpg`; `migrations/env.py` rewrites
+  `postgresql+asyncpg://` to `postgresql://`, whose DBAPI is `psycopg2`,
+  which is not installed. `alembic upgrade head` died with
+  `ModuleNotFoundError` and, because of the `&&`, uvicorn was never reached.
+* Installing the driver would only move the failure. `0001` creates
+  `mpesa_transactions.callback_processed` and `ledger_entries`; `0002` adds
+  the same column and creates the same table again, so the chain fails on a
+  fresh database whatever the driver.
+
+The third Dockerfile was a copy named `Docker`, which Docker never reads —
+it built nothing and existed only to disagree with the other two. Removed.
+
+`tests/test_deployment_config.py` pins all of it: every Dockerfile starts
+uvicorn, none invokes Alembic, the real CMD is executed with uvicorn stubbed
+to prove it is reached, and both faults above are asserted so they cannot be
+quietly forgotten. `migrations/README.md` describes what putting Alembic
+back would actually take.
+
+---
+
+## 12. Deliberately not built
 
 Out of scope by design, not by omission: proxy/automatic bidding, bid
 withdrawal, anti-sniping time extension, bidder deposits, runner-up offers,
@@ -343,9 +465,9 @@ E-Confirm and escrow machinery end to end.
 
 ---
 
-## 12. Tests
+## 13. Tests
 
-`backend/tests/test_auction_lifecycle.py` — 55 tests:
+`backend/tests/test_auction_lifecycle.py` — 82 tests:
 
 | class | covers |
 |---|---|
@@ -363,13 +485,20 @@ E-Confirm and escrow machinery end to end.
 | `TestFullJourney` | create → bid → close → deal → pay, end to end |
 | `TestSweepReliability` | the retry pass runs on a tick with no closings |
 | `TestOrphanedDealClaim` | a claim that never became a Deal is detected and recovered |
+| `TestReserveIsNeverPublic` | feed, detail, auction state and the owner path — §2 |
+| `TestCreationIsValidatedToo` | every `validate_terms` rule at `POST /listings`, plus malformed timestamps — §6 |
+| `TestRepeatBusinessIsNotADuplicate` | terminal deals do not block a new one; live ones are still reused — §5 |
+| `TestEndingSoonIsRetried` | a failed send is retried, a delivered one is not repeated, retries are bounded, two workers send once — §7 |
+| `TestEveryRouteObeysTheLifecycle` | the legacy `/auction/bid` route and every public read surface |
+
+`backend/tests/test_deployment_config.py` — 9 tests, §11.
 
 ---
 
 ## Verification (2026-09-18)
 
 ```
-backend    673 passed          (CI config: SQLite + Redis, --cov-fail-under=35; coverage 50.46%)
+backend    709 passed          (CI config: SQLite + Redis, --cov-fail-under=35; coverage 50.66%)
 flutter    32 passed
 analyze    0 errors            (flutter analyze --no-fatal-warnings --no-fatal-infos)
 ```

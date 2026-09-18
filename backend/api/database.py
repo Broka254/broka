@@ -544,9 +544,19 @@ class AuctionMeta(Base):
     # guarantee: one auction, at most one deal.
     deal_id        = Column(String, ForeignKey("deals.id"), nullable=True)
     payment_deadline = Column(DateTime, nullable=True)
-    # Set when the ending-soon reminder has gone out, so the sweep sends it
-    # once rather than on every pass.
+    # ── Ending-soon reminder: a two-column outbox ────────────────────────
+    # Set ONLY once the reminder has actually been emitted. While it is
+    # NULL the reminder is still owed, so a delivery that fails is retried
+    # by the next sweep instead of being lost - which is what happened when
+    # this single column was written BEFORE the send: the write committed,
+    # the send threw, and due_for_ending_soon excluded the auction forever.
     ending_soon_notified_at = Column(DateTime, nullable=True)
+    # Attempts made so far. Incremented by a compare-and-swap BEFORE each
+    # send, which does two jobs: it claims the attempt, so two workers on
+    # the same tick cannot both send, and it bounds retries, so an auction
+    # whose delivery fails permanently stops rather than being retried
+    # every 60 seconds until it closes. See lifecycle.MAX_ENDING_SOON_ATTEMPTS.
+    ending_soon_attempts = Column(Integer, nullable=False, default=0, server_default="0")
 
 
 class Wishlist(Base):
@@ -1197,6 +1207,10 @@ async def init_db():
             "ALTER TABLE auction_meta ADD COLUMN deal_id VARCHAR",
             "ALTER TABLE auction_meta ADD COLUMN payment_deadline DATETIME",
             "ALTER TABLE auction_meta ADD COLUMN ending_soon_notified_at DATETIME",
+            # NOT NULL with a default so the CAS claim in
+            # lifecycle.claim_ending_soon_attempt can compare against a
+            # number on existing rows rather than against NULL.
+            "ALTER TABLE auction_meta ADD COLUMN ending_soon_attempts INTEGER NOT NULL DEFAULT 0",
         ]
         # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
         # inside its own SAVEPOINT. Previously they shared this function's

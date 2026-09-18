@@ -40,6 +40,108 @@ def _coerce_dt(value) -> Optional[datetime]:
         return None
 
 
+def _strict_dt(value, field: str) -> Optional[datetime]:
+    """Parse a supplied auction timestamp, or 422.
+
+    Distinct from _coerce_dt above, which turns anything unparseable into
+    None. That is right for the optional listing fields it was written for
+    and wrong for an auction window: silently discarding a malformed
+    auction_ends_at does not reject the request, it CREATES A DIFFERENT
+    AUCTION - one closing at the 72-hour default instead of when the seller
+    said. The seller is told it worked and finds out otherwise when it
+    closes.
+
+    Omitted is still omitted; the caller supplies the default. Only a value
+    that was SENT and cannot be read is an error.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        from api.domains.auctions.lifecycle import AuctionError
+        # Not one of validate_terms' codes: those describe a window that
+        # parsed and is wrong, this one never parsed at all.
+        raise AuctionError(
+            422, "INVALID_TIMESTAMP",
+            f"{field} must be an ISO 8601 date-time, e.g. 2026-10-01T14:30:00.",
+        )
+
+
+def _strict_float(value, field: str, code: str) -> Optional[float]:
+    """Parse a supplied auction number, or 422. Same reasoning as _strict_dt:
+    an unreadable increment used to fall back to the default silently."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        from api.domains.auctions.lifecycle import AuctionError
+        raise AuctionError(422, code, f"{field} must be a number.")
+
+
+def resolve_auction_terms(data: dict, price, auction_date, now: Optional[datetime] = None) -> dict:
+    """The auction terms a creation request actually asks for, validated.
+
+    Creation used to go straight to AuctionMeta without consulting
+    lifecycle.validate_terms, so PATCH /auctions/{id}/terms enforced rules
+    that POST /listings did not: an auction could be CREATED with an end
+    before its start, or a reserve under its starting price, and only then
+    become uneditable. The authority has to be the same on both doors.
+
+    Defaults still apply where a field is genuinely absent - omitted start
+    means now, omitted end means auction_date or the configured default
+    duration - because the sell wizard legitimately omits them. What no
+    longer happens is a SUPPLIED value being quietly replaced by one of
+    those defaults because it could not be parsed.
+
+    Raises AuctionError (422, with validate_terms' own codes) and returns
+    the resolved values. Called before the Listing row is written, so a
+    rejected auction leaves nothing behind.
+    """
+    from api.core.config import settings as _settings
+    from api.domains.auctions import lifecycle
+
+    now = now or datetime.utcnow()
+
+    starts_at = _strict_dt(data.get("auction_starts_at"), "auction_starts_at") or now
+    ends_at = (
+        _strict_dt(data.get("auction_ends_at"), "auction_ends_at")
+        or _strict_dt(auction_date, "auction_date")
+        or now + timedelta(hours=_settings.auction_default_duration_hours)
+    )
+
+    increment = _strict_float(
+        data.get("min_bid_increment"), "min_bid_increment", "INVALID_INCREMENT",
+    )
+    reserve = _strict_float(
+        data.get("reserve_price"), "reserve_price", "INVALID_RESERVE",
+    )
+    starting_price = _strict_float(price, "price", "INVALID_STARTING_PRICE")
+
+    lifecycle.validate_terms(
+        starting_price=starting_price,
+        min_bid_increment=increment,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        reserve_price=reserve,
+    )
+
+    return {
+        "starts_at": starts_at,
+        "ends_at": ends_at,
+        "min_bid_increment": (
+            increment if increment is not None
+            else _settings.auction_default_min_increment
+        ),
+        "starting_price": starting_price,
+        "reserve_price": reserve,
+    }
+
+
 def _derive_location_name(county: Optional[str], subcounty: Optional[str], fallback: Optional[str]) -> Optional[str]:
     """location_name is the single free-text field every existing reader
     (search .ilike() filter, negotiate.py prompts, buy_agent matching,
@@ -97,6 +199,20 @@ class ListingService:
             if store.owner_id != seller_id:
                 raise HTTPException(status_code=403, detail="You do not own this store")
 
+        # Auction terms are validated BEFORE the listing row exists, so a
+        # rejected auction leaves no orphan listing behind. The Listing is
+        # committed below and _create_auction_meta runs after that commit,
+        # so validating in there would persist the listing and then 422.
+        # str from the HTTP layer (ListingIn.listing_type is a str), a
+        # ListingType from a direct service call in a test - accept both.
+        _requested_type = data.get("listing_type", "direct")
+        _requested_type = getattr(_requested_type, "value", _requested_type)
+        auction_terms = None
+        if _requested_type == ListingType.auction.value:
+            auction_terms = resolve_auction_terms(
+                data, data.get("price"), data.get("auction_date"),
+            )
+
         listing = Listing(
             seller_id=seller_id,
             store_id=store.id if store else None,
@@ -119,8 +235,17 @@ class ListingService:
             verified_video=data.get("verified_video"),
             advert_video=data.get("advert_video"),
             target_bidders=data.get("target_bidders"),
-            auction_date=data.get("auction_date"),
-            reserve_price=data.get("reserve_price"),
+            # For an auction this is the resolved, parsed end time rather
+            # than the raw request value - ListingIn types auction_date as
+            # a str, which would otherwise reach a DateTime column as one.
+            auction_date=(
+                auction_terms["ends_at"] if auction_terms
+                else data.get("auction_date")
+            ),
+            reserve_price=(
+                auction_terms["reserve_price"] if auction_terms
+                else data.get("reserve_price")
+            ),
             showcase_image_url=showcase_url,
             showcase_image_source=showcase_source,
         )
@@ -135,7 +260,7 @@ class ListingService:
         # there was no start to enforce and no end to close at. See
         # domains/auctions/lifecycle.py.
         if listing.listing_type == ListingType.auction:
-            await self._create_auction_meta(listing, data)
+            await self._create_auction_meta(listing, auction_terms)
 
         await publish(ListingCreated(
             listing_id=listing.id,
@@ -144,52 +269,36 @@ class ListingService:
             category=data["category"],
         ))
 
-        return self._listing_dict(listing, seller=seller, store=store)
+        # The authenticated creator, reading back what they just created -
+        # so the owner view, reserve included.
+        return self._owner_listing_dict(listing, seller=seller, store=store)
 
-    async def _create_auction_meta(self, listing: Listing, data: dict) -> None:
-        """Seed the auction's authoritative window.
+    async def _create_auction_meta(self, listing: Listing, terms: dict) -> None:
+        """Write the auction's authoritative window from validated terms.
 
-        Timestamps come from the request when given, and otherwise from
-        what the sell wizard already collects: bidding opens immediately
-        and closes at auction_date. That fallback is the same reading
-        migration 0021 backfills existing rows with, so a listing created
-        through either path describes its auction the same way.
+        `terms` comes from resolve_auction_terms, which has already applied
+        the defaults and run lifecycle.validate_terms over the result. This
+        method decides nothing - it used to parse and default the window
+        itself, which is how creation ended up enforcing a different set of
+        rules from PATCH /auctions/{id}/terms.
 
-        An auction with no end at all is allowed to exist (the wizard does
-        not currently require auction_date) but cannot take bids -
-        lifecycle.place_bid refuses one rather than accepting bids into
-        something that can never close.
+        Every auction gets a closing time, always: an auction that can
+        never close can never take a bid (see lifecycle.place_bid), so
+        listing.auction_date is kept in step with the resolved end.
         """
         from api.database import AuctionMeta
-        from api.core.config import settings as _settings
 
         now = datetime.utcnow()
-        starts_at = _coerce_dt(data.get("auction_starts_at")) or now
-        ends_at = _coerce_dt(data.get("auction_ends_at")) or listing.auction_date
-        if ends_at is None:
-            # Every auction gets a closing time, always. The sell wizard
-            # collects a reserve and nothing else auction-specific - no end
-            # date at all - so leaving this NULL would create auctions that
-            # can never close and therefore (see lifecycle.place_bid) can
-            # never take a bid. Defaulting is what keeps the existing
-            # creation path working while the rule stays strict.
-            ends_at = now + timedelta(hours=_settings.auction_default_duration_hours)
+        ends_at = terms["ends_at"]
+        if listing.auction_date != ends_at:
             listing.auction_date = ends_at
-
-        increment = data.get("min_bid_increment")
-        try:
-            increment = float(increment) if increment else _settings.auction_default_min_increment
-        except (TypeError, ValueError):
-            increment = _settings.auction_default_min_increment
-        if increment <= 0:
-            increment = _settings.auction_default_min_increment
 
         meta = AuctionMeta(
             listing_id=listing.id,
             status="upcoming",
-            min_bid_increment=increment,
+            min_bid_increment=terms["min_bid_increment"],
             starting_price=listing.price,
-            starts_at=starts_at,
+            starts_at=terms["starts_at"],
             ends_at=ends_at,
             bid_count=0,
         )
@@ -609,7 +718,8 @@ class ListingService:
         await self.db.commit()
         await self.db.refresh(listing)
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
-        return self._listing_dict(listing, seller=seller, store=store)
+        # _get_owned_listing_or_403 above established ownership.
+        return self._owner_listing_dict(listing, seller=seller, store=store)
 
     async def remove_listing_store(self, listing_id: str, requester_id: str) -> dict:
         """Inverse of set_listing_store - returns the listing to a
@@ -620,7 +730,23 @@ class ListingService:
         await self.db.commit()
         await self.db.refresh(listing)
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
-        return self._listing_dict(listing, seller=seller, store=None)
+        # Ownership established by _get_owned_listing_or_403.
+        return self._owner_listing_dict(listing, seller=seller, store=None)
+
+    async def get_own_listing(self, listing_id: str, requester_id: str) -> dict:
+        """The seller's own listing, including the fields buyers never see.
+
+        GET /listings/{id} is unauthenticated and must stay that way, so it
+        cannot be the route that hands a seller their reserve back. This is
+        the authenticated counterpart: same listing, owner view, 403 for
+        anyone else.
+        """
+        listing = await self._get_owned_listing_or_403(listing_id, requester_id)
+        seller = (await self.db.execute(
+            select(User).where(User.id == listing.seller_id)
+        )).scalar_one_or_none()
+        store = await self.db.get(Store, listing.store_id) if listing.store_id else None
+        return self._owner_listing_dict(listing, seller=seller, store=store)
 
     async def _get_owned_listing_or_403(self, listing_id: str, requester_id: str) -> Listing:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))
@@ -632,7 +758,48 @@ class ListingService:
         return listing
 
     @staticmethod
+    def _owner_listing_dict(
+        listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
+    ) -> dict:
+        """The seller's own view of their listing. NEVER for a public route.
+
+        Everything the public serializer returns, plus the fields only the
+        owner may see. Callers must have already established ownership -
+        either the listing was just created by the authenticated seller, or
+        it came through _get_owned_listing_or_403.
+
+        This exists as a separate method rather than an `include_private=True`
+        flag on _listing_dict for one reason: a flag defaults, and a default
+        is what leaked the reserve in the first place. A public caller that
+        forgets to think about it gets the safe serializer, because the safe
+        serializer is the only one it can reach by name.
+        """
+        return {
+            **ListingService._listing_dict(listing, seller=seller, store=store),
+            # The seller's secret walk-away price. Public responses carry
+            # has_reserve/reserve_met instead - see the note in
+            # _listing_dict and lifecycle.public_state.
+            "reserve_price": listing.reserve_price,
+        }
+
+    @staticmethod
     def _listing_dict(listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None) -> dict:
+        """PUBLIC listing payload. Anything added here is world-readable.
+
+        Used by GET /listings/ and GET /listings/{id}, both unauthenticated.
+
+        reserve_price is deliberately absent. A reserve is the seller's
+        secret walk-away price, evaluated once at close (see
+        domains/auctions/lifecycle.py); publishing it turns it into a
+        minimum bid and defeats the whole mechanism. This serializer used
+        to return it, so every auction's reserve was one unauthenticated
+        GET away while the auction API went to some trouble to hide it.
+
+        Buyers get `has_reserve` and `reserve_met` from the auction
+        endpoints - enough to bid sensibly, not enough to reconstruct the
+        number. Sellers get the real value from _owner_listing_dict, on
+        authenticated owner-only paths.
+        """
         return {
             "id": listing.id,
             "seller_id": listing.seller_id,
@@ -654,7 +821,6 @@ class ListingService:
             "views": listing.views or 0,
             "target_bidders": listing.target_bidders,
             "auction_date": listing.auction_date.isoformat() if listing.auction_date else None,
-            "reserve_price": listing.reserve_price,
             "verified_photos": listing.verified_photos,
             "verified_video": listing.verified_video,
             "advert_video": listing.advert_video,
