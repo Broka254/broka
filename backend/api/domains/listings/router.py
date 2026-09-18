@@ -43,6 +43,14 @@ class ListingIn(BaseModel):
     target_bidders: Optional[int] = None
     auction_date: Optional[str] = None
     reserve_price: Optional[float] = None
+    # Auction lifecycle (0021). The window bidding is open for. Both
+    # optional: omitted, bidding opens now and closes at auction_date,
+    # which is what the sell wizard already collects. See
+    # ListingService._create_auction_meta.
+    auction_starts_at: Optional[str] = None
+    auction_ends_at: Optional[str] = None
+    # Minimum raise between bids. Defaults to AUCTION_DEFAULT_MIN_INCREMENT.
+    min_bid_increment: Optional[float] = None
     # AI Showcase/Cover Image (2026-08-29). Optional - set only when the
     # wizard's Showcase step produced one (gallery pick or an AI preview
     # the seller explicitly chose "Use This Image" on client-side; see

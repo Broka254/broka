@@ -1,16 +1,32 @@
-"""BROKA - Auction Router: place bids, leaderboard ranking."""
+"""BROKA - Auction Router: place bids, leaderboard ranking.
+
+The bid ENDPOINT is deliberately thin. Every rule about whether a bid is
+allowed - is the auction open, does the amount clear the increment, who
+gets outbid - lives in api/domains/auctions/lifecycle.py, under a row
+lock, because those rules have to hold for a sweep or a test calling the
+same function directly, not only for traffic arriving through this route.
+
+What this file used to do instead is worth stating, because the shape is
+the bug: it read the top bid in one statement, inserted in another with no
+lock, never looked at a clock, accepted any raise above the current bid
+however small, and rejected any bid below the seller's reserve - turning a
+secret walk-away price into a public minimum bid.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List
 from datetime import datetime
 
-from api.database import get_db, Bid, Listing, User, ListingType, AuctionMeta
+from api.database import get_db, Bid, Listing, User
 from api.security import get_current_user
 from api.core.events import publish, BidPlaced
-import uuid
+from api.core.rate_limit import offer_limiter
+from api.domains.auctions import events as auction_events
+from api.domains.auctions import lifecycle
+from api.domains.auctions.lifecycle import AuctionError
 
 try:
     import broka_engine as engine
@@ -23,7 +39,10 @@ router = APIRouter()
 
 class BidIn(BaseModel):
     listing_id: str
-    amount: float
+    # Bounded here as well as in lifecycle.place_bid: the schema gives the
+    # caller a 422 naming the field, the service enforces it for every
+    # other entry point into bidding.
+    amount: float = Field(gt=0)
 
 
 class BidOut(BaseModel):
@@ -39,63 +58,61 @@ async def place_bid(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Listing).where(Listing.id == data.listing_id))
-    listing = result.scalar_one_or_none()
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
-    if listing.listing_type != ListingType.auction:
-        raise HTTPException(status_code=400, detail="This listing is not an auction")
+    """Place a bid. All validation is server-side and atomic - see
+    domains/auctions/lifecycle.place_bid."""
+    # Bidding moves money-shaped obligations, so it gets the same
+    # per-user limiter the offer path already uses rather than none at all.
+    await offer_limiter.check_and_record(current_user["id"])
 
-    if listing.reserve_price and data.amount < listing.reserve_price:
+    try:
+        result = await lifecycle.place_bid(
+            db,
+            listing_id=data.listing_id,
+            bidder_id=current_user["id"],
+            amount=data.amount,
+        )
+    except AuctionError as e:
+        # Structured so Flutter can react to the specific case (show the
+        # new minimum, refresh an auction it thought was still live)
+        # instead of parsing English out of `detail`.
         raise HTTPException(
-            status_code=400,
-            detail=f"Bid must be at least KES {listing.reserve_price:,.0f} (reserve price)",
+            status_code=e.status_code,
+            detail={"code": e.code, "message": e.message},
         )
 
-    result = await db.execute(
-        select(Bid)
-        .where(Bid.listing_id == data.listing_id)
-        .order_by(Bid.amount.desc())
-        .limit(1)
-    )
-    top_bid = result.scalar_one_or_none()
-    if top_bid and data.amount <= top_bid.amount:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Bid must exceed current highest: KES {top_bid.amount:,.0f}",
-        )
-
-    bid = Bid(
-        listing_id=data.listing_id,
-        bidder_id=current_user["id"],
-        amount=data.amount,
-    )
-    db.add(bid)
-
-    # Every auction-type Listing should have a one-to-one AuctionMeta row,
-    # but nothing creates one at listing-creation time today, and this
-    # table postdates any listings created before this migration - so the
-    # first bid on such a listing lazily creates it rather than crashing.
-    meta = (await db.execute(
-        select(AuctionMeta).where(AuctionMeta.listing_id == data.listing_id)
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == data.listing_id)
     )).scalar_one_or_none()
-    if meta is None:
-        meta = AuctionMeta(id=str(uuid.uuid4()), listing_id=data.listing_id, status="live")
-        db.add(meta)
-    meta.current_bid = data.amount
-    meta.bid_count = (meta.bid_count or 0) + 1
-
-    await db.commit()
+    listing_name = listing.name if listing else "an item"
 
     # Published after commit, once the bid is durable - mirrors
-    # ListingCreated's ordering in domains/listings/service.py.
+    # ListingCreated's ordering in domains/listings/service.py. This is what
+    # the auction WebSocket broadcast hangs off.
     await publish(BidPlaced(
         listing_id=data.listing_id,
         bidder_id=current_user["id"],
-        amount=data.amount,
+        amount=result.amount,
     ))
 
-    return {"message": f"Bid of KES {data.amount:,.0f} placed successfully"}
+    # The person who just lost the lead. A push, not only a socket frame:
+    # the whole point is that it reaches them with the app closed.
+    if result.outbid_user_id:
+        await auction_events.emit_outbid(
+            listing_id=data.listing_id,
+            listing_name=listing_name,
+            outbid_user_id=result.outbid_user_id,
+            new_amount=result.amount,
+        )
+
+    return {
+        "message": f"Bid of KES {result.amount:,.0f} placed successfully",
+        "bid_id": result.bid_id,
+        "amount": result.amount,
+        "bid_count": result.bid_count,
+        "min_next_bid": result.min_next_bid,
+        "status": result.status,
+        "reserve_met": result.reserve_met,
+    }
 
 
 @router.get("/{listing_id}/leaderboard", response_model=List[BidOut])

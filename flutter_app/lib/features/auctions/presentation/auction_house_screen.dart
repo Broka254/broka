@@ -113,9 +113,11 @@ class _AuctionGridState extends State<_AuctionGrid> with AutomaticKeepAliveClien
     );
   }
 
+  // endsAt, not the old single auctionDate: the auction's real closing time
+  // now comes from auction_meta, which is also what the backend closes on.
   List<Auction> _sortByEndingSoon(List<Auction> auctions) {
-    final withDate = auctions.where((a) => a.auctionDate != null).toList()
-      ..sort((a, b) => a.auctionDate!.compareTo(b.auctionDate!));
+    final withDate = auctions.where((a) => a.endsAt != null).toList()
+      ..sort((a, b) => a.endsAt!.compareTo(b.endsAt!));
     return withDate;
   }
 
@@ -164,8 +166,13 @@ class _AuctionCard extends StatelessWidget {
   const _AuctionCard({required this.auction});
 
   String _timeLeft() {
-    if (auction.auctionDate == null) return '--:--';
-    final diff = auction.auctionDate!.difference(DateTime.now().toUtc());
+    // The STATUS decides whether it has ended, not this countdown. A card
+    // whose local clock still shows time left on an auction the server has
+    // closed must say "Ended" - that disagreement is exactly what the
+    // backend is authoritative about.
+    if (auction.isEnded) return 'Ended';
+    if (auction.endsAt == null) return '--:--';
+    final diff = auction.endsAt!.difference(DateTime.now().toUtc());
     if (diff.isNegative) return 'Ended';
     if (diff.inDays > 0) return '${diff.inDays}d ${diff.inHours % 24}h';
     if (diff.inHours > 0) return '${diff.inHours}h ${diff.inMinutes % 60}m';

@@ -90,6 +90,19 @@ class EventType(str, Enum):
     ORDER_AGREED            = "ORDER.AGREED"
     ORDER_BID_PLACED        = "ORDER.BID_PLACED"
 
+    # ── Auctions ──────────────────────────────────────────────────────────────
+    # The auction lifecycle emits its own events rather than reusing the
+    # ORDER.* family: a bid being outbid, an auction closing and a winner
+    # failing to pay are auction facts, and push_subscribers.py needs to
+    # address different people for each (the outbid bidder, the winner, the
+    # losers, the seller).
+    AUCTION_OUTBID          = "AUCTION.OUTBID"
+    AUCTION_ENDING_SOON     = "AUCTION.ENDING_SOON"
+    AUCTION_WON             = "AUCTION.WON"
+    AUCTION_LOST            = "AUCTION.LOST"
+    AUCTION_NO_SALE         = "AUCTION.NO_SALE"
+    AUCTION_PAYMENT_LAPSED  = "AUCTION.PAYMENT_LAPSED"
+
     # ── Payments ──────────────────────────────────────────────────────────────
     PAYMENT_AUTHORIZED      = "PAYMENT.AUTHORIZED"
     PAYMENT_ESCROW_LOCKED   = "PAYMENT.ESCROW_LOCKED"

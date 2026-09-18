@@ -7,6 +7,9 @@ import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/listing.dart';
 import '../models/models.dart';
+// BidRejection - the typed refusal placeBid throws. Lives with the auction
+// model because it is part of that contract, not a transport concern.
+import '../features/auctions/domain/models/auction.dart' show BidRejection;
 import '../core/network/api_client.dart';
 import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
@@ -1034,6 +1037,14 @@ class ApiService {
 
   // ── Auction ────────────────────────────────────────────────────────────────
 
+  /// Place a bid. Throws [BidRejection] when the backend refuses it.
+  ///
+  /// The refusal carries a machine-readable code, and it matters that this
+  /// surfaces rather than being swallowed: the caller used to get an opaque
+  /// map back on every outcome, so a REJECTED bid was indistinguishable
+  /// from an accepted one and the auction screen "helpfully" drew the bid
+  /// into the leaderboard anyway. A bid the server said no to must never
+  /// appear to have worked.
   static Future<Map<String, dynamic>> placeBid({
     required String listingId,
     required double amount,
@@ -1043,7 +1054,25 @@ class ApiService {
       headers: _headers,
       body: jsonEncode({'listing_id': listingId, 'amount': amount}),
     ).timeout(const Duration(seconds: 30));
-    return jsonDecode(response.body) as Map<String, dynamic>;
+
+    final body = jsonDecode(response.body);
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body as Map<String, dynamic>;
+    }
+    // FastAPI wraps our {"code", "message"} under "detail"; a plain string
+    // detail (or anything unexpected) still becomes a rejection the UI can
+    // show, just without a specific code to react to.
+    final detail = (body is Map) ? body['detail'] : null;
+    if (detail is Map) {
+      throw BidRejection(
+        detail['code'] as String? ?? 'BID_REJECTED',
+        detail['message'] as String? ?? 'That bid was not accepted.',
+      );
+    }
+    throw BidRejection(
+      'BID_REJECTED',
+      detail?.toString() ?? 'That bid was not accepted.',
+    );
   }
 
   static Future<List<dynamic>> getLeaderboard(String listingId) async {

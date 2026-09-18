@@ -279,6 +279,34 @@ class Settings:
     # read via --dart-define, not a backend setting, so it has no entry here)
     buy_agent_max_active: int = field(default_factory=lambda: int(os.getenv("BUY_AGENT_MAX_ACTIVE", "1")))
 
+    # ── Auctions ──────────────────────────────────────────────────────────────
+    # How long the winner has to pay before the win lapses. Configurable
+    # because it is a commercial policy, not a technical constant - a
+    # high-value vehicle auction may want longer than a phone.
+    auction_payment_deadline_hours: int = field(
+        default_factory=lambda: int(os.getenv("AUCTION_PAYMENT_DEADLINE_HOURS", "24"))
+    )
+    # Fallback minimum bid increment when an auction does not set its own.
+    # Matches AuctionMeta.min_bid_increment's column default.
+    auction_default_min_increment: float = field(
+        default_factory=lambda: float(os.getenv("AUCTION_DEFAULT_MIN_INCREMENT", "500"))
+    )
+    # How close to the end an auction counts as "ending soon" for the
+    # one-off reminder to bidders and watchers.
+    auction_ending_soon_minutes: int = field(
+        default_factory=lambda: int(os.getenv("AUCTION_ENDING_SOON_MINUTES", "15"))
+    )
+    # How long an auction runs when the seller does not say. The sell
+    # wizard does not currently collect an end time at all (it collects a
+    # reserve and nothing else auction-specific), so without a default,
+    # every auction created through the app would have no closing time -
+    # and an auction that can never close cannot take bids. Three days is
+    # long enough to attract bidders and short enough that a seller is not
+    # surprised by it.
+    auction_default_duration_hours: int = field(
+        default_factory=lambda: int(os.getenv("AUCTION_DEFAULT_DURATION_HOURS", "72"))
+    )
+
     # ── Derived ───────────────────────────────────────────────────────────────
 
     @property

@@ -90,6 +90,158 @@ async def push_deal_finalized(envelope: EventEnvelope) -> None:
     )
 
 
+
+# ── Auctions ──────────────────────────────────────────────────────────────────
+# Every one of these is driven by a real backend transition (a bid that
+# actually beat another, a close that actually happened), never by the
+# client deciding something looks finished. They are also the reason the
+# auction WebSocket can stay a nice-to-have: a bidder with the app closed
+# still learns they were outbid, still learns they won, and still learns
+# payment is due.
+
+async def _notify_many(user_ids, title: str, body: str, data: dict) -> None:
+    """Fan one auction event out to several people.
+
+    Sequential rather than gathered: these lists are small (the bidders on
+    one auction), each send is already fire-and-forget inside _notify, and
+    a burst of concurrent FCM calls from a sweep is exactly the kind of
+    thing that stalls the event loop this codebase has been bitten by
+    before (see api/routers/calls.py's _send_fcm).
+    """
+    for uid in user_ids:
+        if uid:
+            await _notify(uid, title=title, body=body, data=data)
+
+
+@subscribe_to(EventType.AUCTION_OUTBID)
+async def push_auction_outbid(envelope: EventEnvelope) -> None:
+    p = envelope.payload
+    name = p.get("listing_name") or "an item"
+    amount = float(p.get("amount") or 0.0)
+    await _notify(
+        p.get("user_id", ""),
+        title="📉 You've been outbid",
+        body=f"Someone bid KES {amount:,.0f} on {name}. Bid again to stay in front.",
+        data={
+            "type": "auction",
+            "event": "outbid",
+            "listing_id": p.get("listing_id", ""),
+            "screen": "auction",
+        },
+    )
+
+
+@subscribe_to(EventType.AUCTION_ENDING_SOON)
+async def push_auction_ending_soon(envelope: EventEnvelope) -> None:
+    p = envelope.payload
+    name = p.get("listing_name") or "an auction"
+    minutes = int(p.get("minutes_left") or 0)
+    await _notify_many(
+        p.get("user_ids") or [],
+        title="⏳ Auction ending soon",
+        body=f"{name} closes in about {minutes} min.",
+        data={
+            "type": "auction",
+            "event": "ending_soon",
+            "listing_id": p.get("listing_id", ""),
+            "screen": "auction",
+        },
+    )
+
+
+@subscribe_to(EventType.AUCTION_WON)
+async def push_auction_won(envelope: EventEnvelope) -> None:
+    """The one notification in this feature that carries an obligation, so
+    it says so plainly and carries the deal_id that the payment screen
+    needs."""
+    p = envelope.payload
+    name = p.get("listing_name") or "the item"
+    amount = float(p.get("amount") or 0.0)
+    await _notify(
+        p.get("user_id", ""),
+        title="🎉 You won!",
+        body=f"You won {name} for KES {amount:,.0f}. Payment is required to complete it.",
+        data={
+            "type": "auction",
+            "event": "won",
+            "listing_id": p.get("listing_id", ""),
+            "deal_id": p.get("deal_id", ""),
+            "payment_deadline": p.get("payment_deadline", ""),
+            "screen": "deal_status",
+        },
+    )
+
+
+@subscribe_to(EventType.AUCTION_LOST)
+async def push_auction_lost(envelope: EventEnvelope) -> None:
+    p = envelope.payload
+    name = p.get("listing_name") or "an auction"
+    await _notify_many(
+        p.get("user_ids") or [],
+        title="Auction ended",
+        body=f"The auction for {name} has ended. Another bidder won.",
+        data={
+            "type": "auction",
+            "event": "lost",
+            "listing_id": p.get("listing_id", ""),
+            "screen": "auction",
+        },
+    )
+
+
+@subscribe_to(EventType.AUCTION_NO_SALE)
+async def push_auction_no_sale(envelope: EventEnvelope) -> None:
+    """Seller-facing. "Nobody bid" and "the bidding never reached your
+    reserve" need different wording because they need different decisions."""
+    p = envelope.payload
+    name = p.get("listing_name") or "your auction"
+    outcome = p.get("outcome")
+    if outcome == "reserve_not_met":
+        body = f"{name} ended below your reserve, so it didn't sell. You can relist it."
+    else:
+        body = f"{name} ended with no bids. You can relist it."
+    await _notify(
+        p.get("user_id", ""),
+        title="Auction ended — no sale",
+        body=body,
+        data={
+            "type": "auction",
+            "event": "no_sale",
+            "listing_id": p.get("listing_id", ""),
+            "screen": "auction",
+        },
+    )
+
+
+@subscribe_to(EventType.AUCTION_PAYMENT_LAPSED)
+async def push_auction_payment_lapsed(envelope: EventEnvelope) -> None:
+    p = envelope.payload
+    name = p.get("listing_name") or "your auction"
+    await _notify(
+        p.get("seller_id", ""),
+        title="Auction payment not received",
+        body=f"The winner of {name} didn't pay in time. It's listed again.",
+        data={
+            "type": "auction",
+            "event": "payment_lapsed",
+            "listing_id": p.get("listing_id", ""),
+            "screen": "auction",
+        },
+    )
+    if p.get("winner_id"):
+        await _notify(
+            p["winner_id"],
+            title="Your auction win has lapsed",
+            body=f"Payment for {name} wasn't completed in time, so the win has expired.",
+            data={
+                "type": "auction",
+                "event": "payment_lapsed",
+                "listing_id": p.get("listing_id", ""),
+                "screen": "auction",
+            },
+        )
+
+
 # ── Escrow Funded — notify seller ─────────────────────────────────────────────
 
 @subscribe_to(EventType.PAYMENT_ESCROW_LOCKED)

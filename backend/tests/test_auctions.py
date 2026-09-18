@@ -112,8 +112,13 @@ class TestAuctions:
         }, headers={"Authorization": f"Bearer {seller_token}"})
         listing_id = create.json()["id"]
 
-        # auction_meta has no row yet for this listing (nothing creates one
-        # at listing-creation time) - the first bid must not crash.
+        # auction_meta IS now created at listing-creation time (see
+        # ListingService._create_auction_meta), with a default closing time
+        # when the seller gives none - this test used to document the
+        # opposite, that nothing created one and the first bid had to. The
+        # lazy path still exists in lifecycle.ensure_meta for listings that
+        # predate it; what is asserted here is that bidding works and the
+        # denormalized counters track the bids either way.
         bid1 = await client.post("/auction/bid", json={
             "listing_id": listing_id, "amount": 5500,
         }, headers={"Authorization": f"Bearer {bidder_token}"})

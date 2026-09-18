@@ -19,13 +19,37 @@ from fastapi import WebSocket
 
 @dataclass
 class BidUpdateEvent:
+    """What a watching client is told when an auction changes.
+
+    Carries the whole observable state, not just the new amount, for two
+    reasons. A client that missed a frame (backgrounded, reconnected)
+    recovers on the next one instead of holding a stale bid count. And
+    `status` is how the server tells a client its countdown is wrong: when
+    an auction closes the client must treat it as ended immediately, even
+    if its own timer still shows seconds left.
+
+    Optional fields default to None so the existing "bid_placed" call site
+    keeps working unchanged, and so a closed-auction frame doesn't have to
+    invent a bidder.
+    """
     type: str
     listing_id: str
     bidder_id: str
     amount: float
+    current_bid: float | None = None
+    bid_count: int | None = None
+    status: str | None = None
+    min_next_bid: float | None = None
+    reserve_met: bool | None = None
+    outcome: str | None = None
+    winner_id: str | None = None
+    winning_amount: float | None = None
+    server_time: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self))
+        # Omit the fields a given event doesn't carry rather than sending
+        # nulls a client would have to distinguish from real zeros.
+        return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
 
 
 class AuctionHub:

@@ -24,6 +24,22 @@ def _haversine_km(lat1, lng1, lat2, lng2) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def _coerce_dt(value) -> Optional[datetime]:
+    """Accept a datetime or an ISO string from the request body.
+
+    Listing creation takes a plain dict (not a validated model) at this
+    layer, so a client can send either shape; anything unparseable is
+    treated as absent rather than raising, matching how every other
+    optional field in create_listing behaves.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
 def _derive_location_name(county: Optional[str], subcounty: Optional[str], fallback: Optional[str]) -> Optional[str]:
     """location_name is the single free-text field every existing reader
     (search .ilike() filter, negotiate.py prompts, buy_agent matching,
@@ -112,6 +128,15 @@ class ListingService:
         await self.db.commit()
         await self.db.refresh(listing)
 
+        # An auction listing gets its lifecycle record here, at creation,
+        # rather than being conjured by whatever places the first bid.
+        # Creating it lazily was how auctions ended up with no window at
+        # all: the row was invented with status="live" and nothing else, so
+        # there was no start to enforce and no end to close at. See
+        # domains/auctions/lifecycle.py.
+        if listing.listing_type == ListingType.auction:
+            await self._create_auction_meta(listing, data)
+
         await publish(ListingCreated(
             listing_id=listing.id,
             seller_id=seller_id,
@@ -120,6 +145,61 @@ class ListingService:
         ))
 
         return self._listing_dict(listing, seller=seller, store=store)
+
+    async def _create_auction_meta(self, listing: Listing, data: dict) -> None:
+        """Seed the auction's authoritative window.
+
+        Timestamps come from the request when given, and otherwise from
+        what the sell wizard already collects: bidding opens immediately
+        and closes at auction_date. That fallback is the same reading
+        migration 0021 backfills existing rows with, so a listing created
+        through either path describes its auction the same way.
+
+        An auction with no end at all is allowed to exist (the wizard does
+        not currently require auction_date) but cannot take bids -
+        lifecycle.place_bid refuses one rather than accepting bids into
+        something that can never close.
+        """
+        from api.database import AuctionMeta
+        from api.core.config import settings as _settings
+
+        now = datetime.utcnow()
+        starts_at = _coerce_dt(data.get("auction_starts_at")) or now
+        ends_at = _coerce_dt(data.get("auction_ends_at")) or listing.auction_date
+        if ends_at is None:
+            # Every auction gets a closing time, always. The sell wizard
+            # collects a reserve and nothing else auction-specific - no end
+            # date at all - so leaving this NULL would create auctions that
+            # can never close and therefore (see lifecycle.place_bid) can
+            # never take a bid. Defaulting is what keeps the existing
+            # creation path working while the rule stays strict.
+            ends_at = now + timedelta(hours=_settings.auction_default_duration_hours)
+            listing.auction_date = ends_at
+
+        increment = data.get("min_bid_increment")
+        try:
+            increment = float(increment) if increment else _settings.auction_default_min_increment
+        except (TypeError, ValueError):
+            increment = _settings.auction_default_min_increment
+        if increment <= 0:
+            increment = _settings.auction_default_min_increment
+
+        meta = AuctionMeta(
+            listing_id=listing.id,
+            status="upcoming",
+            min_bid_increment=increment,
+            starting_price=listing.price,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            bid_count=0,
+        )
+        # Derive the cached status from the window rather than assuming -
+        # an auction scheduled to open now is already live.
+        from api.domains.auctions import lifecycle as _lifecycle
+        meta.status = _lifecycle.effective_status(meta, now)
+        self.db.add(meta)
+        await self.db.commit()
+        await self.db.refresh(listing)
 
     async def get_listing(self, listing_id: str) -> dict:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))

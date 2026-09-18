@@ -120,7 +120,13 @@ NUDGE_SWEEP_SECONDS = 60
 
 
 async def _nudge_loop(interval_seconds: int = NUDGE_SWEEP_SECONDS) -> None:
-    """Availability-reminder sweep only. See NUDGE_SWEEP_SECONDS."""
+    """The fast loop: availability reminders and the auction lifecycle.
+
+    Everything here enforces a deadline a user is actively waiting on, so
+    it cannot ride the 300s sweep - see NUDGE_SWEEP_SECONDS for the
+    original reasoning and task_close_due_auctions for why an auction end
+    in particular has to be prompt.
+    """
     global _nudge_running
     _nudge_running = True
     logger.info("[nudge] availability sweep started (every %ds)", interval_seconds)
@@ -129,6 +135,21 @@ async def _nudge_loop(interval_seconds: int = NUDGE_SWEEP_SECONDS) -> None:
             await task_check_interest_nudges({})
         except Exception as exc:
             logger.error("[nudge] availability sweep failed: %s", exc)
+        # Auctions ride this 60s loop rather than the 300s sweep - an
+        # auction end is a deadline bidders are watching in real time. See
+        # task_close_due_auctions.
+        try:
+            await task_close_due_auctions({})
+        except Exception as exc:
+            logger.error("[nudge] auction close sweep failed: %s", exc)
+        try:
+            await task_notify_auctions_ending_soon({})
+        except Exception as exc:
+            logger.error("[nudge] auction ending-soon sweep failed: %s", exc)
+        try:
+            await task_lapse_unpaid_auction_wins({})
+        except Exception as exc:
+            logger.error("[nudge] auction payment-lapse sweep failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -1564,3 +1585,146 @@ async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
         if stale:
             await session.commit()
     await engine.dispose()
+
+
+# ── Auction lifecycle sweeps ──────────────────────────────────────────────────
+# An auction's end is a deadline, and a deadline checked every 5 minutes
+# fires up to 5 minutes late. For a call timer that is tolerable; for an
+# auction it is not - bidding is a race, and "the auction closed four
+# minutes after it said it would" is the kind of thing bidders notice and
+# argue about. So auctions ride the 60s loop (the same reasoning
+# NUDGE_SWEEP_SECONDS records for the availability nudge), not the 300s one.
+#
+# Nothing here decides anything: close_auction() owns the rules and the
+# idempotency. The sweep only finds the auctions whose time has come and
+# calls it. That separation is what makes a double-run harmless - two
+# sweeps, a sweep plus a manual call, or a retry after a crash all converge
+# on one winner and one deal.
+
+async def task_close_due_auctions(ctx: dict) -> None:
+    """Close auctions whose ends_at has passed, and hand winners to Deal."""
+    from api.database import AsyncSessionLocal, Listing
+    from sqlalchemy import select
+    from api.domains.auctions import events as auction_events
+    from api.domains.auctions import lifecycle
+
+    async with AsyncSessionLocal() as db:
+        due = await lifecycle.due_for_close(db)
+        if not due:
+            return
+        closed = 0
+        for listing_id in due:
+            try:
+                result = await lifecycle.close_auction(db, listing_id)
+                if result is None or result.already_closed:
+                    continue
+                closed += 1
+                listing = (await db.execute(
+                    select(Listing).where(Listing.id == listing_id)
+                )).scalar_one_or_none()
+                if listing is None:
+                    continue
+                await auction_events.emit_close_outcome(
+                    db,
+                    listing_id=listing_id,
+                    listing_name=listing.name,
+                    seller_id=listing.seller_id,
+                    outcome=result.outcome,
+                    winner_id=result.winner_id,
+                    winning_amount=result.winning_amount,
+                    deal_id=result.deal_id,
+                    payment_deadline_iso=(
+                        result.payment_deadline.isoformat()
+                        if result.payment_deadline else None
+                    ),
+                )
+            except Exception as exc:
+                # One bad auction must not stop the rest of the sweep. It
+                # stays un-closed and is retried next pass; close_auction is
+                # idempotent, so a partial failure costs a minute, not
+                # correctness.
+                logger.error("[sweep] auction close failed listing=%s: %s", listing_id, exc)
+        if closed:
+            logger.info("[sweep] auctions closed=%d", closed)
+
+
+async def task_notify_auctions_ending_soon(ctx: dict) -> None:
+    """One reminder per auction, to everyone who has bid on it."""
+    from api.database import AsyncSessionLocal, Bid, Listing
+    from datetime import datetime
+    from sqlalchemy import select
+    from api.core.config import settings
+    from api.domains.auctions import events as auction_events
+    from api.domains.auctions import lifecycle
+
+    async with AsyncSessionLocal() as db:
+        metas = await lifecycle.due_for_ending_soon(db)
+        for meta in metas:
+            try:
+                listing = (await db.execute(
+                    select(Listing).where(Listing.id == meta.listing_id)
+                )).scalar_one_or_none()
+                if listing is None:
+                    continue
+                bidder_ids = sorted({r for r in (await db.execute(
+                    select(Bid.bidder_id).where(Bid.listing_id == meta.listing_id)
+                )).scalars().all() if r})
+
+                # Marked before sending, not after: a send that throws
+                # halfway through a bidder list must not cause the whole
+                # reminder to be re-sent to everyone on the next pass.
+                meta.ending_soon_notified_at = datetime.utcnow()
+                await db.commit()
+
+                if bidder_ids:
+                    minutes_left = max(
+                        1, int((meta.ends_at - datetime.utcnow()).total_seconds() // 60)
+                    ) if meta.ends_at else settings.auction_ending_soon_minutes
+                    await auction_events.emit_ending_soon(
+                        listing_id=meta.listing_id,
+                        listing_name=listing.name,
+                        user_ids=bidder_ids,
+                        minutes_left=minutes_left,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "[sweep] ending-soon notify failed listing=%s: %s", meta.listing_id, exc,
+                )
+
+
+async def task_lapse_unpaid_auction_wins(ctx: dict) -> None:
+    """Release listings whose winner never paid.
+
+    Without this a listing that somebody won and abandoned stays `pending`
+    forever - unsellable through any other route, and invisible as a
+    problem because nothing ever looks at it again.
+    """
+    from api.database import AsyncSessionLocal, Listing
+    from sqlalchemy import select
+    from api.domains.auctions import events as auction_events
+    from api.domains.auctions import lifecycle
+
+    async with AsyncSessionLocal() as db:
+        overdue = await lifecycle.due_for_payment_lapse(db)
+        for meta in overdue:
+            listing_id = meta.listing_id
+            winner_id = meta.winner_id
+            try:
+                outcome = await lifecycle.lapse_unpaid_win(db, listing_id)
+                if outcome is None:
+                    continue
+                listing = (await db.execute(
+                    select(Listing).where(Listing.id == listing_id)
+                )).scalar_one_or_none()
+                if listing is None:
+                    continue
+                await auction_events.emit_payment_lapsed(
+                    listing_id=listing_id,
+                    listing_name=listing.name,
+                    seller_id=listing.seller_id,
+                    winner_id=winner_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    "[sweep] auction payment lapse failed listing=%s: %s", listing_id, exc,
+                )

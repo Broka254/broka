@@ -487,18 +487,66 @@ class Bid(Base):
 
 
 class AuctionMeta(Base):
-    """One-to-one with an auction-type Listing. Adds computed status,
-    minimum next-bid increment, winner, and denormalized current_bid/
-    bid_count so the Auction House grid doesn't aggregate Bid on every
-    read (Design Journal Volume 6, Ch.6/Ch.27)."""
+    """One-to-one with an auction-type Listing - the authoritative record of
+    an auction's lifecycle (Design Journal Volume 6, Ch.6/Ch.27).
+
+    The lifecycle is UPCOMING -> LIVE -> ENDED, and it is decided HERE, by
+    starts_at/ends_at against server time. `status` is a cached projection
+    of those timestamps, not an independent source of truth: nothing may
+    accept a bid because `status` happens to read "live", and the Flutter
+    countdown is decoration (see domains/auctions/lifecycle.py).
+
+    Why starts_at/ends_at rather than reusing Listing.auction_date: one
+    nullable timestamp cannot express a window. auction_date never said
+    whether it meant "the auction opens then" or "it closes then" - the
+    Flutter countdown treated it as the end, nothing on the backend read it
+    at all, and there was no way at all to express "opens Friday, closes
+    Sunday". Migration 0021 adds the real pair and backfills auction_date
+    into ends_at, where it is at least consistent with the one reader that
+    existed.
+    """
     __tablename__ = "auction_meta"
     id                = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     listing_id        = Column(String, ForeignKey("listings.id"), nullable=False, unique=True)
+    # Cached projection of starts_at/ends_at/closed_at - see the class
+    # docstring. "upcoming" | "live" | "ended".
     status            = Column(String, nullable=False, default="upcoming")
     min_bid_increment = Column(Float, nullable=False, default=500.0)
     current_bid       = Column(Float, nullable=True)
     bid_count         = Column(Integer, nullable=False, default=0)
     winner_id         = Column(String, ForeignKey("users.id"), nullable=True)
+
+    # ── Lifecycle window (migration 0021) ────────────────────────────────────
+    starts_at   = Column(DateTime, nullable=True, index=True)
+    ends_at     = Column(DateTime, nullable=True, index=True)
+    # The floor for the first bid. Distinct from Listing.reserve_price,
+    # which is the seller's secret walk-away price and is NOT a bid floor -
+    # see lifecycle.py's reserve handling.
+    starting_price = Column(Float, nullable=True)
+    # Who currently holds the top bid. Denormalized alongside current_bid so
+    # "you have been outbid" can be sent without re-querying Bid under the
+    # lock.
+    current_bidder_id = Column(String, ForeignKey("users.id"), nullable=True)
+
+    # ── Close (migration 0021) ───────────────────────────────────────────────
+    # Set exactly once, by the close routine, under a row lock. Its presence
+    # is what makes closing idempotent: a second close attempt sees it and
+    # returns the first close's outcome rather than picking a second winner
+    # or creating a second Deal.
+    closed_at      = Column(DateTime, nullable=True)
+    # "won" | "no_bids" | "reserve_not_met" | "unpaid"
+    outcome        = Column(String, nullable=True)
+    # The price the auction actually closed at - what becomes the Deal's
+    # goods amount. Kept separate from current_bid, which keeps tracking the
+    # highest bid regardless of whether it won anything.
+    winning_amount = Column(Float, nullable=True)
+    # The Deal created for the winner. Second half of the idempotency
+    # guarantee: one auction, at most one deal.
+    deal_id        = Column(String, ForeignKey("deals.id"), nullable=True)
+    payment_deadline = Column(DateTime, nullable=True)
+    # Set when the ending-soon reminder has gone out, so the sweep sends it
+    # once rather than on every pass.
+    ending_soon_notified_at = Column(DateTime, nullable=True)
 
 
 class Wishlist(Base):
@@ -1136,6 +1184,19 @@ async def init_db():
             # line in this list. NULL for every existing row = every
             # already-listed item stays a personal listing, unchanged.
             "ALTER TABLE listings ADD COLUMN store_id VARCHAR",
+            # Auction lifecycle (0021). auction_meta predates these, so an
+            # already-existing table needs them added retroactively - same
+            # reasoning as every other entry here.
+            "ALTER TABLE auction_meta ADD COLUMN starts_at DATETIME",
+            "ALTER TABLE auction_meta ADD COLUMN ends_at DATETIME",
+            "ALTER TABLE auction_meta ADD COLUMN starting_price FLOAT",
+            "ALTER TABLE auction_meta ADD COLUMN current_bidder_id VARCHAR",
+            "ALTER TABLE auction_meta ADD COLUMN closed_at DATETIME",
+            "ALTER TABLE auction_meta ADD COLUMN outcome VARCHAR",
+            "ALTER TABLE auction_meta ADD COLUMN winning_amount FLOAT",
+            "ALTER TABLE auction_meta ADD COLUMN deal_id VARCHAR",
+            "ALTER TABLE auction_meta ADD COLUMN payment_deadline DATETIME",
+            "ALTER TABLE auction_meta ADD COLUMN ending_soon_notified_at DATETIME",
         ]
         # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
         # inside its own SAVEPOINT. Previously they shared this function's
@@ -1228,6 +1289,10 @@ async def init_db():
             # keeps it fast. Expression indexes are supported by both
             # PostgreSQL and SQLite (3.9+).
             "CREATE INDEX IF NOT EXISTS ix_listings_category_lower ON listings(lower(category))",
+            # The auction close sweep queries "ends_at <= now AND closed_at
+            # IS NULL" on every pass; ending-soon queries the same column.
+            "CREATE INDEX IF NOT EXISTS ix_auction_meta_ends_at ON auction_meta(ends_at)",
+            "CREATE INDEX IF NOT EXISTS ix_auction_meta_starts_at ON auction_meta(starts_at)",
         ]
         for stmt in index_patches:
             # Same SAVEPOINT scoping as the two blocks above - CREATE INDEX
