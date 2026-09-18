@@ -8,7 +8,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.database import get_db
+# Listing was used by update_listing (db.get(Listing, ...)) without ever
+# being imported into this module - only inside a DIFFERENT function's local
+# import further down - so PATCH /listings/{id} raised
+# NameError: name 'Listing' is not defined and returned 500 on every call.
+# Every seller price edit and photo update through that endpoint has been
+# failing. Found by an auction terms-lock test that expected a 409 and got a
+# 500; no existing test covered this endpoint at all.
+from api.database import get_db, Listing
 from api.security import get_current_user
 from .service import ListingService
 
@@ -227,6 +234,33 @@ async def update_listing(
     if body.price is not None and float(body.price) != float(listing.price or 0):
         if body.price <= 0:
             raise HTTPException(status_code=400, detail="Price must be above zero.")
+        # On an auction, `price` IS the starting price (auction_meta mirrors
+        # it), so this generic edit path is a back door into an auction's
+        # terms - it predates auctions having terms at all. Once bidding has
+        # begun those are fixed; the seller changes them before it does
+        # through PATCH /auctions/{id}/terms, which validates the whole
+        # window rather than one number.
+        from api.database import AuctionMeta, ListingType
+        from api.domains.auctions import lifecycle as _auction_lifecycle
+
+        if listing.listing_type == ListingType.auction:
+            meta = (await db.execute(
+                select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+            )).scalar_one_or_none()
+            if meta is not None:
+                reason = _auction_lifecycle.terms_locked_reason(meta)
+                if reason is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "AUCTION_TERMS_LOCKED",
+                            "message": (
+                                f"{reason} The starting price can't be changed once "
+                                f"bidding begins. You can still update photos."
+                            ),
+                        },
+                    )
+                meta.starting_price = float(body.price)
 
         # A live negotiation outranks the allowance. This is the rule that
         # actually protects buyers: changing the number mid-thread is what

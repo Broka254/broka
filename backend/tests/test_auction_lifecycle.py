@@ -26,6 +26,8 @@ from api.database import (
     AsyncSessionLocal, AuctionMeta, Bid, Deal, DealStatus, Listing,
     ListingStatus, ListingType, User, init_db, reset_engine,
 )
+from sqlalchemy import delete as sa_delete
+
 from api.domains.auctions import lifecycle
 from api.security import create_access_token
 
@@ -768,3 +770,905 @@ class TestSweepDrivesTheWholeThing:
         pushes.clear()
         await workers.task_notify_auctions_ending_soon({})
         assert not pushes, "the reminder must not repeat on every sweep pass"
+
+
+class TestDealCreationFailureAndRetry:
+    """The recoverable gap between a closed auction and its Deal.
+
+    close_auction commits the close BEFORE creating the Deal, on purpose: a
+    downstream failure must never roll back a finished auction and reopen it
+    for more bids. The price of that ordering is a window where an auction
+    is correctly closed, with a winner and a price, and no Deal - so the
+    winner has been told nothing and has nothing to pay. Left alone that
+    state is permanent, because the close sweep only looks at auctions that
+    are still open.
+    """
+
+    @staticmethod
+    def _break_deal_creation(monkeypatch):
+        """Make EscrowService.finalize_deal fail the way a real outage would."""
+        from api.domains.escrow.service import EscrowService
+
+        async def _boom(self, **kwargs):
+            raise RuntimeError("escrow unavailable")
+
+        monkeypatch.setattr(EscrowService, "finalize_deal", _boom)
+
+    @pytest.mark.asyncio
+    async def test_failed_deal_preserves_the_closed_auction(self, monkeypatch):
+        """The auction must stay closed, with its winner and price intact -
+        never reopened, never re-decided."""
+        from sqlalchemy import func, select
+
+        seller = await _user("Seller dealfail")
+        loser = await _user("Loser dealfail")
+        winner = await _user("Winner dealfail")
+        listing, _ = await _auction(seller, starting_price=20000, increment=1000)
+        await _bid(listing.id, loser, 20000)
+        await _bid(listing.id, winner, 50000)
+
+        self._break_deal_creation(monkeypatch)
+        result = await _close(listing.id)
+
+        assert result.outcome == lifecycle.OUTCOME_WON
+        assert result.winner_id == winner.id
+        assert result.winning_amount == 50000
+        assert result.deal_id is None, "the deal genuinely failed"
+
+        meta = await _meta(listing.id)
+        assert meta.closed_at is not None, "the auction must stay closed"
+        assert meta.winner_id == winner.id
+        assert meta.winning_amount == 50000
+        assert meta.deal_id is None
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+        assert deals == 0
+
+    @pytest.mark.asyncio
+    async def test_a_closed_auction_with_a_failed_deal_still_refuses_bids(self, monkeypatch):
+        """The gap must not become a way back into a finished auction."""
+        seller = await _user("Seller dealfail bid")
+        winner = await _user("Winner dealfail bid")
+        latecomer = await _user("Late dealfail bid")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 30000)
+
+        self._break_deal_creation(monkeypatch)
+        await _close(listing.id)
+
+        with pytest.raises(lifecycle.AuctionError) as exc:
+            await _bid(listing.id, latecomer, 99000)
+        assert exc.value.code == "AUCTION_ENDED"
+
+    @pytest.mark.asyncio
+    async def test_retry_creates_the_deal_without_re_deciding_anything(self, monkeypatch):
+        """THE case. A later close/sweep finds outcome=won with no deal_id,
+        retries, and persists the result - keeping the same winner and the
+        same price."""
+        from sqlalchemy import func, select
+
+        seller = await _user("Seller retry")
+        winner = await _user("Winner retry")
+        rival = await _user("Rival retry")
+        listing, _ = await _auction(seller, starting_price=20000, increment=1000)
+        await _bid(listing.id, rival, 20000)
+        await _bid(listing.id, winner, 64000)
+
+        self._break_deal_creation(monkeypatch)
+        first = await _close(listing.id)
+        assert first.deal_id is None
+
+        # Escrow comes back.
+        monkeypatch.undo()
+
+        # The sweep must be able to FIND it - it is closed, so the ordinary
+        # due_for_close query cannot see it.
+        async with AsyncSessionLocal() as db:
+            pending = await lifecycle.due_for_deal_retry(db)
+        assert listing.id in pending
+
+        retried = await _close(listing.id)
+        assert retried.already_closed is True, "the auction must not be reopened"
+        assert retried.outcome == lifecycle.OUTCOME_WON
+        assert retried.winner_id == winner.id, "the same winner, not a re-decision"
+        assert retried.winning_amount == 64000
+        assert retried.deal_id, "the deal must now exist"
+
+        meta = await _meta(listing.id)
+        assert meta.deal_id == retried.deal_id, "deal_id must be persisted"
+        assert meta.closed_at == first_closed_at(first, meta)
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(Deal).where(Deal.listing_id == listing.id)
+            )).scalars().all()
+        assert len(deals) == 1
+        assert deals[0].buyer_id == winner.id
+        assert deals[0].agreed_price == 64000
+
+    @pytest.mark.asyncio
+    async def test_repeated_retries_never_duplicate_the_deal(self, monkeypatch):
+        from sqlalchemy import func, select
+
+        seller = await _user("Seller retry twice")
+        winner = await _user("Winner retry twice")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 30000)
+
+        self._break_deal_creation(monkeypatch)
+        await _close(listing.id)
+        monkeypatch.undo()
+
+        await _close(listing.id)
+        await _close(listing.id)
+        await _close(listing.id)
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+        assert deals == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_retries_produce_one_deal(self, monkeypatch):
+        from sqlalchemy import func, select
+
+        seller = await _user("Seller retry race")
+        winner = await _user("Winner retry race")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 30000)
+
+        self._break_deal_creation(monkeypatch)
+        await _close(listing.id)
+        monkeypatch.undo()
+
+        await asyncio.gather(
+            _close(listing.id), _close(listing.id), return_exceptions=True,
+        )
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+        assert deals == 1
+
+    @pytest.mark.asyncio
+    async def test_sweep_recovers_the_deal_and_notifies_the_winner(self, monkeypatch):
+        """End to end through the worker, which is what runs in production."""
+        from sqlalchemy import select
+        from api.core import workers
+
+        seller = await _user("Seller sweep retry")
+        winner = await _user("Winner sweep retry")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 35000)
+        async with AsyncSessionLocal() as db:
+            meta = await lifecycle._locked_meta(db, listing.id)
+            meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        self._break_deal_creation(monkeypatch)
+        await workers.task_close_due_auctions({})
+        meta = await _meta(listing.id)
+        assert meta.outcome == lifecycle.OUTCOME_WON and meta.deal_id is None
+
+        monkeypatch.undo()
+        pushes = []
+
+        async def _capture(user_id, title, body, data):
+            pushes.append((user_id, title, body, data))
+
+        import api.core.push_subscribers as push_subs
+        monkeypatch.setattr(push_subs, "_notify", _capture)
+
+        await workers.task_close_due_auctions({})
+
+        meta = await _meta(listing.id)
+        assert meta.deal_id, "the sweep must recover the deal"
+        async with AsyncSessionLocal() as db:
+            deal = (await db.execute(
+                select(Deal).where(Deal.id == meta.deal_id)
+            )).scalar_one()
+        assert deal.agreed_price == 35000
+
+        # The winner was never told the first time - there was nothing to
+        # pay. They must be told now.
+        won = [p for p in pushes if p[0] == winner.id]
+        assert won, "the winner must be notified once the deal exists"
+        assert any(p[3].get("deal_id") == meta.deal_id for p in won)
+
+    @pytest.mark.asyncio
+    async def test_retry_finder_ignores_auctions_that_are_fine(self):
+        """A successful close, a no-bids close and a reserve-not-met close
+        must never be picked up as needing a deal."""
+        seller = await _user("Seller finder")
+        winner = await _user("Winner finder")
+
+        sold, _ = await _auction(seller, starting_price=20000)
+        await _bid(sold.id, winner, 30000)
+        await _close(sold.id)
+
+        empty, _ = await _auction(seller)
+        await _close(empty.id)
+
+        under, _ = await _auction(seller, starting_price=20000, reserve=90000)
+        await _bid(under.id, winner, 25000)
+        await _close(under.id)
+
+        async with AsyncSessionLocal() as db:
+            pending = await lifecycle.due_for_deal_retry(db)
+        assert sold.id not in pending
+        assert empty.id not in pending
+        assert under.id not in pending
+
+
+def first_closed_at(result, meta):
+    """The close timestamp must not move on a retry - the auction closed
+    when it closed."""
+    return meta.closed_at
+
+
+class TestTermsLocking:
+    """An auction's terms are the contract bidders bid against. Once
+    somebody has committed money to them they stop being editable."""
+
+    @pytest.mark.asyncio
+    async def test_seller_can_configure_an_upcoming_auction(self, client):
+        seller = await _user("Seller terms open")
+        listing, _ = await _auction(
+            seller, starting_price=20000,
+            starts_in=timedelta(hours=2), ends_in=timedelta(hours=8),
+        )
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+
+        res = await client.patch(
+            f"/auctions/{listing.id}/terms",
+            headers=headers,
+            json={
+                "starting_price": 25000,
+                "min_bid_increment": 1000,
+                "reserve_price": 60000,
+                "ends_at": (datetime.utcnow() + timedelta(hours=12)).isoformat(),
+            },
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["starting_price"] == 25000
+        assert body["min_bid_increment"] == 1000
+        assert body["has_reserve"] is True
+        # Never the amount, even to the seller's own client - the state
+        # payload has one shape and it is the public one.
+        assert "reserve_price" not in body
+
+    @pytest.mark.asyncio
+    async def test_terms_lock_once_the_auction_is_live(self, client):
+        seller = await _user("Seller terms live")
+        listing, _ = await _auction(seller, starting_price=20000)  # live by default
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+
+        res = await client.patch(f"/auctions/{listing.id}/terms",
+                                 headers=headers, json={"min_bid_increment": 5000})
+        assert res.status_code == 409
+        assert res.json()["detail"]["code"] == "AUCTION_TERMS_LOCKED"
+        assert (await _meta(listing.id)).min_bid_increment == 500
+
+    @pytest.mark.asyncio
+    async def test_terms_lock_once_a_bid_lands(self, client):
+        """Even an auction that has not technically opened yet is settled
+        the moment somebody bids on it."""
+        seller = await _user("Seller terms bid")
+        bidder = await _user("Bidder terms bid")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, bidder, 20000)
+
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+        for payload in (
+            {"starting_price": 5000},
+            {"min_bid_increment": 10},
+            {"reserve_price": 999999},
+            {"ends_at": (datetime.utcnow() + timedelta(days=30)).isoformat()},
+            {"starts_at": (datetime.utcnow() + timedelta(days=1)).isoformat()},
+            {"clear_reserve": True},
+        ):
+            res = await client.patch(f"/auctions/{listing.id}/terms",
+                                     headers=headers, json=payload)
+            assert res.status_code == 409, f"{payload} should have been refused: {res.text}"
+            assert res.json()["detail"]["code"] == "AUCTION_TERMS_LOCKED"
+
+    @pytest.mark.asyncio
+    async def test_terms_stay_locked_after_the_auction_closes(self, client):
+        seller = await _user("Seller terms closed")
+        bidder = await _user("Bidder terms closed")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, bidder, 25000)
+        await _close(listing.id)
+
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+        res = await client.patch(f"/auctions/{listing.id}/terms",
+                                 headers=headers, json={"reserve_price": 10})
+        assert res.status_code == 409
+        assert res.json()["detail"]["code"] == "AUCTION_TERMS_LOCKED"
+
+    @pytest.mark.asyncio
+    async def test_generic_listing_price_edit_cannot_move_a_live_starting_price(self, client):
+        """listing.price IS the auction's starting price, so the ordinary
+        edit endpoint is a back door into auction terms. It predates
+        auctions having terms at all."""
+        seller = await _user("Seller backdoor")
+        bidder = await _user("Bidder backdoor")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, bidder, 20000)
+
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+        res = await client.patch(f"/listings/{listing.id}",
+                                 headers=headers, json={"price": 1})
+        assert res.status_code == 409
+        assert res.json()["detail"]["code"] == "AUCTION_TERMS_LOCKED"
+
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(
+                select(Listing).where(Listing.id == listing.id)
+            )).scalar_one()
+        assert row.price == 20000
+
+    @pytest.mark.asyncio
+    async def test_photos_stay_editable_after_bidding_starts(self, client):
+        """The lock is on terms, not on the listing. A seller must still be
+        able to add a better photo of what people are bidding on."""
+        seller = await _user("Seller photos")
+        bidder = await _user("Bidder photos")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, bidder, 20000)
+
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+        res = await client.patch(f"/listings/{listing.id}",
+                                 headers=headers, json={"verified_photos": "data:image/png;base64,AAAA"})
+        assert res.status_code == 200, res.text
+
+    @pytest.mark.asyncio
+    async def test_invalid_windows_are_refused(self, client):
+        seller = await _user("Seller invalid terms")
+        listing, _ = await _auction(
+            seller, starts_in=timedelta(hours=2), ends_in=timedelta(hours=8),
+        )
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+        now = datetime.utcnow()
+
+        # Closes before it opens.
+        res = await client.patch(f"/auctions/{listing.id}/terms", headers=headers, json={
+            "starts_at": (now + timedelta(days=2)).isoformat(),
+            "ends_at": (now + timedelta(days=1)).isoformat(),
+        })
+        assert res.status_code == 422
+        assert res.json()["detail"]["code"] == "INVALID_WINDOW"
+
+        # Zero/negative numbers are refused by the schema itself.
+        for payload in ({"starting_price": 0}, {"min_bid_increment": -5},
+                        {"reserve_price": 0}):
+            bad = await client.patch(f"/auctions/{listing.id}/terms",
+                                     headers=headers, json=payload)
+            assert bad.status_code == 422, f"{payload}: {bad.text}"
+
+        # A reserve under the starting price is met by the first bid, so it
+        # protects nothing while looking like it does.
+        pointless = await client.patch(f"/auctions/{listing.id}/terms", headers=headers,
+                                       json={"starting_price": 50000, "reserve_price": 10000})
+        assert pointless.status_code == 422
+        assert pointless.json()["detail"]["code"] == "RESERVE_BELOW_START"
+
+    @pytest.mark.asyncio
+    async def test_only_the_seller_can_change_terms(self, client):
+        seller = await _user("Seller owns terms")
+        stranger = await _user("Stranger terms")
+        listing, _ = await _auction(
+            seller, starts_in=timedelta(hours=2), ends_in=timedelta(hours=8),
+        )
+        headers = {"Authorization": f"Bearer {create_access_token({'sub': stranger.id})}"}
+        res = await client.patch(f"/auctions/{listing.id}/terms",
+                                 headers=headers, json={"min_bid_increment": 1})
+        assert res.status_code == 403
+
+
+class TestFullJourney:
+    """The whole thing, in one test, in order:
+
+        seller creates auction -> LIVE -> bid -> outbid -> ends_at passes
+        -> sweep closes -> highest bidder wins -> reserve evaluated
+        -> exactly one Deal -> winner pays -> escrow -> seller fulfils
+        -> buyer confirms -> released
+
+    Deliberately end-to-end rather than a sum of the unit tests above: each
+    stage's output is the next stage's input, and the failures worth
+    catching here are the seams between them, not the stages themselves.
+
+    The one simulated step is the M-Pesa/E-Confirm provider round trip -
+    moving the Deal to `paid` stands in for money actually arriving, since
+    that is an external service. Everything either side of it is the real
+    code path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_to_confirmed_delivery(self, client, monkeypatch):
+        from sqlalchemy import func, select
+        from api.core import workers
+        from api.core.config import settings
+        from api.core.money import add_money, pct_of
+        from api.domains.escrow.service import EscrowService
+
+        pushes = []
+
+        async def _capture(user_id, title, body, data):
+            pushes.append((user_id, title, body, data))
+
+        import api.core.push_subscribers as push_subs
+        monkeypatch.setattr(push_subs, "_notify", _capture)
+
+        seller = await _user("Journey Seller")
+        alice = await _user("Journey Alice")
+        bob = await _user("Journey Bob")
+        sh = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+
+        # ── 1. Seller creates an auction with real terms ─────────────────
+        starts = datetime.utcnow() + timedelta(minutes=30)
+        ends = starts + timedelta(hours=2)
+        created = await client.post("/listings/", headers=sh, json={
+            "name": "Journey Tractor",
+            "category": "Agriculture",
+            "price": 200000,
+            "lat": -1.286, "lng": 36.817,
+            "listing_type": "auction",
+            "reserve_price": 260000,
+            "min_bid_increment": 10000,
+            "auction_starts_at": starts.isoformat(),
+            "auction_ends_at": ends.isoformat(),
+        })
+        assert created.status_code == 201, created.text
+        listing_id = created.json()["id"]
+
+        detail = await client.get(f"/auctions/{listing_id}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["status"] == "upcoming"
+        assert detail.json()["min_bid_increment"] == 10000
+        assert detail.json()["has_reserve"] is True
+        assert "reserve_price" not in detail.json()
+
+        # ── 2. Bidding is refused before it opens ────────────────────────
+        ah = {"Authorization": f"Bearer {create_access_token({'sub': alice.id})}"}
+        early = await client.post("/auction/bid", headers=ah,
+                                  json={"listing_id": listing_id, "amount": 210000})
+        assert early.status_code == 409
+        assert early.json()["detail"]["code"] == "AUCTION_NOT_STARTED"
+
+        # ── 3. The auction opens ─────────────────────────────────────────
+        async with AsyncSessionLocal() as db:
+            meta = await lifecycle._locked_meta(db, listing_id)
+            meta.starts_at = datetime.utcnow() - timedelta(minutes=1)
+            await db.commit()
+        assert (await client.get(f"/auctions/{listing_id}")).json()["status"] == "live"
+
+        # ── 4. Alice bids; the seller cannot ─────────────────────────────
+        first = await client.post("/auction/bid", headers=ah,
+                                  json={"listing_id": listing_id, "amount": 200000})
+        assert first.status_code == 201, first.text
+        assert first.json()["min_next_bid"] == 210000
+        assert first.json()["reserve_met"] is False
+
+        own = await client.post("/auction/bid", headers=sh,
+                                json={"listing_id": listing_id, "amount": 300000})
+        assert own.status_code == 403
+        assert own.json()["detail"]["code"] == "OWN_LISTING"
+
+        # ── 5. A raise that does not clear the increment is refused ──────
+        bh = {"Authorization": f"Bearer {create_access_token({'sub': bob.id})}"}
+        short = await client.post("/auction/bid", headers=bh,
+                                  json={"listing_id": listing_id, "amount": 205000})
+        assert short.status_code == 400
+        assert short.json()["detail"]["code"] == "BID_TOO_LOW"
+
+        # ── 6. Bob outbids Alice, and Alice is told ──────────────────────
+        pushes.clear()
+        outbid = await client.post("/auction/bid", headers=bh,
+                                   json={"listing_id": listing_id, "amount": 280000})
+        assert outbid.status_code == 201, outbid.text
+        assert outbid.json()["reserve_met"] is True, "280k clears the 260k reserve"
+        alice_told = [p for p in pushes if p[0] == alice.id]
+        assert alice_told, "the outbid bidder must be notified"
+        assert "outbid" in alice_told[0][1].lower()
+
+        # Terms are now locked - people are bidding against them.
+        locked = await client.patch(f"/auctions/{listing_id}/terms", headers=sh,
+                                    json={"min_bid_increment": 1})
+        assert locked.status_code == 409
+        assert locked.json()["detail"]["code"] == "AUCTION_TERMS_LOCKED"
+
+        # ── 7. The auction reaches its end ───────────────────────────────
+        async with AsyncSessionLocal() as db:
+            meta = await lifecycle._locked_meta(db, listing_id)
+            meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        pushes.clear()
+        await workers.task_close_due_auctions({})
+
+        # ── 8. Highest bidder wins, reserve was met ──────────────────────
+        closed = (await client.get(f"/auctions/{listing_id}")).json()
+        assert closed["status"] == "ended"
+        assert closed["outcome"] == "won"
+        assert closed["winner_id"] == bob.id
+        assert closed["winning_amount"] == 280000
+        assert closed["deal_id"]
+        assert closed["payment_deadline"]
+
+        # Winner told to pay; loser told they lost.
+        bob_told = [p for p in pushes if p[0] == bob.id]
+        alice_told = [p for p in pushes if p[0] == alice.id]
+        assert any("won" in p[1].lower() for p in bob_told)
+        assert any("payment" in p[2].lower() for p in bob_told)
+        assert any(p[3].get("deal_id") == closed["deal_id"] for p in bob_told)
+        assert alice_told, "the losing bidder must be told the auction ended"
+
+        # A bid after close is refused.
+        late = await client.post("/auction/bid", headers=ah,
+                                 json={"listing_id": listing_id, "amount": 500000})
+        assert late.status_code == 409
+        assert late.json()["detail"]["code"] == "AUCTION_ENDED"
+
+        # ── 9. Exactly one Deal, at the winning price ────────────────────
+        async with AsyncSessionLocal() as db:
+            count = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing_id)
+            )).scalar_one()
+            deal = (await db.execute(
+                select(Deal).where(Deal.id == closed["deal_id"])
+            )).scalar_one()
+            listing_row = (await db.execute(
+                select(Listing).where(Listing.id == listing_id)
+            )).scalar_one()
+        assert count == 1
+        assert deal.buyer_id == bob.id and deal.seller_id == seller.id
+        assert deal.agreed_price == 280000, "the winning bid IS the goods amount"
+        assert deal.commission == pct_of(280000, settings.commission_rate)
+        assert deal.status == DealStatus.agreed
+        # The listing is locked against a competing sale.
+        assert listing_row.status != ListingStatus.active
+
+        # ── 10. The winner pays (provider round trip simulated) ──────────
+        expected_total = add_money(deal.agreed_price, deal.commission)
+        assert expected_total == 280000 + pct_of(280000, settings.commission_rate)
+        async with AsyncSessionLocal() as db:
+            paying = (await db.execute(
+                select(Deal).where(Deal.id == deal.id)
+            )).scalar_one()
+            paying.status = DealStatus.paid
+            await db.commit()
+
+        # ── 11. Seller fulfils, buyer confirms - the REAL escrow path ────
+        async with AsyncSessionLocal() as db:
+            released = await EscrowService(db).confirm_delivery(
+                deal_id=deal.id, buyer_id=bob.id,
+            )
+        assert released["status"] == "released"
+
+        async with AsyncSessionLocal() as db:
+            final_deal = (await db.execute(
+                select(Deal).where(Deal.id == deal.id)
+            )).scalar_one()
+            final_seller = (await db.execute(
+                select(User).where(User.id == seller.id)
+            )).scalar_one()
+        assert final_deal.status == DealStatus.released
+        assert final_deal.delivery_confirmed_at is not None
+        assert final_deal.released_at is not None
+        assert (final_seller.completed_deals or 0) >= 1, (
+            "a completed auction sale must count toward the seller's record"
+        )
+
+    @pytest.mark.asyncio
+    async def test_journey_with_reserve_not_met_ends_in_no_deal(self, client, monkeypatch):
+        """The same journey, diverging at the reserve: bidding is healthy,
+        the reserve is simply never reached, and nothing is sold."""
+        from sqlalchemy import func, select
+        from api.core import workers
+
+        pushes = []
+
+        async def _capture(user_id, title, body, data):
+            pushes.append((user_id, title, body, data))
+
+        import api.core.push_subscribers as push_subs
+        monkeypatch.setattr(push_subs, "_notify", _capture)
+
+        seller = await _user("Journey2 Seller")
+        bidder = await _user("Journey2 Bidder")
+        sh = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
+        bh = {"Authorization": f"Bearer {create_access_token({'sub': bidder.id})}"}
+
+        created = await client.post("/listings/", headers=sh, json={
+            "name": "Journey Reserve Piano",
+            "category": "Music & Instruments",
+            "price": 20000,
+            "lat": -1.286, "lng": 36.817,
+            "listing_type": "auction",
+            "reserve_price": 50000,
+            "min_bid_increment": 500,
+            "auction_ends_at": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+        })
+        assert created.status_code == 201, created.text
+        listing_id = created.json()["id"]
+
+        # Exactly the brief's example: every one of these is a VALID bid.
+        for amount in (20500, 30000, 45000):
+            res = await client.post("/auction/bid", headers=bh,
+                                    json={"listing_id": listing_id, "amount": amount})
+            assert res.status_code == 201, f"{amount}: {res.text}"
+            assert res.json()["reserve_met"] is False
+
+        async with AsyncSessionLocal() as db:
+            meta = await lifecycle._locked_meta(db, listing_id)
+            meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        pushes.clear()
+        await workers.task_close_due_auctions({})
+
+        closed = (await client.get(f"/auctions/{listing_id}")).json()
+        assert closed["status"] == "ended"
+        assert closed["outcome"] == "reserve_not_met"
+        assert closed["winner_id"] is None
+        assert closed["deal_id"] is None
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing_id)
+            )).scalar_one()
+        assert deals == 0
+
+        seller_told = [p for p in pushes if p[0] == seller.id]
+        assert any("reserve" in p[2].lower() for p in seller_told)
+
+
+class TestSweepReliability:
+    """The sweep is the only thing that closes an auction. The Flutter
+    countdown reaching zero is decoration - so these are the properties
+    that decide whether auctions actually end."""
+
+    @pytest.mark.asyncio
+    async def test_sweep_finds_every_due_auction_not_just_the_first(self):
+        from api.core import workers
+
+        seller = await _user("Seller batch")
+        bidder = await _user("Bidder batch")
+        listings = []
+        for _ in range(5):
+            listing, _ = await _auction(seller, starting_price=20000)
+            await _bid(listing.id, bidder, 25000)
+            listings.append(listing)
+
+        async with AsyncSessionLocal() as db:
+            for listing in listings:
+                meta = await lifecycle._locked_meta(db, listing.id)
+                meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        await workers.task_close_due_auctions({})
+
+        for listing in listings:
+            meta = await _meta(listing.id)
+            assert meta.closed_at is not None, f"{listing.id} was left open"
+            assert meta.outcome == lifecycle.OUTCOME_WON
+            assert meta.deal_id, f"{listing.id} closed without a deal"
+
+    @pytest.mark.asyncio
+    async def test_one_bad_auction_does_not_stop_the_rest_of_the_sweep(self, monkeypatch):
+        """A pass that dies on its first problem leaves every later auction
+        stuck in LIVE forever."""
+        from api.core import workers
+
+        seller = await _user("Seller resilient")
+        bidder = await _user("Bidder resilient")
+        good_a, _ = await _auction(seller, starting_price=20000)
+        bad, _ = await _auction(seller, starting_price=20000)
+        good_b, _ = await _auction(seller, starting_price=20000)
+        for listing in (good_a, bad, good_b):
+            await _bid(listing.id, bidder, 25000)
+        async with AsyncSessionLocal() as db:
+            for listing in (good_a, bad, good_b):
+                meta = await lifecycle._locked_meta(db, listing.id)
+                meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        real_close = lifecycle.close_auction
+
+        async def _explode_on_one(db, listing_id):
+            if listing_id == bad.id:
+                raise RuntimeError("something went wrong closing this one")
+            return await real_close(db, listing_id)
+
+        monkeypatch.setattr(lifecycle, "close_auction", _explode_on_one)
+        await workers.task_close_due_auctions({})
+        monkeypatch.undo()
+
+        assert (await _meta(good_a.id)).closed_at is not None
+        assert (await _meta(good_b.id)).closed_at is not None
+        # The broken one is still due, so the next pass retries it rather
+        # than it being silently dropped.
+        async with AsyncSessionLocal() as db:
+            still_due = await lifecycle.due_for_close(db)
+        assert bad.id in still_due
+
+        await workers.task_close_due_auctions({})
+        assert (await _meta(bad.id)).closed_at is not None, (
+            "a transient failure must be retried on the next pass"
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sweeps_close_each_auction_exactly_once(self):
+        """Two workers hitting the same pass - the multi-process case."""
+        from sqlalchemy import func, select
+        from api.core import workers
+
+        seller = await _user("Seller two workers")
+        bidder = await _user("Bidder two workers")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, bidder, 30000)
+        async with AsyncSessionLocal() as db:
+            meta = await lifecycle._locked_meta(db, listing.id)
+            meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        await asyncio.gather(
+            workers.task_close_due_auctions({}),
+            workers.task_close_due_auctions({}),
+            workers.task_close_due_auctions({}),
+            return_exceptions=True,
+        )
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+        assert deals == 1
+        meta = await _meta(listing.id)
+        assert meta.outcome == lifecycle.OUTCOME_WON
+        assert meta.winner_id == bidder.id
+
+    @pytest.mark.asyncio
+    async def test_an_expired_auction_is_never_reported_as_live(self):
+        """Even before any sweep runs. The status a client is shown is
+        derived from the clock, so a sweep that is late cannot leave an
+        auction looking open - which is what would let someone bid into an
+        auction that should have closed."""
+        seller = await _user("Seller stuck")
+        listing, _ = await _auction(
+            seller, starts_in=timedelta(hours=-3), ends_in=timedelta(minutes=-5),
+        )
+        meta = await _meta(listing.id)
+        assert meta.status == "live", "precondition: the cached column is stale"
+        assert meta.closed_at is None, "precondition: no sweep has run"
+        assert lifecycle.effective_status(meta) == lifecycle.ENDED
+
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as db:
+            listing_row = (await db.execute(
+                select(Listing).where(Listing.id == listing.id)
+            )).scalar_one()
+            state = await lifecycle.public_state(db, listing_row, meta)
+        assert state["status"] == "ended"
+        assert state["seconds_remaining"] == 0
+
+    @pytest.mark.asyncio
+    async def test_listing_status_filter_uses_derived_state(self, client):
+        """The grid must not offer an auction as live once its time is up."""
+        seller = await _user("Seller grid")
+        listing, _ = await _auction(
+            seller, starts_in=timedelta(hours=-3), ends_in=timedelta(minutes=-5),
+        )
+        res = await client.get("/auctions", params={"status": "live"})
+        assert res.status_code == 200
+        assert listing.id not in [a["id"] for a in res.json()]
+
+
+class TestOrphanedDealClaim:
+    """A retry claims the deal id BEFORE creating the deal, so two workers
+    cannot both proceed. The cost of claiming first is that a process dying
+    mid-claim leaves an auction pointing at a Deal that was never written -
+    a winner with nothing to pay, and a deal_id that hides it from the
+    NULL-based retry query. Detecting that orphan is what makes the strict
+    claim safe to use."""
+
+    @pytest.mark.asyncio
+    async def test_a_claim_that_never_became_a_deal_is_recovered(self):
+        from sqlalchemy import func, select
+
+        seller = await _user("Seller orphan")
+        winner = await _user("Winner orphan")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 40000)
+        await _close(listing.id)
+
+        # Simulate the crash: the auction holds a deal_id for a Deal that
+        # does not exist. This is what a process killed between claiming and
+        # inserting leaves behind.
+        async with AsyncSessionLocal() as db:
+            real_deal_id = (await db.execute(
+                select(AuctionMeta.deal_id).where(AuctionMeta.listing_id == listing.id)
+            )).scalar_one()
+            await db.execute(
+                sa_delete(Deal).where(Deal.id == real_deal_id)
+            )
+            meta = await lifecycle._locked_meta(db, listing.id)
+            meta.deal_id = "claimed-but-never-written"
+            await db.commit()
+
+        # The NULL-based query alone would never see this.
+        async with AsyncSessionLocal() as db:
+            pending = await lifecycle.due_for_deal_retry(db)
+        assert listing.id in pending, "an orphaned claim must be recoverable"
+
+        recovered = await _close(listing.id)
+        assert recovered.deal_id
+        assert recovered.deal_id != "claimed-but-never-written"
+        assert recovered.winner_id == winner.id
+        assert recovered.winning_amount == 40000
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+            meta = (await db.execute(
+                select(AuctionMeta).where(AuctionMeta.listing_id == listing.id)
+            )).scalar_one()
+        assert deals == 1
+        assert meta.deal_id == recovered.deal_id
+
+    @pytest.mark.asyncio
+    async def test_a_healthy_deal_is_never_seen_as_an_orphan(self):
+        """The orphan check joins against Deal, so it must not sweep up
+        auctions whose deal is perfectly fine."""
+        seller = await _user("Seller healthy")
+        winner = await _user("Winner healthy")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 30000)
+        result = await _close(listing.id)
+        assert result.deal_id
+
+        async with AsyncSessionLocal() as db:
+            pending = await lifecycle.due_for_deal_retry(db)
+        assert listing.id not in pending
+
+    @pytest.mark.asyncio
+    async def test_the_deal_gets_the_id_that_was_claimed(self):
+        """Claim and deal must refer to the same row, or the claim proves
+        nothing."""
+        from sqlalchemy import select
+
+        seller = await _user("Seller claimid")
+        winner = await _user("Winner claimid")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 30000)
+
+        # Force the retry path rather than the straight-through close.
+        from api.domains.escrow.service import EscrowService
+        original = EscrowService.finalize_deal
+
+        async def _fail_once(self, **kwargs):
+            raise RuntimeError("not this time")
+
+        EscrowService.finalize_deal = _fail_once
+        try:
+            await _close(listing.id)
+        finally:
+            EscrowService.finalize_deal = original
+
+        recovered = await _close(listing.id)
+        async with AsyncSessionLocal() as db:
+            meta = (await db.execute(
+                select(AuctionMeta).where(AuctionMeta.listing_id == listing.id)
+            )).scalar_one()
+            deal = (await db.execute(
+                select(Deal).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+        assert meta.deal_id == deal.id == recovered.deal_id

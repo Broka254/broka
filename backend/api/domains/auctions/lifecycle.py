@@ -82,6 +82,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
+from api.core.money import add_money, money
 from api.database import AuctionMeta, Bid, Listing, ListingStatus, ListingType, User
 
 logger = logging.getLogger(__name__)
@@ -146,8 +147,10 @@ def minimum_next_bid(meta: AuctionMeta) -> float:
     """
     increment = meta.min_bid_increment or settings.auction_default_min_increment
     if meta.current_bid is None:
-        return float(meta.starting_price or increment)
-    return float(meta.current_bid) + float(increment)
+        return money(meta.starting_price or increment)
+    # add_money rather than a float add: this number is shown to the bidder
+    # AND enforced against their bid, so the two must be bit-identical.
+    return add_money(meta.current_bid, increment)
 
 
 def reserve_met(meta: AuctionMeta, reserve_price: Optional[float]) -> bool:
@@ -159,6 +162,89 @@ def reserve_met(meta: AuctionMeta, reserve_price: Optional[float]) -> bool:
     if not reserve_price:
         return True
     return (meta.current_bid or 0.0) >= float(reserve_price)
+
+
+# Terms a seller may not change once people are bidding against them.
+# Named here so the message a seller gets and the fields the API refuses
+# come from one list.
+LOCKED_TERMS = (
+    "starting price", "minimum bid increment", "start time", "end time",
+    "reserve price",
+)
+
+
+def terms_locked_reason(meta: AuctionMeta, now: Optional[datetime] = None) -> Optional[str]:
+    """Why this auction's terms can no longer be changed, or None if they can.
+
+    An auction's terms are the contract bidders are bidding against. Moving
+    the reserve, the increment or the closing time after someone has
+    committed money to it changes the deal underneath them - and moving the
+    start or end time is also how an auction gets extended until a
+    favoured bid arrives. So terms are editable only while the auction is
+    genuinely still UPCOMING and untouched.
+
+    bid_count is checked as well as status because they can disagree
+    legitimately: an auction with no starts_at is LIVE from creation, and
+    an auction that took a bid is settled regardless of what the clock
+    says next.
+    """
+    now = now or datetime.utcnow()
+    if meta.closed_at is not None:
+        return "This auction has already ended."
+    status = effective_status(meta, now)
+    if status == ENDED:
+        return "This auction has already ended."
+    if (meta.bid_count or 0) > 0:
+        return "Bidding has already started on this auction."
+    if status == LIVE:
+        return "This auction is already live."
+    return None
+
+
+def assert_terms_editable(meta: AuctionMeta, now: Optional[datetime] = None) -> None:
+    reason = terms_locked_reason(meta, now)
+    if reason is None:
+        return
+    raise AuctionError(
+        409, "AUCTION_TERMS_LOCKED",
+        f"{reason} The {', '.join(LOCKED_TERMS)} can't be changed once bidding "
+        f"begins. You can still update photos.",
+    )
+
+
+def validate_terms(
+    starting_price: Optional[float],
+    min_bid_increment: Optional[float],
+    starts_at: Optional[datetime],
+    ends_at: Optional[datetime],
+    reserve_price: Optional[float],
+) -> None:
+    """The rules an auction window has to satisfy to be one.
+
+    Enforced here rather than only in the client because the client is not
+    the authority on any of it - a request that skips the app entirely has
+    to hit the same wall.
+    """
+    if starting_price is not None and starting_price <= 0:
+        raise AuctionError(422, "INVALID_STARTING_PRICE",
+                            "The starting price must be above zero.")
+    if min_bid_increment is not None and min_bid_increment <= 0:
+        raise AuctionError(422, "INVALID_INCREMENT",
+                            "The minimum bid increment must be above zero.")
+    if reserve_price is not None and reserve_price <= 0:
+        raise AuctionError(422, "INVALID_RESERVE",
+                            "A reserve price must be above zero. Leave it empty for no reserve.")
+    if starts_at is not None and ends_at is not None and ends_at <= starts_at:
+        raise AuctionError(422, "INVALID_WINDOW",
+                            "The auction must close after it opens.")
+    if (reserve_price is not None and starting_price is not None
+            and reserve_price < starting_price):
+        # Not fatal to the mechanics, but it is always a mistake: a reserve
+        # below the starting price is met by the very first valid bid, so
+        # it protects nothing and the seller thinks it does.
+        raise AuctionError(422, "RESERVE_BELOW_START",
+                            "A reserve below the starting price would be met by the "
+                            "first bid. Raise the reserve or lower the starting price.")
 
 
 @dataclass
@@ -250,6 +336,10 @@ async def place_bid(
         raise AuctionError(422, "INVALID_AMOUNT", "That bid amount is not a number.")
     if amount != amount or amount in (float("inf"), float("-inf")) or amount <= 0:
         raise AuctionError(422, "INVALID_AMOUNT", "That bid amount is not valid.")
+    # Quantize at the door, so what is compared, stored and later becomes a
+    # Deal's goods amount is one clean 2dp number rather than whatever
+    # float the client's own arithmetic produced. See api/core/money.py.
+    amount = money(amount)
 
     listing = (await db.execute(
         select(Listing).where(Listing.id == listing_id)
@@ -390,6 +480,18 @@ async def close_auction(db: AsyncSession, listing_id: str) -> Optional[CloseResu
         return None
 
     if meta.closed_at is not None:
+        # Already closed. One thing still needs doing on a re-run: a won
+        # auction whose Deal creation failed.
+        #
+        # The close commits before the Deal is created, deliberately - a
+        # downstream failure must never roll back a finished auction and
+        # reopen it for more bids. The cost is a window where the auction
+        # is correctly closed with a winner and a price but has no Deal,
+        # so the winner has nothing to pay. Without this branch that state
+        # was permanent: the sweep only looks for unclosed auctions, so
+        # nothing ever came back for it.
+        if await _needs_deal_retry(db, meta):
+            return await _retry_winner_deal(db, listing_id, meta)
         return _existing_close(listing_id, meta)
 
     listing = (await db.execute(
@@ -426,7 +528,7 @@ async def close_auction(db: AsyncSession, listing_id: str) -> Optional[CloseResu
     else:
         outcome = OUTCOME_WON
         winner_id = top.bidder_id
-        winning_amount = float(top.amount)
+        winning_amount = money(top.amount)
         deadline = now + timedelta(hours=settings.auction_payment_deadline_hours)
 
     claim = await db.execute(
@@ -487,6 +589,137 @@ async def close_auction(db: AsyncSession, listing_id: str) -> Optional[CloseResu
     )
 
 
+async def _needs_deal_retry(db: AsyncSession, meta: AuctionMeta) -> bool:
+    """A closed, won auction whose Deal does not exist.
+
+    Two shapes, and the second is the one that needs a database round trip:
+
+      * deal_id is NULL - creation never succeeded.
+      * deal_id is SET but no Deal has that id - a claim that was never
+        redeemed, because the process died between claiming the id and
+        writing the row. Indistinguishable from the first case in effect:
+        the winner has nothing to pay.
+
+    Detecting the orphan is what lets the claim below be a strict
+    compare-and-swap without stranding an auction forever.
+    """
+    from api.database import Deal
+
+    if not (
+        meta.closed_at is not None
+        and meta.outcome == OUTCOME_WON
+        and meta.winner_id is not None
+        and meta.winning_amount is not None
+    ):
+        return False
+    if not meta.deal_id:
+        return True
+    exists = (await db.execute(
+        select(Deal.id).where(Deal.id == meta.deal_id).limit(1)
+    )).scalar_one_or_none()
+    return exists is None
+
+
+async def _retry_winner_deal(
+    db: AsyncSession, listing_id: str, meta: AuctionMeta,
+) -> CloseResult:
+    """Re-attempt the Deal for an already-closed win.
+
+    Safe to call repeatedly. EscrowService.finalize_deal returns the
+    EXISTING deal for a (listing, buyer) pair it has already created rather
+    than making another, so a retry that follows a partial success adopts
+    that deal instead of duplicating it - which is also what makes this
+    correct if the original failure happened AFTER the deal was written but
+    before deal_id was persisted.
+
+    Nothing here touches closed_at, the winner or the amount. The auction
+    stays closed and the result stays exactly as it was decided.
+    """
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == listing_id)
+    )).scalar_one_or_none()
+    if listing is None:
+        return _existing_close(listing_id, meta)
+
+    # CLAIM the right to create this deal, with the id the deal will have.
+    #
+    # Compare-and-swap against the deal_id we just observed, so two workers
+    # retrying the same auction cannot both proceed: the second one's WHERE
+    # no longer matches and it backs off. Claiming with the REAL id rather
+    # than a sentinel is what makes a crash recoverable - a claim that is
+    # never redeemed leaves a deal_id pointing at a Deal that does not
+    # exist, which _needs_deal_retry detects on the next pass. A sentinel
+    # would be indistinguishable from a live in-flight claim.
+    observed = meta.deal_id
+    claimed_id = str(uuid.uuid4())
+    claim = await db.execute(
+        update(AuctionMeta)
+        .where(
+            AuctionMeta.listing_id == listing_id,
+            AuctionMeta.deal_id.is_(None) if observed is None
+            else AuctionMeta.deal_id == observed,
+        )
+        .values(deal_id=claimed_id)
+    )
+    await db.commit()
+    if claim.rowcount == 0:
+        # Another retry owns this one. Do not create a second deal.
+        db.expire_all()
+        current = (await db.execute(
+            select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+        )).scalar_one_or_none()
+        return _existing_close(listing_id, current or meta)
+
+    logger.info("[auction] DEAL_RETRY listing=%s winner=%s", listing_id, meta.winner_id)
+    deal_id = await _create_winner_deal(
+        db, listing, meta.winner_id, float(meta.winning_amount),
+        deal_id=claimed_id,
+    )
+    if not deal_id:
+        # Release the claim so the next pass can try again immediately,
+        # rather than waiting for the orphan check to notice.
+        await db.execute(
+            update(AuctionMeta)
+            .where(AuctionMeta.listing_id == listing_id,
+                    AuctionMeta.deal_id == claimed_id)
+            .values(deal_id=None)
+        )
+        await db.commit()
+    if deal_id:
+        # Only fill an EMPTY deal_id. If a concurrent retry got there
+        # first, theirs stands and this one is a no-op rather than an
+        # overwrite - the same compare-and-swap shape the close itself uses.
+        # Normally a no-op - the claim above already wrote this id. It
+        # matters only when finalize_deal ADOPTED a pre-existing deal for
+        # this (listing, buyer) and returned that one instead.
+        if deal_id != claimed_id:
+            await db.execute(
+                update(AuctionMeta)
+                .where(AuctionMeta.listing_id == listing_id,
+                        AuctionMeta.deal_id == claimed_id)
+                .values(deal_id=deal_id)
+            )
+            await db.commit()
+
+    # Re-read unconditionally rather than reusing the `meta` passed in.
+    # A failed attempt rolls the session back (see _create_winner_deal),
+    # which EXPIRES that instance - reading its attributes afterwards
+    # triggers a lazy refresh from inside a sync context and raises
+    # SQLAlchemy's greenlet_spawn error, turning a handled deal failure
+    # into an unhandled one. Found by the sweep test doing exactly that.
+    db.expire_all()
+    fresh = (await db.execute(
+        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+    )).scalar_one_or_none()
+    if fresh is None:
+        return _existing_close(listing_id, meta)
+    if deal_id:
+        logger.info(
+            "[auction] DEAL_RETRY_OK listing=%s deal=%s", listing_id, fresh.deal_id,
+        )
+    return _existing_close(listing_id, fresh)
+
+
 def _existing_close(listing_id: str, meta: AuctionMeta) -> CloseResult:
     return CloseResult(
         listing_id=listing_id,
@@ -501,6 +734,7 @@ def _existing_close(listing_id: str, meta: AuctionMeta) -> CloseResult:
 
 async def _create_winner_deal(
     db: AsyncSession, listing: Listing, winner_id: str, winning_amount: float,
+    deal_id: Optional[str] = None,
 ) -> Optional[str]:
     """Hand the win straight to the existing Deal + E-Confirm flow.
 
@@ -528,6 +762,7 @@ async def _create_winner_deal(
             buyer_id=winner_id,
             agreed_price=float(winning_amount),
             current_user_id=winner_id,
+            deal_id=deal_id,
         )
         return result.get("deal_id")
     except Exception as exc:
@@ -539,6 +774,12 @@ async def _create_winner_deal(
             "[auction] DEAL_CREATION_FAILED listing=%s winner=%s: %s",
             listing.id, winner_id, exc,
         )
+        # Leave the session usable for the caller's own follow-up writes -
+        # a failed finalize_deal may have left it mid-transaction.
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -551,6 +792,31 @@ async def due_for_close(db: AsyncSession, limit: int = 100) -> list[str]:
             AuctionMeta.closed_at.is_(None),
             AuctionMeta.ends_at.is_not(None),
             AuctionMeta.ends_at <= now,
+        )
+        .limit(limit)
+    )).scalars().all()
+    return list(rows)
+
+
+async def due_for_deal_retry(db: AsyncSession, limit: int = 100) -> list[str]:
+    """Closed, won auctions that still have no Deal.
+
+    Separate from due_for_close because that query filters on
+    closed_at IS NULL by definition - these auctions are closed, which is
+    exactly why nothing was coming back for them.
+    """
+    from api.database import Deal
+
+    # deal_id IS NULL, or it points at a Deal that does not exist - a claim
+    # whose process died before writing the row. See _needs_deal_retry.
+    rows = (await db.execute(
+        select(AuctionMeta.listing_id)
+        .outerjoin(Deal, Deal.id == AuctionMeta.deal_id)
+        .where(
+            AuctionMeta.closed_at.is_not(None),
+            AuctionMeta.outcome == OUTCOME_WON,
+            AuctionMeta.winner_id.is_not(None),
+            Deal.id.is_(None),
         )
         .limit(limit)
     )).scalars().all()

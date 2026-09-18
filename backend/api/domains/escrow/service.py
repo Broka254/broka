@@ -41,6 +41,7 @@ from api.core.events import (
 from api.core.audit import record_audit
 from api.core.fraud import flag_fraud, compute_trust_score
 from api.core.config import settings
+from api.core.money import add_money, money, pct_of
 from api.core.econfirm_client import EConfirmError, EConfirmConnectionError, EConfirmAPIError
 from api.core.secrets_crypto import encrypt_secret, decrypt_secret, SecretCryptoError
 from api.models.external_escrow import ExternalEscrow, EConfirmEscrowStatus
@@ -85,7 +86,11 @@ def validate_agreed_price(price) -> float:
 
 
 def _commission(price: float) -> float:
-    return round(price * settings.commission_rate, 2)
+    # Decimal-quantized rather than round(price * rate, 2): the float
+    # multiply can land a hair either side of a .005 boundary before
+    # round() ever sees it, and this number is a real obligation on a real
+    # person. See api/core/money.py for why the columns stay Float.
+    return pct_of(price, settings.commission_rate)
 
 
 class EscrowService:
@@ -104,6 +109,7 @@ class EscrowService:
         agreed_price: float,
         current_user_id: str,   # authenticated caller — see note below
         request_ip: Optional[str] = None,
+        deal_id: Optional[str] = None,
     ) -> dict:
         """
         current_user_id (renamed from this method's old `seller_id` param —
@@ -152,6 +158,12 @@ class EscrowService:
             agreed_price=agreed_price,
             commission=commission,
             status=DealStatus.agreed,
+            # deal_id is normally None and the model generates one. The
+            # auction close passes an id it has already CLAIMED on the
+            # auction row, so that the claim and the deal it refers to
+            # cannot disagree - see domains/auctions/lifecycle.py's
+            # _retry_winner_deal. Nothing else supplies it.
+            **({"id": deal_id} if deal_id else {}),
         )
 
         # Update listing status
@@ -182,7 +194,11 @@ class EscrowService:
             "buyer_id": buyer_id,
             "agreed_price": agreed_price,
             "commission": commission,
-            "amount_to_pay": agreed_price + commission,
+            # Summed through Decimal - this was the one total in the
+            # payment path that was not rounded at all, so it could surface
+            # as 20600.000000000004 in an API response and in whatever the
+            # client rendered from it.
+            "amount_to_pay": add_money(agreed_price, commission),
             "status": deal.status.value,
         }
 
@@ -212,8 +228,8 @@ class EscrowService:
             logger.error("[escrow] fee quote error deal=%s: %s", deal_id, exc)
             raise HTTPException(status_code=502, detail="Could not get a payment quote right now")
 
-        provider_fee = round(quote.fee_amount, 2)
-        total = round(deal.agreed_price + deal.commission + provider_fee, 2)
+        provider_fee = money(quote.fee_amount)
+        total = add_money(deal.agreed_price, deal.commission, provider_fee)
         return {
             "deal_id": deal_id,
             "goods_amount": deal.agreed_price,
@@ -673,7 +689,7 @@ class EscrowService:
             "merchant_commission": deal.commission,
             "provider_fee": provider_fee,
             "total_to_pay": (
-                round(deal.agreed_price + deal.commission + provider_fee, 2)
+                add_money(deal.agreed_price, deal.commission, provider_fee)
                 if provider_fee is not None else None
             ),
             "currency": escrow.currency if escrow else "KES",

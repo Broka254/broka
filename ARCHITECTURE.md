@@ -10,6 +10,11 @@ BROKA is an AI-powered peer-to-peer marketplace for East Africa, built around th
 > foreground service, iOS status, known limitations) is documented
 > separately in **CALLING.md** rather than here.
 
+> The auction lifecycle (UPCOMING → LIVE → ENDED, reserve semantics,
+> compare-and-swap bidding, winner → Deal, terms locking, the sweeps, and
+> how monetary values are quantized) is documented separately in
+> **AUCTIONS.md**.
+
 ---
 
 ## Project Structure

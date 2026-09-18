@@ -7,6 +7,7 @@ from typing import Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.money import money_decimal
 from api.models.escrow_ledger import LedgerEntry, LedgerAccount, LedgerDirection
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,13 @@ class EscrowLedger:
     """
 
     async def _entry(self, db, deal_id, account, direction, amount, description, ref_id=None):
-        amt = Decimal(str(amount))
+        # Quantized to the column's own scale (Numeric(18,2)) rather than
+        # left for the database to round: SQLAlchemy's Numeric degrades to
+        # float on SQLite, so an over-precise input would be stored as one
+        # number in CI and another in production. money_decimal() also
+        # routes floats through repr(), so 0.1+0.2 lands as 0.30 and not
+        # 0.30000000000000004.
+        amt = money_decimal(amount)
         if amt < 0:
             # A negative amount silently flips a debit into a credit and
             # corrupts every balance derived from it. Reversals here are

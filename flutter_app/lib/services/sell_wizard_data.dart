@@ -67,6 +67,20 @@ class SellWizardData {
   // image above), so it survives a draft restore like every other field.
   String? storeId;
 
+  // ── Auction terms (auction listings only) ─────────────────────────────
+  // These configure the backend's auction lifecycle (auction_meta:
+  // starting_price, min_bid_increment, starts_at, ends_at). The seller
+  // could previously set only a reserve, so every auction was created with
+  // a default window and a default increment nobody chose.
+  //
+  // Kept as strings/nullable DateTimes alongside the other draft fields so
+  // they persist and restore exactly like everything else. The backend
+  // re-validates all of it - see lifecycle.validate_terms - because the
+  // client is not the authority on any of these rules.
+  String minBidIncrement = '';
+  DateTime? auctionStartsAt;
+  DateTime? auctionEndsAt;
+
   bool get hasContent =>
       name.isNotEmpty || price.isNotEmpty || verifiedPhotos.isNotEmpty;
 
@@ -86,6 +100,9 @@ class SellWizardData {
     'type': type,
     'verifiedPhotoPaths': verifiedPhotos.map((f) => f.path).toList(),
     'storeId': storeId,
+    'minBidIncrement': minBidIncrement,
+    'auctionStartsAt': auctionStartsAt?.toIso8601String(),
+    'auctionEndsAt': auctionEndsAt?.toIso8601String(),
   };
 
   /// Snapshots the current step's data to on-device storage. Called right
@@ -120,8 +137,14 @@ class SellWizardData {
       ..attributes  = (draft['attributes'] as Map?)?.cast<String, String>() ?? {}
       ..type        = draft['type']        as String? ?? 'direct'
       ..storeId     = draft['storeId']     as String?
+      ..minBidIncrement = draft['minBidIncrement'] as String? ?? ''
+      ..auctionStartsAt = _parseDraftDate(draft['auctionStartsAt'])
+      ..auctionEndsAt   = _parseDraftDate(draft['auctionEndsAt'])
       ..verifiedPhotos.addAll(restoredPhotos);
 
     return data.hasContent ? data : null;
   }
+
+  static DateTime? _parseDraftDate(dynamic raw) =>
+      raw is String ? DateTime.tryParse(raw) : null;
 }

@@ -105,6 +105,16 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
         'verified_photos': photoBase64List.join(','),
         if (data.type == 'auction' && data.reserve.isNotEmpty)
           'reserve_price': double.parse(data.reserve),
+        // Auction terms. Omitted entirely for a direct listing; for an
+        // auction these are what configure the backend lifecycle, and
+        // without them the backend had to invent a window and an increment
+        // on the seller's behalf.
+        if (data.type == 'auction' && data.minBidIncrement.isNotEmpty)
+          'min_bid_increment': double.parse(data.minBidIncrement),
+        if (data.type == 'auction' && data.auctionStartsAt != null)
+          'auction_starts_at': data.auctionStartsAt!.toUtc().toIso8601String(),
+        if (data.type == 'auction' && data.auctionEndsAt != null)
+          'auction_ends_at': data.auctionEndsAt!.toUtc().toIso8601String(),
         // AI Showcase/Cover Image (2026-08-29) - only sent if the wizard's
         // Showcase step actually produced one; both null just means the
         // seller skipped it, which the backend already treats as valid

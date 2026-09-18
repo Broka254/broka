@@ -1609,9 +1609,14 @@ async def task_close_due_auctions(ctx: dict) -> None:
     from api.domains.auctions import lifecycle
 
     async with AsyncSessionLocal() as db:
+        # Two independent passes, and the second must NOT be gated on the
+        # first finding anything. The retry pass used to sit after an early
+        # `if not due: return`, which meant a stranded deal was only ever
+        # retried on a tick that ALSO had an auction closing - on a quiet
+        # marketplace, possibly never. Caught by the sweep-recovery test,
+        # which is exactly that shape: close on one tick, recover on the
+        # next.
         due = await lifecycle.due_for_close(db)
-        if not due:
-            return
         closed = 0
         for listing_id in due:
             try:
@@ -1646,6 +1651,47 @@ async def task_close_due_auctions(ctx: dict) -> None:
                 logger.error("[sweep] auction close failed listing=%s: %s", listing_id, exc)
         if closed:
             logger.info("[sweep] auctions closed=%d", closed)
+
+        # Second pass: auctions that closed with a winner but whose Deal
+        # creation failed. close_auction commits the close before creating
+        # the Deal (so a downstream failure can never reopen a finished
+        # auction), which leaves this recoverable gap - a winner with
+        # nothing to pay. These are closed, so the query above cannot see
+        # them; they need their own.
+        retried = 0
+        for listing_id in await lifecycle.due_for_deal_retry(db):
+            try:
+                result = await lifecycle.close_auction(db, listing_id)
+                if result is None or not result.deal_id:
+                    continue
+                retried += 1
+                listing = (await db.execute(
+                    select(Listing).where(Listing.id == listing_id)
+                )).scalar_one_or_none()
+                if listing is None:
+                    continue
+                # The winner was never told, because there was nothing to
+                # pay. Now there is.
+                await auction_events.emit_close_outcome(
+                    db,
+                    listing_id=listing_id,
+                    listing_name=listing.name,
+                    seller_id=listing.seller_id,
+                    outcome=result.outcome,
+                    winner_id=result.winner_id,
+                    winning_amount=result.winning_amount,
+                    deal_id=result.deal_id,
+                    payment_deadline_iso=(
+                        result.payment_deadline.isoformat()
+                        if result.payment_deadline else None
+                    ),
+                )
+            except Exception as exc:
+                logger.error(
+                    "[sweep] auction deal retry failed listing=%s: %s", listing_id, exc,
+                )
+        if retried:
+            logger.info("[sweep] auction deals recovered=%d", retried)
 
 
 async def task_notify_auctions_ending_soon(ctx: dict) -> None:
