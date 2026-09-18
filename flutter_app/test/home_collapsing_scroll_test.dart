@@ -15,8 +15,6 @@
 // real ProductCards built from real BrokaListing.fromJson parsing, and the
 // prices they show are the ones a user would see.
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -30,10 +28,10 @@ import 'package:broka/widgets/zeno_avatar.dart';
 import 'package:broka/features/listings/domain/models/listing.dart';
 import 'package:broka/utils/price_format.dart';
 
+import 'support/fake_api.dart';
+
 void main() {
-  setUpAll(() {
-    HttpOverrides.global = _FakeHttpOverrides();
-  });
+  setUpAll(installFakeApi);
 
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -62,7 +60,7 @@ void main() {
     });
 
     test('BrokaListing.priceFormatted goes through the same formatter', () {
-      final listing = BrokaListing.fromJson(_listingJson(0, price: 15000));
+      final listing = BrokaListing.fromJson(fakeListingJson(0, price: 15000));
       expect(listing.priceFormatted, 'KES 15,000');
     });
 
@@ -86,7 +84,7 @@ void main() {
         fetchPage: (page) async {
           pagesFetched.add(page);
           return List.generate(20, (i) => BrokaListing.fromJson(
-              _listingJson(page * 20 + i, price: 15000)));
+              fakeListingJson(page * 20 + i, price: 15000)));
         },
       ));
       await _settle(tester);
@@ -109,7 +107,7 @@ void main() {
     testWidgets('the parent owns the only vertical scrollable', (tester) async {
       await tester.pumpWidget(_slidingHost(
         fetchPage: (page) async => List.generate(
-            20, (i) => BrokaListing.fromJson(_listingJson(page * 20 + i))),
+            20, (i) => BrokaListing.fromJson(fakeListingJson(page * 20 + i))),
       ));
       await _settle(tester);
       expect(_verticalScrollableCount(tester), 1);
@@ -125,7 +123,7 @@ void main() {
         fetchPage: (page) async {
           pagesFetched.add(page);
           return List.generate(20, (i) => BrokaListing.fromJson(
-              _listingJson(page * 20 + i)));
+              fakeListingJson(page * 20 + i)));
         },
       ));
       await _settle(tester);
@@ -156,7 +154,7 @@ void main() {
       await tester.pumpWidget(_slidingHost(
         fetchPage: (_) async {
           if (shouldFail) throw StateError('offline');
-          return [BrokaListing.fromJson(_listingJson(0))];
+          return [BrokaListing.fromJson(fakeListingJson(0))];
         },
       ));
       await _settle(tester);
@@ -181,7 +179,7 @@ void main() {
       Future<List<dynamic>> fetch(int page) async {
         pagesFetched.add(page);
         return List.generate(20, (i) => BrokaListing.fromJson(
-            _listingJson(page * 20 + i)));
+            fakeListingJson(page * 20 + i)));
       }
 
       Widget host(String key) => MaterialApp(
@@ -223,7 +221,7 @@ void main() {
           pagesFetched.add(page);
           if (page == 0 && !gate.isCompleted) await gate.future;
           return List.generate(20, (i) => BrokaListing.fromJson(
-              _listingJson(page * 20 + i)));
+              fakeListingJson(page * 20 + i)));
         },
       ));
       await tester.pump();
@@ -243,7 +241,7 @@ void main() {
         home: Scaffold(
           body: ProductGridView(
             fetchPage: (page) async => List.generate(
-                20, (i) => BrokaListing.fromJson(_listingJson(page * 20 + i))),
+                20, (i) => BrokaListing.fromJson(fakeListingJson(page * 20 + i))),
           ),
         ),
       ));
@@ -266,7 +264,7 @@ void main() {
       expect(find.text('BROKA'), findsOneWidget);
       expect(find.textContaining('Good '), findsOneWidget);          // greeting
       expect(find.textContaining('Search for products'), findsOneWidget);
-      expect(find.text('Agriculture'), findsOneWidget);              // rail
+      expect(find.text(_firstCategory), findsOneWidget);              // rail
       expect(find.text('Fresh on Broka'), findsOneWidget);
       expect(find.byType(ProductCard), findsWidgets);
       // Step 19 + brief §11: the nav is outside the scroll view.
@@ -281,7 +279,7 @@ void main() {
 
       final headerAtRest = _headerHeight(tester);
       final navAtRest = tester.getRect(find.text('Home').last);
-      final railAtRest = tester.getRect(find.text('Agriculture'));
+      final railAtRest = tester.getRect(find.text(_firstCategory));
       final firstCardAtRest = tester.getRect(find.byType(ProductCard).first);
 
       // Steps 7-9: a SLOW swipe up. Deliberately smaller than the header's
@@ -291,7 +289,7 @@ void main() {
 
       expect(_headerHeight(tester), lessThan(headerAtRest),
           reason: 'the header must contract as the user scrolls');
-      expect(tester.getRect(find.text('Agriculture')).top,
+      expect(tester.getRect(find.text(_firstCategory)).top,
           lessThan(railAtRest.top),
           reason: 'the discovery rail must travel upward with the content');
       expect(tester.getRect(find.byType(ProductCard).first).top,
@@ -302,7 +300,7 @@ void main() {
       // out at the compact search bar, and no tall empty band is left behind.
       await _scrollHome(tester, -1400);
 
-      expect(find.text('Agriculture'), findsNothing,
+      expect(find.text(_firstCategory), findsNothing,
           reason: 'the category rail must scroll completely off-screen');
       expect(find.text('Fresh on Broka'), findsNothing,
           reason: 'the feed heading scrolls away with everything else');
@@ -328,7 +326,7 @@ void main() {
       await _scrollHome(tester, 3000);
       expect(_headerHeight(tester), closeTo(headerAtRest, 0.5));
       expect(find.text('BROKA'), findsOneWidget);
-      expect(find.text('Agriculture'), findsOneWidget);
+      expect(find.text(_firstCategory), findsOneWidget);
     });
 
     testWidgets('step 30: every price on screen is a full KES amount',
@@ -455,7 +453,7 @@ void main() {
       expect(tester.getTopLeft(find.byType(ProductCard).first).dx, 16);
       // The rail's first circle: 12px of ListView padding + each pill's own
       // 4px margin.
-      expect(tester.getTopLeft(find.text('Agriculture')).dx, 16);
+      expect(tester.getTopLeft(find.text(_firstCategory)).dx, 16);
 
       // The search field and the Zeno CTA are boxes rather than bare text, so
       // measure the box, not its contents - their own padding and 1px border
@@ -522,6 +520,12 @@ void main() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// The first category the fake backend returns, and so the first pill in the
+/// rail. Width-sensitive assertions use this rather than a name further along
+/// the list, which a narrow viewport never builds - the rail is a lazy
+/// horizontal ListView.
+final _firstCategory = fakeTopLevelCategories.first;
 
 /// Scrolls Home's one scroll view by [dy] (negative scrolls down the feed)
 /// and lets the frame settle. Uses the ScrollPosition directly rather than a
@@ -594,181 +598,3 @@ int _verticalScrollableCount(WidgetTester tester) => tester
     .where((s) => s.axisDirection == AxisDirection.down || s.axisDirection == AxisDirection.up)
     .length;
 
-Map<String, dynamic> _listingJson(int i, {double price = 1300}) => {
-      'id': 'listing-$i',
-      'seller_id': 'seller-$i',
-      'name': 'Test item $i',
-      'category': 'Electronics',
-      'price': price,
-      'lat': -1.28,
-      'lng': 36.8,
-      'location_name': 'Nairobi',
-      'created_at': '2026-09-18T10:00:00',
-      'seller_name': 'Xavier Bravin',
-      'seller_verified': true,
-      'seller_completed_deals': 3,
-      'seller_rating': 4.8,
-    };
-
-// ── Fake HttpClient ──────────────────────────────────────────────────────────
-// Only the slice http's IOClient actually touches: openUrl, a request whose
-// close() yields a response, and a response that is a Stream<List<int>>.
-// Everything else routes to noSuchMethod and would throw loudly if a code path
-// under test ever needed it.
-
-class _FakeHttpOverrides extends HttpOverrides {
-  @override
-  HttpClient createHttpClient(SecurityContext? context) => _FakeHttpClient();
-}
-
-List<int> _bodyFor(Uri uri) {
-  final path = uri.path;
-  if (path.startsWith('/categories')) {
-    return utf8.encode(jsonEncode([
-      for (final name in const [
-        'Agriculture', 'Beauty & Personal Care', 'Books & Education',
-        'Business & Industrial', 'Construction', 'Electronics',
-      ])
-        {'id': name, 'name': name, 'icon': null, 'parent_id': null},
-    ]));
-  }
-  if (path.startsWith('/listings')) {
-    final offset = int.tryParse(uri.queryParameters['offset'] ?? '0') ?? 0;
-    return utf8.encode(jsonEncode([
-      for (int i = 0; i < 20; i++) _listingJson(offset + i, price: 15000),
-    ]));
-  }
-  // Buy-agent "no active request" and anything else: a JSON null.
-  return utf8.encode('null');
-}
-
-class _FakeHttpClient implements HttpClient {
-  @override
-  bool autoUncompress = true;
-  @override
-  Duration idleTimeout = const Duration(seconds: 15);
-  @override
-  Duration? connectionTimeout;
-  @override
-  int? maxConnectionsPerHost;
-  @override
-  String? userAgent;
-
-  @override
-  Future<HttpClientRequest> openUrl(String method, Uri url) async =>
-      _FakeHttpClientRequest(method, url);
-
-  @override
-  void close({bool force = false}) {}
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _FakeHttpClientRequest implements HttpClientRequest {
-  _FakeHttpClientRequest(this.method, this.uri);
-
-  @override
-  final String method;
-  @override
-  final Uri uri;
-
-  @override
-  final HttpHeaders headers = _FakeHttpHeaders();
-  @override
-  bool followRedirects = true;
-  @override
-  int maxRedirects = 5;
-  @override
-  int contentLength = -1;
-  @override
-  bool persistentConnection = true;
-  @override
-  bool bufferOutput = true;
-  @override
-  Encoding encoding = utf8;
-
-  @override
-  void add(List<int> data) {}
-
-  @override
-  Future<void> addStream(Stream<List<int>> stream) async {
-    await stream.drain<void>();
-  }
-
-  @override
-  Future<HttpClientResponse> close() async => _FakeHttpClientResponse(_bodyFor(uri));
-
-  @override
-  Future<HttpClientResponse> get done => close();
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _FakeHttpClientResponse extends Stream<List<int>>
-    implements HttpClientResponse {
-  _FakeHttpClientResponse(this.body);
-
-  final List<int> body;
-
-  @override
-  int get statusCode => 200;
-  @override
-  String get reasonPhrase => 'OK';
-  @override
-  int get contentLength => body.length;
-  @override
-  HttpHeaders get headers => _FakeHttpHeaders();
-  @override
-  bool get isRedirect => false;
-  @override
-  bool get persistentConnection => false;
-  @override
-  List<Cookie> get cookies => const [];
-  @override
-  List<RedirectInfo> get redirects => const [];
-  @override
-  HttpClientResponseCompressionState get compressionState =>
-      HttpClientResponseCompressionState.notCompressed;
-
-  @override
-  StreamSubscription<List<int>> listen(
-    void Function(List<int> event)? onData, {
-    Function? onError,
-    void Function()? onDone,
-    bool? cancelOnError,
-  }) =>
-      Stream<List<int>>.fromIterable([body]).listen(onData,
-          onError: onError, onDone: onDone, cancelOnError: cancelOnError);
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _FakeHttpHeaders implements HttpHeaders {
-  final Map<String, List<String>> _values = {};
-
-  @override
-  List<String>? operator [](String name) => _values[name.toLowerCase()];
-
-  @override
-  void set(String name, Object value, {bool preserveHeaderCase = false}) {
-    _values[name.toLowerCase()] = ['$value'];
-  }
-
-  @override
-  void add(String name, Object value, {bool preserveHeaderCase = false}) {
-    _values.putIfAbsent(name.toLowerCase(), () => []).add('$value');
-  }
-
-  @override
-  void forEach(void Function(String name, List<String> values) action) =>
-      _values.forEach(action);
-
-  @override
-  ContentType? get contentType => ContentType.json;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}

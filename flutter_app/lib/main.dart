@@ -248,53 +248,20 @@ class BrokaColors {
   // reads as "BROKA, tuned for this category" and not a different app.
   // amber/orange are the only two genuinely new hex values in this file;
   // every other zone reuses a token already defined above.
-  static const _amber  = Color(0xFFFBBF24);
-  static const _orange = Color(0xFFFF6B4A);
+  // Public (was _amber/_orange) so features/categories/domain/category_visual.dart
+  // can hold the per-category gradient table. These two exist only for
+  // category personality colours, hence the zone* naming.
+  static const zoneAmber  = Color(0xFFFBBF24);
+  static const zoneOrange = Color(0xFFFF6B4A);
 
-  static const Map<String, List<Color>> zoneGradients = {
-    'electronics':         [neonCyan, neonBlue],
-    'phones':               [neonCyan, neonBlue],
-    'computers':            [neonCyan, neonBlue],
-    'gaming':                [neonPurple, neonPink],
-    'automobiles':          [_orange, neonPurple],
-    'farm equipment':      [neonGreen, _amber],
-    'construction':        [_orange, warning],
-    'furniture':             [_amber, gold],
-    'home appliances':    [neonGreen, neonCyan],
-    'clothing':               [neonPink, gold],
-    'beauty':                 [neonPink, _amber],
-    'sports':                 [neonGreen, neonBlue],
-    'books':                   [gold, neonBlue],
-    'musical instruments': [neonPink, neonPurple],
-    // Canonical taxonomy (mockup-actualization spec §2, Phase 1) - added
-    // alongside the entries above rather than replacing them, since a
-    // couple of names are shared verbatim (electronics, gaming,
-    // construction already match and don't need a second entry).
-    'vehicles':                  [_orange, neonPurple],
-    'property':                  [neonBlue, neonGreen],
-    'home & furniture':      [_amber, gold],
-    'fashion':                    [neonPink, gold],
-    'agriculture':              [neonGreen, _amber],
-    'beauty & personal care': [neonPink, _amber],
-    'sports & fitness':      [neonGreen, neonBlue],
-    'books & education':    [gold, neonBlue],
-    'music & instruments':  [neonPink, neonPurple],
-    'business & industrial': [neonBlue, warning],
-    'pets & animals':          [neonGreen, neonPink],
-    'services':                  [neonCyan, gold],
-    // 'other' has no entry on purpose - it's a real catch-all, so it
-    // should read as plain BROKA brand identity via the fallback below,
-    // not a fake "theme".
-  };
+  // zoneGradients / zoneGradientFor moved to
+  // features/categories/domain/category_visual.dart (category-alignment pass,
+  // 2026-09-18). They were a second, parallel category table keyed the same
+  // way as home_screen's emoji map and drifting from it - "furniture" had a
+  // gradient but no emoji, "other" had an emoji but no gradient. One
+  // registry now owns emoji, icon and gradient together; call
+  // CategoryVisuals.gradientFor(name) (or .resolve(name).gradient) instead.
 
-  /// Case-insensitive lookup with a graceful fallback to the brand gradient
-  /// for any category not in the map above (new categories added later,
-  /// or the migration script's canonical list changing) - so a Zone screen
-  /// is never left with no gradient to render at all.
-  static List<Color> zoneGradientFor(String? categoryName) {
-    if (categoryName == null) return brandGradient;
-    return zoneGradients[categoryName.toLowerCase().trim()] ?? brandGradient;
-  }
 }
 
 // ─── Shared UI Components ──────────────────────────────────────────────────
@@ -381,8 +348,15 @@ class ZoneGlowText extends StatelessWidget {
   final List<Color> gradient;
   final double fontSize;
   final TextAlign textAlign;
+  /// Added for the category-alignment pass (2026-09-18): a Zone title like
+  /// "BEAUTY & PERSONAL CARE ZONE" has to be allowed to wrap, and to stop
+  /// wrapping once the header collapses. Null keeps the previous
+  /// unconstrained behaviour for any existing caller.
+  final int? maxLines;
+  final double letterSpacing;
   const ZoneGlowText(this.text, {
     super.key, required this.gradient, this.fontSize = 26, this.textAlign = TextAlign.start,
+    this.maxLines, this.letterSpacing = 1.4,
   });
 
   @override
@@ -396,11 +370,13 @@ class ZoneGlowText extends StatelessWidget {
     child: Text(
       text.toUpperCase(),
       textAlign: textAlign,
+      maxLines: maxLines,
+      overflow: maxLines == null ? null : TextOverflow.ellipsis,
       style: TextStyle(
         fontSize: fontSize,
         fontWeight: FontWeight.w900,
-        letterSpacing: 1.4,
-        height: 1.1,
+        letterSpacing: letterSpacing,
+        height: 1.12,
         color: Colors.white,
         shadows: [
           Shadow(color: gradient.first, blurRadius: 18),

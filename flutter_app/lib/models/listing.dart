@@ -1,5 +1,6 @@
 // BROKA - Listing Model
 import '../utils/backend_time.dart';
+import '../features/categories/domain/category_visual.dart';
 
 class Listing {
   final String  id;
@@ -114,15 +115,11 @@ class Listing {
         storeSlug:            j['store_slug']  as String?,
       );
 
-  String get emoji {
-    switch (category) {
-      case 'Vehicles':    return '🚗';
-      case 'Property':    return '🏠';
-      case 'Electronics': return '📱';
-      case 'Livestock':   return '🐄';
-      default:            return '📦';
-    }
-  }
+  // Category-alignment pass (2026-09-18): this four-case switch only
+  // knew Vehicles/Property/Electronics/Livestock, so eleven of the
+  // backend's sixteen top-level categories rendered as a generic box.
+  // features/categories/domain/category_visual.dart is the one table now.
+  String get emoji => CategoryVisuals.emojiFor(category);
 
   String get formattedPrice => 'KES ${price.toStringAsFixed(0).replaceAllMapped(
         RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},',

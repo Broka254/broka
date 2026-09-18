@@ -1,0 +1,243 @@
+// lib/features/categories/domain/category_visual.dart
+//
+// ONE visual definition per canonical category, for the whole app.
+//
+// Before this file there were six independent category-visual tables:
+// home_screen's _categoryEmojiMap (26 entries), BrokaColors.zoneGradients
+// (27 entries), and four near-identical four-case switches in
+// product_card.dart, models/listing.dart, boost_screen.dart and
+// inbox_screen.dart. The four switches only knew Vehicles, Property,
+// Electronics and Livestock, so eleven of the backend's sixteen top-level
+// categories rendered as a generic 📦 everywhere except Home - the exact
+// drift the category brief describes. Adding a seventeenth category to
+// backend/api/domains/categories/seed.py meant finding and editing six
+// places, and nothing failed if you missed one.
+//
+// Resolution is by NAME, never by list position. A category's visual is
+// looked up on `name.toLowerCase().trim()`, so the UI adapts to whatever
+// the backend returns from /categories rather than assuming a count or an
+// order. An unknown name falls back to the "Other" visual instead of a
+// broken/blank one, which also means a category added to the backend before
+// this table is updated still renders sensibly.
+//
+// The canonical taxonomy below is a mirror of CANONICAL_CATEGORIES in
+// backend/api/domains/categories/seed.py, and the backend is the source of
+// truth. test/category_visual_test.dart parses that Python file directly and
+// fails if the two ever diverge, so this mirror cannot rot silently.
+//
+// [assetPath] is deliberately null on every entry today: flutter_app/assets/
+// contains only the BROKA and Zeno marks, and referencing sixteen category
+// PNGs that do not exist would be sixteen broken asset references. When real
+// artwork arrives, filling in assetPath on an entry is the only change
+// needed - every call site already asks the resolver, so nothing else moves.
+import 'package:flutter/material.dart';
+
+import '../../../main.dart' show BrokaColors;
+
+/// Everything the UI needs to render one category, resolved by name.
+class CategoryVisual {
+  /// Canonical display name, spelled exactly as the backend seeds it.
+  final String categoryName;
+
+  /// The primary visual today. Emoji rather than a bundled image because the
+  /// app ships no category artwork - see the file header.
+  final String emoji;
+
+  /// Vector equivalent, for surfaces where an emoji reads as informal (a
+  /// dense list row, a form field, a monochrome chip).
+  final IconData icon;
+
+  /// The category's personality colours. Used for the Zone's radial wash,
+  /// the Home rail's circle ring, and selected subcategory chips - always as
+  /// an accent over BROKA's own near-black/violet identity, never as a
+  /// wholesale re-theme of the screen.
+  final List<Color> gradient;
+
+  /// Real artwork, once it exists. Null everywhere today.
+  final String? assetPath;
+
+  const CategoryVisual({
+    required this.categoryName,
+    required this.emoji,
+    required this.icon,
+    required this.gradient,
+    this.assetPath,
+  });
+
+  /// For screen readers and tooltips.
+  String get semanticLabel => categoryName;
+}
+
+/// Name-keyed registry for every category visual in the app.
+///
+/// Call [resolve] from anywhere that needs a category's emoji, icon or
+/// gradient. Do not add a second table.
+class CategoryVisuals {
+  const CategoryVisuals._();
+
+  /// The sixteen top-level categories, in the backend's own seed order.
+  static const List<CategoryVisual> canonical = <CategoryVisual>[
+    CategoryVisual(
+      categoryName: 'Vehicles',
+      emoji: '🚗',
+      icon: Icons.directions_car_rounded,
+      gradient: [BrokaColors.zoneOrange, BrokaColors.neonPurple],
+    ),
+    CategoryVisual(
+      categoryName: 'Property',
+      emoji: '🏠',
+      icon: Icons.home_work_rounded,
+      gradient: [BrokaColors.neonBlue, BrokaColors.neonGreen],
+    ),
+    CategoryVisual(
+      categoryName: 'Electronics',
+      emoji: '📱',
+      icon: Icons.smartphone_rounded,
+      gradient: [BrokaColors.neonCyan, BrokaColors.neonBlue],
+    ),
+    // Top-level Gaming is NOT the same thing as Electronics -> Gaming, and
+    // the backend defines both on purpose. Nothing here collapses them: this
+    // table only ever describes top-level names, and a subcategory is
+    // identified by its own id and parent_id everywhere it is used.
+    CategoryVisual(
+      categoryName: 'Gaming',
+      emoji: '🎮',
+      icon: Icons.sports_esports_rounded,
+      gradient: [BrokaColors.neonPurple, BrokaColors.neonPink],
+    ),
+    CategoryVisual(
+      categoryName: 'Home & Furniture',
+      emoji: '🛋️',
+      icon: Icons.chair_rounded,
+      gradient: [BrokaColors.zoneAmber, BrokaColors.gold],
+    ),
+    CategoryVisual(
+      categoryName: 'Fashion',
+      emoji: '👗',
+      icon: Icons.checkroom_rounded,
+      gradient: [BrokaColors.neonPink, BrokaColors.gold],
+    ),
+    CategoryVisual(
+      categoryName: 'Agriculture',
+      emoji: '🌾',
+      icon: Icons.agriculture_rounded,
+      gradient: [BrokaColors.neonGreen, BrokaColors.zoneAmber],
+    ),
+    CategoryVisual(
+      categoryName: 'Construction',
+      emoji: '🏗️',
+      icon: Icons.construction_rounded,
+      gradient: [BrokaColors.zoneOrange, BrokaColors.warning],
+    ),
+    CategoryVisual(
+      categoryName: 'Beauty & Personal Care',
+      emoji: '💄',
+      icon: Icons.spa_rounded,
+      gradient: [BrokaColors.neonPink, BrokaColors.zoneAmber],
+    ),
+    CategoryVisual(
+      categoryName: 'Sports & Fitness',
+      emoji: '⚽',
+      icon: Icons.fitness_center_rounded,
+      gradient: [BrokaColors.neonGreen, BrokaColors.neonBlue],
+    ),
+    CategoryVisual(
+      categoryName: 'Books & Education',
+      emoji: '📚',
+      icon: Icons.menu_book_rounded,
+      gradient: [BrokaColors.gold, BrokaColors.neonBlue],
+    ),
+    CategoryVisual(
+      categoryName: 'Music & Instruments',
+      emoji: '🎸',
+      icon: Icons.music_note_rounded,
+      gradient: [BrokaColors.neonPink, BrokaColors.neonPurple],
+    ),
+    CategoryVisual(
+      categoryName: 'Business & Industrial',
+      emoji: '🏭',
+      icon: Icons.factory_rounded,
+      gradient: [BrokaColors.neonBlue, BrokaColors.warning],
+    ),
+    CategoryVisual(
+      categoryName: 'Pets & Animals',
+      emoji: '🐾',
+      icon: Icons.pets_rounded,
+      gradient: [BrokaColors.neonGreen, BrokaColors.neonPink],
+    ),
+    CategoryVisual(
+      categoryName: 'Services',
+      emoji: '🛠️',
+      icon: Icons.handyman_rounded,
+      gradient: [BrokaColors.neonCyan, BrokaColors.gold],
+    ),
+    // "Other" carries plain BROKA brand identity rather than a colour of its
+    // own - it is a real catch-all, and inventing a theme for it would make
+    // it look like a category with a personality when it is the absence of
+    // one. It is also what an unrecognised name resolves to.
+    CategoryVisual(
+      categoryName: 'Other',
+      emoji: '🛍️',
+      icon: Icons.shopping_bag_rounded,
+      gradient: BrokaColors.brandGradient,
+    ),
+  ];
+
+  /// Free-text category values that predate the canonical taxonomy.
+  ///
+  /// Listings created before the taxonomy migration still carry strings like
+  /// "Automobiles" or "Livestock" in their `category` column, and
+  /// lib/models/listing.dart hands those straight to this resolver. Mapping
+  /// them onto their canonical successor keeps an old listing showing a real
+  /// icon instead of the catch-all. migrate_categories_from_freetext.py is
+  /// what eventually retires these; until every deployment has run it, they
+  /// are live data.
+  static const Map<String, String> _aliases = <String, String>{
+    'automobiles': 'Vehicles',
+    'phones': 'Electronics',
+    'computers': 'Electronics',
+    'laptops': 'Electronics',
+    'home appliances': 'Home & Furniture',
+    'furniture': 'Home & Furniture',
+    'clothing': 'Fashion',
+    'livestock': 'Agriculture',
+    'farm equipment': 'Agriculture',
+    'beauty': 'Beauty & Personal Care',
+    'sports': 'Sports & Fitness',
+    'books': 'Books & Education',
+    'musical instruments': 'Music & Instruments',
+    'music': 'Music & Instruments',
+  };
+
+  static final Map<String, CategoryVisual> _byKey = <String, CategoryVisual>{
+    for (final visual in canonical) _key(visual.categoryName): visual,
+    for (final entry in _aliases.entries)
+      _key(entry.key): canonical.firstWhere(
+          (v) => v.categoryName == entry.value),
+  };
+
+  static String _key(String name) => name.toLowerCase().trim();
+
+  /// What an unknown or missing category name renders as.
+  static CategoryVisual get fallback => _byKey['other']!;
+
+  /// The visual for [categoryName], matched case- and whitespace-insensitively.
+  ///
+  /// Never returns null and never throws: a name this table has not heard of
+  /// - a new backend category, a typo, a legacy free-text value - resolves to
+  /// [fallback] so the UI degrades to "generic marketplace item" instead of
+  /// an empty box.
+  static CategoryVisual resolve(String? categoryName) {
+    if (categoryName == null) return fallback;
+    return _byKey[_key(categoryName)] ?? fallback;
+  }
+
+  /// Convenience accessors, so a call site that wants one field does not have
+  /// to spell out the resolve.
+  static String emojiFor(String? categoryName) => resolve(categoryName).emoji;
+
+  static IconData iconFor(String? categoryName) => resolve(categoryName).icon;
+
+  static List<Color> gradientFor(String? categoryName) =>
+      resolve(categoryName).gradient;
+}

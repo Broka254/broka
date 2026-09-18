@@ -29,6 +29,7 @@ import '../main.dart';
 import '../features/listings/domain/models/listing.dart' show BrokaListing;
 import '../utils/backend_time.dart';
 import '../utils/price_format.dart';
+import '../features/categories/domain/category_visual.dart';
 
 class ProductCard extends StatelessWidget {
   final dynamic item; // Listing or BrokaListing
@@ -52,13 +53,10 @@ class ProductCard extends StatelessWidget {
     this.onViewStore,
   });
 
-  static const _categoryEmoji = <String, String>{
-    'Vehicles': '🚗',
-    'Automobiles': '🚗',
-    'Property': '🏠',
-    'Electronics': '📱',
-    'Livestock': '🐄',
-  };
+  // Category-alignment pass (2026-09-18): this five-entry map was the
+  // narrowest of the app's category tables - every listing outside
+  // Vehicles/Property/Electronics/Livestock showed 📦 on its card.
+  // features/categories/domain/category_visual.dart resolves all sixteen.
 
   // Home collapsing-scroll pass (2026-09-18, brief §5): the K/M ladder that
   // used to live here is gone - see utils/price_format.dart, which is now
@@ -104,12 +102,14 @@ class ProductCard extends StatelessWidget {
 
   String get _emoji {
     if (item is BrokaListing) {
-      return _categoryEmoji[(item as BrokaListing).category] ?? '📦';
+      return CategoryVisuals.emojiFor((item as BrokaListing).category);
     }
     try {
-      return (item.emoji as String?) ?? '📦';
+      // The older Listing model has its own emoji getter, which now goes
+      // through the same resolver.
+      return (item.emoji as String?) ?? CategoryVisuals.fallback.emoji;
     } catch (_) {
-      return '📦';
+      return CategoryVisuals.fallback.emoji;
     }
   }
 

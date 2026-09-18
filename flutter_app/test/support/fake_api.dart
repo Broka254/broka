@@ -1,0 +1,251 @@
+// Shared fake HttpClient for widget tests.
+//
+// Extracted from home_collapsing_scroll_test.dart during the category
+// alignment pass, so the Home tests and the Category Zone tests drive the same
+// fake backend instead of keeping two copies of ~150 lines of HttpClient
+// boilerplate that could disagree about response shapes.
+//
+// Faking the transport rather than the repositories is deliberate: the
+// repositories are const globals, swapping them would mean changing production
+// code to suit a test, and going through the real ApiClient means the widgets
+// under test are built from real BrokaListing.fromJson / Category.fromJson
+// parsing - the JSON shapes here have to match what the backend actually
+// returns or the tests fail, which is the point.
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+/// Routes a request to a JSON body. Return null to fall through to the
+/// defaults in [defaultRoute].
+typedef FakeRoute = Object? Function(Uri uri);
+
+/// The handler consulted at REQUEST time, not at client-construction time.
+///
+/// It has to be mutable and read late: ApiClient is a lazily-initialised
+/// global that builds its HttpClient once, on first use, so a route captured
+/// when the client was created could never be changed by a later test. This
+/// way a single test can swap in an empty-results or failing backend with
+/// [setFakeRoute] and the very next request picks it up.
+FakeRoute? _activeRoute;
+
+/// Installs the fake for the whole test file. Call from setUpAll.
+void installFakeApi({FakeRoute? route}) {
+  _activeRoute = route;
+  HttpOverrides.global = _FakeHttpOverrides();
+}
+
+/// Swaps the handler for one test. Pass null to go back to [defaultRoute].
+void setFakeRoute(FakeRoute? route) => _activeRoute = route;
+
+/// The canonical taxonomy, as the backend's /categories endpoint returns it.
+/// Ids are the names themselves so a test can assert on them readably.
+const List<String> fakeTopLevelCategories = [
+  'Vehicles', 'Property', 'Electronics', 'Gaming', 'Home & Furniture',
+  'Fashion', 'Agriculture', 'Construction', 'Beauty & Personal Care',
+  'Sports & Fitness', 'Books & Education', 'Music & Instruments',
+  'Business & Industrial', 'Pets & Animals', 'Services', 'Other',
+];
+
+Map<String, dynamic> fakeListingJson(int i,
+        {double price = 1300, String category = 'Electronics'}) =>
+    {
+      'id': 'listing-$i',
+      'seller_id': 'seller-$i',
+      'name': 'Test item $i',
+      'category': category,
+      'price': price,
+      'lat': -1.28,
+      'lng': 36.8,
+      'location_name': 'Nairobi',
+      'created_at': '2026-09-18T10:00:00',
+      'seller_name': 'Xavier Bravin',
+      'seller_verified': true,
+      'seller_completed_deals': 3,
+      'seller_rating': 4.8,
+    };
+
+Object? defaultRoute(Uri uri) {
+  final path = uri.path;
+  if (path.contains('/subcategories')) {
+    return [
+      for (final name in const ['Sub One', 'Sub Two', 'Sub Three'])
+        {'id': 'sub-$name', 'name': name, 'icon': null, 'parent_id': 'parent'},
+    ];
+  }
+  if (path.contains('/filters')) return <Object?>[];
+  if (path.startsWith('/categories')) {
+    return [
+      for (final name in fakeTopLevelCategories)
+        {'id': name, 'name': name, 'icon': null, 'parent_id': null},
+    ];
+  }
+  if (path.startsWith('/listings')) {
+    final offset = int.tryParse(uri.queryParameters['offset'] ?? '0') ?? 0;
+    // Listings come back in the category they were asked for. The Category
+    // Zone tests rely on this: a card in the Vehicles zone shows the Vehicles
+    // visual because its own category says so, which is what the real backend
+    // returns too.
+    final category = uri.queryParameters['category_id'] ?? 'Electronics';
+    final items = [
+      for (int i = 0; i < 20; i++)
+        fakeListingJson(offset + i, price: 15000, category: category),
+    ];
+    // The Zone asks for with_total=true and gets {items, total}; Home asks
+    // without it and gets a bare list. Both shapes come from the same
+    // endpoint in the real API, so the fake mirrors that.
+    if (uri.queryParameters['with_total'] == 'true') {
+      return {'items': items, 'total': 128};
+    }
+    return items;
+  }
+  // Buy-agent "no active request" and anything else.
+  return null;
+}
+
+// ── Plumbing ─────────────────────────────────────────────────────────────────
+// Only the slice http's IOClient actually touches: openUrl, a request whose
+// close() yields a response, and a response that is a Stream<List<int>>.
+// Everything else routes to noSuchMethod and would throw loudly if a code path
+// under test ever needed it.
+
+class _FakeHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) => _FakeHttpClient();
+}
+
+List<int> _encode(Uri uri) {
+  final body = _activeRoute?.call(uri) ?? defaultRoute(uri);
+  return utf8.encode(jsonEncode(body));
+}
+
+class _FakeHttpClient implements HttpClient {
+  @override
+  bool autoUncompress = true;
+  @override
+  Duration idleTimeout = const Duration(seconds: 15);
+  @override
+  Duration? connectionTimeout;
+  @override
+  int? maxConnectionsPerHost;
+  @override
+  String? userAgent;
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async =>
+      _FakeHttpClientRequest(method, url);
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeHttpClientRequest implements HttpClientRequest {
+  _FakeHttpClientRequest(this.method, this.uri);
+
+  @override
+  final String method;
+  @override
+  final Uri uri;
+
+  @override
+  final HttpHeaders headers = _FakeHttpHeaders();
+  @override
+  bool followRedirects = true;
+  @override
+  int maxRedirects = 5;
+  @override
+  int contentLength = -1;
+  @override
+  bool persistentConnection = true;
+  @override
+  bool bufferOutput = true;
+  @override
+  Encoding encoding = utf8;
+
+  @override
+  void add(List<int> data) {}
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) async {
+    await stream.drain<void>();
+  }
+
+  @override
+  Future<HttpClientResponse> close() async =>
+      _FakeHttpClientResponse(_encode(uri));
+
+  @override
+  Future<HttpClientResponse> get done => close();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeHttpClientResponse extends Stream<List<int>>
+    implements HttpClientResponse {
+  _FakeHttpClientResponse(this.body);
+
+  final List<int> body;
+
+  @override
+  int get statusCode => 200;
+  @override
+  String get reasonPhrase => 'OK';
+  @override
+  int get contentLength => body.length;
+  @override
+  HttpHeaders get headers => _FakeHttpHeaders();
+  @override
+  bool get isRedirect => false;
+  @override
+  bool get persistentConnection => false;
+  @override
+  List<Cookie> get cookies => const [];
+  @override
+  List<RedirectInfo> get redirects => const [];
+  @override
+  HttpClientResponseCompressionState get compressionState =>
+      HttpClientResponseCompressionState.notCompressed;
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) =>
+      Stream<List<int>>.fromIterable([body]).listen(onData,
+          onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeHttpHeaders implements HttpHeaders {
+  final Map<String, List<String>> _values = {};
+
+  @override
+  List<String>? operator [](String name) => _values[name.toLowerCase()];
+
+  @override
+  void set(String name, Object value, {bool preserveHeaderCase = false}) {
+    _values[name.toLowerCase()] = ['$value'];
+  }
+
+  @override
+  void add(String name, Object value, {bool preserveHeaderCase = false}) {
+    _values.putIfAbsent(name.toLowerCase(), () => []).add('$value');
+  }
+
+  @override
+  void forEach(void Function(String name, List<String> values) action) =>
+      _values.forEach(action);
+
+  @override
+  ContentType? get contentType => ContentType.json;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}

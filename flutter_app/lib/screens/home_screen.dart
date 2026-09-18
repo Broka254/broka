@@ -44,6 +44,7 @@ import '../widgets/zeno_avatar.dart';
 import '../widgets/product_card.dart';
 import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/models/category.dart';
+import '../features/categories/domain/category_visual.dart';
 import '../features/categories/presentation/category_zone_screen.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/presentation/auction_house_screen.dart';
@@ -325,11 +326,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return SizedBox(height: railHeight);
     }
     final items = <_RailItem>[
-      ..._topCategories.map((c) => _RailItem(
-            emoji: _categoryEmoji(c.name), label: c.name,
-            colors: BrokaColors.zoneGradientFor(c.name),
-            onTap: () => _openCategoryZone(c),
-          )),
+      // Straight from categoriesRepository.getTopLevel() - however many the
+      // backend returns is however many render. No count, no slots, no index
+      // -> visual mapping: each pill asks the resolver for its own name.
+      ..._topCategories.map((c) {
+        final visual = CategoryVisuals.resolve(c.name);
+        return _RailItem(
+          emoji: visual.emoji, label: c.name,
+          colors: visual.gradient,
+          onTap: () => _openCategoryZone(c),
+        );
+      }),
       _RailItem(
         emoji: '🔥', label: 'Trending',
         colors: const [BrokaColors.neonPink, Color(0xFFFF6B9D)],
@@ -465,23 +472,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       );
 
-  static const _categoryEmojiMap = <String, String>{
-    'automobiles': '🚗', 'vehicles': '🚗', 'electronics': '📱', 'phones': '📱',
-    'computers': '💻', 'gaming': '🎮', 'furniture': '🛋️', 'home appliances': '🔌',
-    'clothing': '👕', 'beauty': '💄', 'sports': '⚽', 'books': '📚',
-    'musical instruments': '🎸', 'farm equipment': '🚜', 'construction': '🏗️',
-    'property': '🏠',
-    // Canonical taxonomy (mockup-actualization spec §2, Phase 1). 'vehicles'
-    // and 'property' above already cover two of these; the rest are new.
-    'home & furniture': '🛋️', 'fashion': '👗', 'agriculture': '🌾',
-    'beauty & personal care': '💄', 'sports & fitness': '⚽',
-    'books & education': '📚', 'music & instruments': '🎸',
-    'business & industrial': '🏭', 'pets & animals': '🐾', 'services': '🛠️',
-    // 'other' intentionally omitted - falls through to the 🛍️ default
-    // below, which suits a real catch-all better than a made-up icon.
-  };
+  // Category-alignment pass (2026-09-18): _categoryEmojiMap and the
+  // _categoryEmoji() lookup that used to sit here are gone. They were the
+  // most complete of the app's six category tables and still a duplicate -
+  // paired with BrokaColors.zoneGradients, which was keyed the same way and
+  // had already drifted from it. Both now live in
+  // features/categories/domain/category_visual.dart, which CategoryZoneScreen,
+  // ProductCard, the Listing model, Boost and Inbox all read from too, so the
+  // rail's icon and the Zone's icon can no longer disagree.
 
-  String _categoryEmoji(String name) => _categoryEmojiMap[name.toLowerCase()] ?? '🛍️';
 
   // _loadTrending()/_loadLiveAuctions()/_buildLiveAuctionsCarousel() removed
   // (home-redesign brief round 2, 2026-08-17): Trending and Auctions are

@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../main.dart';
+import '../features/categories/domain/category_visual.dart';
 import '../widgets/gradient_button.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
@@ -281,15 +282,11 @@ class _ListingGroup extends StatelessWidget {
     required this.threads,     required this.onThreadTap,
   });
 
-  String _emoji(String cat) {
-    switch (cat) {
-      case 'Vehicles':    return '🚗';
-      case 'Property':    return '🏠';
-      case 'Electronics': return '📱';
-      case 'Livestock':   return '🐄';
-      default:            return '📦';
-    }
-  }
+  // Category-alignment pass (2026-09-18): this four-case switch only
+  // knew Vehicles/Property/Electronics/Livestock, so eleven of the
+  // backend's sixteen top-level categories rendered as a generic box.
+  // features/categories/domain/category_visual.dart is the one table now.
+  String _emoji(String cat) => CategoryVisuals.emojiFor(cat);
 
   String _fmt(double v) => 'KES ${v.toStringAsFixed(0).replaceAllMapped(
       RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},')}';
