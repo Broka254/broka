@@ -250,10 +250,13 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          color: error ? BrokaColors.warning : accent,
+          // An error is read, not alarmed at: pale lavender body text at the
+          // same weight as everything else in the card, rather than bold
+          // amber. The accent border already says which state this is.
+          color: error ? BrokaColors.textHigh : accent,
           fontSize: narrow ? 12.5 : 13.5,
           height: 1.25,
-          fontWeight: FontWeight.w700,
+          fontWeight: error ? FontWeight.w600 : FontWeight.w700,
         ),
       ),
     );
@@ -389,6 +392,8 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
         return c.interim.isEmpty ? 'Listening…' : "I'm listening…";
       case VoiceSessionState.processing:
         return 'Got it…';
+      case VoiceSessionState.reconnecting:
+        return 'Reconnecting voice…';
       case VoiceSessionState.readyToSend:
         return 'Ready to send';
       case VoiceSessionState.sendingToZeno:
@@ -404,6 +409,8 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
     switch (c.state) {
       case VoiceSessionState.speaking:
         return 'Zeno is replying…';
+      case VoiceSessionState.reconnecting:
+        return 'One moment…';
       case VoiceSessionState.error:
         return 'Type to Zeno instead';
       default:
@@ -419,6 +426,7 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
       case VoiceSessionState.sendingToZeno:
       case VoiceSessionState.speaking:
       case VoiceSessionState.connecting:
+      case VoiceSessionState.reconnecting:
         return WaveformMode.processing;
       case VoiceSessionState.idle:
       case VoiceSessionState.readyToSend:
@@ -427,16 +435,36 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
     }
   }
 
+  /// The card's accent, kept inside BROKA's own palette.
+  ///
+  /// It used to turn amber on an error, which is the one hue BROKA's UI does
+  /// not otherwise use: an orange-bordered, orange-lettered panel over a
+  /// violet-and-cyan constellation read as a system alarm rather than as part
+  /// of the app, and it did that for a failure as ordinary as a dropped
+  /// connection. The whole range now runs across the brand gradient's own
+  /// hues - violet while working, blue while listening, green when there is
+  /// something to send - and a failure desaturates to violet rather than
+  /// shouting in a foreign colour. Green stays reserved for the state where
+  /// an action is genuinely available, as it is everywhere else in the app.
   static Color _accentFor(VoiceSessionState state) {
     switch (state) {
       case VoiceSessionState.speaking:
+      case VoiceSessionState.sendingToZeno:
         return BrokaColors.neonPurple;
-      case VoiceSessionState.error:
-        return BrokaColors.warning;
       case VoiceSessionState.readyToSend:
         return BrokaColors.neonGreen;
-      default:
+      case VoiceSessionState.reconnecting:
+      case VoiceSessionState.connecting:
+      case VoiceSessionState.idle:
+        return BrokaColors.gold;
+      case VoiceSessionState.error:
+        return _errorAccent;
+      case VoiceSessionState.listening:
+      case VoiceSessionState.processing:
         return BrokaColors.neonBlue;
     }
   }
+
+  /// A dimmed violet: visibly not the working state, still unmistakably BROKA.
+  static const Color _errorAccent = Color(0xFF7C6BB0);
 }

@@ -46,6 +46,15 @@ services:
                              # keeps its text composer. This is the PERMANENT key and must
                              # never reach the Flutter build - the phone only ever receives
                              # the short-lived token minted from it by /stt/deepgram-token.
+      - key: ASSEMBLYAI_API_KEY
+        sync: false          # AssemblyAI Universal Streaming - the FALLBACK for the Zeno
+                             # voice card, used when Deepgram cannot be reached or refuses
+                             # a session. Unset is safe: /stt/assemblyai-token returns 503,
+                             # the failover is simply unavailable and Deepgram (or the text
+                             # composer) carries voice on its own. Same rule as above: this
+                             # is the PERMANENT key, it must never reach the Flutter build,
+                             # and the phone only ever receives the short-lived token minted
+                             # from it by /stt/assemblyai-token.
       - key: RESEND_API_KEY
         sync: false          # Resend — email verification codes. Unset is safe:
                              # email is optional at signup and codes are logged

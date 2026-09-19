@@ -5,40 +5,41 @@
 // and Deepgram's WebSocket - are injected, so these tests drive the real
 // service and the real controller rather than a mock of them. The fake socket
 // below emits Deepgram's actual frame shapes, which means a change to the
-// parsing that broke on a real `Results` frame breaks here too.
-import 'dart:async';
-import 'dart:convert';
+// parsing that broke on a real `Results` frame breaks here too. The failover
+// between providers is covered separately, in stt_fallback_test.dart.
+
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:record/record.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'package:broka/services/deepgram_stt_service.dart';
+import 'package:broka/services/realtime_stt.dart';
 import 'package:broka/services/zeno_voice_controller.dart';
 import 'package:broka/widgets/voice_waveform.dart';
 import 'package:broka/widgets/zeno_voice_card.dart';
 import 'package:broka/widgets/zeno_avatar.dart';
 
+import 'support/fake_voice.dart';
+
 void main() {
   group('DeepgramSttService', () {
     test('asks for one token per session and connects with Deepgram params',
         () async {
-      final socket = _FakeSocket();
+      final socket = FakeSocket();
       var tokenCalls = 0;
       Uri? connectedTo;
       String? connectedWith;
 
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(),
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
         fetchToken: () async {
           tokenCalls++;
           return 'temp-jwt';
         },
-        connect: (uri, token) {
+        connect: (uri, headers) {
           connectedTo = uri;
-          connectedWith = token;
+          connectedWith = headers['authorization'];
           return socket;
         },
       );
@@ -46,7 +47,9 @@ void main() {
       await service.start(brokaLanguage: 'english');
 
       expect(tokenCalls, 1, reason: 'one token per session, not per utterance');
-      expect(connectedWith, 'temp-jwt');
+      // Bearer, not Token: /v1/auth/grant returns a JWT and Deepgram accepts
+      // JWTs only under the Bearer scheme.
+      expect(connectedWith, 'Bearer temp-jwt');
       expect(connectedTo!.scheme, 'wss');
       expect(connectedTo!.host, 'api.deepgram.com');
       expect(connectedTo!.path, '/v1/listen');
@@ -72,11 +75,11 @@ void main() {
         () async {
       var connects = 0;
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(),
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
         fetchToken: () async => 't',
         connect: (_, __) {
           connects++;
-          return _FakeSocket();
+          return FakeSocket();
         },
       );
 
@@ -93,12 +96,12 @@ void main() {
         () async {
       var tokenCalls = 0;
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(permitted: false),
+        microphone: MicrophoneSource(recorder: FakeRecorder(permitted: false)),
         fetchToken: () async {
           tokenCalls++;
           return 't';
         },
-        connect: (_, __) => _FakeSocket(),
+        connect: (_, __) => FakeSocket(),
       );
 
       await expectLater(
@@ -112,10 +115,10 @@ void main() {
     });
 
     test('streams PCM to the socket as binary frames', () async {
-      final socket = _FakeSocket();
-      final recorder = _FakeRecorder();
+      final socket = FakeSocket();
+      final recorder = FakeRecorder();
       final service = DeepgramSttService(
-        recorder: recorder,
+        microphone: MicrophoneSource(recorder: recorder),
         fetchToken: () async => 't',
         connect: (_, __) => socket,
       );
@@ -133,9 +136,9 @@ void main() {
     });
 
     test('interim, final and speech-final all surface', () async {
-      final socket = _FakeSocket();
+      final socket = FakeSocket();
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(),
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
         fetchToken: () async => 't',
         connect: (_, __) => socket,
       );
@@ -151,8 +154,8 @@ void main() {
       await service.start();
 
       socket.emit({'type': 'SpeechStarted'});
-      socket.emit(_results('Find me a phone under', isFinal: false));
-      socket.emit(_results('Find me a phone under KES 20,000',
+      socket.emit(deepgramResults('Find me a phone under', isFinal: false));
+      socket.emit(deepgramResults('Find me a phone under KES 20,000',
           isFinal: true, speechFinal: true));
       await Future<void>.delayed(Duration.zero);
 
@@ -167,9 +170,9 @@ void main() {
     test('an empty final still closes the turn', () async {
       // Deepgram sends empty finals at the end of silence; they carry the
       // speech_final flag that ends a turn even though the text does not.
-      final socket = _FakeSocket();
+      final socket = FakeSocket();
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(),
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
         fetchToken: () async => 't',
         connect: (_, __) => socket,
       );
@@ -179,7 +182,7 @@ void main() {
       service.finalTranscript.listen(finals.add);
 
       await service.start();
-      socket.emit(_results('', isFinal: true, speechFinal: true));
+      socket.emit(deepgramResults('', isFinal: true, speechFinal: true));
       await Future<void>.delayed(Duration.zero);
 
       expect(speechFinals, 1);
@@ -188,9 +191,9 @@ void main() {
     });
 
     test('malformed frames are ignored rather than fatal', () async {
-      final socket = _FakeSocket();
+      final socket = FakeSocket();
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(),
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
         fetchToken: () async => 't',
         connect: (_, __) => socket,
       );
@@ -211,10 +214,10 @@ void main() {
     });
 
     test('stop closes the microphone and the socket', () async {
-      final socket = _FakeSocket();
-      final recorder = _FakeRecorder();
+      final socket = FakeSocket();
+      final recorder = FakeRecorder();
       final service = DeepgramSttService(
-        recorder: recorder,
+        microphone: MicrophoneSource(recorder: recorder),
         fetchToken: () async => 't',
         connect: (_, __) => socket,
       );
@@ -233,10 +236,10 @@ void main() {
     });
 
     test('cancel tears down without waiting for a flush', () async {
-      final socket = _FakeSocket();
-      final recorder = _FakeRecorder();
+      final socket = FakeSocket();
+      final recorder = FakeRecorder();
       final service = DeepgramSttService(
-        recorder: recorder,
+        microphone: MicrophoneSource(recorder: recorder),
         fetchToken: () async => 't',
         connect: (_, __) => socket,
       );
@@ -252,12 +255,12 @@ void main() {
     test('a token failure never reaches the socket', () async {
       var connects = 0;
       final service = DeepgramSttService(
-        recorder: _FakeRecorder(),
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
         fetchToken: () async =>
             throw VoiceSessionException(VoiceFailure.notConfigured),
         connect: (_, __) {
           connects++;
-          return _FakeSocket();
+          return FakeSocket();
         },
       );
 
@@ -301,22 +304,22 @@ void main() {
   });
 
   group('ZenoVoiceController', () {
-    late _FakeSocket socket;
-    late _FakeRecorder recorder;
+    late FakeSocket socket;
+    late FakeRecorder recorder;
 
     ZenoVoiceController build({
       required List<String> sent,
       bool autoSend = true,
       String language = 'english',
     }) {
-      socket = _FakeSocket();
-      recorder = _FakeRecorder();
+      socket = FakeSocket();
+      recorder = FakeRecorder();
       return ZenoVoiceController(
         onSubmit: (t) async => sent.add(t),
         languageKey: () => language,
         autoSend: autoSend,
         service: DeepgramSttService(
-          recorder: recorder,
+          microphone: MicrophoneSource(recorder: recorder),
           fetchToken: () async => 't',
           connect: (_, __) => socket,
         ),
@@ -341,12 +344,12 @@ void main() {
       final c = build(sent: sent);
       await c.open();
 
-      socket.emit(_results('I need a laptop', isFinal: false));
+      socket.emit(deepgramResults('I need a laptop', isFinal: false));
       await Future<void>.delayed(Duration.zero);
       expect(c.interim, 'I need a laptop');
       expect(c.transcript.text, isEmpty);
 
-      socket.emit(_results('I need a laptop for work', isFinal: true));
+      socket.emit(deepgramResults('I need a laptop for work', isFinal: true));
       await Future<void>.delayed(Duration.zero);
       expect(c.interim, isEmpty);
       expect(c.transcript.text, 'I need a laptop for work');
@@ -359,7 +362,7 @@ void main() {
       final c = build(sent: sent);
       await c.open();
 
-      socket.emit(_results('I need a laptop for work',
+      socket.emit(deepgramResults('I need a laptop for work',
           isFinal: true, speechFinal: true));
       await Future<void>.delayed(Duration.zero);
       expect(c.state, VoiceSessionState.readyToSend);
@@ -378,7 +381,7 @@ void main() {
       final c = build(sent: sent);
       await c.open();
 
-      socket.emit(_results('Find me a good phone under twenty thousand',
+      socket.emit(deepgramResults('Find me a good phone under twenty thousand',
           isFinal: true, speechFinal: true));
       await Future<void>.delayed(Duration.zero);
 
@@ -399,7 +402,7 @@ void main() {
       final c = build(sent: sent, autoSend: false);
       await c.open();
 
-      socket.emit(_results('hello', isFinal: true, speechFinal: true));
+      socket.emit(deepgramResults('hello', isFinal: true, speechFinal: true));
       await Future<void>.delayed(const Duration(milliseconds: 1100));
       expect(sent, isEmpty);
       expect(c.state, VoiceSessionState.readyToSend);
@@ -452,9 +455,9 @@ void main() {
         onSubmit: (t) async => sent.add(t),
         languageKey: () => 'english',
         service: DeepgramSttService(
-          recorder: _FakeRecorder(permitted: false),
+          microphone: MicrophoneSource(recorder: FakeRecorder(permitted: false)),
           fetchToken: () async => 't',
-          connect: (_, __) => _FakeSocket(),
+          connect: (_, __) => FakeSocket(),
         ),
       );
 
@@ -480,7 +483,7 @@ void main() {
 
   group('ZenoVoiceCard', () {
     late ZenoVoiceController controller;
-    late _FakeSocket socket;
+    late FakeSocket socket;
     late List<String> sent;
 
     Widget host() {
@@ -500,12 +503,12 @@ void main() {
 
     setUp(() {
       sent = [];
-      socket = _FakeSocket();
+      socket = FakeSocket();
       controller = ZenoVoiceController(
         onSubmit: (t) async => sent.add(t),
         languageKey: () => 'english',
         service: DeepgramSttService(
-          recorder: _FakeRecorder(),
+          microphone: MicrophoneSource(recorder: FakeRecorder()),
           fetchToken: () async => 't',
           connect: (_, __) => socket,
         ),
@@ -581,12 +584,12 @@ void main() {
       await controller.open();
       await _settle(tester);
 
-      socket.emit(_results('Find me a good phone under', isFinal: false));
+      socket.emit(deepgramResults('Find me a good phone under', isFinal: false));
       await tester.pump();
       await tester.pump();
       expect(find.text('Find me a good phone under'), findsOneWidget);
 
-      socket.emit(_results('Find me a good phone under KES 20,000',
+      socket.emit(deepgramResults('Find me a good phone under KES 20,000',
           isFinal: true));
       await tester.pump();
       await tester.pump();
@@ -607,7 +610,7 @@ void main() {
       await controller.open();
       await _settle(tester);
 
-      socket.emit(_results('tell the seller eighteen thousand', isFinal: true));
+      socket.emit(deepgramResults('tell the seller eighteen thousand', isFinal: true));
       await tester.pump();
       await tester.pump();
 
@@ -667,7 +670,7 @@ void main() {
         await controller.open();
         await _settle(tester);
 
-        socket.emit(_results(
+        socket.emit(deepgramResults(
             'Find me a Samsung Galaxy A54 128GB under KES 20,000 in Nairobi',
             isFinal: true));
         await _settle(tester);
@@ -693,122 +696,4 @@ Future<void> _settle(WidgetTester tester) async {
   for (int i = 0; i < 6; i++) {
     await tester.pump(const Duration(milliseconds: 80));
   }
-}
-
-// ── Fakes ────────────────────────────────────────────────────────────────────
-
-/// A Deepgram `Results` frame, in the shape the real service sends.
-Map<String, dynamic> _results(String text,
-        {required bool isFinal, bool speechFinal = false}) =>
-    {
-      'type': 'Results',
-      'is_final': isFinal,
-      'speech_final': speechFinal,
-      'channel': {
-        'alternatives': [
-          {'transcript': text, 'confidence': 0.98}
-        ]
-      },
-    };
-
-class _FakeSocket implements WebSocketChannel {
-  final _incoming = StreamController<dynamic>.broadcast();
-  final _sink = _FakeSink();
-
-  final List<Uint8List> sentBinary = [];
-  final List<String> sentText = [];
-  bool closed = false;
-
-  _FakeSocket() {
-    _sink.onAdd = (data) {
-      if (data is Uint8List) {
-        sentBinary.add(data);
-      } else if (data is String) {
-        sentText.add(data);
-      }
-    };
-    _sink.onClose = () => closed = true;
-  }
-
-  void emit(Map<String, dynamic> event) => emitRaw(jsonEncode(event));
-
-  void emitRaw(String raw) {
-    if (!_incoming.isClosed) _incoming.add(raw);
-  }
-
-  @override
-  Stream get stream => _incoming.stream;
-
-  @override
-  WebSocketSink get sink => _sink;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _FakeSink implements WebSocketSink {
-  void Function(dynamic)? onAdd;
-  void Function()? onClose;
-
-  @override
-  void add(dynamic data) => onAdd?.call(data);
-
-  @override
-  Future close([int? closeCode, String? closeReason]) async => onClose?.call();
-
-  @override
-  Future addStream(Stream stream) async {}
-
-  @override
-  void addError(Object error, [StackTrace? stackTrace]) {}
-
-  @override
-  Future get done async {}
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _FakeRecorder implements AudioRecorder {
-  _FakeRecorder({this.permitted = true});
-
-  final bool permitted;
-  final _audio = StreamController<Uint8List>.broadcast();
-  bool stopped = false;
-  bool cancelled = false;
-
-  void emit(Uint8List chunk) {
-    if (!_audio.isClosed) _audio.add(chunk);
-  }
-
-  @override
-  Future<bool> hasPermission({bool request = true}) async => permitted;
-
-  @override
-  Future<Stream<Uint8List>> startStream(RecordConfig config) async {
-    // The service must ask for exactly what Deepgram's linear16 expects.
-    expect(config.encoder, AudioEncoder.pcm16bits);
-    expect(config.sampleRate, 16000);
-    expect(config.numChannels, 1);
-    return _audio.stream;
-  }
-
-  @override
-  Future<String?> stop() async {
-    stopped = true;
-    return null;
-  }
-
-  @override
-  Future<void> cancel() async {
-    cancelled = true;
-  }
-
-  @override
-  Future<void> dispose() async {
-    if (!_audio.isClosed) await _audio.close();
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

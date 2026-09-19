@@ -182,3 +182,80 @@ async def deepgram_token(_user: dict = Depends(get_current_user)):
         # Deepgram echoes the granted TTL; fall back to what we asked for.
         "expires_in": body.get("expires_in", DEEPGRAM_TOKEN_TTL_SECONDS),
     }
+
+
+# ── AssemblyAI (fallback realtime STT) ───────────────────────────────────────
+#
+# Same shape as the Deepgram endpoint above and for the same reason: the
+# permanent key stays on Render, the app gets something short-lived that is
+# spent on one WebSocket handshake. The differences are AssemblyAI's, not
+# ours - its token endpoint is a GET, its Authorization header takes the raw
+# key with NO "Bearer" or "Token" prefix, and the TTL goes in the query string
+# and is capped at 600 seconds.
+
+ASSEMBLYAI_TOKEN_URL = "https://streaming.assemblyai.com/v3/token"
+
+
+def _assemblyai_key() -> str:
+    """Read at call time. See _deepgram_key."""
+    return os.getenv("ASSEMBLYAI_API_KEY", "")
+
+
+# 300s, matching Deepgram's. Well inside AssemblyAI's documented 1..600 range,
+# and the token is spent the moment the socket opens.
+ASSEMBLYAI_TOKEN_TTL_SECONDS = 300
+
+
+@router.post("/assemblyai-token")
+async def assemblyai_token(_user: dict = Depends(get_current_user)):
+    """Mint a short-lived AssemblyAI streaming token for this BROKA user.
+
+    Returns only the temporary token. As with Deepgram: the permanent key
+    never leaves the server, is never logged, and is never echoed into a
+    response - the error paths return fixed strings rather than anything
+    upstream sent back, because an upstream error body can quote the
+    credential that was rejected.
+    """
+    api_key = _assemblyai_key()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Voice transcription is not configured on this server.",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                ASSEMBLYAI_TOKEN_URL,
+                # The raw key, no scheme prefix. AssemblyAI rejects
+                # "Bearer <key>" here, which is an easy thing to copy in from
+                # another vendor's example and a hard one to debug.
+                headers={"Authorization": api_key},
+                params={"expires_in_seconds": ASSEMBLYAI_TOKEN_TTL_SECONDS},
+            )
+    except httpx.HTTPError as exc:
+        logger.exception("AssemblyAI token request failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Voice service unreachable")
+
+    if resp.status_code != 200:
+        # Status code only. resp.text can contain the rejected credential.
+        logger.warning("AssemblyAI token request returned %s", resp.status_code)
+        raise HTTPException(status_code=502, detail="Could not start a voice session")
+
+    try:
+        body = resp.json()
+    except ValueError:
+        logger.warning("AssemblyAI token request returned a non-JSON body")
+        raise HTTPException(status_code=502, detail="Could not start a voice session")
+
+    token = body.get("token")
+    if not token:
+        logger.warning("AssemblyAI token request returned no token")
+        raise HTTPException(status_code=502, detail="Could not start a voice session")
+
+    return {
+        "token": token,
+        "expires_in_seconds": body.get(
+            "expires_in_seconds", ASSEMBLYAI_TOKEN_TTL_SECONDS
+        ),
+    }

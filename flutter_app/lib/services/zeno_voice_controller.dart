@@ -4,6 +4,10 @@
 // to answer". It owns the Deepgram session, the transcript, and the session
 // state machine; it owns nothing about what a transcript MEANS.
 //
+// It is also why the vendor is invisible from here up. This file holds a
+// [RealtimeSttProvider]; whether that is Deepgram, AssemblyAI after a
+// failover, or something not written yet, is RealtimeSttManager's business.
+//
 // That split is what lets one card work over both ZenoScreen and
 // NegotiateScreen. The screen passes an [onSubmit] callback - ZenoScreen's
 // hands the text to _send(), NegotiateScreen's hands it to its own _send() -
@@ -18,7 +22,8 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
-import 'deepgram_stt_service.dart';
+import 'realtime_stt.dart';
+import 'realtime_stt_manager.dart';
 
 /// Where a voice session is. One enum rather than a handful of booleans,
 /// because `listening && !processing && !speaking` is a state machine written
@@ -33,8 +38,13 @@ enum VoiceSessionState {
   /// Microphone live, waiting for or receiving speech.
   listening,
 
-  /// Deepgram is finalising an utterance.
+  /// The provider is finalising an utterance.
   processing,
+
+  /// The speech session died and a replacement is being established. Not an
+  /// error: the transcript survives, the microphone comes back, and the user
+  /// is told only that it is reconnecting.
+  reconnecting,
 
   /// There is final text in the box and it has not been sent.
   readyToSend,
@@ -53,18 +63,18 @@ class ZenoVoiceController extends ChangeNotifier {
   ZenoVoiceController({
     required Future<void> Function(String text) onSubmit,
     required String Function() languageKey,
-    DeepgramSttService? service,
+    RealtimeSttProvider? service,
 
     /// Direct voice mode: a completed utterance goes to Zeno without the user
     /// tapping send. False makes every turn edit-then-send.
     this.autoSend = true,
   })  : _onSubmit = onSubmit,
         _languageKey = languageKey,
-        _service = service ?? DeepgramSttService();
+        _service = service ?? RealtimeSttManager();
 
   final Future<void> Function(String text) _onSubmit;
   final String Function() _languageKey;
-  final DeepgramSttService _service;
+  final RealtimeSttProvider _service;
   final bool autoSend;
 
   /// The editable transcript. A TextEditingController rather than a String so
@@ -96,9 +106,9 @@ class ZenoVoiceController extends ChangeNotifier {
   /// 0..1 microphone loudness, for the waveform.
   double get level => _level;
 
-  /// True when the user's BROKA language is one Deepgram cannot transcribe,
-  /// so this session is running on English (see [DeepgramLanguage]). The card
-  /// says so rather than letting a user conclude BROKA's Dholuo is broken.
+  /// True when the user's BROKA language is one the speech provider cannot
+  /// transcribe, so this session is running on English. The card says so
+  /// rather than letting a user conclude BROKA's Dholuo is broken.
   bool get languageUnsupported => _languageUnsupported;
 
   bool get hasSendableText => transcript.text.trim().isNotEmpty;
@@ -117,8 +127,7 @@ class ZenoVoiceController extends ChangeNotifier {
     _set(VoiceSessionState.connecting);
 
     final language = _languageKey();
-    _languageUnsupported =
-        !DeepgramLanguage.forBrokaLanguage(language).supported;
+    _languageUnsupported = !_service.languageFor(language).supported;
 
     _listen();
 
@@ -287,6 +296,21 @@ class ZenoVoiceController extends ChangeNotifier {
         _level = v;
         notifyListeners();
       }),
+      _service.reconnecting.listen((busy) {
+        if (!_open) return;
+        if (busy) {
+          _autoSendTimer?.cancel();
+          _interim = '';
+          _set(VoiceSessionState.reconnecting);
+        } else if (_state == VoiceSessionState.reconnecting) {
+          // Whatever was already transcribed is still in `transcript` - the
+          // text lives here, not in the provider, so a vendor swap costs the
+          // user nothing they had already said.
+          _set(hasSendableText
+              ? VoiceSessionState.readyToSend
+              : VoiceSessionState.listening);
+        }
+      }),
       _service.failures.listen(_failWith),
     ]);
   }
@@ -332,14 +356,30 @@ class ZenoVoiceController extends ChangeNotifier {
 
   /// One honest sentence per failure, each of which ends with the user still
   /// having a working text composer.
+  ///
+  /// Every one of these used to be the same sentence. That was the single
+  /// worst thing about the original: a user could not tell a denied
+  /// microphone from an unreachable server, and neither could anyone reading
+  /// their screenshot. These say what happened without leaking a stack trace
+  /// or a server detail, and each one leaves the user somewhere to go.
   static String _messageFor(VoiceFailure failure) {
     switch (failure) {
       case VoiceFailure.microphoneDenied:
-        return 'Microphone access is needed to talk to Zeno.';
+        return 'Microphone access is needed to talk to Zeno. '
+            'You can still type.';
+      case VoiceFailure.microphoneStartFailed:
+        return "Your microphone didn't start. Close anything else using it, "
+            'or type to Zeno.';
       case VoiceFailure.notConfigured:
-        return "Voice isn't available right now. You can still type to Zeno.";
+        return "Voice isn't switched on yet. You can still type to Zeno.";
       case VoiceFailure.tokenUnavailable:
-      case VoiceFailure.connectionFailed:
+        return "Couldn't start a voice session. Check your connection, "
+            'or type to Zeno.';
+      case VoiceFailure.handshakeFailed:
+      case VoiceFailure.socketClosed:
+        return "Voice couldn't connect. Check your connection, "
+            'or type to Zeno.';
+      case VoiceFailure.providerError:
       case VoiceFailure.unknown:
         return "Voice isn't available right now. You can still type to Zeno.";
     }
