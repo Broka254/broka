@@ -164,11 +164,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       // canCheckBiometrics is true only if biometrics are ENROLLED on the device
       final enrolled  = await _localAuth.canCheckBiometrics;
       final types     = await _localAuth.getAvailableBiometrics();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _biometricAvailable = supported; // hardware exists
         _biometricEnrolled  = enrolled;  // AND biometrics set up in device settings
         _availableTypes     = types;
       });
+      }
     } catch (_) {
       // Hardware absent, or no local_auth implementation on this platform at
       // all. The latter raises MissingPluginException, which is NOT a
@@ -259,10 +261,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
             _animateStep(_sVerify);
           }
         } catch (e) {
-          if (mounted) setState(() {
+          if (mounted) {
+            setState(() {
             _loading = false;
             _error = e.toString().replaceFirst('Exception: ', '');
           });
+          }
         }
         return;
 
@@ -276,10 +280,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           _phoneVerifyToken = await ApiService.verifyOtp(_fullPhone, code);
           if (mounted) { setState(() => _loading = false); _animateStep(_sName); }
         } catch (e) {
-          if (mounted) setState(() {
+          if (mounted) {
+            setState(() {
             _loading = false;
             _error = e.toString().replaceFirst('Exception: ', '');
           });
+          }
         }
         return;
 
@@ -373,10 +379,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         _emailOtpExpiryTimer?.cancel();
         if (mounted) { setState(() => _loading = false); _animateStep(_sPassword); }
       } catch (e) {
-        if (mounted) setState(() {
+        if (mounted) {
+          setState(() {
           _loading = false;
           _error = e.toString().replaceFirst('Exception: ', '');
         });
+        }
       }
       return;
     }
@@ -393,10 +401,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       if (mounted) setState(() { _loading = false; _emailCodeSent = true; });
       _stepAnim.forward(from: 0);   // same transition as a step change
     } catch (e) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _loading = false;
         _error = e.toString().replaceFirst('Exception: ', '');
       });
+      }
     }
   }
 
@@ -637,10 +647,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         });
       }
     } on PlatformException catch (e) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _loading = false;
         _error = 'Biometric error: ${e.message}';
       });
+      }
     }
   }
 
@@ -830,7 +842,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       const SizedBox(height: 14),
       _buildPasswordField(),
       const SizedBox(height: 12),
-      Align(alignment: Alignment.centerRight,
+      const Align(alignment: Alignment.centerRight,
         child: Text('Forgot password?',
           style: TextStyle(color: BrokaColors.gold,
               fontSize: 13, fontWeight: FontWeight.w700))),
@@ -1675,11 +1687,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                     base64Decode(_capturedPhoto!),
                     width: 80, height: 80, fit: BoxFit.cover)),
                 const SizedBox(width: 16),
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('Selfie captured ✓',
+                const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Selfie captured ✓',
                       style: TextStyle(color: BrokaColors.neonGreen,
                           fontWeight: FontWeight.w700, fontSize: 15)),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   Text('Tap to retake',
                       style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
                 ]),
@@ -1736,16 +1748,16 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: BrokaColors.gold.withOpacity(0.25)),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
+      child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
           Icon(Icons.shield_rounded, color: BrokaColors.gold, size: 18),
           SizedBox(width: 8),
           Text('BROKA Biometric Security',
               style: TextStyle(color: BrokaColors.textHigh,
                   fontSize: 14, fontWeight: FontWeight.w800)),
         ]),
-        const SizedBox(height: 8),
-        const Text(
+        SizedBox(height: 8),
+        Text(
           'BROKA will capture your biometric LIVE right now - this is '
           'not using stored phone data. Your scan is linked specifically '
           'to your BROKA account and will be required to approve payments.',

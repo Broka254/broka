@@ -21,10 +21,8 @@ class _VerificationScreenState extends State<VerificationScreen>
 
   _VerifyStep _step         = _VerifyStep.tiers;
   String      _selectedTier = 'basic';
-  String      _phone        = '';
   String?     _errorMsg;
   String?     _receipt;
-  String?     _verifyLabel;
   Timer?      _pollTimer;
   int         _pollCount    = 0;
   static const _maxPolls   = 20;   // 20 × 3s = 60s timeout
@@ -97,11 +95,10 @@ class _VerificationScreenState extends State<VerificationScreen>
     setState(() { _step = _VerifyStep.payment; _errorMsg = null; });
 
     try {
-      final result = await ApiService.buyVerification(
+      await ApiService.buyVerification(
         tier:  _selectedTier,
         phone: phone,
       );
-      _verifyLabel = result['tier_label'] as String?;
       setState(() { _step = _VerifyStep.waiting; });
       HapticFeedback.mediumImpact();
       _startPolling();
@@ -234,28 +231,28 @@ class _VerificationScreenState extends State<VerificationScreen>
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: BrokaColors.gold.withOpacity(0.3)),
         ),
-        child: Column(children: [
-          const Icon(Icons.verified_rounded,
+        child: const Column(children: [
+          Icon(Icons.verified_rounded,
               color: BrokaColors.gold, size: 42),
-          const SizedBox(height: 12),
-          const Text('BROKA Verified Seller',
+          SizedBox(height: 12),
+          Text('BROKA Verified Seller',
               style: TextStyle(color: BrokaColors.textHigh,
                   fontSize: 18, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 6),
-          const Text(
+          SizedBox(height: 6),
+          Text(
             'Verified sellers on BROKA earn significantly more buyer trust, '
             'appear higher in search results, and close deals faster.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.5),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: 14),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             _StatPill(icon: Icons.trending_up_rounded,
                 label: '40% more trust', color: BrokaColors.neonGreen),
-            const SizedBox(width: 10),
+            SizedBox(width: 10),
             _StatPill(icon: Icons.search_rounded,
                 label: 'Higher in search', color: BrokaColors.neonBlue),
-            const SizedBox(width: 10),
+            SizedBox(width: 10),
             _StatPill(icon: Icons.handshake_rounded,
                 label: 'Close faster', color: BrokaColors.gold),
           ]),
@@ -442,8 +439,8 @@ class _VerificationScreenState extends State<VerificationScreen>
             child: Icon(tier.icon, color: tier.color, size: 44),
           ),
           const SizedBox(height: 24),
-          Text('You\'re Verified! 🎉',
-              style: const TextStyle(color: BrokaColors.textHigh,
+          const Text('You\'re Verified! 🎉',
+              style: TextStyle(color: BrokaColors.textHigh,
                   fontSize: 24, fontWeight: FontWeight.w900)),
           const SizedBox(height: 10),
           Text(
@@ -627,8 +624,8 @@ class _TierCard extends StatelessWidget {
                 style: TextStyle(
                     color: selected ? tier.color : BrokaColors.textHigh,
                     fontSize: 18, fontWeight: FontWeight.w900)),
-            Text('one-time',
-                style: const TextStyle(color: BrokaColors.textLow, fontSize: 10)),
+            const Text('one-time',
+                style: TextStyle(color: BrokaColors.textLow, fontSize: 10)),
           ]),
           if (selected) ...[
             const SizedBox(width: 8),

@@ -132,7 +132,7 @@ class _CreateStoreScreenState extends State<CreateStoreScreen> {
   void _pickPhoto() {
     if (_photoDataUris.length >= _maxPhotos) {
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Maximum $_maxPhotos photos allowed')));
+          const SnackBar(content: Text('Maximum $_maxPhotos photos allowed')));
       return;
     }
     _chooseSource((uri) => setState(() => _photoDataUris.add(uri)));
@@ -263,9 +263,9 @@ class _CreateStoreScreenState extends State<CreateStoreScreen> {
                 ]),
               ),
             ),
-            Center(
+            const Center(
               child: Padding(
-                padding: const EdgeInsets.only(top: 6),
+                padding: EdgeInsets.only(top: 6),
                 child: Text('Store logo', style: TextStyle(
                     color: BrokaColors.textLow, fontSize: 11.5)),
               ),

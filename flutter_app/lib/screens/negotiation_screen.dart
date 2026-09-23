@@ -10,16 +10,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/webrtc_service.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
@@ -159,7 +156,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   bool                _isRecording = false;
   bool                _isPlaying   = false;
   String?             _playingUrl;
-  String?             _recordPath;
   DateTime?           _recordStart;
 
   // Image picker
@@ -207,8 +203,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
         final la = args['listing'];
-        if (la is Listing) _listing = la;
-        else if (la is Map) _listing = Listing.fromJson(Map<String, dynamic>.from(la));
+        if (la is Listing) {
+          _listing = la;
+        } else if (la is Map) _listing = Listing.fromJson(Map<String, dynamic>.from(la));
         final passedRole = args['role'] as String?;
         _role = passedRole ?? _detectRole();
         // buyer_id passed from inbox screen (identifies the thread for sellers)
@@ -479,10 +476,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // (negotiate_screen.dart) - it must never appear here, since each
       // side's conversation with Zeno is meant to stay private.
       final directOnly = history.where((m) => (m.role == 'buyer' || m.role == 'seller') && !m.viaAi).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _messages = directOnly.map(ChatMessage.fromMessage).toList();
         _loading = false;
       });
+      }
       _seenMsgIds.clear();
       _markSeen(_messages);
       _scrollDown();
@@ -567,9 +566,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             onTimeout: () {
               if (!mounted || !_incomingCallShown) return;
               _incomingCallShown = false;
-              if (roomId != null) {
-                NotificationService.instance.cancelIncomingCall(roomId);
-              }
+              NotificationService.instance.cancelIncomingCall(roomId);
               Navigator.pop(context);
             },
           );
@@ -595,10 +592,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                     RingtoneService.instance.stop();
                     Navigator.pop(context);
                     _incomingCallShown = false;
-                    if (roomId != null) {
-                      NotificationService.instance.cancelIncomingCall(roomId);
-                    }
-                    if (buyerIdForThread.isNotEmpty && _listing?.id != null && roomId != null) {
+                    NotificationService.instance.cancelIncomingCall(roomId);
+                    if (buyerIdForThread.isNotEmpty && _listing?.id != null) {
                       unawaited(ApiService.logCallResult(
                         roomId: roomId, listingId: _listing!.id, buyerId: buyerIdForThread,
                         outcome: 'declined', callerRole: callerRoleForThread,
@@ -615,7 +610,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   onPressed: () {
                     RingtoneService.instance.stop();
                     Navigator.pop(context);
-                    NotificationService.instance.cancelIncomingCall(roomId!);
+                    NotificationService.instance.cancelIncomingCall(roomId);
                     Navigator.pushNamed(context, '/voip-call', arguments: {
                       'roomId': roomId, 'userId': ApiService.currentUserId ?? '',
                       'callToken': callToken,
@@ -702,14 +697,16 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Future<void> _startRecording() async {
     final ok = await _recorder.hasPermission();
     if (!ok) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Microphone permission required')));
+      }
       return;
     }
     final dir  = await getTemporaryDirectory();
     final path = '${dir.path}/broka_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
     await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-    setState(() { _isRecording = true; _recordPath = path; _recordStart = DateTime.now(); });
+    setState(() { _isRecording = true; _recordStart = DateTime.now(); });
   }
 
   Future<void> _stopAndSendVoice() async {
@@ -746,14 +743,16 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         durationSecs: duration,
       );
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not send voice note: $e')));
+      }
     }
   }
 
   Future<void> _cancelRecording() async {
     await _recorder.cancel();
-    setState(() { _isRecording = false; _recordPath = null; _recordStart = null; });
+    setState(() { _isRecording = false; _recordStart = null; });
   }
 
   // ── Image sharing ──────────────────────────────────────────────────────────
@@ -781,8 +780,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         buyerId:     _buyerId,
       );
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not send image: $e')));
+      }
     }
   }
 
@@ -988,10 +989,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       );
       if (mounted) setState(() => _dealInfo = deal);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not finalize deal: $e',
             style: const TextStyle(color: Colors.white)),
           backgroundColor: Colors.redAccent));
+      }
     }
   }
 
@@ -1125,8 +1128,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   final fundResult = await ApiService.fundDealEscrow(
                     dealId: dealId, payerPhone: phone);
                   final finalTotal = (fundResult['total_to_pay'] as num?)?.toDouble() ?? total;
+                  // Two contexts, two checks: the dialog's own (what is
+                  // popped) and the screen's (what navigates on). Checking
+                  // only the screen's let a dialog dismissed during the
+                  // await be popped twice.
+                  if (ctx.mounted) Navigator.pop(ctx);
                   if (mounted) {
-                    Navigator.pop(ctx);
                     Navigator.pushNamed(context, '/escrow-payment', arguments: {
                       'deal_id': dealId,
                       'amount': finalTotal,
@@ -2086,7 +2093,7 @@ class _CallCard extends StatelessWidget {
             Icon(icon, color: color, size: 20),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('$label $callerLabel', style: TextStyle(
+              Text('$label $callerLabel', style: const TextStyle(
                   color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 13)),
               if (message.createdAt != null)
                 Text(_relativeTime(message.createdAt), style: const TextStyle(

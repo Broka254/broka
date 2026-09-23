@@ -389,8 +389,10 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     // Leaving it registered would silence this thread's
     // notifications permanently.
     final lid = _listing?.id;
-    if (lid != null) GlobalPollerService.instance
+    if (lid != null) {
+      GlobalPollerService.instance
         .markScreenInactive(lid, buyerId: _buyerId);
+    }
     _msgCtrl.dispose(); _scrollCtrl.dispose();
     _tts.stop();
     _voice.dispose();
@@ -484,10 +486,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
         setState(() => _pendingAction = reply.zenoAction);
       }
     } catch (_) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _typing = false;
         _messages.add(const Message(role: 'broker', content: 'Connection issue. Please try again.'));
       });
+      }
       unawaited(_cacheMessages());
     }
   }
@@ -715,10 +719,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       if (mounted) setState(() { _typing = false; _messages.add(reply); });
       _scrollDown();
     } catch (_) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _typing = false;
         _messages.add(const Message(role: 'broker', content: 'Could not start timer — please try again.'));
       });
+      }
     }
   }
 
@@ -936,9 +942,11 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
   // ── Scroll ─────────────────────────────────────────────────────────────────
   void _scrollDown() => Future.delayed(const Duration(milliseconds: 120), () {
-    if (_scrollCtrl.hasClients) _scrollCtrl.animateTo(
+    if (_scrollCtrl.hasClients) {
+      _scrollCtrl.animateTo(
       _scrollCtrl.position.maxScrollExtent,
       duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+    }
   });
 
   // ── Dialogs ────────────────────────────────────────────────────────────────
@@ -1034,10 +1042,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       Navigator.pushReplacementNamed(context, '/direct-chat',
           arguments: {'listing': listing, 'role': _role, 'buyer_id': buyerId, 'deal': deal});
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Could not finalize deal: $e', style: const TextStyle(color: Colors.white)),
         backgroundColor: Colors.redAccent,
       ));
+      }
     }
   }
 

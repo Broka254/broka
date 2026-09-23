@@ -373,7 +373,7 @@ class DeepgramSttService implements RealtimeSttProvider {
         if (e.diagnostic != null) {
           SttDiagnostics.record(e.diagnostic!);
         } else {
-          _log(_stage, 'DEEPGRAM_START_FAILED', safeError: '${e.failure.name}');
+          _log(_stage, 'DEEPGRAM_START_FAILED', safeError: e.failure.name);
         }
         rethrow;
       }

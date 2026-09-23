@@ -89,6 +89,9 @@ class ZenoVoiceController extends ChangeNotifier {
   String _interim = '';
   String? _errorMessage;
   bool _open = false;
+  // Bumped by every open() and close(), so an async step can tell whether
+  // the card it started in is still the card that is showing.
+  int _session = 0;
   bool _userEdited = false;
   bool _languageUnsupported = false;
   double _level = 0;
@@ -115,14 +118,43 @@ class ZenoVoiceController extends ChangeNotifier {
 
   /// Open the card and start listening.
   ///
-  /// Guarded: a second tap while connecting is ignored rather than opening a
-  /// second socket (brief §26).
+  /// Guarded: a second tap while connecting or listening is ignored rather
+  /// than opening a second socket (brief §26). The one exception is a card
+  /// sitting on an error: there the microphone button is the obvious way to
+  /// try again, and it used to do nothing at all - the only way out was to
+  /// close the card with X and reopen it.
   Future<void> open() async {
-    if (_open) return;
+    if (_open) {
+      if (_state == VoiceSessionState.error) await _retryAfterError();
+      return;
+    }
     _open = true;
+    _session++;
     _userEdited = false;
-    _errorMessage = null;
     transcript.clear();
+    await _start();
+  }
+
+  /// Start a fresh session in the card that is already open.
+  ///
+  /// Leaves `error` synchronously, before the first await, so a second tap
+  /// during the teardown is ignored like any other tap while connecting.
+  /// Whatever was already transcribed stays in the box - the user can still
+  /// send or edit it - exactly as it does across a provider failover.
+  Future<void> _retryAfterError() async {
+    final session = _session;
+    _errorMessage = null;
+    _set(VoiceSessionState.connecting);
+    await _cancelSubs();
+    await _service.cancel();
+    // Closed with X during the teardown - or closed and reopened, in which
+    // case that open() has started its own session and this one must not.
+    if (!_open || session != _session) return;
+    await _start();
+  }
+
+  Future<void> _start() async {
+    _errorMessage = null;
     _interim = '';
     _set(VoiceSessionState.connecting);
 
@@ -155,6 +187,7 @@ class ZenoVoiceController extends ChangeNotifier {
     // user watch it sit there until a WebSocket finishes closing is both
     // wrong to look at and, if the socket is already dead, indefinite.
     _open = false;
+    _session++;
     _autoSendTimer?.cancel();
     _autoSendTimer = null;
     _interim = '';

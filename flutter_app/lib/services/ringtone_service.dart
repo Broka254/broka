@@ -62,7 +62,7 @@ class RingtoneService {
       // ringtone usage so the fallback tone at least lands on the ring
       // stream rather than at media volume.
       await _player.setAudioContext(AudioContext(
-        android: AudioContextAndroid(
+        android: const AudioContextAndroid(
           isSpeakerphoneOn: true,
           stayAwake: true,
           contentType: AndroidContentType.sonification,
@@ -71,7 +71,7 @@ class RingtoneService {
         ),
         iOS: AudioContextIOS(
           category: AVAudioSessionCategory.playback,
-          options: {AVAudioSessionOptions.mixWithOthers},
+          options: const {AVAudioSessionOptions.mixWithOthers},
         ),
       ));
     } catch (_) {

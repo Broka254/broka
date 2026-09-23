@@ -467,6 +467,61 @@ void main() {
       c.dispose();
     });
 
+    test('tapping the microphone after a failure tries again', () async {
+      // The card stays open on an error, and the microphone button under it
+      // is the obvious way to retry. It used to do nothing until the card
+      // was closed with X.
+      var tokenCalls = 0;
+      final c = ZenoVoiceController(
+        onSubmit: (_) async {},
+        languageKey: () => 'english',
+        service: DeepgramSttService(
+          microphone: MicrophoneSource(recorder: FakeRecorder()),
+          fetchToken: () async {
+            tokenCalls++;
+            if (tokenCalls == 1) {
+              throw VoiceSessionException(VoiceFailure.tokenUnavailable);
+            }
+            return 't';
+          },
+          connect: (_, __) => FakeSocket(),
+        ),
+      );
+
+      await c.open();
+      expect(c.state, VoiceSessionState.error);
+      c.transcript.text = 'what I said before it failed';
+
+      await c.open();
+      expect(c.state, VoiceSessionState.listening);
+      expect(c.errorMessage, isNull);
+      expect(tokenCalls, 2);
+      expect(c.transcript.text, 'what I said before it failed',
+          reason: 'a retry must not throw away text the user can still send');
+      c.dispose();
+    });
+
+    test('a tap while healthy is still ignored', () async {
+      var tokenCalls = 0;
+      final c = ZenoVoiceController(
+        onSubmit: (_) async {},
+        languageKey: () => 'english',
+        service: DeepgramSttService(
+          microphone: MicrophoneSource(recorder: FakeRecorder()),
+          fetchToken: () async {
+            tokenCalls++;
+            return 't';
+          },
+          connect: (_, __) => FakeSocket(),
+        ),
+      );
+      await c.open();
+      await c.open();
+      expect(c.state, VoiceSessionState.listening);
+      expect(tokenCalls, 1);
+      c.dispose();
+    });
+
     test('an unsupported language is flagged, not hidden', () async {
       final sent = <String>[];
       final c = build(sent: sent, language: 'luo');
@@ -491,7 +546,7 @@ void main() {
         home: Scaffold(
           body: ZenoVoiceOverlay(
             controller: controller,
-            child: Column(children: const [
+            child: const Column(children: [
               Text('an existing conversation message'),
               Spacer(),
               Text('the composer'),

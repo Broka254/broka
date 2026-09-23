@@ -447,7 +447,7 @@ class WebRtcService {
   // ── WebSocket signaling ───────────────────────────────────────────────────
 
   Future<void> _connectWs() async {
-    final raw  = ApiService.baseUrl;
+    const raw  = ApiService.baseUrl;
     final base = raw.startsWith('https://')
         ? raw.replaceFirst('https://', 'wss://')
         : raw.replaceFirst('http://', 'ws://');
@@ -778,7 +778,7 @@ class WebRtcService {
       // falls through to restarting with whatever configuration is
       // already active if this fails for any reason, matching today's
       // exact (never-refreshed) behavior rather than aborting recovery.
-      final margin = const Duration(minutes: 2);
+      const margin = Duration(minutes: 2);
       final stale = _iceCredentialsExpireAt == null ||
           DateTime.now().isAfter(_iceCredentialsExpireAt!.subtract(margin));
       if (stale && _pc != null) {
@@ -1323,7 +1323,6 @@ class WebRtcService {
 
         if (!isVideoTrack || !isVideo) return;
         remoteRenderer.srcObject = event.streams[0];
-        _remoteVideoTrack = event.track;
 
         // Don't announce remote video until the renderer has actual
         // dimensions - i.e. a frame has really been decoded. srcObject
@@ -1359,7 +1358,6 @@ class WebRtcService {
     };
   }
 
-  MediaStreamTrack? _remoteVideoTrack;
   // Peer's camera state, as last announced by them. Defaults to true: a
   // peer on an older build never sends video_state, and assuming their
   // camera is on preserves exactly the previous behaviour for them.
@@ -1820,7 +1818,6 @@ class WebRtcService {
     _lastPacketsReceived = null;
     _lastPacketsLost = null;
     _quality = CallQuality.unknown;
-    _remoteVideoTrack = null;
     _cameraDenied = false;
     debugPrint('WebRTC: DISPOSE_COMPLETED room=$roomId');
   }

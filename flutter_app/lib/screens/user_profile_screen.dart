@@ -68,11 +68,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     try {
       final summary = await ApiService.getReviewSummary(_userId!);
       final reviews = await ApiService.getSellerReviews(_userId!, limit: 10);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _reviewSummary = summary;
         _reviews       = reviews;
         _loadingReviews = false;
       });
+      }
     } catch (_) {
       if (mounted) setState(() => _loadingReviews = false);
     }
@@ -325,7 +327,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         Wrap(spacing: 8, runSpacing: 6, alignment: WrapAlignment.center, children: [
           if (_isVerified) _badge('✓ Verified', BrokaColors.gold),
           _badge('⭐ ${_avgRating.toStringAsFixed(1)}/10', BrokaColors.gold),
-          _badge('${_completedDeals} deals', BrokaColors.gold),
+          _badge('$_completedDeals deals', BrokaColors.gold),
           _badge('Member since $_memberSince', BrokaColors.neonBlue),
         ]),
 
@@ -489,10 +491,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         border: Border.all(color: BrokaColors.border),
       ),
       child: Column(children: [
-        Row(children: [
-          const Icon(Icons.radar_rounded, color: BrokaColors.gold, size: 16),
-          const SizedBox(width: 8),
-          const Text('TRADER PROFILE RADAR', style: TextStyle(
+        const Row(children: [
+          Icon(Icons.radar_rounded, color: BrokaColors.gold, size: 16),
+          SizedBox(width: 8),
+          Text('TRADER PROFILE RADAR', style: TextStyle(
               color: BrokaColors.textLow, fontSize: 10,
               fontWeight: FontWeight.w700, letterSpacing: 1.0)),
         ]),
@@ -759,16 +761,20 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   );
 
   Widget _buildListingsGrid() {
-    if (_loadingListings) return const Padding(padding: EdgeInsets.all(24),
+    if (_loadingListings) {
+      return const Padding(padding: EdgeInsets.all(24),
         child: Center(child: CircularProgressIndicator(color: BrokaColors.gold)));
-    if (_listings.isEmpty) return Padding(
-      padding: const EdgeInsets.all(24),
+    }
+    if (_listings.isEmpty) {
+      return const Padding(
+      padding: EdgeInsets.all(24),
       child: Center(child: Column(children: [
-        const Icon(Icons.store_outlined, color: BrokaColors.textLow, size: 36),
-        const SizedBox(height: 8),
-        const Text('No active listings', style: TextStyle(color: BrokaColors.textMid)),
+        Icon(Icons.store_outlined, color: BrokaColors.textLow, size: 36),
+        SizedBox(height: 8),
+        Text('No active listings', style: TextStyle(color: BrokaColors.textMid)),
       ])),
     );
+    }
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -814,7 +820,11 @@ class _RadarPainter extends CustomPainter {
         final angle = 2 * math.pi * i / n - math.pi / 2;
         final x = cx + rr * math.cos(angle);
         final y = cy + rr * math.sin(angle);
-        if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
       }
       path.close();
       canvas.drawPath(path, Paint()
@@ -837,7 +847,11 @@ class _RadarPainter extends CustomPainter {
       final angle = 2 * math.pi * i / n - math.pi / 2;
       final rv = r * values[i];
       final pt = Offset(cx + rv * math.cos(angle), cy + rv * math.sin(angle));
-      if (i == 0) dataPath.moveTo(pt.dx, pt.dy); else dataPath.lineTo(pt.dx, pt.dy);
+      if (i == 0) {
+        dataPath.moveTo(pt.dx, pt.dy);
+      } else {
+        dataPath.lineTo(pt.dx, pt.dy);
+      }
     }
     dataPath.close();
 

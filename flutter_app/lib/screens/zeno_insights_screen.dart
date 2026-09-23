@@ -32,7 +32,7 @@ class ZenoInsightsScreen extends StatelessWidget {
             backgroundColor: BrokaColors.bg.withOpacity(0.55),
             elevation: 0,
             scrolledUnderElevation: 0,
-            title: Row(children: const [
+            title: const Row(children: [
               ZenoAvatar(size: 26),
               SizedBox(width: 8),
               Text('ZENO INSIGHTS',

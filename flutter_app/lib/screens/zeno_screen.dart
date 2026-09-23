@@ -101,8 +101,8 @@ class _ZenoScreenState extends State<ZenoScreen>
   bool _composerFocused = false;
   final _scrollCtrl = ScrollController();
   bool _typing      = false;
-  List<_Turn> _turns = [];
-  List<Map<String, String>> _history = [];
+  final List<_Turn> _turns = [];
+  final List<Map<String, String>> _history = [];
 
   bool get _isBuying => widget.mode == ZenoMode.buyingAgent;
 
@@ -137,7 +137,6 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   final _tts = BrokaTts.instance;
   bool _ttsEnabled = true;
-  bool _speaking   = false;
 
   // Voice input (Deepgram voice-card pass, 2026-09-18).
   //
@@ -303,7 +302,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     } catch (e) {
       if (mounted) {
         setState(() {
-          _turns.add(_Turn(Message(role: 'broker',
+          _turns.add(const _Turn(Message(role: 'broker',
               content: '⚠️ Zeno is unavailable right now. Please try again shortly.')));
           _typing = false;
         });
@@ -395,7 +394,6 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   Future<void> _speak(String text) async {
     if (!_ttsEnabled) return;
-    setState(() => _speaking = true);
     // The same playback the screen already did, with the voice card told
     // about it so it can show "Zeno is speaking..." and then go back to
     // listening. The existing TTS toggle still governs whether this runs at
@@ -403,7 +401,6 @@ class _ZenoScreenState extends State<ZenoScreen>
     _voice.setZenoSpeaking(true);
     await _tts.speak(text, language: _langKey);
     _voice.setZenoSpeaking(false);
-    if (mounted) setState(() => _speaking = false);
   }
 
   /// Opens the floating voice card. Guarded inside the controller, so a
@@ -714,9 +711,9 @@ class _ZenoScreenState extends State<ZenoScreen>
           ),
         ),
         if (isExact)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(children: const [
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Row(children: [
               Icon(Icons.check_circle_rounded, size: 13, color: BrokaColors.success),
               SizedBox(width: 5),
               Text('Matches everything you asked for',
@@ -815,9 +812,9 @@ class _ZenoScreenState extends State<ZenoScreen>
     if (_slots['category'] == null && _slots['query'] == null) return const SizedBox.shrink();
 
     if (_watching) {
-      return Padding(
-        padding: const EdgeInsets.only(left: 38, bottom: 14),
-        child: Row(children: const [
+      return const Padding(
+        padding: EdgeInsets.only(left: 38, bottom: 14),
+        child: Row(children: [
           Icon(Icons.visibility_rounded, size: 14, color: BrokaColors.success),
           SizedBox(width: 6),
           Flexible(child: Text("I'll keep watching and tell you when something turns up.",
@@ -1004,7 +1001,7 @@ class _ZenoScreenState extends State<ZenoScreen>
                         hintStyle: const TextStyle(color: BrokaColors.textLow, fontSize: 15),
                         border: InputBorder.none,
                         contentPadding:
-                            EdgeInsets.symmetric(horizontal: 6, vertical: 13),
+                            const EdgeInsets.symmetric(horizontal: 6, vertical: 13),
                       ),
                     ),
                   ),

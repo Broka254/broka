@@ -174,10 +174,13 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator(
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(
         color: BrokaColors.gold, strokeWidth: 1.5));
+    }
 
-    if (_error != null) return Center(child: Column(
+    if (_error != null) {
+      return Center(child: Column(
       mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.error_outline, color: BrokaColors.danger, size: 40),
         const SizedBox(height: 12),
@@ -189,6 +192,7 @@ class _InboxScreenState extends State<InboxScreen> {
               color: Colors.white, fontWeight: FontWeight.w700))),
       ],
     ));
+    }
 
     if (_grouped.isEmpty) return _buildEmpty();
 
@@ -227,10 +231,10 @@ class _InboxScreenState extends State<InboxScreen> {
     width: double.infinity,
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
     color: BrokaColors.gold.withOpacity(0.12),
-    child: Row(children: [
-      const Icon(Icons.cloud_off_rounded, size: 14, color: BrokaColors.gold),
-      const SizedBox(width: 8),
-      const Expanded(child: Text(
+    child: const Row(children: [
+      Icon(Icons.cloud_off_rounded, size: 14, color: BrokaColors.gold),
+      SizedBox(width: 8),
+      Expanded(child: Text(
         "You're offline - showing your last saved messages",
         style: TextStyle(color: BrokaColors.gold, fontSize: 11.5, fontWeight: FontWeight.w600),
       )),

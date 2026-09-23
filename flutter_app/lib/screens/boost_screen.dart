@@ -28,8 +28,6 @@ class _BoostScreenState extends State<BoostScreen>
   bool   _listingsLoading = true;
   String? _selectedId;
   String? _selectedName;
-  bool   _selectedFeatured = false;
-  String? _featuredUntil;
 
   // Plan
   String _plan = 'week';
@@ -85,8 +83,6 @@ class _BoostScreenState extends State<BoostScreen>
             final first = _listings.first;
             _selectedId      = first['id'] as String;
             _selectedName    = first['name'] as String;
-            _selectedFeatured = first['is_featured'] as bool? ?? false;
-            _featuredUntil   = first['featured_until'] as String?;
           }
         });
       }
@@ -232,27 +228,27 @@ class _BoostScreenState extends State<BoostScreen>
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: BrokaColors.gold.withOpacity(0.25)),
         ),
-        child: Column(children: [
-          const Icon(Icons.rocket_launch_rounded,
+        child: const Column(children: [
+          Icon(Icons.rocket_launch_rounded,
               color: BrokaColors.gold, size: 40),
-          const SizedBox(height: 12),
-          const Text('Get More Eyes on Your Listing',
+          SizedBox(height: 12),
+          Text('Get More Eyes on Your Listing',
               style: TextStyle(color: BrokaColors.textHigh,
                   fontSize: 17, fontWeight: FontWeight.w900),
               textAlign: TextAlign.center),
-          const SizedBox(height: 8),
-          const Text(
+          SizedBox(height: 8),
+          Text(
             'Boosted listings appear at the top of the home feed '
             'with a glowing FEATURED badge - seen first by every buyer in your area.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.5),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: 14),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             _StatPill(icon: Icons.visibility_rounded, label: '5x more views',        color: BrokaColors.neonBlue),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             _StatPill(icon: Icons.push_pin_rounded,   label: 'Pinned to top',        color: BrokaColors.gold),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             _StatPill(icon: Icons.bolt_rounded,       label: 'Sell 3x faster',       color: BrokaColors.gold),
           ]),
         ]),
@@ -299,8 +295,6 @@ class _BoostScreenState extends State<BoostScreen>
             onTap: () => setState(() {
               _selectedId       = id;
               _selectedName     = name;
-              _selectedFeatured = isFeatured;
-              _featuredUntil    = l['featured_until'] as String?;
               _errorMsg         = null;
             }),
             child: AnimatedContainer(
@@ -338,7 +332,7 @@ class _BoostScreenState extends State<BoostScreen>
                   Text(category, style: const TextStyle(color: BrokaColors.textLow, fontSize: 11)),
                 ])),
                 if (isFeatured)
-                  _FeaturedBadge(small: true)
+                  const _FeaturedBadge(small: true)
                 else if (selected)
                   const Icon(Icons.check_circle_rounded,
                       color: BrokaColors.gold, size: 22),
@@ -467,7 +461,7 @@ class _BoostScreenState extends State<BoostScreen>
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
               _selectedName != null
-                  ? 'Boost: ${_selectedName!.length > 30 ? _selectedName!.substring(0, 28) + "…" : _selectedName}'
+                  ? 'Boost: ${_selectedName!.length > 30 ? "${_selectedName!.substring(0, 28)}…" : _selectedName}'
                   : 'Select a listing',
               style: const TextStyle(color: BrokaColors.textHigh,
                   fontWeight: FontWeight.w700, fontSize: 13),

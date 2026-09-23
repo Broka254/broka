@@ -20,7 +20,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   final _scrollCtrl = ScrollController();
   bool _typing = false;
   List<Message> _messages = [];
-  List<Map<String, String>> _history = [];
+  final List<Map<String, String>> _history = [];
   // Keyed by message index in _messages - the shortlist a given advisor
   // reply was ranked from, rendered as tappable cards under that message.
   final Map<int, List<Listing>> _shortlists = {};
@@ -93,7 +93,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       if (mounted) {
         setState(() {
           _typing = false;
-          _messages.add(Message(role: 'broker',
+          _messages.add(const Message(role: 'broker',
             content: 'Network error. Please check your connection.'));
         });
       }
@@ -101,16 +101,18 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   }
 
   void _scrollDown() => Future.delayed(const Duration(milliseconds: 120), () {
-    if (_scrollCtrl.hasClients) _scrollCtrl.animateTo(
+    if (_scrollCtrl.hasClients) {
+      _scrollCtrl.animateTo(
       _scrollCtrl.position.maxScrollExtent,
       duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+    }
   });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             colors: [Color(0xFF070B16), Color(0xFF03040A)],
             begin: Alignment.topCenter, end: Alignment.bottomCenter,
@@ -222,7 +224,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                           ? BrokaColors.success : BrokaColors.gold).withOpacity(0.3)),
                       boxShadow: isBroker ? [BrokaColors.glowGold] : null,
                     ),
-                    child: Text(msg.content, style: TextStyle(
+                    child: Text(msg.content, style: const TextStyle(
                         color: BrokaColors.textHigh, fontSize: 13, height: 1.45)),
                   ),
                 ],
@@ -282,7 +284,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         border: Border.all(color: BrokaColors.gold.withOpacity(0.3)),
         boxShadow: const [BrokaColors.glowGold],
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: const [
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(width: 16, height: 16,
           child: CircularProgressIndicator(strokeWidth: 1.5,
               color: BrokaColors.gold)),
@@ -294,7 +296,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     ),
   );
 
-  Widget _buildSuggestions() => Container(
+  Widget _buildSuggestions() => SizedBox(
     height: 42,
     child: ListView.builder(
       scrollDirection: Axis.horizontal,
@@ -315,7 +317,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Text(emoji, style: const TextStyle(fontSize: 13)),
               const SizedBox(width: 6),
-              Text(label, style: TextStyle(
+              Text(label, style: const TextStyle(
                   color: BrokaColors.textMid, fontSize: 11)),
             ]),
           ),
@@ -328,14 +330,14 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     top: false,
     child: Container(
     padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-    decoration: BoxDecoration(
+    decoration: const BoxDecoration(
       color: BrokaColors.bgMid,
       border: Border(top: BorderSide(color: BrokaColors.border)),
     ),
     child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
       Expanded(child: TextField(
         controller: _msgCtrl,
-        style: TextStyle(color: BrokaColors.textHigh, fontSize: 13),
+        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13),
         maxLines: 6,
         minLines: 1,
         textCapitalization: TextCapitalization.sentences,

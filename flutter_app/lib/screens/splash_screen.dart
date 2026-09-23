@@ -159,7 +159,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // See CHANGES.md "Sell flow — photo capture kicking you back to Home"
     // and the v6.1 entry's "always proceeds to Home (or a saved sell draft)
     // regardless of login state" — this restores that literally.
-    if (await SellDraftStore.hasDraft()) {
+    final hasDraft = await SellDraftStore.hasDraft();
+    if (!mounted) return;
+    if (hasDraft) {
       Navigator.of(context).pushReplacement(_smoothRoute(const SellPhotosScreen()));
       return;
     }
@@ -516,7 +518,7 @@ class _BootTextBlock extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        FittedBox(
+        const FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
             'THE FUTURE OF INTELLIGENT COMMERCE',

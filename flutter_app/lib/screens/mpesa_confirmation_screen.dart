@@ -33,7 +33,6 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
   String?    _receipt;
   String?    _errorMsg;
   int        _secondsLeft = 120;
-  int        _pollCount   = 0;
 
   Timer? _pollTimer;
   Timer? _countdownTimer;
@@ -145,7 +144,6 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
 
   Future<void> _poll() async {
     if (_status != _PayStatus.pending) return;
-    _pollCount++;
     try {
       final result = await ApiService.mpesaQuery(
         checkoutRequestId: _checkoutRequestId,
@@ -214,7 +212,6 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
     setState(() {
       _status     = _PayStatus.pending;
       _secondsLeft = 120;
-      _pollCount  = 0;
       _errorMsg   = null;
     });
     _startPolling();
@@ -236,7 +233,7 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
   String get _timeLabel {
     final m = _secondsLeft ~/ 60;
     final s = _secondsLeft % 60;
-    return '${m}:${s.toString().padLeft(2, '0')}';
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -372,7 +369,7 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
                   fontSize: 20, fontWeight: FontWeight.w800),
               textAlign: TextAlign.center),
           const SizedBox(height: 8),
-          Text('Check your phone (${ _maskedPhone}) and enter your M-Pesa PIN',
+          Text('Check your phone ($_maskedPhone) and enter your M-Pesa PIN',
               style: const TextStyle(color: BrokaColors.textMid,
                   fontSize: 13, height: 1.5),
               textAlign: TextAlign.center),
@@ -387,13 +384,13 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
         ]);
 
       case _PayStatus.success:
-        return Column(children: [
-          const Text('Payment Successful! 🎉',
+        return const Column(children: [
+          Text('Payment Successful! 🎉',
               style: TextStyle(color: BrokaColors.neonGreen,
                   fontSize: 22, fontWeight: FontWeight.w800),
               textAlign: TextAlign.center),
-          const SizedBox(height: 8),
-          const Text('Your payment has been confirmed by Safaricom.',
+          SizedBox(height: 8),
+          Text('Your payment has been confirmed by Safaricom.',
               style: TextStyle(color: BrokaColors.textMid,
                   fontSize: 13, height: 1.5),
               textAlign: TextAlign.center),
@@ -412,12 +409,12 @@ class _MpesaConfirmationScreenState extends State<MpesaConfirmationScreen>
         ]);
 
       case _PayStatus.timeout:
-        return Column(children: [
-          const Text('Payment Timed Out',
+        return const Column(children: [
+          Text('Payment Timed Out',
               style: TextStyle(color: Colors.orange,
                   fontSize: 22, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          const Text('No confirmation received within 2 minutes. '
+          SizedBox(height: 8),
+          Text('No confirmation received within 2 minutes. '
               'If money was deducted, contact Safaricom on *234#.',
               style: TextStyle(color: BrokaColors.textMid,
                   fontSize: 13, height: 1.5),

@@ -65,14 +65,14 @@ class NotificationService {
   // killed, where the notification is the only thing that happens.
   static const String _systemRingtoneUri = 'content://settings/system/ringtone';
 
-  static final AndroidNotificationChannel _callChannel =
+  static const AndroidNotificationChannel _callChannel =
       AndroidNotificationChannel(
     callChannelId,
     'Incoming Calls',
     description: 'Incoming BROKA in-app calls',
     importance: Importance.max,
     playSound: true,
-    sound: const UriAndroidNotificationSound(_systemRingtoneUri),
+    sound: UriAndroidNotificationSound(_systemRingtoneUri),
     // Put it on the ring stream, not the notification stream, so it
     // follows ringer volume and silent mode the way a call should.
     audioAttributesUsage: AudioAttributesUsage.notificationRingtone,

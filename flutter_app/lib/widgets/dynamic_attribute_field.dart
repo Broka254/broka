@@ -92,7 +92,7 @@ class DynamicAttributeField extends StatelessWidget {
                 initialValue: value,
                 keyboardType: const TextInputType.numberWithOptions(decimal: false),
                 style: const TextStyle(color: BrokaColors.textHigh),
-                decoration: InputDecoration(hintText: 'e.g. 2018'),
+                decoration: const InputDecoration(hintText: 'e.g. 2018'),
                 onChanged: onChanged,
               ),
             ],

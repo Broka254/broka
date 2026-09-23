@@ -66,7 +66,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _navIndex = 0;
+  // Dormant by design, not dead: see the "Standalone location row removed"
+  // note further down. Kept as ready plumbing for a "near me" filter.
+  // ignore: unused_field
   String? _locationLabel;
+  // ignore: unused_field
   bool _gettingLocation = false;
 
   // The single vertical scroll owner for the whole screen (collapsing-scroll
@@ -87,7 +91,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // is what the grid actually fetches against, updated only when the user
   // releases the slider so dragging doesn't refetch on every frame (matches
   // the old _loadListings-on-onChangeEnd behaviour).
-  double _maxPrice = 5000000;
+  final double _maxPrice = 5000000;
   double _priceFilter = 5000000;
   double _committedPriceFilter = 5000000;
   bool _showFilters = false;
@@ -647,6 +651,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // Fix #2: use Geolocator.getCurrentPosition() first; fall back to IP only
   // when the user denies GPS. This fixes the 0.0km distance bug.
 
+  // Dormant by design - see the "Standalone location row removed" note.
+  // ignore: unused_element
   Future<void> _detectLocation() async {
     setState(() => _gettingLocation = true);
     await _gpsGeolocation();
@@ -693,8 +699,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       }
       if (perm == LocationPermission.deniedForever) return null;
       final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 10),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 10),
+        ),
       );
       return {'lat': pos.latitude, 'lng': pos.longitude};
     } catch (_) {
@@ -1014,7 +1022,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildFilterPanel() => Container(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-    decoration: BoxDecoration(
+    decoration: const BoxDecoration(
       color: BrokaColors.bgMid,
       border: Border(bottom: BorderSide(color: BrokaColors.border)),
     ),
@@ -1499,7 +1507,9 @@ class _ListingSearchDelegate extends SearchDelegate<String> {
         _traderResults = [];
       }
       _loading = false;
-      showResults(context);
+      // The search page can be closed while the requests are in flight;
+      // showResults on a dead context throws.
+      if (context.mounted) showResults(context);
     });
     return _buildBody(context);
   }

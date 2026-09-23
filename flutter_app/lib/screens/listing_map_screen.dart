@@ -134,8 +134,10 @@ class _ListingMapScreenState extends State<ListingMapScreen> {
       if (perm == LocationPermission.denied ||
           perm == LocationPermission.deniedForever) return;
       final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 10),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 10),
+        ),
       );
       if (!mounted) return;
       setState(() {
@@ -338,8 +340,8 @@ class _ListingMapScreenState extends State<ListingMapScreen> {
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  Text('Route to Seller',
-                      style: const TextStyle(
+                  const Text('Route to Seller',
+                      style: TextStyle(
                           color: BrokaColors.textHigh,
                           fontSize: 16,
                           fontWeight: FontWeight.w800)),
@@ -528,9 +530,9 @@ class _ListingMapScreenState extends State<ListingMapScreen> {
         _listing?.sellerName ??
         (_viewerRole == 'seller' ? 'Buyer' : 'Seller');
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: BrokaColors.bgMid,
-        border: const Border(top: BorderSide(color: BrokaColors.border)),
+        border: Border(top: BorderSide(color: BrokaColors.border)),
       ),
       child: SafeArea(
         top: false,

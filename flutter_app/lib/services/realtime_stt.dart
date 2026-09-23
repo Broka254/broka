@@ -366,7 +366,7 @@ class MicrophoneSource {
         provider: 'microphone',
         stage: SttStage.microphone,
         event: 'MICROPHONE_STARTED',
-        info: {
+        info: const {
           'sample_rate': sampleRate,
           'channels': channels,
           'encoding': 'pcm16le',

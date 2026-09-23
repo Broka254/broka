@@ -155,11 +155,11 @@ class StoreExplainerScreen extends StatelessWidget {
               borderRadius: BorderRadius.circular(9),
               border: Border.all(color: BrokaColors.border),
             ),
-            child: Row(children: [
-              const Icon(Icons.lock_rounded, size: 12,
+            child: const Row(children: [
+              Icon(Icons.lock_rounded, size: 12,
                   color: BrokaColors.neonGreen),
-              const SizedBox(width: 7),
-              const Text('broka.co.ke/store/',
+              SizedBox(width: 7),
+              Text('broka.co.ke/store/',
                   style: TextStyle(color: BrokaColors.textMid,
                       fontSize: 12.5, fontFamily: 'monospace')),
               Text('yourname',
@@ -213,11 +213,11 @@ class StoreExplainerScreen extends StatelessWidget {
           border: Border.all(
               color: BrokaColors.border, style: BorderStyle.solid),
         ),
-        child: Row(children: [
-          const Icon(Icons.photo_library_outlined,
+        child: const Row(children: [
+          Icon(Icons.photo_library_outlined,
               size: 18, color: BrokaColors.textMid),
-          const SizedBox(width: 11),
-          const Expanded(child: Text(
+          SizedBox(width: 11),
+          Expanded(child: Text(
             'Screenshots of a live store are coming here — so you can see '
             'exactly what buyers will see before you make one.',
             style: TextStyle(color: BrokaColors.textMid,

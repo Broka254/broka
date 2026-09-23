@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/api_service.dart';
@@ -36,7 +35,7 @@ class _BrokerScreenState extends State<BrokerScreen>
   Timer? _thinkingTimer;
 
   List<Message>               _messages = [];
-  List<Map<String, String>>   _history  = [];
+  final List<Map<String, String>>   _history  = [];
   Listing?                    _listing;
 
   // Deal probability (0-100)
@@ -183,7 +182,7 @@ class _BrokerScreenState extends State<BrokerScreen>
       _scrollDown();
     } catch (e) {
       if (mounted) {
-        setState(() => _messages.add(Message(
+        setState(() => _messages.add(const Message(
           role: 'broker',
           content: '⚠️ Network issue - please retry.',
         )));
@@ -405,9 +404,9 @@ class _BrokerScreenState extends State<BrokerScreen>
     top: false,
     child: Container(
     padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-    decoration: BoxDecoration(
+    decoration: const BoxDecoration(
       color: BrokaColors.bgMid,
-      border: const Border(top: BorderSide(color: BrokaColors.border)),
+      border: Border(top: BorderSide(color: BrokaColors.border)),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.end,

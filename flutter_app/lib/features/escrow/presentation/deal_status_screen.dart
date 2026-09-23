@@ -134,12 +134,10 @@ class _DealStatusScreenState extends State<DealStatusScreen> {
     if (confirmed != true || !mounted) return;
 
     setState(() { _isActing = true; _actionError = null; });
-    // POST /disputes/open
-    // Inline call to the disputes endpoint
-    final repo = EscrowRepository();
-    final result = await repo.getDeal(widget.dealId);
-    // Use disputesRepository (if wired) or raw call
-    // Here we navigate user to dispute screen with pre-filled data
+    // The dispute screen opens the case itself (POST /disputes/open) from
+    // the pre-filled data handed to it here. A getDeal() round-trip used to
+    // sit in front of this with its result discarded - a wasted request
+    // that delayed the screen on a slow connection.
     if (mounted) {
       Navigator.pushNamed(context, '/dispute', arguments: {
         'deal_id':     widget.dealId,

@@ -250,7 +250,6 @@ class _DealStatusWidgetState extends State<DealStatusWidget>
   }
 
   Widget _buildAltStatus() {
-    final isRefund  = _status == DealStatus.refunded;
     final isDispute = _status == DealStatus.disputed;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),

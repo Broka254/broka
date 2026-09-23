@@ -164,11 +164,13 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
 
       final b64 = base64Encode(bytes);
 
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _previewB64  = b64;
         _photoBlurry = blurry;
         _capturing   = false;
       });
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _capturing = false);
@@ -283,12 +285,12 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
           ),
 
           // ── Instruction above the oval ──
-          Positioned(
+          const Positioned(
             top: 0, left: 24, right: 24,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.only(top: 62),
-                child: Column(children: const [
+                padding: EdgeInsets.only(top: 62),
+                child: Column(children: [
                   Text(
                     'Take a quick selfie',
                     textAlign: TextAlign.center,

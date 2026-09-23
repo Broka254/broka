@@ -187,18 +187,22 @@ class _AuctionScreenState extends State<AuctionScreen> {
   Future<void> _loadLeaderboard() async {
     try {
       final b = await ApiService.getLeaderboard(_targetListingId);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         // fixed: cast List<dynamic> to List<Bid>
         _bids = b
             .map((e) => Bid.fromJson(e as Map<String, dynamic>))
             .toList();
         _loadingBids = false;
       });
+      }
     } catch (_) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _bids = widget.listingId != null ? [] : List<Bid>.from(_demoBids);
         _loadingBids = false;
       });
+      }
     }
   }
 

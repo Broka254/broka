@@ -151,8 +151,8 @@ class NeuralNetworkPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant NeuralNetworkPainter old) =>
-      old.t != t || old.reveal != reveal;
+  bool shouldRepaint(covariant NeuralNetworkPainter oldDelegate) =>
+      oldDelegate.t != t || oldDelegate.reveal != reveal;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -255,8 +255,8 @@ class OrbitRingPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant OrbitRingPainter old) =>
-      old.reveal != reveal || old.cometAngle != cometAngle;
+  bool shouldRepaint(covariant OrbitRingPainter oldDelegate) =>
+      oldDelegate.reveal != reveal || oldDelegate.cometAngle != cometAngle;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -389,7 +389,7 @@ class DigitalWavePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant DigitalWavePainter old) => old.t != t || old.reveal != reveal;
+  bool shouldRepaint(covariant DigitalWavePainter oldDelegate) => oldDelegate.t != t || oldDelegate.reveal != reveal;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -431,6 +431,6 @@ class ActivityDotsPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant ActivityDotsPainter old) =>
-      old.sweep != sweep || old.reveal != reveal;
+  bool shouldRepaint(covariant ActivityDotsPainter oldDelegate) =>
+      oldDelegate.sweep != sweep || oldDelegate.reveal != reveal;
 }

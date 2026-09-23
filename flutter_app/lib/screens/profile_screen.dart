@@ -15,7 +15,7 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _notificationsEnabled = true;
-  bool _darkMode             = true;
+  final bool _darkMode             = true;
   bool _locationVisible      = true;
   bool _loadingStats         = true;
 
@@ -368,12 +368,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       Switch(
         value: value, onChanged: onChanged,
         activeColor: BrokaColors.gold,
-        trackColor: MaterialStateProperty.resolveWith((s) =>
-          s.contains(MaterialState.selected)
+        trackColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.selected)
               ? BrokaColors.gold.withOpacity(0.3)
               : BrokaColors.border),
-        thumbColor: MaterialStateProperty.resolveWith((s) =>
-          s.contains(MaterialState.selected)
+        thumbColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.selected)
               ? BrokaColors.gold : BrokaColors.textLow),
       ),
     ]),
@@ -401,15 +401,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         border: Border.all(color: BrokaColors.border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.language_rounded,
+        const Row(children: [
+          Icon(Icons.language_rounded,
               color: BrokaColors.gold, size: 18),
-          const SizedBox(width: 12),
-          const Text('Language', style: TextStyle(
+          SizedBox(width: 12),
+          Text('Language', style: TextStyle(
               color: BrokaColors.textHigh, fontSize: 14,
               fontWeight: FontWeight.w600)),
-          const Spacer(),
-          const Text('AI + Voice', style: TextStyle(
+          Spacer(),
+          Text('AI + Voice', style: TextStyle(
               color: BrokaColors.textLow, fontSize: 11)),
         ]),
         const SizedBox(height: 12),

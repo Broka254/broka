@@ -300,7 +300,7 @@ class GoldButton extends StatelessWidget {
       decoration: BoxDecoration(
         gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim]),
         borderRadius: BorderRadius.circular(10),
-        boxShadow: [BrokaColors.glowGold],
+        boxShadow: const [BrokaColors.glowGold],
       ),
       child: Center(
         child: loading

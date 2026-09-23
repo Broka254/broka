@@ -628,8 +628,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     if (ls == 'sold' || ls == 'completed') return 'Complete';
     final raw = (((_dealStatusMap[l.id]?['deal_status'] ??
                    _dealStatusMap[l.id]?['status']) ?? '') as Object).toString().toLowerCase();
-    if (raw.contains('funded') || raw.contains('escrow') || raw.contains('pending_delivery'))
+    if (raw.contains('funded') || raw.contains('escrow') || raw.contains('pending_delivery')) {
       return 'In Escrow';
+    }
     if (raw.contains('pending'))   return 'Pending';
     if (raw.contains('completed')) return 'Complete';
     if (ls == 'pending')           return 'Pending';
@@ -786,10 +787,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   /// lands the whole layout appears at once and jumps. Blocking out the
   /// actual sections means the page is already the right shape before the
   /// data arrives - the wait reads shorter and nothing moves when it ends.
-  Widget _buildLoadingShimmer() => SingleChildScrollView(
-    physics: const NeverScrollableScrollPhysics(),
-    padding: const EdgeInsets.fromLTRB(16, 20, 16, 56),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: const [
+  Widget _buildLoadingShimmer() => const SingleChildScrollView(
+    physics: NeverScrollableScrollPhysics(),
+    padding: EdgeInsets.fromLTRB(16, 20, 16, 56),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       ShimmerBox(height: 132, radius: BorderRadius.all(Radius.circular(18))),  // command header
       SizedBox(height: 14),
       Row(children: [
@@ -983,7 +984,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   Widget _buildDcrRow() {
     // Nothing completed yet: say what is actually true, and what moves it.
     if (!_dcrIsMeasured) {
-      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: const [
+      return const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(Icons.trending_up, size: 18, color: BrokaColors.gold),
         SizedBox(width: 8),
         Expanded(child: Text(
@@ -2248,7 +2249,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
 
   Widget _buildActiveFeaturedBadge(Listing l) {
     final until = l.featuredUntil;
-    final diff  = until != null ? until.difference(DateTime.now()) : null;
+    final diff  = until?.difference(DateTime.now());
     final lbl   = diff != null && diff.isNegative
         ? 'Featured listing has expired'
         : diff != null
@@ -2600,7 +2601,9 @@ class _GlowLineChartPainter extends CustomPainter {
 
     // Gradient fill under line
     final fillPath = Path()..moveTo(pts[0].dx, bottom);
-    for (final p in pts) fillPath.lineTo(p.dx, p.dy);
+    for (final p in pts) {
+      fillPath.lineTo(p.dx, p.dy);
+    }
     fillPath.lineTo(pts.last.dx, bottom);
     fillPath.close();
     canvas.drawPath(fillPath, Paint()
@@ -2724,7 +2727,9 @@ class _WeekViewsPainter extends CustomPainter {
 
     // Fill
     final fillPath = Path()..moveTo(pts.first.dx, bottom);
-    for (final p in pts) fillPath.lineTo(p.dx, p.dy);
+    for (final p in pts) {
+      fillPath.lineTo(p.dx, p.dy);
+    }
     fillPath.lineTo(pts.last.dx, bottom);
     fillPath.close();
     canvas.drawPath(fillPath, Paint()
@@ -2736,7 +2741,9 @@ class _WeekViewsPainter extends CustomPainter {
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)));
 
     final linePath = Path()..moveTo(pts.first.dx, pts.first.dy);
-    for (int i = 1; i < n; i++) linePath.lineTo(pts[i].dx, pts[i].dy);
+    for (int i = 1; i < n; i++) {
+      linePath.lineTo(pts[i].dx, pts[i].dy);
+    }
 
     // Shadow
     canvas.drawPath(linePath, Paint()

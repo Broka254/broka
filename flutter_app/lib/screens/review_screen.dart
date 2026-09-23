@@ -124,10 +124,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
       HapticFeedback.heavyImpact();
       if (mounted) setState(() => _step = _ReviewStep.success);
     } catch (e) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _errorMsg = e.toString().replaceFirst('Exception: ', '');
         _step = _ReviewStep.form;
       });
+      }
     }
   }
 

@@ -129,7 +129,11 @@ class _HexPainter extends CustomPainter {
     for (int i = 0; i < 6; i++) {
       final a = (i * 60 - 30) * pi / 180;
       final px = cx + r * cos(a); final py = cy + r * sin(a);
-      if (i == 0) path.moveTo(px, py); else path.lineTo(px, py);
+      if (i == 0) {
+        path.moveTo(px, py);
+      } else {
+        path.lineTo(px, py);
+      }
     }
     path.close();
     canvas.drawPath(path, Paint()..color = color.withOpacity(0.12)..style = PaintingStyle.fill);

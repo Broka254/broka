@@ -176,11 +176,11 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
           child: Row(children: [
             Container(
               width: 36, height: 36,
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                     colors: [BrokaColors.gold, BrokaColors.goldDim]),
-                boxShadow: const [BrokaColors.glowGold],
+                boxShadow: [BrokaColors.glowGold],
               ),
               child: const Icon(Icons.smart_toy_outlined,
                   color: Colors.white, size: 17),

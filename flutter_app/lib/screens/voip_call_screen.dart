@@ -4,7 +4,6 @@
 // Supports both audio and video calls (see WebRtcService.callType).
 
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';

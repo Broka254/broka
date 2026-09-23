@@ -139,10 +139,12 @@ class _ProductScreenState extends State<ProductScreen> {
     if (_listing == null || _priceComparisonLoaded) return;
     try {
       final comparison = await ApiService.getPriceComparison(_listing!.id);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _priceComparison = comparison;
         _priceComparisonLoaded = true;
       });
+      }
     } catch (_) {
       if (mounted) setState(() => _priceComparisonLoaded = true);
     }
@@ -173,8 +175,9 @@ class _ProductScreenState extends State<ProductScreen> {
     final r = (_listing?.sellerRating as num?)?.toDouble() ?? 5.0;
     score += (r > 5 ? r / 2 : r) * 0.5;
     final deals = _listing?.sellerCompletedDeals ?? 0;
-    if (deals > 10) score += 1.5;
-    else if (deals > 3) score += 0.8;
+    if (deals > 10) {
+      score += 1.5;
+    } else if (deals > 3) score += 0.8;
     final verified = _sellerInfo?['is_verified'] as bool? ?? false;
     if (verified) score += 1.5;
     return score.clamp(0.0, 10.0);
@@ -438,8 +441,9 @@ class _ProductScreenState extends State<ProductScreen> {
       try {
         final dt = DateTime.parse(lastSeen);
         final diff = DateTime.now().difference(dt);
-        if (diff.inMinutes < 2) lastSeenLabel = 'Online now';
-        else if (diff.inMinutes < 60) lastSeenLabel = '${diff.inMinutes}m ago';
+        if (diff.inMinutes < 2) {
+          lastSeenLabel = 'Online now';
+        } else if (diff.inMinutes < 60) lastSeenLabel = '${diff.inMinutes}m ago';
         else if (diff.inHours < 24) lastSeenLabel = '${diff.inHours}h ago';
         else lastSeenLabel = '${diff.inDays}d ago';
       } catch (_) {}
@@ -564,7 +568,6 @@ class _ProductScreenState extends State<ProductScreen> {
 
   Widget _buildMapPreview(Listing l) {
     final myLat = ApiService.currentUserLat;
-    final myLng = ApiService.currentUserLng;
     final dist  = _distanceKm;
 
     String? distanceText;
@@ -611,10 +614,10 @@ class _ProductScreenState extends State<ProductScreen> {
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Container(
                     width: 32, height: 32,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       shape: BoxShape.circle,
                       color: BrokaColors.gold,
-                      boxShadow: const [BrokaColors.glowGold],
+                      boxShadow: [BrokaColors.glowGold],
                     ),
                     child: const Icon(Icons.store_rounded,
                         color: Colors.white, size: 16),
@@ -789,7 +792,7 @@ class _ProductScreenState extends State<ProductScreen> {
       final price        = listing.price;
       final credScore    = _credibilityScore;
       final distKm       = _distanceKm;
-      final category     = listing.category ?? 'General';
+      final category     = listing.category;
 
       // ── Price comparison block: real on-platform data when we have
       // enough, otherwise tell Zeno honestly so it falls back to its own
@@ -799,13 +802,13 @@ class _ProductScreenState extends State<ProductScreen> {
         final diff = _priceDiffPct!;
         final avg  = _marketAvgPrice!;
         priceBlock =
-            'On-platform comparison: ${_priceComparisonSampleSize} similar active '
+            'On-platform comparison: $_priceComparisonSampleSize similar active '
             'listings found, average price KES ${avg.toStringAsFixed(0)}. '
             'This listing is ${diff > 0 ? "${diff.toStringAsFixed(0)}% above" : "${diff.abs().toStringAsFixed(0)}% below"} that average.';
       } else {
         priceBlock =
             'Not enough similar listings on BROKA yet for a reliable on-platform '
-            'average (only ${_priceComparisonSampleSize} found). Use your own general '
+            'average (only $_priceComparisonSampleSize found). Use your own general '
             'knowledge of typical market prices for this kind of item in Kenya '
             'instead, and be clear that this is a general estimate, not platform data.';
       }
@@ -849,10 +852,12 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
         imageBase64: _zenoImageBase64,
       );
 
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _zenoComment        = comment;
         _zenoCommentLoading = false;
       });
+      }
       // Speak the Zeno verdict aloud so the user hears the analysis.
       if (comment.isNotEmpty) {
         BrokaTts.instance.speak(comment, language: lang);
@@ -992,8 +997,8 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
       // Not enough comparable listings yet - be honest about it instead of
       // showing a fabricated percentage.
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Text('Listing Price', style: TextStyle(
+        const Row(children: [
+          Text('Listing Price', style: TextStyle(
               color: BrokaColors.textLow, fontSize: 10)),
         ]),
         Text(l.formattedPrice, style: const TextStyle(
@@ -1011,7 +1016,7 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
             const SizedBox(width: 6),
             Expanded(child: Text(
               _priceComparisonSampleSize > 0
-                  ? 'Only ${_priceComparisonSampleSize} similar listings on BROKA so far — not enough yet for a reliable platform average.'
+                  ? 'Only $_priceComparisonSampleSize similar listings on BROKA so far — not enough yet for a reliable platform average.'
                   : 'No similar listings on BROKA yet to compare against. Ask Zeno for a general market estimate.',
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 12))),
           ]),
@@ -1024,8 +1029,8 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
     final color = diffAbs < 10 ? BrokaColors.neonGreen
         : isAbove ? BrokaColors.warning : BrokaColors.neonBlue;
     final label = diffAbs < 10 ? 'Fair price (vs $_priceComparisonSampleSize similar listings)'
-        : isAbove ? '${diffAbs.toStringAsFixed(0)}% above ${_priceComparisonSampleSize} similar listings'
-        : '${diffAbs.toStringAsFixed(0)}% below ${_priceComparisonSampleSize} similar listings';
+        : isAbove ? '${diffAbs.toStringAsFixed(0)}% above $_priceComparisonSampleSize similar listings'
+        : '${diffAbs.toStringAsFixed(0)}% below $_priceComparisonSampleSize similar listings';
     final avgPrice = _marketAvgPrice!;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1093,7 +1098,7 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
           FractionallySizedBox(
             widthFactor: score / 10,
             child: Container(height: 8, decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [
+              gradient: const LinearGradient(colors: [
                 BrokaColors.danger, BrokaColors.warning, BrokaColors.neonGreen]),
               borderRadius: BorderRadius.circular(4))),
           ),
@@ -1184,9 +1189,9 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(
           width: 28, height: 28,
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             shape: BoxShape.circle,
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
                 colors: [BrokaColors.gold, BrokaColors.neonBlue]),
           ),
           child: const Icon(Icons.auto_awesome_rounded,

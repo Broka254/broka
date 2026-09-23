@@ -772,15 +772,15 @@ class _DisputeScreenState extends State<DisputeScreen>
 
   // ── Executing ──────────────────────────────────────────────────────────────
 
-  Widget _buildExecuting() => Center(
+  Widget _buildExecuting() => const Center(
     child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      const CircularProgressIndicator(color: BrokaColors.neonGreen),
-      const SizedBox(height: 24),
-      const Text('Executing resolution…',
+      CircularProgressIndicator(color: BrokaColors.neonGreen),
+      SizedBox(height: 24),
+      Text('Executing resolution…',
           style: TextStyle(color: BrokaColors.textHigh,
               fontSize: 16, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 8),
-      const Text('Triggering M-Pesa - do not close this screen.',
+      SizedBox(height: 8),
+      Text('Triggering M-Pesa - do not close this screen.',
           style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
     ]),
   );
@@ -1182,14 +1182,14 @@ class _SectionDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-    Expanded(child: Divider(color: BrokaColors.border, height: 1)),
+    const Expanded(child: Divider(color: BrokaColors.border, height: 1)),
     Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10),
       child: Text(label, style: const TextStyle(
           color: BrokaColors.textLow,
           fontSize: 11, fontWeight: FontWeight.w600)),
     ),
-    Expanded(child: Divider(color: BrokaColors.border, height: 1)),
+    const Expanded(child: Divider(color: BrokaColors.border, height: 1)),
   ]);
 }
 

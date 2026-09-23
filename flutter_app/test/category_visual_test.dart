@@ -143,7 +143,7 @@ void main() {
       // it actually exists belongs.
       for (final v in CategoryVisuals.canonical) {
         if (v.assetPath == null) continue;
-        expect(File('.' + '/' + v.assetPath!).existsSync(), isTrue,
+        expect(File('./${v.assetPath!}').existsSync(), isTrue,
             reason: '${v.categoryName} points at a missing asset '
                 '(${v.assetPath})');
       }

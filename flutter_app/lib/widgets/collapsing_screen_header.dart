@@ -168,15 +168,15 @@ class CollapsingScreenHeader extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  bool shouldRebuild(covariant CollapsingScreenHeader old) =>
-      old.title != title ||
-      old.emoji != emoji ||
-      old.gradient != gradient ||
-      old.narrow != narrow ||
-      old.textScale != textScale ||
-      old.trailingKey != trailingKey ||
-      (old.trailing == null) != (trailing == null) ||
-      old.onBack != onBack;
+  bool shouldRebuild(covariant CollapsingScreenHeader oldDelegate) =>
+      oldDelegate.title != title ||
+      oldDelegate.emoji != emoji ||
+      oldDelegate.gradient != gradient ||
+      oldDelegate.narrow != narrow ||
+      oldDelegate.textScale != textScale ||
+      oldDelegate.trailingKey != trailingKey ||
+      (oldDelegate.trailing == null) != (trailing == null) ||
+      oldDelegate.onBack != onBack;
 }
 
 /// The square control that sits at the right of a [CollapsingScreenHeader] -

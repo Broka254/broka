@@ -91,10 +91,10 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
         _buildReputation(trader),
         if (trader.specializations != null && trader.specializations!.isNotEmpty)
           _buildTopCategories(trader),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: Text('All Products',
-              style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.bold, fontSize: 16)),
+              style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.bold, fontSize: 16)),
         ),
         SizedBox(
           height: 520,

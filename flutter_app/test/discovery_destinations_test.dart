@@ -310,8 +310,8 @@ void main() {
 
       // embedded: true is a pre-existing contract - no Scaffold, no header,
       // just the list, for a caller that hosts it itself.
-      await tester.pumpWidget(MaterialApp(
-          home: Scaffold(body: const TraderListScreen(embedded: true))));
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(body: TraderListScreen(embedded: true))));
       await _settle(tester);
       expect(find.byType(SliverPersistentHeader), findsNothing);
       expect(find.byType(ConstellationBackground), findsNothing);

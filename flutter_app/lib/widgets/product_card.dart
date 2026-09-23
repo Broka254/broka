@@ -450,7 +450,7 @@ class ProductCard extends StatelessWidget {
                   // subtree, and "featured" plus "nearby" showing one
                   // listing is a real case here.
                   Hero(
-                    tag: 'listing-photo-${_heroId}',
+                    tag: 'listing-photo-$_heroId',
                     // The card clips to a rounded rect and the detail view
                     // does not, so without this the corners pop square for
                     // the duration of the flight.
