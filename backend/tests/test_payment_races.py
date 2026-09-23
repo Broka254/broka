@@ -596,3 +596,111 @@ class TestLegacyMpesaSettlement:
             deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
         assert deal.status == DealStatus.agreed
         assert funded_events == []
+
+
+# ── E-Confirm release: the re-check under the lock must read the real row ────
+
+class ReleaseCountingProvider(FakeProvider):
+    """Counts release_escrow calls. Answers `payout_initiated`, the response
+    that leaves Deal.status at `paid` and so leaves a second request a way
+    past the deal lock."""
+
+    def __init__(self):
+        super().__init__(status=EConfirmEscrowStatus.RELEASE_PENDING)
+        self.release_calls = 0
+
+    async def release_escrow(self, provider_transaction_id, confirmation_code, notes=None):
+        self.release_calls += 1
+        return EscrowProviderResult(
+            provider_transaction_id, EConfirmEscrowStatus.RELEASE_PENDING, "payout_initiated",
+        )
+
+
+@pytest.fixture
+def release_provider(monkeypatch):
+    fake = ReleaseCountingProvider()
+    monkeypatch.setattr("api.domains.escrow.service.get_escrow_provider", lambda: fake)
+    monkeypatch.setattr("api.domains.escrow.providers.get_escrow_provider", lambda: fake)
+    return fake
+
+
+async def _funded_econfirm_deal():
+    """A paid deal whose E-Confirm escrow is funded and holds a release code."""
+    from api.core.secrets_crypto import encrypt_secret
+
+    seller, buyer = await _user("Seller"), await _user("Buyer")
+    async with AsyncSessionLocal() as db:
+        listing = Listing(
+            seller_id=seller.id, name=f"Item {_tag()}", category="Electronics", price=25000,
+            lat=-1.29, lng=36.82, status=ListingStatus.pending,
+        )
+        db.add(listing)
+        await db.flush()
+        deal = Deal(
+            listing_id=listing.id, seller_id=seller.id, buyer_id=buyer.id,
+            agreed_price=25000, commission=750, status=DealStatus.paid,
+        )
+        db.add(deal)
+        await db.flush()
+        db.add(ExternalEscrow(
+            deal_id=deal.id, provider_transaction_id=f"tx-{_tag()}",
+            status=EConfirmEscrowStatus.FUNDED, amount=25000,
+            buyer_email="b@x.test", seller_email="s@x.test", receiver_phone="+254700000000",
+            confirmation_code_encrypted=encrypt_secret("RELEASE-CODE"),
+        ))
+        await db.commit()
+        return deal.id, buyer
+
+
+class TestReleaseRace:
+    """Two "confirm delivery" requests for one E-Confirm deal.
+
+    Request B reads the escrow (funded) and passes the cheap early check.
+    Request A then marks it release_pending and commits - the deal stays
+    `paid`, because a release answered with payout_initiated does not
+    complete the deal. B takes the deal lock and re-reads the escrow. That
+    re-read is the only thing between B and a second payout request, so it
+    has to see A's commit, not B's own earlier copy of the row.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_release_committed_by_another_request_stops_the_second_one(self, release_provider):
+        from api.domains.escrow.service import EscrowService
+
+        deal_id, buyer = await _funded_econfirm_deal()
+
+        async with AsyncSessionLocal() as db_b:
+            svc_b = EscrowService(db_b)
+            deal_b = await svc_b.deals.get_by_id(deal_id)
+            escrow_b = await svc_b.external_escrows.get_by_deal_id(deal_id)
+            assert escrow_b.status == EConfirmEscrowStatus.FUNDED
+
+            # Request A wins the race and commits its intent to release.
+            async with AsyncSessionLocal() as db_a:
+                row = (await db_a.execute(
+                    select(ExternalEscrow).where(ExternalEscrow.deal_id == deal_id)
+                )).scalar_one()
+                row.status = EConfirmEscrowStatus.RELEASE_PENDING
+                row.release_initiated_at = datetime.utcnow()
+                await db_a.commit()
+
+            await svc_b._confirm_delivery_econfirm(deal_b, escrow_b, buyer.id, None)
+
+        assert release_provider.release_calls == 0, (
+            "the re-check under the deal lock read a stale `funded` escrow and "
+            "asked E-Confirm to release the same transaction a second time"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_single_release_still_goes_through(self, release_provider):
+        from api.domains.escrow.service import EscrowService
+
+        deal_id, buyer = await _funded_econfirm_deal()
+        async with AsyncSessionLocal() as db:
+            await EscrowService(db).confirm_delivery(deal_id, buyer.id)
+        assert release_provider.release_calls == 1
+        async with AsyncSessionLocal() as db:
+            escrow = (await db.execute(
+                select(ExternalEscrow).where(ExternalEscrow.deal_id == deal_id)
+            )).scalar_one()
+        assert escrow.status == EConfirmEscrowStatus.RELEASE_PENDING

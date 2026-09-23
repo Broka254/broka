@@ -131,17 +131,37 @@ class ExternalEscrowRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    # Both single-row reads below use populate_existing, so they always
+    # return what the row holds NOW. Sessions here use
+    # expire_on_commit=False, and without this a second read of an escrow
+    # the session had already loaded handed back that earlier copy -
+    # whatever another request had committed in between.
+    #
+    # That broke the double-release guard in
+    # EscrowService._confirm_delivery_econfirm. Its "authoritative
+    # re-check" re-reads the escrow after taking the deal lock, but the
+    # request had loaded it once already (confirm_delivery reads it to
+    # choose the flow), so the re-check saw the stale `funded` rather than
+    # the `release_pending` a concurrent release had just committed, and
+    # went on to call release_escrow() a second time. Same bug class as
+    # lock_deal_if_status's, fixed there for the Deal row only.
+    #
+    # Safe for callers holding unflushed edits: the session autoflushes
+    # before the SELECT, so those edits are written first and read back.
+
     async def get_by_deal_id(self, deal_id: str) -> Optional[ExternalEscrow]:
         r = await self.db.execute(
-            select(ExternalEscrow).where(ExternalEscrow.deal_id == deal_id)
+            select(ExternalEscrow)
+            .where(ExternalEscrow.deal_id == deal_id)
+            .execution_options(populate_existing=True)
         )
         return r.scalar_one_or_none()
 
     async def get_by_provider_transaction_id(self, provider_transaction_id: str) -> Optional[ExternalEscrow]:
         r = await self.db.execute(
-            select(ExternalEscrow).where(
-                ExternalEscrow.provider_transaction_id == provider_transaction_id
-            )
+            select(ExternalEscrow)
+            .where(ExternalEscrow.provider_transaction_id == provider_transaction_id)
+            .execution_options(populate_existing=True)
         )
         return r.scalar_one_or_none()
 
