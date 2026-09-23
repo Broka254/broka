@@ -92,6 +92,20 @@ services:
         sync: false          # Error tracking AND reconciliation alerts (money that needs a
                              # person - see api/core/reconciliation.py). Without it those
                              # alerts only reach the logs. Free tier covers 5k errors/month.
+      - key: R2_ACCOUNT_ID
+        sync: false          # Cloudflare account id (R2 overview page). Images: see
+                             # api/core/media_storage.py. With any of these five unset,
+                             # images are stored in the database instead.
+      - key: R2_ACCESS_KEY_ID
+        sync: false          # R2 API token (Object Read & Write, this bucket only)
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false          # e.g. broka-media
+      - key: MEDIA_PUBLIC_BASE_URL
+        sync: false          # The bucket's public URL: custom domain or pub-....r2.dev
+      - key: PUBLIC_API_BASE_URL
+        sync: false          # This service's own URL; absolute links for database-stored images
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false          # Optional: FCM push notifications
       - key: CLOUDFLARE_TURN_KEY_ID

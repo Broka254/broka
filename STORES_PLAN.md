@@ -71,7 +71,27 @@ storefront draws the same effect in the browser.
 Each phase ships on its own: backend, app and web together, with tests,
 behind the previous phase's work.
 
-### Phase 1 — Images
+### Phase 1 — Images ✅ (2026-09-23)
+
+Shipped as planned, with these differences and additions:
+- Sizes are **480 / 960 / 1600 px** (not 320/800): 320 was soft on a
+  two-column grid at phone pixel densities.
+- Base64 still sent by older app builds (listings, showcase, store images,
+  profile photos) isn't converted inline: the id is left NULL and the
+  5-minute backfill converts it, with compare-and-swap writes so an edit
+  made during a conversion always wins.
+- Listing cards carry a `cover` with `kind` ("showcase" | "photo") so the
+  "✨ AI Showcase" badge stays accurate.
+- Fixed on the way: the product page's Zeno verdict never actually sent the
+  listing photo (it only accepted data URIs, and listing photos were bare
+  base64). It now sends the stored image, and the server labels images by
+  their real type instead of always JPEG.
+- CI now runs `flutter test`.
+
+Tests: `backend/tests/test_media_assets.py` (37),
+`flutter_app/test/image_upload_test.dart` (14).
+
+The original Phase 1 plan follows.
 
 The foundation for everything after it. Today listing photos are raw
 base64 joined with commas and sent in full on every list request (up to 6

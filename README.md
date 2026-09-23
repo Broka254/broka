@@ -20,6 +20,15 @@ Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
 
 ## Recent changes (2026-09-23)
 
+- **Images are stored files, not text in the database** (Online Stores
+  phase 1, see `STORES_PLAN.md`). Every photo is checked, turned upright,
+  stripped of its metadata (phone photos carry GPS coordinates) and saved
+  as WebP in three sizes on Cloudflare R2. Product lists now carry small
+  image links instead of every photo, video and seller selfie as base64,
+  which made a 20-product page tens of megabytes. The app uploads each
+  photo as soon as it's taken, with progress and retry, so publishing no
+  longer sends all the photos in one request. Images already in the
+  database are converted in the background.
 - **Zeno chat requires sign-in.** `POST /negotiate/chat`, the handler that
   serves every Zeno conversation, took no token, no rate limit and no size
   limit, so anyone who found the URL could send unlimited prompts and images
@@ -40,8 +49,9 @@ Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
   together) and retries once. The Zeno chat calls do the same.
 
 Regression tests: `backend/tests/test_cost_bounds.py`,
-`backend/tests/test_route_ordering.py`, `backend/tests/test_payment_races.py`
-and `flutter_app/test/session_renewal_test.dart`.
+`backend/tests/test_route_ordering.py`, `backend/tests/test_payment_races.py`,
+`backend/tests/test_media_assets.py`, `flutter_app/test/session_renewal_test.dart`
+and `flutter_app/test/image_upload_test.dart`.
 
 ---
 
@@ -104,6 +114,25 @@ is never exposed publicly. A win becomes a normal deal. See `AUCTIONS.md`.
   fraud flag) go to ARQ when `REDIS_URL` is set, and need a worker process:
   `arq api.core.workers.WorkerSettings`. Without Redis they run in-process.
 
+### Images
+
+`POST /media/images` takes one image with a purpose (listing photo,
+showcase, store logo/cover/photo). The server reads it with Pillow (so a
+renamed non-image is refused), applies the phone's rotation, drops all
+metadata, and writes WebP at 480, 960 and 1600 pixels on the longest side
+(`thumb`, `medium`, `large`). It returns an id, which listings and stores
+are created with; the server checks the id belongs to the caller and was
+uploaded for that purpose.
+
+Files go to Cloudflare R2 when the five `R2_*`/`MEDIA_PUBLIC_BASE_URL`
+variables are set, and to the database otherwise (served by
+`GET /media/i/...`). Either way the URLs never change, so they're cached
+forever. Rows written before this, or by older app builds, still hold
+base64; a background pass every 5 minutes converts a batch at a time
+(`POST /admin/media/backfill` runs one on demand). List responses send the
+first legacy photo only until a row is converted, and single-listing reads
+keep the base64 for older app builds.
+
 ### Calling
 
 WebRTC audio and video between the two phones. The backend relays call
@@ -163,8 +192,8 @@ Flutter:
 
 ```bash
 cd flutter_app
-flutter analyze --no-fatal-warnings --no-fatal-infos   # CI runs this
-flutter test                                           # CI does not run this yet
+flutter analyze --no-fatal-warnings --no-fatal-infos
+flutter test
 ```
 
 ---
@@ -181,6 +210,8 @@ flutter test                                           # CI does not run this ye
 | `ECONFIRM_API_KEY` | Required in production | E-Confirm escrow. Production refuses to start without it |
 | `ZAC_SECRET` | Required in production | Signs dispute resolution codes. Production refuses the default |
 | `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` | At least one | AI providers, tried in that order |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `MEDIA_PUBLIC_BASE_URL` | Production | Image storage on Cloudflare R2. Any unset: images are stored in the database |
+| `PUBLIC_API_BASE_URL` | Optional | This API's own URL, for absolute links to database-stored images |
 | `REDIS_URL` | Strongly recommended | Rate limits and idempotency across instances, call state, the ARQ queue |
 | `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |
@@ -214,7 +245,7 @@ routes need `Authorization: Bearer <access token>`.
 | `/reviews` | Seller reviews |
 | `/calls` | Call setup, TURN credentials, call logging |
 | `/stt`, `/tts` | Speech-to-text tokens and transcription, text-to-speech |
-| `/media` | Voice note and image upload |
+| `/media` | Image upload (`/media/images`) and serving, chat voice notes and images |
 | `/admin` | Summary, users, audit logs, fraud events, ledger integrity, AI savings |
 | `/health`, `/ready`, `/live` | Liveness and readiness probes |
 
@@ -266,7 +297,7 @@ PostgreSQL database, both on Render's free plan.
   E-Confirm reconciliation don't run. They catch up once it wakes.
 - CI (`.github/workflows/build.yml`) runs on every push to `main`: backend
   tests against Redis with the 50% coverage gate, then `flutter analyze`
-  (errors only), then an APK build that replaces the `latest-release`
+  (errors only) and `flutter test`, then an APK build that replaces the `latest-release`
   GitHub release. Without a keystore configured, that APK is signed with the
   debug key.
 
@@ -289,8 +320,9 @@ PostgreSQL database, both on Render's free plan.
 - [x] CI-enforced test coverage floor (50%, `--cov-fail-under` in `.github/workflows/build.yml` and `backend/pytest.ini`)
 - [x] VoIP calling (WebRTC)
 - [x] STT / TTS voice support
+- [x] Image storage on Cloudflare R2 (WebP sizes, metadata stripped)
+- [x] `flutter test` in CI
 - [ ] Consume the Redis event streams (events are written there but only handled in-process today)
-- [ ] Run `flutter test` in CI
 - [ ] Event sourcing for payments (Phase 3)
 - [ ] ML-based fraud models (Phase 4)
 - [ ] Seller reputation graph (Phase 4)

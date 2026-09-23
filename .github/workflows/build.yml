@@ -127,6 +127,14 @@ jobs:
           cd flutter_app
           flutter analyze --no-fatal-warnings --no-fatal-infos
 
+      - name: Test
+        # Blocking: a failing widget or unit test stops the APK from being
+        # built and published. The suite needs no network - the voice tests
+        # inject their connectors and the HTTP tests use mock clients.
+        run: |
+          cd flutter_app
+          flutter test
+
       - name: Build APK
         # flutter build apk's own post-build .apk existence check can return
         # a false failure when used with --split-per-abi (it looks for a
