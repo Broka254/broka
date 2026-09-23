@@ -17,6 +17,7 @@ Circuit breakers prevent cascading failures:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -88,6 +89,39 @@ _CACHE_KEY_PREFIX = "broka:ai_cache:"
 _CACHE_TTL        = 3600
 
 
+def _cache_key(kind: str, messages: list[dict]) -> str:
+    """Degraded-mode cache key over the WHOLE prompt.
+
+    The cache is served back only when every provider is down, so the key
+    must identify the exact question asked. It used to be hash() of the
+    latest message alone, which had two faults: a chat reply is personalised
+    (the system prompt carries the user's name, plus their history and
+    language), so user B saying "hi" could be served user A's cached "Hi
+    Wanjiru!"; and str hash() is randomised per process, so the key never
+    matched across workers sharing the Redis cache anyway. A SHA-256 of the
+    full message list fixes both.
+    """
+    digest = hashlib.sha256(
+        json.dumps(messages, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return f"{kind}:{digest}"
+
+
+# Text a CLIENT sends that ends up inside a model prompt is billed per token
+# and was unbounded: chat `history` entries are handed back by the app every
+# turn, and a crafted request could make each one megabytes long. Clipped
+# where prompts are built, so every endpoint that forwards history is
+# covered at once - and clipped, not rejected, because a long legitimate
+# conversation should degrade to "the model sees less of it", not a 422.
+_HISTORY_ENTRY_MAX_CHARS = 2000
+_MESSAGE_MAX_CHARS       = 4000
+
+
+def _clip(text, limit: int) -> str:
+    s = text if isinstance(text, str) else ("" if text is None else str(text))
+    return s if len(s) <= limit else s[:limit]
+
+
 async def _cache_get(key: str) -> Optional[str]:
     try:
         if not settings.redis_enabled:
@@ -133,13 +167,13 @@ class AIBrokerService:
             system += f"\n\nRespond primarily in {language}."
         if user_name:
             system += f"\nThe user's name is {user_name}. Use their name occasionally."
-        messages = self._build_messages(system, history, content)
-        reply    = await self._call_ai(messages, cache_key=f"chat:{hash(content)}")
+        messages = self._build_messages(system, history, _clip(content, _MESSAGE_MAX_CHARS))
+        reply    = await self._call_ai(messages, cache_key=_cache_key("chat", messages))
         return {"role": "broker", "content": reply}
 
     async def detect_scam(self, message: str) -> dict:
-        messages = [{"role": "user", "content": f"{SCAM_DETECTION_SYSTEM}\n\nMessage to analyse:\n{message}"}]
-        raw = await self._call_ai(messages, cache_key=f"scam:{hash(message)}")
+        messages = [{"role": "user", "content": f"{SCAM_DETECTION_SYSTEM}\n\nMessage to analyse:\n{_clip(message, _MESSAGE_MAX_CHARS)}"}]
+        raw = await self._call_ai(messages, cache_key=_cache_key("scam", messages))
         try:
             start = raw.index("{")
             end   = raw.rindex("}") + 1
@@ -182,7 +216,7 @@ class AIBrokerService:
             f'{{"min_price":0,"max_price":0,"recommended_price":0,"reasoning":"..."}}'
         )
         messages = [{"role": "user", "content": prompt}]
-        raw = await self._call_ai(messages, cache_key=f"price:{hash(item_name+category)}")
+        raw = await self._call_ai(messages, cache_key=_cache_key("price", messages))
         try:
             start = raw.index("{")
             end   = raw.rindex("}") + 1
@@ -211,7 +245,7 @@ class AIBrokerService:
         See Volume 5 Ch.5: the 20-item cap is enforced by the caller, not
         here.
         """
-        prompt = f"Buyer's request: {query}\n\nShortlist:\n" + "\n".join(
+        prompt = f"Buyer's request: {_clip(query, _MESSAGE_MAX_CHARS)}\n\nShortlist:\n" + "\n".join(
             f"- {item['name']} — KES {item['price']} — {item['category']}" for item in shortlist
         )
         # Reuses the exact internal method broker_chat() already uses to
@@ -437,8 +471,10 @@ class AIBrokerService:
             "brand, model, year, size, capacity - whatever is specific to this kind of item"
         )
         transcript = "\n".join(
-            f"{'Buyer' if h.get('role') == 'user' else 'Zeno'}: {h.get('content', '')}"
+            f"{'Buyer' if h.get('role') == 'user' else 'Zeno'}: "
+            f"{_clip(h.get('content', ''), _HISTORY_ENTRY_MAX_CHARS)}"
             for h in history[-12:]
+            if isinstance(h, dict)
         ) or "(this is the first thing they've said)"
 
         budget_left = max_questions - questions_asked
@@ -714,8 +750,16 @@ class AIBrokerService:
     def _build_messages(self, system: str, history: list[dict], current: str) -> list[dict]:
         messages = [{"role": "user", "content": system}]
         for h in history[-8:]:
+            if not isinstance(h, dict):
+                continue
             role = "assistant" if h.get("role") in ("broker", "assistant") else "user"
-            messages.append({"role": role, "content": h.get("content", "")})
+            messages.append({
+                "role": role,
+                "content": _clip(h.get("content", ""), _HISTORY_ENTRY_MAX_CHARS),
+            })
+        # `current` is NOT clipped here: shopping_advisor builds it server-side
+        # around the listing shortlist, and cutting that would drop listings.
+        # Callers clip the client-supplied part before building it.
         messages.append({"role": "user", "content": current})
         return messages
 

@@ -39,9 +39,21 @@ class EmailProvider(Protocol):
 
 
 class ConsoleEmail:
-    """Dev/CI fallback — logs instead of sending. Never raises."""
+    """Dev/CI fallback — logs instead of sending. Never raises.
+
+    Refuses in production for the same reason ConsoleSMS does: logging a
+    verification code and reporting success would let anyone with log access
+    mark any address as verified, while the real owner never gets the code.
+    False sends /auth/email/otp/request down its existing 503 path.
+    """
 
     async def send(self, to: str, subject: str, html: str, text: str) -> bool:
+        if settings.is_production:
+            logger.error(
+                "[email:console] no email provider configured in production — "
+                "email NOT sent (set RESEND_API_KEY and RESEND_FROM)"
+            )
+            return False
         logger.warning(
             "[email:console] no email provider configured (checked "
             "RESEND_API_KEY) — logging instead of sending. to=%s subject=%r "

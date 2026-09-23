@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections import defaultdict, deque
 from fastapi import HTTPException, status
 
@@ -28,6 +29,11 @@ class RedisRateLimiter:
         self._redis_url     = redis_url
         self._client        = None
         self._client_loop   = None
+        # Used only while Redis is unreachable. It is per-process, so across
+        # N instances the effective limit is up to N x limit - still bounded,
+        # which is the point: failing OPEN would drop brute-force protection
+        # on login and OTP entirely for the length of any Redis blip.
+        self._fallback      = RateLimiter(name, limit, window_seconds)
 
     async def _get_client(self):
         # Same event-loop hazard as api/core/call_state.py's
@@ -51,32 +57,51 @@ class RedisRateLimiter:
         return self._client
 
     async def check_and_record(self, identifier: str) -> None:
+        key = f"broka:rl:{self.name}:{identifier}"
         try:
-            client  = await self._get_client()
-            key     = f"broka:rl:{self.name}:{identifier}"
-            now     = time.time()
-            cutoff  = now - self.window
+            client = await self._get_client()
+            now    = time.time()
+            cutoff = now - self.window
+            # Unique per request. The member used to be str(now) alone, and
+            # two requests landing on the same clock value collapsed into one
+            # sorted-set entry - counted once.
+            member = f"{now}:{uuid.uuid4().hex[:12]}"
 
-            pipe = client.pipeline()
+            # Add THEN count, in one MULTI/EXEC: every concurrent request
+            # sees a count that includes itself, so exactly `limit` of them
+            # pass. (Counting first and adding after let a burst all read
+            # the same pre-burst count.)
+            pipe = client.pipeline(transaction=True)
             pipe.zremrangebyscore(key, "-inf", cutoff)
+            pipe.zadd(key, {member: now})
             pipe.zcard(key)
-            pipe.zadd(key, {f"{now}": now})
             pipe.expire(key, self.window + 1)
             results = await pipe.execute()
-
-            count = results[1]   # count BEFORE adding current request
-            if count >= self.limit:
-                logger.warning("[rate_limit] redis hit name=%s id=%s", self.name, identifier)
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Too many {self.name} attempts. Limit: {self.limit} per {self.window}s.",
-                    headers={"Retry-After": str(self.window)},
-                )
-        except HTTPException:
-            raise
+            count = results[2]
         except Exception as e:
-            # Redis unavailable — fail open (log + allow request through)
-            logger.error("[rate_limit] Redis error (fail-open): %s", e)
+            logger.error(
+                "[rate_limit] Redis error name=%s - using the in-process limiter: %s",
+                self.name, e,
+            )
+            await self._fallback.check_and_record(identifier)
+            return
+
+        if count > self.limit:
+            # A REJECTED request must not occupy the window. It used to stay
+            # in the set, so a client retrying through its 429s kept
+            # extending its own lockout indefinitely instead of recovering
+            # once the window had passed - unlike the in-memory limiter,
+            # which only ever records requests it lets through.
+            try:
+                await client.zrem(key, member)
+            except Exception as e:
+                logger.warning("[rate_limit] could not un-record a rejected request: %s", e)
+            logger.warning("[rate_limit] redis hit name=%s id=%s", self.name, identifier)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many {self.name} attempts. Limit: {self.limit} per {self.window}s.",
+                headers={"Retry-After": str(self.window)},
+            )
 
 
 # ── In-process sliding window (single-instance fallback) ─────────────────────
@@ -140,12 +165,23 @@ if _settings.is_test:
     message_limiter  = _make_limiter("message",  limit=1000, window_seconds=60)
     otp_request_limiter = _make_limiter("otp_request", limit=1000, window_seconds=300)
     otp_verify_limiter  = _make_limiter("otp_verify",  limit=1000, window_seconds=300)
+    stt_token_limiter      = _make_limiter("stt_token",      limit=1000, window_seconds=60)
+    stt_transcribe_limiter = _make_limiter("stt_transcribe", limit=1000, window_seconds=60)
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
     message_limiter  = _make_limiter("message",  limit=30, window_seconds=60)
     otp_request_limiter = _make_limiter("otp_request", limit=3, window_seconds=300)   # per phone: 3 SMS / 5 min
     otp_verify_limiter  = _make_limiter("otp_verify",  limit=5, window_seconds=300)   # per phone: 5 attempts / 5 min
+    # Speech-to-text (api/routers/stt.py), keyed by authenticated user.
+    # Every token mint opens a PAID streaming session on BROKA's Deepgram or
+    # AssemblyAI account - and a Deepgram socket keeps streaming after its
+    # token expires - while every /stt/transcribe is a paid Whisper call on
+    # up to 25 MB of audio. A voice session normally mints one token, two on
+    # a failover; 12/min leaves room for reconnects on a flaky network and
+    # none for scripted minting. Same reasoning as turn_credential_limiter.
+    stt_token_limiter      = _make_limiter("stt_token",      limit=12, window_seconds=60)
+    stt_transcribe_limiter = _make_limiter("stt_transcribe", limit=10, window_seconds=60)
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)

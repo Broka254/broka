@@ -201,15 +201,44 @@ def decode_refresh_token(token: str) -> dict | None:
 # ── Generic decode ────────────────────────────────────────────────────────────
 
 def decode_token(token: str) -> dict | None:
-    """Safe decode — returns None on any error. Used by WebSocket endpoints."""
+    """Signature and expiry only - says nothing about what the token is FOR.
+
+    Every token this module issues is signed with the same key, so a valid
+    signature alone would let a refresh, call, phone-verify or email-verify
+    token stand in for an access token. Anything that turns a token into an
+    identity must go through decode_access_token() instead.
+    """
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
 
 
+def decode_access_token(token: str) -> dict | None:
+    """The payload of a genuine access token, or None.
+
+    The one gate between "a validly signed token" and "this request is
+    user X". Only `type == "access"` passes: a call token is scoped to one
+    room for a few minutes, a refresh token is meant only for /auth/refresh,
+    and the verify tokens prove a phone or email, not an account. Each of
+    those has its own decoder, and none of them may authenticate a route -
+    otherwise a call token leaked from a WebSocket URL would be a full
+    account token for its lifetime.
+
+    Used by the HTTP dependencies below and by every WebSocket that takes
+    the ordinary access token (deal, auction, media chat). The call
+    signalling socket uses decode_call_token() instead.
+    """
+    payload = decode_token(token)
+    if payload is None:
+        return None
+    if payload.get("type") != "access" or not payload.get("sub"):
+        return None
+    return payload
+
+
 def decode_token_strict(token: str) -> dict:
-    """Raises HTTP 401 on failure. Used by HTTP route dependencies."""
+    """Raises HTTP 401 unless `token` is a valid access token."""
     payload = decode_token(token)
     if payload is None:
         raise HTTPException(
@@ -221,6 +250,13 @@ def decode_token_strict(token: str) -> dict:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Provide an access token, not a refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This token can't be used to sign in",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     return payload
 

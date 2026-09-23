@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api.database import get_db, NegotiationMessage, Listing, User
-from api.security import get_current_user, decode_token
+from api.security import get_current_user, decode_access_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,15 +100,14 @@ async def negotiate_ws(
     """
     # Authenticate via JWT query param
     try:
-        payload = decode_token(token)
-        logger.info("[media-ws] decode result for listing=%s: payload=%s", listing_id, payload)
+        # Access tokens only: a refresh, call or verify token is signed with
+        # the same key but must never open someone's chat thread. See
+        # security.decode_access_token.
+        payload = decode_access_token(token)
         if payload is None:
-            await websocket.close(code=4001, reason="Token decode failed")
+            await websocket.close(code=4001, reason="Invalid or expired token")
             return
-        uid = payload.get("sub") or payload.get("id") or payload.get("user_id")
-        if not uid:
-            await websocket.close(code=4001, reason="Invalid token")
-            return
+        uid = payload["sub"]
     except Exception as e:
         logger.warning("[media-ws] auth exception for listing=%s: %s", listing_id, e)
         await websocket.close(code=4001, reason="Unauthorized")

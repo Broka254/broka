@@ -332,28 +332,17 @@ async def get_dispute_summary() -> dict:
     data, so intentionally left public (no current_user dependency) rather than
     requiring auth like the rest of this router.
 
-    Backed by a Redis cache refreshed every ~4h by
-    core.workers.task_refresh_dispute_summary_cache. On a cold cache (e.g. the
-    very first request after a fresh deploy, before the sweep loop has ticked
-    yet) this computes once synchronously and warms the cache for every
-    request after it, rather than returning a hardcoded fallback.
+    Backed by core.workers.get_dispute_summary: a process-local copy in
+    front of the Redis cache, each refreshed at most every ~4h. Because this
+    route is public, the aggregate must never run per request - with or
+    without Redis. A cold start computes it once (concurrent requests wait
+    for that one computation), and a failure is remembered briefly rather
+    than retried by every caller.
     """
-    from api.core.stats_cache import cache_get_json, DISPUTE_SUMMARY_KEY
-    from api.core.workers import task_refresh_dispute_summary_cache
+    from api.core.workers import get_dispute_summary, _dispute_summary_null_payload
 
-    cached = await cache_get_json(DISPUTE_SUMMARY_KEY)
-    if cached is None:
-        await task_refresh_dispute_summary_cache()
-        cached = await cache_get_json(DISPUTE_SUMMARY_KEY)
-
-    return cached or {
-        "resolved_within_24h_pct": None,
-        "median_resolution_hours": None,
-        "escrow_success_rate_pct": None,
-        "window":      "trailing_90_days",
-        "sample_size": 0,
-        "computed_at": None,
-    }
+    summary = await get_dispute_summary()
+    return summary or _dispute_summary_null_payload()
 
 
 @router.get("/v2/{case_id}")

@@ -370,7 +370,16 @@ class AuthService:
 
         pw_hash = hash_password(password)
 
-        is_admin = bool(settings.admin_bootstrap_email) and email == settings.admin_bootstrap_email
+        # Only a PROVEN address may claim the bootstrap admin seat. Matching a
+        # typed email was enough before email verification existed, which
+        # meant anyone who knew or guessed ADMIN_BOOTSTRAP_EMAIL - usually a
+        # founder's public address - and registered first became admin. The
+        # real admin now verifies their email during signup to claim it.
+        is_admin = (
+            email_verified
+            and bool(settings.admin_bootstrap_email)
+            and email == settings.admin_bootstrap_email
+        )
 
         user = await self.repo.create(
             name=name.strip(),

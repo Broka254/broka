@@ -32,10 +32,14 @@ def _coerce_dt(value) -> Optional[datetime]:
     treated as absent rather than raising, matching how every other
     optional field in create_listing behaves.
     """
-    if value is None or isinstance(value, datetime):
-        return value
+    from api.core.timeutil import parse_iso_to_naive_utc, to_naive_utc
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return to_naive_utc(value)
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+        return parse_iso_to_naive_utc(str(value))
     except (TypeError, ValueError):
         return None
 
@@ -54,13 +58,19 @@ def _strict_dt(value, field: str) -> Optional[datetime]:
     Omitted is still omitted; the caller supplies the default. Only a value
     that was SENT and cannot be read is an error.
     """
-    if value is None or isinstance(value, datetime):
-        return value
+    from api.core.timeutil import parse_iso_to_naive_utc, to_naive_utc
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return to_naive_utc(value)
     text = str(value).strip()
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+        # Converted to UTC before the zone is dropped - an offset is an
+        # instant, not decoration. See api/core/timeutil.py.
+        return parse_iso_to_naive_utc(text)
     except (TypeError, ValueError):
         from api.domains.auctions.lifecycle import AuctionError
         # Not one of validate_terms' codes: those describe a window that

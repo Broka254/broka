@@ -174,7 +174,10 @@ async def initiate_stk_push(
         )
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"STK push failed: {resp.text}")
+        # Status only in the log, fixed text to the client: the upstream body
+        # is Safaricom's, not ours to forward, and can carry request details.
+        logger.warning("[mpesa] STK push HTTP %s for deal=%s", resp.status_code, deal.id)
+        raise HTTPException(status_code=502, detail="M-Pesa is not accepting payment requests right now. Please try again.")
 
     body = resp.json()
     if body.get("ResponseCode") != "0":
@@ -211,7 +214,27 @@ async def query_payment_status(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Poll Safaricom for STK push result."""
+    """Poll Safaricom for STK push result.
+
+    Only the buyer who started the push may poll it - it used to accept any
+    CheckoutRequestID from any signed-in user. A confirmed success is applied
+    through _settle_successful_stk, the same guarded path the callback uses,
+    rather than by writing `deal.status = paid` directly: the direct write
+    skipped the agreed-only guard (so it could revive a cancelled or released
+    deal) and published nothing, which meant a query that beat the callback
+    left the deal paid with NO ledger entry - the callback then saw a paid
+    deal and stood down.
+    """
+    txn = (await db.execute(
+        select(MpesaTransaction).where(
+            MpesaTransaction.checkout_request_id == data.checkout_request_id
+        )
+    )).scalar_one_or_none()
+    if txn is None or txn.buyer_id != current_user["id"]:
+        # One answer for both, so the endpoint can't be used to probe which
+        # checkout ids exist.
+        raise HTTPException(status_code=404, detail="Payment not found")
+
     token = await _get_access_token()
     timestamp, password = _generate_password()
 
@@ -231,24 +254,18 @@ async def query_payment_status(
 
     body = resp.json()
 
-    # Mirror result to DB
-    result = await db.execute(
-        select(MpesaTransaction).where(
-            MpesaTransaction.checkout_request_id == data.checkout_request_id
-        )
-    )
-    txn = result.scalar_one_or_none()
-    if txn:
+    # Mirror a FINAL result to the DB, once. Safaricom's query is answered
+    # to us over our own authenticated call, so ResultCode 0 for our own
+    # CheckoutRequestID is trustworthy, and the amount is the one we
+    # requested (an STK prompt's amount cannot be changed by the payer).
+    if not txn.callback_processed:
         result_code = body.get("ResultCode")
         if str(result_code) == "0":
-            txn.status = MpesaStatus.success
-            deal_result = await db.execute(select(Deal).where(Deal.id == txn.deal_id))
-            deal = deal_result.scalar_one_or_none()
-            if deal:
-                deal.status = DealStatus.paid
+            await _settle_successful_stk(db, txn)
         elif result_code is not None and str(result_code) != "":
             txn.status = MpesaStatus.failed
-        await db.commit()
+            txn.callback_processed = True
+            await db.commit()
 
     return body
 
@@ -293,6 +310,74 @@ async def mpesa_callback_secured(secret: str, request: Request, db: AsyncSession
         # distinguish "wrong secret" from "route doesn't exist".
         raise HTTPException(status_code=404, detail="Not found")
     return await _process_mpesa_callback(request, db)
+
+
+async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> None:
+    """Apply a CONFIRMED successful STK payment to its transaction and deal.
+
+    The one place a legacy M-Pesa payment moves a deal, shared by the
+    Safaricom callback and /mpesa/query so the two can never disagree:
+
+      * the deal moves agreed -> paid only, under the deal row lock
+        (lock_deal_if_status). Without the guard a late or replayed result
+        could drag a released/refunded/cancelled deal back to `paid`,
+        re-opening a settled deal for a second release;
+      * EscrowFunded is published exactly once, after commit - it is what
+        writes the ledger entry and broadcasts over the deal's WebSocket;
+      * callback_processed marks the transaction done, so whichever of the
+        callback and the query arrives second is a no-op.
+
+    Deliberately NOT here: `seller.completed_deals += 1` and a +0.05 rating
+    bump, both removed earlier. completed_deals is credited once, at
+    release; and a rating that raises itself on payment is a fabricated
+    review on a marketplace whose whole value is trust.
+    """
+    from api.core.audit import record_audit
+    from api.domains.escrow.service import _FUNDED_OR_LATER, lock_deal_if_status
+
+    txn.status = MpesaStatus.success
+    deal = await lock_deal_if_status(db, txn.deal_id, (DealStatus.agreed,))
+    if deal is None:
+        current = (await db.execute(
+            select(Deal).where(Deal.id == txn.deal_id)
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        status_now = current.status if current is not None else None
+        txn.callback_processed = True
+        if status_now in _FUNDED_OR_LATER:
+            logger.warning(
+                "[mpesa] payment for deal=%s in status=%s - recording the "
+                "payment but not changing deal status",
+                txn.deal_id, status_now.value,
+            )
+        else:
+            # Money for a deal that is cancelled (or gone). Somebody has to
+            # refund this by hand; the audit row is the durable alert
+            # (GET /admin/audit-logs).
+            reason = (
+                f"M-Pesa payment {txn.mpesa_receipt or txn.checkout_request_id} "
+                f"of KES {txn.amount} received for deal in status "
+                f"{status_now.value if status_now else 'missing'}"
+            )
+            await record_audit(
+                db, "system", "mpesa_payment_on_inactive_deal", "deal", txn.deal_id, reason,
+            )
+            logger.error("[mpesa] RECONCILIATION_REQUIRED deal=%s: %s", txn.deal_id, reason)
+        await db.commit()
+        return
+
+    deal.status = DealStatus.paid
+    txn.callback_processed = True
+    await db.commit()
+
+    # After commit, so subscribers see a consistent database.
+    await publish(EscrowFunded(
+        deal_id=deal.id,
+        buyer_id=deal.buyer_id,
+        seller_id=deal.seller_id,
+        amount=txn.amount,
+        mpesa_receipt=txn.mpesa_receipt or "",
+    ))
 
 
 async def _process_mpesa_callback(request: Request, db: AsyncSession) -> dict:
@@ -369,64 +454,13 @@ async def _process_mpesa_callback(request: Request, db: AsyncSession) -> dict:
                     # redeliver it indefinitely.
                     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-                txn.status = MpesaStatus.success
-
-                # Mark deal as paid - but only from a status where that is
-                # a legal move. Without this guard a late or replayed
-                # callback could drag an already released/refunded/cancelled
-                # deal back to `paid`, re-opening a settled deal for a
-                # second release. The callback_processed flag doesn't cover
-                # it: that's per-transaction, and a deal can have more than
-                # one MpesaTransaction against it.
-                deal_result = await db.execute(select(Deal).where(Deal.id == txn.deal_id))
-                deal = deal_result.scalar_one_or_none()
-                if deal and deal.status != DealStatus.agreed:
-                    logger.warning(
-                        "[mpesa] callback for deal=%s in status=%s - recording the "
-                        "payment but not changing deal status",
-                        deal.id, deal.status.value,
-                    )
-                    txn.callback_processed = True
-                    await db.commit()
-                    return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-                if deal:
-                    deal.status = DealStatus.paid
-                    # REMOVED: `seller.completed_deals += 1` and
-                    # `seller.rating = min(5.0, seller.rating + 0.05)`.
-                    #
-                    # Both were wrong here. completed_deals is incremented
-                    # again on delivery confirmation (see EscrowService's
-                    # _confirm_delivery_legacy and _confirm_delivery_econfirm),
-                    # so every legacy deal counted twice. And raising a
-                    # seller's RATING automatically on payment is a
-                    # fabricated review: a rating is supposed to mean a
-                    # buyer assessed them, and this handed out +0.05 for the
-                    # act of being paid, before delivery had happened at
-                    # all. On a marketplace whose entire value proposition
-                    # is trust, a rating that inflates itself is worse than
-                    # no rating. Completion is credited once, at release,
-                    # where it is actually earned.
-
-                # Mark as processed to prevent duplicate callbacks
-                txn.callback_processed = True
-                await db.commit()
-
-                # ── Fire events AFTER commit so DB is consistent ───────────────
+                await _settle_successful_stk(db, txn)
                 await publish(MpesaCallbackReceived(
                     checkout_request_id=checkout_id or "",
                     result_code=result_code,
                     mpesa_receipt=txn.mpesa_receipt or "",
                     amount=txn.amount,
                 ))
-                if deal:
-                    await publish(EscrowFunded(
-                        deal_id=deal.id,
-                        buyer_id=deal.buyer_id,
-                        seller_id=deal.seller_id,
-                        amount=txn.amount,
-                        mpesa_receipt=txn.mpesa_receipt or "",
-                    ))
             else:
                 txn.status             = MpesaStatus.failed
                 txn.callback_processed = True

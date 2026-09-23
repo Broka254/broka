@@ -1,0 +1,13 @@
+[run]
+omit =
+    # Quarantined routers: never imported and never mounted (each file's
+    # header says so, as does main.py's router section). Counting them at 0%
+    # only distorts the coverage number.
+    #
+    # NOT omitted, deliberately: api/routers/auth.py and api/routers/disputes.py.
+    # Their routes are unmounted, but live code imports helpers from them -
+    # negotiate.py uses auth._approx_location, and negotiate.py and
+    # workers.py call disputes._mpesa_b2c_refund, which moves money.
+    */api/routers/admin.py
+    */api/routers/reviews.py
+    */api/routers/listings.py

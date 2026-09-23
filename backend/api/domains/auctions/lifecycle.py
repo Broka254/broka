@@ -260,9 +260,15 @@ class BidResult:
 
 
 async def _locked_meta(db: AsyncSession, listing_id: str) -> Optional[AuctionMeta]:
-    """Row-locked auction_meta. See the module docstring on concurrency."""
+    """Row-locked auction_meta. See the module docstring on concurrency.
+
+    populate_existing so the row's CURRENT values replace any copy this
+    session already holds - see escrow/service.py lock_deal_if_status.
+    """
     return (await db.execute(
-        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id).with_for_update()
+        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )).scalar_one_or_none()
 
 
@@ -473,9 +479,7 @@ async def close_auction(db: AsyncSession, listing_id: str) -> Optional[CloseResu
 
     Returns None only when there is no such auction to close.
     """
-    meta = (await db.execute(
-        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id).with_for_update()
-    )).scalar_one_or_none()
+    meta = await _locked_meta(db, listing_id)
     if meta is None:
         return None
 
@@ -938,6 +942,206 @@ async def due_for_payment_lapse(db: AsyncSession, limit: int = 100) -> list[Auct
     return list(rows)
 
 
+# ── Payment lapse ─────────────────────────────────────────────────────────────
+#
+# A lapse CANCELS a deal and puts the item back on sale, so it must never run
+# while the winner's money might be moving. "deal.status is still agreed" is
+# not evidence of that: `agreed` is exactly the status a deal sits in while an
+# STK prompt is on the buyer's phone, and it stays `agreed` until the provider
+# reports the escrow funded. Lapsing on status alone let a buyer who paid in
+# the last minute end up with money held against a cancelled deal and the item
+# re-listed for someone else.
+#
+# So the lapse first asks what became of any payment attempt, and only a
+# confirmed answer lets it proceed:
+#
+#   no attempt at all                       -> lapse
+#   attempt younger than the settle window  -> in flight, look again later
+#   E-Confirm attempt past the window       -> ask E-Confirm; lapse only on a
+#                                              definite "not funded"
+#   provider says funded / money moved      -> never lapse; let the escrow
+#                                              service apply it, and alert if
+#                                              the deal did not follow
+#   provider unreachable or unclear         -> look again later
+#
+# Then everything is re-checked under the deal and escrow row locks, which
+# are the same locks the funding path takes before it claims an attempt - so
+# a Pay tap and a lapse cannot both win.
+
+_VERDICT_NONE = "none"                    # nothing is or was in flight
+_VERDICT_IN_FLIGHT = "in_flight"          # too recent to judge
+_VERDICT_NEEDS_PROVIDER = "needs_provider"  # old enough; the provider must answer
+_VERDICT_UNCONFIRMED = "unconfirmed"      # provider could not give a definite answer
+_VERDICT_FUNDED = "funded"                # money reached the provider
+
+
+def _money_moved_statuses() -> tuple:
+    from api.models.external_escrow import EConfirmEscrowStatus as S
+    return (S.FUNDED, S.RELEASE_PENDING, S.COMPLETED, S.PAYOUT_FAILED)
+
+
+async def _payment_evidence(db: AsyncSession, deal_id: str, *, lock: bool):
+    """The deal's E-Confirm escrow row and legacy M-Pesa transactions.
+
+    populate_existing so a re-read after a commit sees current values rather
+    than this session's cached copies (sessions use expire_on_commit=False).
+    """
+    from api.database import MpesaTransaction
+    from api.models.external_escrow import ExternalEscrow
+
+    q = select(ExternalEscrow).where(ExternalEscrow.deal_id == deal_id)
+    if lock:
+        q = q.with_for_update()
+    escrow = (await db.execute(
+        q.execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    txns = (await db.execute(
+        select(MpesaTransaction)
+        .where(MpesaTransaction.deal_id == deal_id)
+        .execution_options(populate_existing=True)
+    )).scalars().all()
+    return escrow, list(txns)
+
+
+def _local_verdict(escrow, txns, now: datetime, confirmed_dead_attempt: Optional[datetime]):
+    """What the rows alone say. Returns (verdict, recheck_at).
+
+    `confirmed_dead_attempt` is the funding_initiated_at the provider has
+    ALREADY been asked about and answered "not funded" - that attempt, and
+    only that one, no longer blocks the lapse.
+    """
+    from api.database import MpesaStatus
+
+    settle = timedelta(minutes=settings.auction_funding_settle_minutes)
+
+    if escrow is not None and escrow.status in _money_moved_statuses():
+        return _VERDICT_FUNDED, None
+    if any(t.status == MpesaStatus.success for t in txns):
+        return _VERDICT_FUNDED, None
+
+    if escrow is not None and escrow.funding_initiated_at is not None \
+            and escrow.funding_initiated_at != confirmed_dead_attempt:
+        settle_at = escrow.funding_initiated_at + settle
+        if now < settle_at:
+            return _VERDICT_IN_FLIGHT, settle_at
+        return _VERDICT_NEEDS_PROVIDER, None
+
+    # Legacy Daraja STK pushes (commission-only deals). Safaricom resolves an
+    # STK prompt - paid, cancelled or timed out - within a couple of minutes
+    # and posts the result to the callback, so a transaction still pending
+    # after the settle window is one whose prompt died unanswered. A callback
+    # that somehow arrives later still lands safely: _process_mpesa_callback
+    # refuses to move a non-agreed deal and raises a reconciliation alert.
+    pending_until = [
+        (t.created_at or now) + settle
+        for t in txns
+        if t.status == MpesaStatus.pending and not t.callback_processed
+    ]
+    in_flight_until = [at for at in pending_until if now < at]
+    if in_flight_until:
+        return _VERDICT_IN_FLIGHT, max(in_flight_until)
+
+    return _VERDICT_NONE, None
+
+
+async def _ask_provider(db: AsyncSession, deal_id: str, escrow) -> str:
+    """Resolve an E-Confirm attempt that is past its settle window.
+
+    Returns _VERDICT_NONE only on a definite "still pending, never funded"
+    from E-Confirm itself. A funded answer is handed to the escrow service,
+    which owns that transition (deal -> paid, ledger, events); anything
+    unclear - an unreachable provider included - defers the decision.
+    """
+    from api.domains.escrow.providers import get_escrow_provider
+    from api.domains.escrow.service import EscrowService
+    from api.models.external_escrow import EConfirmEscrowStatus
+
+    if not escrow.provider_transaction_id:
+        return _VERDICT_UNCONFIRMED
+    try:
+        result = await get_escrow_provider().get_status(escrow.provider_transaction_id)
+    except Exception as exc:
+        logger.warning(
+            "[auction] lapse: E-Confirm status check failed deal=%s: %s",
+            deal_id, type(exc).__name__,
+        )
+        return _VERDICT_UNCONFIRMED
+
+    if result.status == EConfirmEscrowStatus.PENDING:
+        return _VERDICT_NONE
+    if result.status in _money_moved_statuses():
+        try:
+            await EscrowService(db).reconcile_econfirm_escrow(deal_id)
+        except Exception as exc:
+            logger.error("[auction] lapse: reconcile failed deal=%s: %s", deal_id, exc)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+        return _VERDICT_FUNDED
+    return _VERDICT_UNCONFIRMED
+
+
+async def _defer_lapse(
+    db: AsyncSession, listing_id: str, recheck_at: Optional[datetime], why: str,
+) -> None:
+    """Push the payment deadline out so the sweep looks again later.
+
+    Guarded on the auction still being an open win, so a deferral can never
+    resurrect a deadline another path has already cleared.
+    """
+    recheck_at = recheck_at or (
+        datetime.utcnow() + timedelta(minutes=settings.auction_funding_settle_minutes)
+    )
+    await db.execute(
+        update(AuctionMeta)
+        .where(
+            AuctionMeta.listing_id == listing_id,
+            AuctionMeta.outcome == OUTCOME_WON,
+            AuctionMeta.payment_deadline.is_not(None),
+        )
+        .values(payment_deadline=recheck_at)
+    )
+    await db.commit()
+    logger.info(
+        "[auction] PAYMENT_LAPSE_DEFERRED listing=%s until=%s reason=%s",
+        listing_id, recheck_at.isoformat(), why,
+    )
+
+
+async def _alert_funded_but_unpaid(db: AsyncSession, meta: AuctionMeta, deal, escrow) -> None:
+    """Money reached the provider but the deal never became paid.
+
+    Never lapsed and never auto-corrected: which side is right needs a human
+    with the provider's dashboard. The deadline is cleared so the sweep stops
+    re-examining it, and the audit row is the durable alert
+    (GET /admin/audit-logs).
+    """
+    from api.core.audit import record_audit
+    from api.core.events import EConfirmReconciliationRequired, publish
+
+    tx = getattr(escrow, "provider_transaction_id", None) or ""
+    reason = (
+        f"auction payment deadline reached with money moved "
+        f"(escrow={getattr(escrow, 'status', 'none')}) but deal still "
+        f"{deal.status.value if deal is not None else 'missing'}"
+    )
+    meta.payment_deadline = None
+    if deal is not None:
+        await record_audit(
+            db, "system", "auction_payment_reconciliation_required", "deal", deal.id, reason,
+        )
+    await db.commit()
+    logger.error(
+        "[auction] PAYMENT_RECONCILIATION_REQUIRED listing=%s deal=%s: %s",
+        meta.listing_id, getattr(deal, "id", None), reason,
+    )
+    if deal is not None:
+        await publish(EConfirmReconciliationRequired(
+            deal_id=deal.id, provider_transaction_id=tx, reason=reason,
+        ))
+
+
 async def lapse_unpaid_win(db: AsyncSession, listing_id: str) -> Optional[str]:
     """Handle a winner who never paid.
 
@@ -946,30 +1150,80 @@ async def lapse_unpaid_win(db: AsyncSession, listing_id: str) -> Optional[str]:
     the deal is cancelled, and the listing goes back to `active` so the
     seller can relist or sell it another way. What must NOT happen is the
     listing staying locked in `pending` forever because somebody won it and
-    walked away, which is what would happen with no sweep at all.
+    walked away - nor, just as much, cancelling a deal the winner is in the
+    middle of paying for. See the section comment above.
 
-    Returns the outcome it set, or None if there was nothing to do.
+    Returns OUTCOME_UNPAID when it lapsed the win, or None when there was
+    nothing to do, the buyer paid, or the decision was deferred.
     """
     from api.database import Deal, DealStatus
 
-    meta = await _locked_meta(db, listing_id)
+    # ── Phase 1: what became of any payment attempt? No locks held. ─────────
+    meta = (await db.execute(
+        select(AuctionMeta)
+        .where(AuctionMeta.listing_id == listing_id)
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
     if meta is None or meta.outcome != OUTCOME_WON:
         return None
     if meta.payment_deadline is None or datetime.utcnow() < meta.payment_deadline:
         return None
 
+    confirmed_dead_attempt: Optional[datetime] = None
+    if meta.deal_id:
+        escrow, txns = await _payment_evidence(db, meta.deal_id, lock=False)
+        verdict, recheck_at = _local_verdict(escrow, txns, datetime.utcnow(), None)
+        if verdict == _VERDICT_NEEDS_PROVIDER:
+            attempt = escrow.funding_initiated_at
+            # End the read transaction before a network call: nothing may
+            # be held open while waiting on E-Confirm.
+            await db.commit()
+            verdict = await _ask_provider(db, meta.deal_id, escrow)
+            if verdict == _VERDICT_NONE:
+                confirmed_dead_attempt = attempt
+        if verdict in (_VERDICT_IN_FLIGHT, _VERDICT_UNCONFIRMED):
+            await _defer_lapse(db, listing_id, recheck_at, verdict)
+            return None
+        # _VERDICT_FUNDED falls through: Phase 2 either finds the deal paid
+        # (the normal case) or raises the reconciliation alert.
+
+    # ── Phase 2: re-check everything under the row locks, then act. ─────────
+    meta = await _locked_meta(db, listing_id)
+    if meta is None or meta.outcome != OUTCOME_WON:
+        await db.rollback()
+        return None
+    now = datetime.utcnow()
+    if meta.payment_deadline is None or now < meta.payment_deadline:
+        await db.rollback()
+        return None
+
     deal = None
+    escrow = None
+    txns: list = []
     if meta.deal_id:
         deal = (await db.execute(
-            select(Deal).where(Deal.id == meta.deal_id).with_for_update()
+            select(Deal).where(Deal.id == meta.deal_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )).scalar_one_or_none()
+        escrow, txns = await _payment_evidence(db, meta.deal_id, lock=True)
 
     if deal is not None and deal.status != DealStatus.agreed:
-        # They paid (or the deal moved on some other way) between the sweep
-        # picking this up and the lock being taken. Clearing the deadline
-        # stops the sweep re-examining it forever.
+        # They paid (or the deal moved on some other way). Clearing the
+        # deadline stops the sweep re-examining it forever.
         meta.payment_deadline = None
         await db.commit()
+        return None
+
+    verdict, recheck_at = _local_verdict(escrow, txns, now, confirmed_dead_attempt)
+    if verdict == _VERDICT_FUNDED:
+        await _alert_funded_but_unpaid(db, meta, deal, escrow)
+        return None
+    if verdict != _VERDICT_NONE:
+        # A payment attempt started between the two phases. Release the
+        # locks and judge it on its own schedule.
+        await db.rollback()
+        await _defer_lapse(db, listing_id, recheck_at, verdict)
         return None
 
     meta.outcome = OUTCOME_UNPAID

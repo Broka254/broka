@@ -108,6 +108,10 @@ async def fund_deal_escrow(
         return idempotency_result.response
 
     svc = EscrowService(db)
+    # A failure below releases the key (idempotency_guard does it on the
+    # way out), so a corrected retry is not answered with 409. Safe even
+    # after an ambiguous provider failure: the escrow's own funding claim
+    # makes any retry reconcile instead of re-sending.
     result = await svc.fund_deal_escrow(
         deal_id=deal_id,
         buyer_id=current_user["id"],

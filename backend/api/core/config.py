@@ -286,6 +286,16 @@ class Settings:
     auction_payment_deadline_hours: int = field(
         default_factory=lambda: int(os.getenv("AUCTION_PAYMENT_DEADLINE_HOURS", "24"))
     )
+    # How long after a winner STARTS paying before an unfunded attempt is
+    # treated as abandoned rather than in flight. An M-Pesa STK prompt dies
+    # on the handset within a couple of minutes; this is deliberately far
+    # longer so a slow provider callback or reconciliation still lands
+    # before the sweep decides anything. Until it passes - and until the
+    # provider has been asked and answered "not funded" - a payment-lapse
+    # never cancels the deal. See lifecycle.lapse_unpaid_win.
+    auction_funding_settle_minutes: int = field(
+        default_factory=lambda: int(os.getenv("AUCTION_FUNDING_SETTLE_MINUTES", "30"))
+    )
     # Fallback minimum bid increment when an auction does not set its own.
     # Matches AuctionMeta.min_bid_increment's column default.
     auction_default_min_increment: float = field(
@@ -446,8 +456,8 @@ def validate_startup() -> None:
         logger.warning(
             "[startup] ⚠  No SMS provider configured (MOBITECH_API_KEY/"
             "MOBITECH_SENDER_NAME or AT_USERNAME/AT_API_KEY) — phone OTPs "
-            "and SMS nudges will be logged instead of actually sent. No new "
-            "user can complete registration until one of these is set."
+            "and SMS nudges will FAIL (never logged, never sent). Phone "
+            "verification is unavailable until one of these is set."
         )
 
     # ── Warn if FAL_KEY not configured ─────────────────────────────────────────
@@ -507,12 +517,12 @@ def validate_startup() -> None:
     # hard fail, since the actual exploitability today is limited.
     if s.is_production and not s.email_enabled:
         # Not fatal: email is optional at signup, so registration still
-        # completes without it. But a production deployment where every
-        # verification email is silently logged instead of sent is worth
-        # saying out loud.
+        # completes without it. But email verification requests will fail
+        # with 503 (ConsoleEmail refuses in production rather than logging
+        # codes), which is worth saying out loud at boot.
         logger.warning(
             "[startup] ⚠  RESEND_API_KEY/RESEND_FROM not set — email "
-            "verification codes will be logged, not delivered."
+            "verification is unavailable (requests return 503)."
         )
 
     if s.is_production and s.allowed_origins_raw in ("*", ""):

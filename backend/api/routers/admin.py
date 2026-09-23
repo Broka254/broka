@@ -65,6 +65,10 @@ async def bootstrap_admin(db: AsyncSession = Depends(get_db)):
     user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="Bootstrap user not found - sign up first")
+    if not user.email_verified:
+        # A typed address proves nothing - see the matching check in
+        # domains/auth/service.py register().
+        raise HTTPException(status_code=403, detail="Verify this email address before claiming admin")
     user.is_admin = True
     await db.commit()
     return {"user_id": user.id, "email": user.email, "is_admin": True}

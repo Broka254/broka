@@ -42,9 +42,24 @@ class SMSProvider(Protocol):
 
 
 class ConsoleSMS:
-    """Dev/CI fallback — logs instead of sending. Never raises."""
+    """Dev/CI fallback — logs instead of sending. Never raises.
+
+    In production it refuses instead. "Logged instead of sent" is worse than
+    a failed send there: the caller reports success, the recipient never
+    gets the message, and a one-time code lands in log storage, where anyone
+    with log access could use it to verify a phone number they don't hold.
+    Returning False makes every caller take its existing send-failed path
+    (e.g. /auth/otp/request answers 503), and the body is never logged.
+    """
 
     async def send(self, phone: str, message: str) -> bool:
+        if settings.is_production:
+            logger.error(
+                "[sms:console] no SMS provider configured in production — "
+                "message NOT sent (set MOBITECH_API_KEY/MOBITECH_SENDER_NAME "
+                "or AT_USERNAME/AT_API_KEY)"
+            )
+            return False
         logger.warning("[sms:console] no SMS provider configured (checked "
                         "MOBITECH_API_KEY/MOBITECH_SENDER_NAME, then "
                         "AT_USERNAME/AT_API_KEY) — logging instead of "

@@ -27,7 +27,7 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from api.database import (
     Deal, DealStatus, Listing, User, MpesaTransaction, MpesaStatus,
@@ -49,6 +49,20 @@ from .repository import DealRepository, MpesaRepository, ExternalEscrowRepositor
 from .providers import get_escrow_provider
 
 logger = logging.getLogger(__name__)
+
+# Deal statuses that can only be reached AFTER the buyer's money was held.
+# A FUNDED report for a deal in one of these is a duplicate of a transition
+# already applied; for any other status it is money with no live deal.
+_FUNDED_OR_LATER = frozenset({
+    DealStatus.paid,
+    DealStatus.released,
+    DealStatus.refunded,
+    DealStatus.disputed,
+    DealStatus.awaiting_condition_check,
+    DealStatus.awaiting_resolution,
+    DealStatus.awaiting_replacement,
+    DealStatus.goods_not_arrived,
+})
 
 
 # Mirrors MAX_AGREED_PRICE_KES in api/domains/escrow/router.py.
@@ -375,16 +389,47 @@ class EscrowService:
         if not escrow.provider_transaction_id:
             raise HTTPException(status_code=502, detail="Escrow setup has not completed yet — please try again shortly")
 
+        # CLAIM the attempt before sending anything. Two things race for
+        # this escrow, and both used to read-then-act:
+        #
+        #   * a second /fund call (a double tap, a retry with a fresh
+        #     Idempotency-Key) that also saw funding_initiated_at empty and
+        #     would send a second STK prompt;
+        #   * an auction payment-lapse cancelling the deal while this STK
+        #     prompt is on the buyer's phone.
+        #
+        # The claim takes the deal row lock - the same lock the lapse takes -
+        # re-checks the deal is still payable, and sets funding_initiated_at
+        # with a compare-and-swap, all before the provider is called. Exactly
+        # one caller can win it, and a lapse that runs after it sees the
+        # attempt in flight.
+        claimed = await self._claim_funding_attempt(deal.id, escrow, payer_phone)
+        if not claimed:
+            fresh_deal = await self.deals.get_by_id(deal.id)
+            await self.db.refresh(escrow)
+            return await self._payment_status_dict(fresh_deal or deal, escrow)
+
         try:
             result = await get_escrow_provider().fund_escrow(escrow.provider_transaction_id, payer_phone)
-        except EConfirmConnectionError as exc:
+        except EConfirmAPIError as exc:
+            # A clean, confirmed rejection (e.g. invalid phone number) —
+            # the provider never actually queued an STK push, so the claim
+            # is RELEASED: a corrected retry is legitimate, not a duplicate.
+            logger.warning("[escrow] fund_stk_push rejected deal=%s status=%d", deal_id, exc.status_code)
+            escrow.funding_initiated_at = None
+            escrow.last_error = f"fund rejected: HTTP {exc.status_code}"
+            await self.external_escrows.save(escrow)
+            await self.db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail="The payment provider rejected this request — please check the phone number and try again",
+            )
+        except Exception as exc:
             # Ambiguous — we do NOT know if E-Confirm received this STK
-            # request. funding_initiated_at is set regardless (this WAS
-            # a real attempt), so any further /fund call reconciles
-            # instead of retrying — see the PENDING+funding_initiated_at
-            # branch above.
-            escrow.payer_phone = payer_phone
-            escrow.funding_initiated_at = datetime.utcnow()
+            # request (a timeout, a 5xx, an unreadable response). The claim
+            # stands (this WAS a real attempt), so any further /fund call
+            # reconciles instead of retrying — see the
+            # PENDING+funding_initiated_at branch above.
             escrow.last_error = f"fund attempt: connection error ({type(exc).__name__})"
             await self.external_escrows.save(escrow)
             await self.db.commit()
@@ -396,22 +441,7 @@ class EscrowService:
                 status_code=503,
                 detail="We couldn't confirm the payment prompt was sent — checking status, please refresh in a few seconds",
             )
-        except EConfirmAPIError as exc:
-            # A clean, confirmed rejection (e.g. invalid phone number) —
-            # the provider never actually queued an STK push, so
-            # funding_initiated_at is deliberately left unset: a
-            # corrected retry is legitimate, not a duplicate.
-            logger.warning("[escrow] fund_stk_push rejected deal=%s status=%d", deal_id, exc.status_code)
-            escrow.last_error = f"fund rejected: HTTP {exc.status_code}"
-            await self.external_escrows.save(escrow)
-            await self.db.commit()
-            raise HTTPException(
-                status_code=422,
-                detail="The payment provider rejected this request — please check the phone number and try again",
-            )
 
-        escrow.payer_phone = payer_phone
-        escrow.funding_initiated_at = datetime.utcnow()
         escrow.provider_raw_status = result.raw_status
         if result.status != EConfirmEscrowStatus.UNKNOWN:
             escrow.status = result.status
@@ -429,6 +459,38 @@ class EscrowService:
         ))
 
         return await self._payment_status_dict(deal, escrow)
+
+    async def _claim_funding_attempt(
+        self, deal_id: str, escrow: ExternalEscrow, payer_phone: str,
+    ) -> bool:
+        """Atomically mark a funding attempt as started. True if this caller won.
+
+        Under the deal row lock (see lock_deal_if_status) so it serialises
+        with an auction payment-lapse, which takes the same lock; the UPDATE
+        itself is a compare-and-swap on funding_initiated_at IS NULL, so it
+        also holds on SQLite, where FOR UPDATE is a no-op. Committed before
+        returning, so no lock is held while the provider is called.
+        """
+        locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.agreed,))
+        if locked is None:
+            # Cancelled, lapsed or already paid since this request started.
+            await self.db.commit()
+            return False
+        now = datetime.utcnow()
+        claim = await self.db.execute(
+            update(ExternalEscrow)
+            .where(
+                ExternalEscrow.id == escrow.id,
+                ExternalEscrow.funding_initiated_at.is_(None),
+            )
+            .values(funding_initiated_at=now, payer_phone=payer_phone, updated_at=now)
+        )
+        await self.db.commit()
+        # The Core UPDATE bypassed the ORM, and sessions keep their objects
+        # across commits (expire_on_commit=False) - resync so later ORM
+        # writes to this escrow start from what the row really holds.
+        await self.db.refresh(escrow)
+        return claim.rowcount > 0
 
     async def _create_external_escrow(
         self, deal: Deal, buyer_id: str, existing: Optional[ExternalEscrow] = None,
@@ -620,7 +682,38 @@ class EscrowService:
                     amount=deal.agreed_price, mpesa_receipt=escrow.provider_transaction_id,
                 ))
             else:
-                await self.db.commit()  # Phase 8: someone else already moved it — not an error
+                # The deal was not `agreed` when locked. Usually that is the
+                # benign Phase 8 case - a concurrent poller already applied
+                # this same FUNDED transition - and the deal is paid or
+                # later. But money arriving for a deal that is CANCELLED (a
+                # lapsed auction win, say) is not benign: the buyer has paid
+                # into escrow for something they will not get, and nothing
+                # would ever notice. That needs a human with the provider's
+                # dashboard, so it is recorded as an audit row (the durable
+                # alert, GET /admin/audit-logs), logged at ERROR and
+                # published for any subscriber.
+                current = await self.deals.get_by_id(deal_id)
+                current_status = current.status if current is not None else None
+                if current_status in _FUNDED_OR_LATER:
+                    await self.db.commit()  # Phase 8: someone else already moved it — not an error
+                else:
+                    reason = (
+                        f"escrow funded but deal is "
+                        f"{current_status.value if current_status else 'missing'}"
+                    )
+                    await record_audit(
+                        self.db, "system", "econfirm_funded_on_inactive_deal", "deal", deal_id,
+                        f"provider_transaction_id={escrow.provider_transaction_id} {reason}",
+                    )
+                    await self.db.commit()
+                    logger.error(
+                        "[escrow] RECONCILIATION_REQUIRED deal=%s tx=%s: %s",
+                        deal_id, escrow.provider_transaction_id, reason,
+                    )
+                    await publish(EConfirmReconciliationRequired(
+                        deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
+                        reason=reason,
+                    ))
 
         elif result.status == EConfirmEscrowStatus.PAYOUT_FAILED and previous_status != EConfirmEscrowStatus.PAYOUT_FAILED:
             escrow.last_error = "provider reported payout_failed"
@@ -1068,8 +1161,18 @@ async def lock_deal_if_status(
     production with one), so the dialect that matters for real concurrent
     traffic is the one where the lock actually holds.
     """
+    # populate_existing is what makes the re-check real. Sessions here use
+    # expire_on_commit=False, so a Deal this session loaded earlier (every
+    # caller does - they read it first to authorise) sits in the identity
+    # map, and a plain SELECT hands back THAT object with its old status
+    # even though the row just returned says otherwise. Without this, a
+    # transaction that waited on the lock would still see "agreed" after
+    # the lock holder committed "paid", and apply the transition a second
+    # time.
     result = await db.execute(
-        select(Deal).where(Deal.id == deal_id).with_for_update()
+        select(Deal).where(Deal.id == deal_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     deal = result.scalar_one_or_none()
     if deal is None or deal.status not in expected_statuses:

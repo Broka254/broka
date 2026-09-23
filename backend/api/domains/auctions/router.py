@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +41,16 @@ class AuctionTermsIn(BaseModel):
     # was omitted would be the worst possible interpretation.
     clear_reserve: bool = False
 
+    @field_validator("starts_at", "ends_at")
+    @classmethod
+    def _as_naive_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        # Clients send "...Z" (the Flutter app always does). Pydantic parses
+        # that as timezone-aware, and an aware value compared against the
+        # stored naive-UTC window raised a TypeError - every such request
+        # was a 500. Convert to the stored convention at the boundary.
+        from api.core.timeutil import to_naive_utc
+        return to_naive_utc(v) if v is not None else None
+
 
 @router.patch("/{listing_id}/terms")
 async def update_auction_terms(
@@ -65,7 +75,9 @@ async def update_auction_terms(
             status_code=403, detail="You can only change your own auction.")
 
     meta = (await db.execute(
-        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id).with_for_update()
+        select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )).scalar_one_or_none()
     if meta is None:
         raise HTTPException(status_code=404, detail="This listing is not an auction.")

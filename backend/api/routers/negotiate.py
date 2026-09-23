@@ -279,6 +279,35 @@ class MessageIn(BaseModel):
     intent:       Optional[str] = None
 
 
+async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> bool:
+    """True (and a reconciliation alert raised) when E-Confirm holds this
+    deal's money, so a chat intent must not settle it.
+
+    The buyer_confirms_goods_ok / buyer_chooses_refund intents below assume
+    BROKA holds the funds: release only flips Deal.status, refund pays out of
+    BROKA's own M-Pesa B2C account. For an E-Confirm deal that is wrong both
+    ways - the seller would be told money was released that E-Confirm was
+    never asked to pay, or the buyer refunded from BROKA's pocket while their
+    money stayed in escrow. Same fail-closed isolation the dispute engine
+    applies (DisputeEngineService.execute_fund_action).
+    """
+    from api.models.external_escrow import ExternalEscrow
+    held = (await db.execute(
+        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id)
+    )).scalar_one_or_none()
+    if held is None:
+        return False
+    await record_audit(
+        db, "system", f"econfirm_chat_{action}_blocked", "deal", deal.id,
+        f"buyer chose {action} in chat; E-Confirm holds the funds - resolve with E-Confirm "
+        f"(deal status left at {deal.status.value})",
+    )
+    await db.commit()
+    logger.error("[negotiate] RECONCILIATION_REQUIRED deal=%s: chat %s on an E-Confirm deal",
+                 deal.id, action)
+    return True
+
+
 class ChatIn(BaseModel):
     content:         str
     history:         List[dict] = []
@@ -558,30 +587,11 @@ async def _call_groq(system: str, messages: List[dict],
         else:
             merged.append({"role": m["role"], "content": m["content"]})
 
-    # Attach the photo to the last user turn.
-    #
-    # V4.1-Flash added native visual understanding ("the smallest model in
-    # our new architecture family, with native visual understanding" -
-    # DeepSeek, 2026-09-10), which resurrects a feature that was dead in any
-    # deployment without a Gemini key: image_base64 previously reached
-    # _call_gemini and nothing else, so on a DeepSeek-only box Zeno answered
-    # photo messages having never seen the photo.
-    #
-    # Uses the OpenAI multimodal content-parts shape, because this endpoint
-    # is OpenAI-compatible throughout (same /chat/completions, same
-    # choices[0].message.content response). If DeepSeek expects something
-    # else the request comes back 400, which is now logged by name and falls
-    # through - the photo is lost, which is exactly where it was before, not
-    # worse.
-    if image_base64 and merged and merged[-1]["role"] == "user":
-        merged[-1] = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": merged[-1]["content"]},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_base64}"}},
-            ],
-        }
+    # Text-only model: a photo can't be sent here. (A copy of the DeepSeek
+    # image-attachment block used to sit here and referenced an
+    # `image_base64` this function never receives - a NameError on EVERY
+    # call, which the fallback chain swallowed, so this provider never
+    # answered at all.)
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
@@ -632,30 +642,11 @@ async def _call_openrouter(system: str, messages: List[dict],
         else:
             merged.append({"role": m["role"], "content": m["content"]})
 
-    # Attach the photo to the last user turn.
-    #
-    # V4.1-Flash added native visual understanding ("the smallest model in
-    # our new architecture family, with native visual understanding" -
-    # DeepSeek, 2026-09-10), which resurrects a feature that was dead in any
-    # deployment without a Gemini key: image_base64 previously reached
-    # _call_gemini and nothing else, so on a DeepSeek-only box Zeno answered
-    # photo messages having never seen the photo.
-    #
-    # Uses the OpenAI multimodal content-parts shape, because this endpoint
-    # is OpenAI-compatible throughout (same /chat/completions, same
-    # choices[0].message.content response). If DeepSeek expects something
-    # else the request comes back 400, which is now logged by name and falls
-    # through - the photo is lost, which is exactly where it was before, not
-    # worse.
-    if image_base64 and merged and merged[-1]["role"] == "user":
-        merged[-1] = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": merged[-1]["content"]},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_base64}"}},
-            ],
-        }
+    # Text-only model: a photo can't be sent here. (A copy of the DeepSeek
+    # image-attachment block used to sit here and referenced an
+    # `image_base64` this function never receives - a NameError on EVERY
+    # call, which the fallback chain swallowed, so this provider never
+    # answered at all.)
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
@@ -2044,6 +2035,14 @@ async def send_message(
                 via_ai=False)
         active_deal = locked_deal
 
+        if await _econfirm_holds_funds(db, active_deal, "release"):
+            return MessageOut(role="broker", content=(
+                f"Thanks, {b_name.split()[0]} - noted that everything arrived in perfect "
+                f"condition. This payment is held by our escrow partner, so the release "
+                f"to the seller is completed by the BROKA escrow team rather than "
+                f"instantly here. You don't need to do anything else."
+            ), via_ai=False)
+
         now = _dt.utcnow()
         payout = round(active_deal.agreed_price * (1 - COMMISSION_RATE), 2)
         active_deal.status = DealStatus.released
@@ -2057,6 +2056,13 @@ async def send_message(
         if seller_user:
             seller_user.completed_deals = (seller_user.completed_deals or 0) + 1
         await db.commit()
+        # After commit: this is what writes the ledger entry and updates an
+        # open deal screen - the chat release used to publish nothing.
+        from api.core.events import EscrowReleased, publish as _publish
+        await _publish(EscrowReleased(
+            deal_id=active_deal.id, seller_id=active_deal.seller_id,
+            buyer_id=active_deal.buyer_id, amount=active_deal.agreed_price,
+        ))
 
         b_first = b_name.split()[0]
         reply = (
@@ -2342,12 +2348,25 @@ async def send_message(
                 via_ai=False)
         active_deal = locked_deal
 
+        if await _econfirm_holds_funds(db, active_deal, "refund"):
+            return MessageOut(role="broker", content=(
+                f"Understood, {b_name.split()[0]} - you've chosen a refund. This payment "
+                f"is held by our escrow partner, so the BROKA escrow team completes the "
+                f"refund with them rather than instantly here. You don't need to do "
+                f"anything else; keep the item safe until we confirm the return."
+            ), via_ai=False)
+
         now = _dt.utcnow()
         refund_amount = round(active_deal.agreed_price * (1 - COMMISSION_RATE), 2)
         active_deal.status = DealStatus.refunded
         active_deal.refunded_at = now
         active_deal.timer_cancelled_at = now
         await db.commit()
+        from api.core.events import EscrowRefunded, publish as _publish
+        await _publish(EscrowRefunded(
+            deal_id=active_deal.id, buyer_id=active_deal.buyer_id,
+            seller_id=active_deal.seller_id, amount=refund_amount,
+        ))
 
         # Trigger M-Pesa B2C refund
         buyer_result = await db.execute(select(User).where(User.id == effective_buyer_id))
@@ -2792,10 +2811,11 @@ async def send_message(
     if off_platform_detected:
         # Specificity over generality (Volume 2 §2.2): reference BROKA's real,
         # live dispute-resolution rate rather than a generic warning. Pulled
-        # from the same Redis cache the /disputes/v2/stats/summary endpoint
+        # from the same source the /disputes/v2/stats/summary endpoint
         # reads - never hardcoded, so this stays honest as the number moves.
-        from api.core.stats_cache import cache_get_json, DISPUTE_SUMMARY_KEY
-        _stats = await cache_get_json(DISPUTE_SUMMARY_KEY)
+        # Read-only: a chat reply must not wait on the aggregate.
+        from api.core.workers import get_dispute_summary
+        _stats = await get_dispute_summary(compute_if_stale=False)
         _resolved_pct = _stats.get("resolved_within_24h_pct") if _stats else None
         _proof_line = (
             f"On BROKA, {_resolved_pct}% of reported problems are resolved within 24 hours."

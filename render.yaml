@@ -57,8 +57,9 @@ services:
                              # from it by /stt/assemblyai-token.
       - key: RESEND_API_KEY
         sync: false          # Resend — email verification codes. Unset is safe:
-                             # email is optional at signup and codes are logged
-                             # instead of sent. See api/core/email.py
+                             # email is optional at signup; verification requests
+                             # return 503 (codes are never logged in production).
+                             # See api/core/email.py
       - key: RESEND_FROM
         sync: false          # Must be on a domain verified in the Resend
                              # dashboard, or Resend refuses every send
@@ -77,8 +78,10 @@ services:
                              # Enables: durable events, idempotency, rate limiting, ARQ workers
       - key: ALLOWED_ORIGINS
         value: "*"
-      - key: TOKEN_EXPIRE_MINUTES
-        value: "15"          # Short-lived access tokens — refresh token handles renewal
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "15"          # Short-lived access tokens — refresh token handles renewal.
+                             # (Was TOKEN_EXPIRE_MINUTES, which nothing reads - changing
+                             # it in the dashboard silently did nothing.)
       - key: REFRESH_TOKEN_EXPIRE_DAYS
         value: "30"
       - key: JSON_LOGS

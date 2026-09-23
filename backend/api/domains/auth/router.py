@@ -14,9 +14,25 @@ from api.security import get_current_user
 from api.core.rate_limit import (
     login_limiter, register_limiter, otp_request_limiter, otp_verify_limiter,
 )
-from .service import AuthService
+from .service import AuthService, _normalize_phone, _normalize_email
 
 router = APIRouter()
+
+
+# Rate-limit keys are built from the SAME normalisation the service applies,
+# not from the raw request field. Otherwise "0712345678", "+254712345678" and
+# "254712345678" - one handset to the service - are three separate budgets to
+# the limiter, and the per-number limit multiplies by however many spellings
+# an attacker cares to try.
+def _phone_key(phone: str) -> str:
+    return f"phone:{_normalize_phone(phone or '')}"
+
+
+def _email_key(email: str) -> str:
+    # _normalize_email returns "" for anything that isn't an address; fall
+    # back to the trimmed input so malformed values still share one bucket
+    # per spelling rather than all sharing the empty key.
+    return f"email:{_normalize_email(email) or (email or '').strip().lower()}"
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -114,7 +130,7 @@ async def request_otp(
     db: AsyncSession = Depends(get_db),
 ):
     ip = request.client.host if request.client else "unknown"
-    await otp_request_limiter.check_and_record(body.phone)
+    await otp_request_limiter.check_and_record(_phone_key(body.phone))
     await otp_request_limiter.check_and_record(f"ip:{ip}")
     svc = AuthService(db)
     return await svc.request_otp(
@@ -129,7 +145,7 @@ async def verify_otp(
     body: OtpVerifyIn,
     db: AsyncSession = Depends(get_db),
 ):
-    await otp_verify_limiter.check_and_record(body.phone)
+    await otp_verify_limiter.check_and_record(_phone_key(body.phone))
     svc = AuthService(db)
     return await svc.verify_otp(body.phone, body.code, purpose=OtpPurpose.registration)
 
@@ -145,7 +161,7 @@ async def request_email_otp(
     # than an SMS, but an unthrottled endpoint that emails an arbitrary
     # address on demand is a spam relay wearing our sending domain's
     # reputation.
-    await otp_request_limiter.check_and_record(f"email:{body.email.strip().lower()}")
+    await otp_request_limiter.check_and_record(_email_key(body.email))
     await otp_request_limiter.check_and_record(f"ip:{ip}")
     svc = AuthService(db)
     return await svc.request_email_otp(body.email, purpose=OtpPurpose.registration)
@@ -156,7 +172,7 @@ async def verify_email_otp(
     body: EmailOtpVerifyIn,
     db: AsyncSession = Depends(get_db),
 ):
-    await otp_verify_limiter.check_and_record(f"email:{body.email.strip().lower()}")
+    await otp_verify_limiter.check_and_record(_email_key(body.email))
     svc = AuthService(db)
     return await svc.verify_email_otp(body.email, body.code, purpose=OtpPurpose.registration)
 
@@ -199,7 +215,7 @@ async def login(
 ):
     ip = request.client.host if request.client else "unknown"
     await login_limiter.check_and_record(ip)
-    await login_limiter.check_and_record(body.phone)
+    await login_limiter.check_and_record(_phone_key(body.phone))
     svc = AuthService(db)
     return await svc.login(phone=body.phone, password=body.password)
 

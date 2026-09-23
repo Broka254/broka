@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,10 @@ from .actions import ZenoActionRequest, ZenoActionError, ZenoActionName, execute
 from . import conversation
 
 router = APIRouter()
+
+# See ConverseTurnIn._recent_history_only.
+_HISTORY_KEEP = 40
+_HISTORY_ENTRY_MAX_CHARS = 2000
 
 
 class BuyAgentRequestIn(BaseModel):
@@ -122,11 +126,40 @@ class ConverseTurnIn(BaseModel):
     anything outside its own search.
     """
     message: str = Field(min_length=1, max_length=1000)
-    history: list[dict] = Field(default_factory=list, max_length=40)
+    history: list[dict] = Field(default_factory=list)
     slots: Optional[dict] = None
     # How many questions Zeno has already asked in this conversation. Caps
     # the interrogation - see conversation.MAX_QUESTIONS.
     questions_asked: int = Field(default=0, ge=0, le=20)
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _recent_history_only(cls, v):
+        """Keep the newest turns, each bounded, instead of rejecting.
+
+        The app sends its whole transcript every turn and never trims it, so
+        a hard `max_length=40` turned the 21st exchange of one conversation
+        into a 422 - the Buying Agent broke mid-chat. The model only ever
+        sees the last 12 entries (AIBrokerService.buy_agent_turn), so
+        keeping the last 40 loses nothing. Each entry is reduced to the two
+        fields the prompt uses, with content clipped: that text is pasted
+        into a billed LLM prompt, which is why `message` is bounded too.
+        """
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            raise ValueError("history must be a list")
+        cleaned = []
+        for h in v[-_HISTORY_KEEP:]:
+            if not isinstance(h, dict):
+                continue
+            content = h.get("content")
+            content = content if isinstance(content, str) else ("" if content is None else str(content))
+            cleaned.append({
+                "role": "user" if h.get("role") == "user" else "assistant",
+                "content": content[:_HISTORY_ENTRY_MAX_CHARS],
+            })
+        return cleaned
 
 
 @router.post("/converse")

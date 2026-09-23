@@ -525,6 +525,9 @@ async def task_check_deal_timers(ctx: dict) -> None:
         if due_deals:
             await session.commit()
             logger.info("[sweep] processed %d due deal timer(s)", len(due_deals))
+        # Only now that the status changes are committed may the rest of the
+        # system hear about them - see _queue_after_commit.
+        await _publish_queued_events(session)
 
 
 # Days after the seller's delivery claim at which each check-in fires.
@@ -1163,88 +1166,171 @@ async def task_recompute_dcr_and_leaks() -> None:
         )
 
 
-async def task_refresh_dispute_summary_cache() -> None:
-    """
-    Recomputes the platform-wide dispute-resolution summary (Volume 2 §2.3)
-    and writes it to Redis. Self-gated to roughly every 4 hours rather than
-    running on every 5-minute sweep tick - checks the cached payload's own
-    computed_at before doing any DB work, so most ticks are a single cheap
-    Redis read that immediately returns.
+# ── Dispute-resolution summary (Volume 2 §2.3) ────────────────────────────────
+#
+# Served to buyers by the UNAUTHENTICATED GET /disputes/v2/stats/summary, so
+# the one thing it must never do is run its aggregate per request. It used to
+# be gated only by its own Redis cache - and with Redis unset or down (a
+# supported configuration: README calls Redis "strongly recommended", not
+# required) every request missed and ran an unbounded query that loaded every
+# closed case in 90 days as full ORM objects.
+#
+# Now: a process-local copy with its own freshness gate sits in front of
+# Redis; a cold miss computes ONCE behind a lock no matter how many requests
+# arrive together; a failed computation is remembered briefly so a broken
+# database is not retried per request; and the query reads three columns
+# with a hard row cap.
 
-    Powers GET /disputes/v2/stats/summary (domains/disputes/router.py) and
-    the off-platform-solicitation redirect in routers/negotiate.py (§2.2),
-    both of which read the Redis cache rather than querying live.
-    """
+_DISPUTE_SUMMARY_REFRESH_SECONDS = 4 * 3600
+_DISPUTE_SUMMARY_FAILURE_BACKOFF_SECONDS = 300
+_DISPUTE_SUMMARY_MAX_ROWS = 50_000
+# (expires_at on the monotonic clock, payload or None after a failure)
+_dispute_summary_memo: tuple[float, Any] | None = None
+_dispute_summary_lock: tuple[Any, asyncio.Lock] | None = None
+
+
+def _dispute_summary_null_payload() -> dict:
+    """"No data" - the frontend hides the stat for nulls rather than printing
+    0%, which would misleadingly read as "BROKA fails every dispute"."""
+    return {
+        "resolved_within_24h_pct": None,
+        "median_resolution_hours": None,
+        "escrow_success_rate_pct": None,
+        "window":      "trailing_90_days",
+        "sample_size": 0,
+        "computed_at": None,
+    }
+
+
+def _dispute_summary_fresh(payload: Any) -> bool:
+    from datetime import datetime as _dt
+    if not isinstance(payload, dict) or not payload.get("computed_at"):
+        return False
+    try:
+        age = _dt.utcnow() - _dt.fromisoformat(payload["computed_at"])
+    except (TypeError, ValueError):
+        return False
+    return age.total_seconds() < _DISPUTE_SUMMARY_REFRESH_SECONDS
+
+
+def _dispute_summary_lock_for_loop() -> asyncio.Lock:
+    """One lock per running event loop - an asyncio.Lock must not be shared
+    across loops (tests and some deployments run more than one)."""
+    global _dispute_summary_lock
+    loop = asyncio.get_running_loop()
+    if _dispute_summary_lock is None or _dispute_summary_lock[0] is not loop:
+        _dispute_summary_lock = (loop, asyncio.Lock())
+    return _dispute_summary_lock[1]
+
+
+async def _compute_dispute_summary() -> dict:
+    """The aggregate itself: three columns, bounded, newest first."""
     from datetime import datetime as _dt, timedelta as _timedelta
     from statistics import median as _median
     from sqlalchemy import select as _select
     from api.database import AsyncSessionLocal
     from api.models.dispute import DisputeCase, CaseState
-    from api.core.stats_cache import cache_get_json, cache_set_json, DISPUTE_SUMMARY_KEY
-
-    refresh_every = _timedelta(hours=4)
-
-    existing = await cache_get_json(DISPUTE_SUMMARY_KEY)
-    if existing and existing.get("computed_at"):
-        try:
-            last = _dt.fromisoformat(existing["computed_at"])
-            if _dt.utcnow() - last < refresh_every:
-                return  # still fresh - nothing to do this tick
-        except ValueError:
-            pass  # malformed timestamp - fall through and recompute
 
     window_start = _dt.utcnow() - _timedelta(days=90)
-
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            _select(DisputeCase).where(
+        rows = (await session.execute(
+            _select(DisputeCase.created_at, DisputeCase.closed_at, DisputeCase.fund_action)
+            .where(
                 DisputeCase.state.in_((CaseState.closed_refunded, CaseState.closed_released)),
                 DisputeCase.closed_at.isnot(None),
                 DisputeCase.closed_at >= window_start,
             )
-        )
-        closed_cases = list(result.scalars().all())
+            .order_by(DisputeCase.closed_at.desc())
+            .limit(_DISPUTE_SUMMARY_MAX_ROWS)
+        )).all()
 
-    total = len(closed_cases)
+    total = len(rows)
     if total == 0:
-        # No resolved disputes in the window (e.g. a fresh deployment with
-        # an empty database). Cache explicit nulls rather than 0%/0h, which
-        # would misleadingly read as "BROKA fails every dispute" instead of
-        # "no data yet" - the frontend is expected to hide the stat, not
-        # print "0%", when these fields are null.
-        payload = {
-            "resolved_within_24h_pct": None,
-            "median_resolution_hours": None,
-            "escrow_success_rate_pct": None,
-            "window":       "trailing_90_days",
-            "sample_size":  0,
-            "computed_at":  _dt.utcnow().isoformat(),
-        }
-    else:
-        resolution_hours = [
-            (c.closed_at - c.created_at).total_seconds() / 3600.0 for c in closed_cases
-        ]
-        within_24h    = sum(1 for h in resolution_hours if h <= 24.0)
-        fund_executed = sum(1 for c in closed_cases if c.fund_action)
+        payload = _dispute_summary_null_payload()
+        payload["computed_at"] = _dt.utcnow().isoformat()
+        return payload
 
-        payload = {
-            "resolved_within_24h_pct": round(100.0 * within_24h / total, 1),
-            "median_resolution_hours": round(_median(resolution_hours), 1),
-            # % of closed cases where escrow actually executed a fund action
-            # (refund or release) rather than closing with none recorded -
-            # i.e. "did escrow do its job," not just "was the case closed."
-            "escrow_success_rate_pct": round(100.0 * fund_executed / total, 1),
-            "window":       "trailing_90_days",
-            "sample_size":  total,
-            "computed_at":  _dt.utcnow().isoformat(),
-        }
+    resolution_hours = [
+        (closed_at - created_at).total_seconds() / 3600.0
+        for created_at, closed_at, _fund_action in rows
+    ]
+    within_24h    = sum(1 for h in resolution_hours if h <= 24.0)
+    fund_executed = sum(1 for _c, _d, fund_action in rows if fund_action)
+    return {
+        "resolved_within_24h_pct": round(100.0 * within_24h / total, 1),
+        "median_resolution_hours": round(_median(resolution_hours), 1),
+        # % of closed cases where escrow actually executed a fund action
+        # (refund or release) rather than closing with none recorded -
+        # i.e. "did escrow do its job," not just "was the case closed."
+        "escrow_success_rate_pct": round(100.0 * fund_executed / total, 1),
+        "window":       "trailing_90_days",
+        "sample_size":  total,
+        "computed_at":  _dt.utcnow().isoformat(),
+    }
 
-    # TTL longer than the refresh interval above: under normal operation the
-    # sweep loop refreshes well before this expires, so the TTL only matters
-    # as a safety net if the sweep loop itself stops running (rather than
-    # serving an arbitrarily stale value forever).
-    await cache_set_json(DISPUTE_SUMMARY_KEY, payload, ttl_seconds=6 * 3600)
-    logger.info("[worker] dispute summary cache refreshed: %s", payload)
+
+async def get_dispute_summary(*, compute_if_stale: bool = True) -> dict | None:
+    """The current summary, computing it at most once per refresh interval.
+
+    compute_if_stale=False only reads (memo, then Redis) - for callers on a
+    latency-sensitive path, like a chat reply, that can live without it.
+    Never raises.
+    """
+    import time as _time
+    from api.core.stats_cache import cache_get_json, cache_set_json, DISPUTE_SUMMARY_KEY
+
+    global _dispute_summary_memo
+
+    def _memo_hit():
+        memo = _dispute_summary_memo
+        if memo is not None and _time.monotonic() < memo[0]:
+            return True, memo[1]
+        return False, None
+
+    hit, value = _memo_hit()
+    if hit:
+        return value
+
+    cached = await cache_get_json(DISPUTE_SUMMARY_KEY)
+    if _dispute_summary_fresh(cached):
+        _dispute_summary_memo = (_time.monotonic() + _DISPUTE_SUMMARY_REFRESH_SECONDS, cached)
+        return cached
+    if not compute_if_stale:
+        return cached  # stale is better than nothing for a read-only caller
+
+    async with _dispute_summary_lock_for_loop():
+        # Whoever held the lock before us may have just computed it.
+        hit, value = _memo_hit()
+        if hit:
+            return value
+        try:
+            payload = await _compute_dispute_summary()
+        except Exception as exc:
+            logger.error("[worker] dispute summary computation failed: %s", exc)
+            _dispute_summary_memo = (
+                _time.monotonic() + _DISPUTE_SUMMARY_FAILURE_BACKOFF_SECONDS, cached,
+            )
+            return cached
+        _dispute_summary_memo = (_time.monotonic() + _DISPUTE_SUMMARY_REFRESH_SECONDS, payload)
+        # TTL longer than the refresh interval: the sweep refreshes well
+        # before it expires, so the TTL only matters as a safety net if the
+        # sweep itself stops running.
+        await cache_set_json(DISPUTE_SUMMARY_KEY, payload, ttl_seconds=6 * 3600)
+        logger.info("[worker] dispute summary refreshed: %s", payload)
+        return payload
+
+
+async def task_refresh_dispute_summary_cache(ctx: dict | None = None) -> None:
+    """
+    Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+    Self-gated to roughly every 4 hours through get_dispute_summary, so most
+    sweep ticks are a memo or Redis read that returns immediately.
+
+    Powers GET /disputes/v2/stats/summary (domains/disputes/router.py) and
+    the off-platform-solicitation redirect in routers/negotiate.py (§2.2).
+    `ctx` is accepted because ARQ passes one to every registered job.
+    """
+    await get_dispute_summary()
 
 
 async def task_check_dispute_timers() -> None:
@@ -1264,7 +1350,7 @@ async def task_check_dispute_timers() -> None:
     from sqlalchemy import select as _select
     from api.database import AsyncSessionLocal, Deal, DealStatus, User, NegotiationMessage
     from api.models.dispute import DisputeCase, DisputeTimer, TimerKind, CaseState, EventType
-    from api.domains.disputes.service import DisputeEngineService, _mpesa_b2c
+    from api.domains.disputes.service import DisputeEngineService
     from api.core.config import settings as _settings
 
     now = _dt.utcnow()
@@ -1328,17 +1414,21 @@ async def task_check_dispute_timers() -> None:
                 if timer.timer_kind in (TimerKind.auto_refund_buyer,
                                          TimerKind.seller_explanation_due,
                                          TimerKind.replacement_arrival_due):
-                    # Refund 97% to buyer
-                    from api.core.ledger import EscrowLedger
-                    COMMISSION = 0.03
-                    net = round(deal.agreed_price * (1 - COMMISSION), 2)
-                    b2c = {"success": False, "detail": "no_phone"}
-                    if buyer and buyer.phone:
-                        b2c = await _mpesa_b2c(buyer.phone, net, case.id)
-
+                    # Refund 97% to buyer - through execute_fund_action ONLY.
+                    # It is the single place a dispute refund pays out: it
+                    # takes the deal row lock, claims the payout so it can
+                    # happen once, calls M-Pesa B2C, and writes the ledger.
+                    # This branch used to call _mpesa_b2c itself first and
+                    # THEN execute_fund_action - two 97% refunds to the buyer
+                    # on every timed auto-refund, the first of them made
+                    # before any of those guards ran (so it paid even when
+                    # another path had already settled the deal and
+                    # execute_fund_action refused with a 409).
                     from api.models.dispute import CaseState as CS, EventType as ET
                     case.state = CS.ready_for_refund
                     await svc.execute_fund_action(case, actor_id="system", actor_role="system")
+                    # What was actually refunded, as recorded by the payout.
+                    net = case.fund_amount
                     logger.info("[dispute_sweep] auto-refunded deal %s (timer=%s)",
                                 deal.id, timer.timer_kind.value)
 
@@ -1477,14 +1567,73 @@ async def task_check_dispute_timers() -> None:
                 await session.rollback()
 
 
+def _queue_after_commit(session, event) -> None:
+    """Hold an event until the sweep has committed the change it describes.
+
+    EscrowReleased/EscrowRefunded are what write the ledger entry and push
+    the new status over the deal's WebSocket (core/deal_hub_subscribers.py).
+    The automatic release/refund below used to publish nothing at all, so
+    every timer-driven settlement was missing from the ledger and invisible
+    to an open deal screen. Publishing before the sweep's single commit
+    would let the ledger record a settlement whose status change could
+    still roll back.
+    """
+    session.info.setdefault("broka_post_commit_events", []).append(event)
+
+
+async def _publish_queued_events(session) -> None:
+    from api.core.events import publish
+    events = session.info.pop("broka_post_commit_events", [])
+    for event in events:
+        try:
+            await publish(event)
+        except Exception as exc:
+            logger.error("[sweep] failed to publish %s: %s", type(event).__name__, exc)
+
+
+async def _econfirm_deal_fails_closed(session, deal, action: str) -> bool:
+    """True (and a reconciliation alert raised) when `deal` is E-Confirm-funded.
+
+    Same isolation the dispute engine applies in execute_fund_action: the
+    automatic paths below assume BROKA holds the money - a refund pays out
+    of BROKA's own M-Pesa B2C account, a release only flips the status. For
+    an E-Confirm deal the principal is held by E-Confirm, so an automatic
+    refund would pay the buyer from BROKA's own pocket while their money
+    stayed in escrow, and an automatic release would mark the deal released
+    with the seller never paid. Neither is automated for E-Confirm yet, so
+    this fails closed: the deal is left as it is and a human is asked to
+    resolve it with E-Confirm.
+    """
+    from sqlalchemy import select
+    from api.core.audit import record_audit
+    from api.models.external_escrow import ExternalEscrow
+
+    escrow = (await session.execute(
+        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id)
+    )).scalar_one_or_none()
+    if escrow is None:
+        return False
+    reason = (
+        f"automatic {action} is not available for E-Confirm deals - "
+        f"resolve with E-Confirm (deal status left at {deal.status.value})"
+    )
+    await record_audit(session, "system", f"econfirm_auto_{action}_blocked", "deal", deal.id, reason)
+    logger.error("[sweep] RECONCILIATION_REQUIRED deal=%s: %s", deal.id, reason)
+    return True
+
+
 async def _fire_auto_refund(session, deal) -> None:
     """Seller never responded - refund the buyer 97% (3% commission retained).
     Mirrors the manual dispute refund path in routers/disputes.py, minus the
     AI verdict (the rule that triggered this is deterministic: deadline passed,
-    seller silent)."""
+    seller silent). Legacy (non-E-Confirm) deals only - see
+    _econfirm_deal_fails_closed."""
     from datetime import datetime
     from sqlalchemy import select
+    from api.core.events import EscrowRefunded
     from api.database import User, DealStatus
+    if await _econfirm_deal_fails_closed(session, deal, "refund"):
+        return
     _COMMISSION_RATE = 0.03
     refund_amount = round(deal.agreed_price * (1 - _COMMISSION_RATE), 2)
     deal.status = DealStatus.refunded
@@ -1496,16 +1645,24 @@ async def _fire_auto_refund(session, deal) -> None:
             await _mpesa_b2c_refund(buyer.phone, refund_amount, deal.id)
         except Exception as exc:
             logger.error("[sweep] auto-refund B2C call failed for deal %s: %s", deal.id, exc)
+    _queue_after_commit(session, EscrowRefunded(
+        deal_id=deal.id, buyer_id=deal.buyer_id, seller_id=deal.seller_id,
+        amount=refund_amount,
+    ))
     logger.info("[sweep] auto-refunded deal %s to buyer %s — KES %.0f (97%% of %.0f)",
                 deal.id, deal.buyer_id, refund_amount, deal.agreed_price)
 
 
 async def _fire_auto_release(session, deal) -> None:
     """Buyer never confirmed - release funds to the seller. Mirrors the
-    manual /escrow/confirm-delivery path, minus requiring the buyer's tap."""
+    manual /escrow/confirm-delivery path, minus requiring the buyer's tap.
+    Legacy (non-E-Confirm) deals only - see _econfirm_deal_fails_closed."""
     from datetime import datetime
     from sqlalchemy import select
+    from api.core.events import EscrowReleased
     from api.database import User, DealStatus
+    if await _econfirm_deal_fails_closed(session, deal, "release"):
+        return
     now = datetime.utcnow()
     deal.status = DealStatus.released
     deal.delivery_confirmed_at = now
@@ -1513,7 +1670,14 @@ async def _fire_auto_release(session, deal) -> None:
     seller = (await session.execute(select(User).where(User.id == deal.seller_id))).scalar_one_or_none()
     if seller:
         seller.completed_deals = (seller.completed_deals or 0) + 1
-        seller.rating = round(min(5.0, (seller.rating or 5.0) + 0.05), 2)
+        # No rating change. This used to add +0.05 to the seller's rating on
+        # every automatic release - a review nobody wrote, awarded for a
+        # buyer's SILENCE. The same bump was already removed from the M-Pesa
+        # callback for that reason; a rating must mean a buyer rated them.
+    _queue_after_commit(session, EscrowReleased(
+        deal_id=deal.id, seller_id=deal.seller_id, buyer_id=deal.buyer_id,
+        amount=deal.agreed_price,
+    ))
     logger.info("[sweep] auto-released deal %s to seller %s (buyer silence timeout)",
                 deal.id, deal.seller_id)
 

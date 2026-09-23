@@ -16,6 +16,7 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 
+from api.core.rate_limit import stt_token_limiter, stt_transcribe_limiter
 from api.security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -44,13 +45,16 @@ async def transcribe(
     _user: dict = Depends(get_current_user),
 ):
     """Accepts an audio file (mp3/m4a/wav/ogg/webm) and returns transcript text."""
+    await stt_transcribe_limiter.check_and_record(_user["id"])
     if not OPENAI_KEY:
         raise HTTPException(
             status_code=503,
             detail="Speech-to-text is not configured. Set OPENAI_API_KEY on the server.",
         )
 
-    audio_bytes = await file.read()
+    # Bounded read: one byte past the limit is enough to know it is too big,
+    # without pulling an arbitrarily large upload into memory first.
+    audio_bytes = await file.read(MAX_BYTES + 1)
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio file")
     if len(audio_bytes) > MAX_BYTES:
@@ -135,6 +139,7 @@ async def deepgram_token(_user: dict = Depends(get_current_user)):
     anything Deepgram sent back, since an upstream error body can quote the
     credential that was rejected.
     """
+    await stt_token_limiter.check_and_record(_user["id"])
     api_key = _deepgram_key()
     if not api_key:
         raise HTTPException(
@@ -216,6 +221,7 @@ async def assemblyai_token(_user: dict = Depends(get_current_user)):
     upstream sent back, because an upstream error body can quote the
     credential that was rejected.
     """
+    await stt_token_limiter.check_and_record(_user["id"])
     api_key = _assemblyai_key()
     if not api_key:
         raise HTTPException(

@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api.database import AsyncSessionLocal, Deal
-from api.security import decode_token
+from api.security import decode_access_token
 from api.core.deal_hub import deal_hub, DealStatusEvent
 
 logger = logging.getLogger(__name__)
@@ -76,15 +76,13 @@ async def deal_status_ws(
         wss://<host>/deal-ws/ws/<deal_id>?token=<jwt>
     """
     # ── Authenticate ──────────────────────────────────────────────────────────
-    payload = decode_token(token)
+    # Access tokens only - see security.decode_access_token.
+    payload = decode_access_token(token)
     if not payload:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
 
-    user_id = payload.get("sub")
-    if not user_id:
-        await websocket.close(code=4001, reason="Token missing subject")
-        return
+    user_id = payload["sub"]
 
     # ── Validate deal access ──────────────────────────────────────────────────
     deal_data = await _get_deal(deal_id)
