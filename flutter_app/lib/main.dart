@@ -95,6 +95,9 @@ void main() async {
   ));
   await ApiService.loadSavedSession();
   await apiClient.loadToken();
+  // ApiService owns the refresh token; apiClient asks it to renew when a
+  // request comes back 401, then retries with the new token.
+  apiClient.onUnauthorized = ApiService.renewSession;
   await NotificationService.instance.initialize(navKey: navigatorKey);
 
   // Firebase is optional at this point in BROKA's rollout (see

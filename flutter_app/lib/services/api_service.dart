@@ -172,6 +172,20 @@ class ApiService {
   static bool   get isLoggedIn => _token != null;
   static String? get authToken  => _token;
 
+  static Future<bool>? _renewal;
+
+  /// Renews an expired session: refresh token first, stored credentials
+  /// second. Returns true if a new access token is in place - in BOTH
+  /// clients, this class's and [apiClient], which the feature repositories
+  /// use and which calls this itself on a 401 (see main.dart).
+  ///
+  /// One renewal at a time: every request that finds the token expired at
+  /// the same moment (Home loads several repositories at once) waits on the
+  /// same attempt instead of each starting its own. That matters most for
+  /// the fallback, a full re-login, which the server limits to 5 a minute.
+  static Future<bool> renewSession() =>
+      _renewal ??= _tryRefreshOrRelogin().whenComplete(() => _renewal = null);
+
   /// v4: Try refresh token first; fall back to relogin with stored credentials.
   /// FIX (2026-08-13): the refresh-token attempt below was reaching a
   /// broken URL (a `\$baseUrl` escaped-dollar typo prevented interpolation
@@ -202,10 +216,14 @@ class ApiService {
           final newRt = data['refresh_token'] as String?;
           if (token != null) {
             _token = token;
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('auth_token', token);
+            // Hand the new token to apiClient too - it persists it under
+            // the same 'auth_token' key. This used to update only this
+            // class, leaving every ApiClient-based repository sending the
+            // expired token until the app was restarted.
+            await apiClient.saveToken(token);
             if (newRt != null) {
               _refreshToken = newRt;
+              final prefs = await SharedPreferences.getInstance();
               await prefs.setString('refresh_token', newRt);
             }
             return true;
@@ -231,7 +249,7 @@ class ApiService {
   }
 
   // Keep old name as alias so unchanged call-sites still compile
-  static Future<bool> _tryRelogin() => _tryRefreshOrRelogin();
+  static Future<bool> _tryRelogin() => renewSession();
 
   // ── Auth ───────────────────────────────────────────────────────────────────
 
@@ -805,21 +823,45 @@ class ApiService {
 
   // ── Negotiate ──────────────────────────────────────────────────────────────
 
+  /// POST /negotiate/chat, the endpoint behind [freeChat], [xxenoChat] and
+  /// [zenoChat].
+  ///
+  /// The route requires sign-in and is rate-limited per user. It used to
+  /// ignore the token entirely, so these callers never needed 401 recovery
+  /// and never had it; an expired token now renews the session and retries
+  /// once. Any other failure (429, 422, 5xx) throws with the server's
+  /// message, so each screen's own catch shows its "Zeno is unavailable"
+  /// text - [zenoChat] used to return '' instead, which rendered as an
+  /// empty reply bubble.
+  static Future<Map<String, dynamic>> _postChat(Map<String, dynamic> body) async {
+    Future<http.Response> send() => http.post(
+      Uri.parse('$baseUrl/negotiate/chat'),
+      headers: _headers,
+      body: jsonEncode(body),
+    ).timeout(const Duration(seconds: 60));
+
+    var response = await send();
+    if (response.statusCode == 401 && _token != null && await _tryRelogin()) {
+      response = await send();
+    }
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(data['detail']?.toString() ?? 'Zeno request failed (${response.statusCode})');
+    }
+    return data;
+  }
+
   static Future<Message> freeChat({
     required String content,
     required List<Map<String, String>> history,
     String? userName,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/negotiate/chat'),
-      headers: _headers,
-      body: jsonEncode({
-        'content':   content,
-        'history':   history,
-        'user_name': userName ?? currentUserName,
-      }),
-    ).timeout(const Duration(seconds: 60));
-    return Message.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    final data = await _postChat({
+      'content':   content,
+      'history':   history,
+      'user_name': userName ?? currentUserName,
+    });
+    return Message.fromJson(data);
   }
 
   // Design Journal Volume 6, Ch.29 - ai_assistant_screen.dart's Advisor
@@ -861,18 +903,14 @@ class ApiService {
     String? userName,
     String? language,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/negotiate/chat'),
-      headers: _headers,
-      body: jsonEncode({
-        'content':         content,
-        'history':         history,
-        'user_name':       userName ?? currentUserName,
-        'system_override': 'zeno',  // updated: was 'xxeno'
-        'language':        language ?? currentUserLanguage,
-      }),
-    ).timeout(const Duration(seconds: 60));
-    return Message.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    final data = await _postChat({
+      'content':         content,
+      'history':         history,
+      'user_name':       userName ?? currentUserName,
+      'system_override': 'zeno',  // updated: was 'xxeno'
+      'language':        language ?? currentUserLanguage,
+    });
+    return Message.fromJson(data);
   }
 
   static Future<Message> sendNegotiationMessage({
@@ -1222,19 +1260,14 @@ class ApiService {
     String? imageBase64,
     String systemOverride = 'zeno',
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/negotiate/chat'),
-      headers: _headers,
-      body: jsonEncode({
-        'content':         message,
-        'history':         history,
-        'user_name':       currentUserName,
-        'system_override': systemOverride,
-        'language':        language ?? currentUserLanguage,
-        if (imageBase64 != null) 'image_base64': imageBase64,
-      }),
-    ).timeout(const Duration(seconds: 60));
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = await _postChat({
+      'content':         message,
+      'history':         history,
+      'user_name':       currentUserName,
+      'system_override': systemOverride,
+      'language':        language ?? currentUserLanguage,
+      if (imageBase64 != null) 'image_base64': imageBase64,
+    });
     return data['content'] as String? ?? data['message'] as String? ?? '';
   }
 

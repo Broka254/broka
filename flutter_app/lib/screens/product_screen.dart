@@ -768,7 +768,16 @@ class _ProductScreenState extends State<ProductScreen> {
 
   // ── Zeno AI Commentary ─────────────────────────────────────────────────────
 
-  void _toggleZenoAnalysis() {
+  Future<void> _toggleZenoAnalysis() async {
+    // Zeno's verdict is a model call, and /negotiate/chat requires an
+    // account. A guest is asked to sign in first - same sheet as every other
+    // account-gated action - rather than the panel opening onto "Zeno
+    // analysis unavailable".
+    if (!_zenoExpanded &&
+        !await requireAuth(context, reason: "to get Zeno's verdict on this deal")) {
+      return;
+    }
+    if (!mounted) return;
     setState(() => _zenoExpanded = !_zenoExpanded);
     // Only fire the AI call the first time the panel is opened, so collapsing
     // and re-expanding doesn't re-trigger it (saves on API costs).

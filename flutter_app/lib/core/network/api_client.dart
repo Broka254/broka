@@ -47,6 +47,35 @@ class ApiClient {
 
   bool get isAuthenticated => _token != null;
 
+  /// Renews the session after a 401. Returns true if it did, in which case
+  /// the request is sent once more with the new token.
+  ///
+  /// Access tokens last 15 minutes. This client used to have no way to
+  /// renew one: it read the token once at startup and never again, so
+  /// after a quarter of an hour every repository built on it (escrow,
+  /// disputes, auctions, stores, buy-agent...) got 401 until the app was
+  /// restarted. main.dart points this at ApiService.renewSession, which
+  /// owns the refresh token and hands the new access token back through
+  /// [saveToken].
+  Future<bool> Function()? onUnauthorized;
+
+  /// Sends [send], and on a 401 renews the session and sends it once more.
+  ///
+  /// [send] is called again for the retry, so it has to build its request
+  /// from scratch - which also means it picks up the new token through
+  /// [_headers]. A 401 on a request that carried no token is a guest
+  /// hitting an account-only route, not an expired session, so it is
+  /// returned as-is.
+  Future<http.Response> _send(Future<http.Response> Function() send) async {
+    final response = await send();
+    final renew = onUnauthorized;
+    if (response.statusCode != 401 || _token == null || renew == null) {
+      return response;
+    }
+    if (!await renew()) return response;
+    return send();
+  }
+
   // ── Headers ───────────────────────────────────────────────────────────────
 
   Map<String, String> get _headers => {
@@ -64,7 +93,9 @@ class ApiClient {
     final uri = Uri.parse('$_baseUrl$path').replace(
       queryParameters: queryParams,
     );
-    final response = await _http.get(uri, headers: _headers).timeout(timeout);
+    final response = await _send(
+      () => _http.get(uri, headers: _headers).timeout(timeout),
+    );
     return _handleResponse(response);
   }
 
@@ -74,9 +105,11 @@ class ApiClient {
     Duration timeout = const Duration(seconds: 60),
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
-    final response = await _http
-        .post(uri, headers: _headers, body: jsonEncode(body))
-        .timeout(timeout);
+    final response = await _send(
+      () => _http
+          .post(uri, headers: _headers, body: jsonEncode(body))
+          .timeout(timeout),
+    );
     return _handleResponse(response);
   }
 
@@ -87,14 +120,17 @@ class ApiClient {
     Duration timeout = const Duration(seconds: 90),
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
-    final request = http.MultipartRequest('POST', uri);
-    // Copy auth headers (skip Content-Type — MultipartRequest sets it)
-    _headers.forEach((k, v) {
-      if (k.toLowerCase() != 'content-type') request.headers[k] = v;
+    // A MultipartRequest can only be sent once, so each attempt builds its own.
+    final response = await _send(() async {
+      final request = http.MultipartRequest('POST', uri);
+      // Copy auth headers (skip Content-Type — MultipartRequest sets it)
+      _headers.forEach((k, v) {
+        if (k.toLowerCase() != 'content-type') request.headers[k] = v;
+      });
+      request.fields.addAll(fields);
+      final streamed = await _http.send(request).timeout(timeout);
+      return http.Response.fromStream(streamed);
     });
-    request.fields.addAll(fields);
-    final streamed = await _http.send(request).timeout(timeout);
-    final response = await http.Response.fromStream(streamed);
     return _handleResponse(response);
   }
 
@@ -104,15 +140,17 @@ class ApiClient {
     Duration timeout = const Duration(seconds: 30),
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
-    final response = await _http
-        .patch(uri, headers: _headers, body: jsonEncode(body))
-        .timeout(timeout);
+    final response = await _send(
+      () => _http
+          .patch(uri, headers: _headers, body: jsonEncode(body))
+          .timeout(timeout),
+    );
     return _handleResponse(response);
   }
 
   Future<dynamic> delete(String path) async {
     final uri = Uri.parse('$_baseUrl$path');
-    final response = await _http.delete(uri, headers: _headers);
+    final response = await _send(() => _http.delete(uri, headers: _headers));
     return _handleResponse(response);
   }
 
