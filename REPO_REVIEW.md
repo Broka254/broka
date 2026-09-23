@@ -1,322 +1,276 @@
 # BROKA — Repository Review
 
-**Date:** 2026-09-17
-**Commit reviewed:** `1d80ddd` ("BROKA update")
-**Branch:** `claude/respiratory-review-hwj7tj`
+**Date:** 2026-09-23
+**Commit reviewed:** `939eafd` ("Zeno voice: bound every startup stage…")
+**Previous review:** 2026-09-17 at `1d80ddd` (in git history of this file)
+**Branch:** `claude/respiratory-review-clsvba`
 
-Everything below was verified by running it, not by reading comments. Where a
-finding could not be verified in this sandbox, that is stated explicitly.
+This review does two things: it rechecks every finding from the 2026-09-17
+review, and it reviews the 18 commits since then (~27k lines: auction
+lifecycle, email OTP and seller signup, buying-agent conversation, calling
+fixes, Home/Categories redesign, Zeno voice). Every finding marked
+**Reproduced** was confirmed by running code against the real service layer,
+not by reading comments.
 
 ---
 
-## 1. Baseline: what actually works
+## 1. Baseline
 
 | Check | Result |
 |---|---|
-| Backend test suite (522 tests) | All pass, ~60s |
-| Measured backend coverage | 45% |
-| Committed secrets | None found |
-| Bare `except:` clauses | 0 |
-| Backend Python | 43,196 lines |
-| Flutter Dart | 43,785 lines |
+| Backend test suite | **731 passed**, 0 failed (~2 min) |
+| Measured backend coverage | 50% (was 45%) |
+| Flutter `analyze` | 0 errors, 24 warnings (see §6) |
+| Flutter `test` | **162 passed**, 0 failed |
+| Backend Python | ~52,900 lines (was 43,200) |
+| Flutter Dart (`lib/`) | ~52,000 lines (was 43,800) |
+| Flutter test files | 8 (was 0) |
 
-The test suite is genuinely green. Run with:
+Run the backend suite with:
 
 ```
 cd backend && ENV=test SECRET_KEY=<32+ chars> \
   DATABASE_URL="sqlite+aiosqlite:///:memory:" \
-  pytest tests/ -q --no-cov
+  python -m pytest tests/ -q -o addopts="" --cov=api
 ```
 
-The codebase is unusually well commented. Most non-obvious decisions carry a
-comment explaining the failure mode they exist to prevent, and several of those
-comments correctly document prior incidents. That is a real asset and it made
-this review much faster.
+(`-o addopts=""` is needed because of §2 #6. Use `python -m pytest` so the
+interpreter with the project's dependencies runs it.)
 
 ---
 
-## 2. Critical — production container cannot start
+## 2. Status of the 2026-09-17 findings
 
-All three Dockerfiles (`Dockerfile`, `Docker`, `backend/Dockerfile`) use this
-entrypoint:
+| # | Finding | Status |
+|---|---|---|
+| 2 | Production container crash-loops on `alembic upgrade head` | **Fixed** in `8d790b9`. Both Dockerfiles run uvicorn only, the duplicate `Docker` file is gone, and `test_deployment_config.py` guards it. |
+| 3 | Call tokens authenticate every HTTP route | **Open.** Reproduced again: `get_current_user(create_call_token(...))` → `{'id': 'user-123'}`. `security.py` gained an email-verify token this week but `decode_token_strict()` still rejects only `type == "refresh"`. |
+| 4 | Unauthenticated `/disputes/v2/stats/summary` runs an unbounded query per request when Redis is absent | **Open.** File unchanged. |
+| 5 | Idempotency guard is check-then-act (no `SET NX`) | **Open.** File unchanged. |
+| 6 | `pytest.ini` requires 60% coverage; CI enforces 35%; measured is 50% | **Open.** The documented local command still exits 1 with every test green. |
+| 7 | `TOKEN_EXPIRE_MINUTES` in `render.yaml` is read by nothing | **Open.** |
+| 8 | Redis rate limiter records rejected requests (`zadd` before the count check) | **Open.** File unchanged. |
+| 9 | No `analysis_options.yaml`; no Flutter tests | **Partly fixed.** 8 widget/unit test files now exist. `analysis_options.yaml` is still missing, so `flutter_lints` is still inert. |
 
-```
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
-```
-
-`render.yaml` deploys `./backend/Dockerfile`, so this is the live production
-path. The Alembic step fails two independent ways, and because the shell uses
-`&&`, uvicorn is never reached. The container exits non-zero and crash-loops.
-
-**Failure one — no synchronous Postgres driver.** `migrations/env.py` rewrites
-the async URL to a sync one and builds a normal engine, which resolves to
-psycopg2. That package is not in `requirements.txt` and is not installed in the
-image. Reproduced with the production URL shape:
-
-```
-DATABASE_URL="postgresql://u:p@db.example.com:5432/broka" alembic upgrade head
-→ ModuleNotFoundError: No module named 'psycopg2'
-→ exit 1
-```
-
-**Failure two — the migration chain is internally inconsistent.** Independent of
-the driver, the chain cannot run from scratch on any database. Revision `0001`
-creates `mpesa_transactions.callback_processed`, and revision `0002` adds the
-same column again. Reproduced on SQLite:
-
-```
-INFO  Running upgrade      -> 0001, Initial schema — all v3.0 tables
-INFO  Running upgrade 0001 -> 0002, Add callback_processed idempotency ...
-sqlalchemy.exc.OperationalError: duplicate column name: callback_processed
-```
-
-**Why this has not been noticed.** The README states plainly that Alembic is not
-used and that nothing in the repository calls `alembic upgrade`. Schema changes
-really do go through `create_all()` plus hand-written `ALTER TABLE` lists in
-`api/database.py`'s `init_db()`. The README is right about the mechanism and
-wrong about the call site: the Dockerfiles call it. The Alembic scaffolding is
-unexercised, untested, and wired into the one place it must not fail.
-
-**Fix.** Drop `alembic upgrade head &&` from all three Dockerfiles, matching the
-documented reality. If Alembic is meant to become the real mechanism later, that
-is a separate piece of work: it needs psycopg2 added, the `0001`/`0002` conflict
-resolved, and a CI job that actually runs the chain against an empty database.
-
-I did not verify the live deployment. It is possible production is served some
-other way, in which case this is latent rather than active. As committed, the
-deploy configuration is broken.
+The deploy fix is the one that mattered most, and it was done properly, with
+a regression test. Everything else from the last review is still open.
 
 ---
 
-## 3. High — call tokens work as full account tokens
+## 3. High — an auction payment lapse can cancel a deal the buyer is paying for
 
-`api/security.py` issues a deliberately narrow, room-scoped token for WebRTC
-signalling. Its own comment states the intent:
+**Reproduced.** `lifecycle.lapse_unpaid_win()` cancels the winner's deal
+whenever `deal.status` is still `agreed` at the deadline. But `agreed` is
+also the deal's status while an M-Pesa STK push is outstanding. Funding moves
+the escrow row (`ExternalEscrow.funding_initiated_at` set, status `PENDING`
+or `UNKNOWN`), and the deal only becomes `paid` once E-Confirm reports
+`FUNDED`. The lapse never looks at the escrow.
 
-> scoping it to one room_id means a leaked call token only exposes that one
-> call, not the holder's whole account
+Sequence, run against the real service layer:
 
-That is not what happens. `decode_token_strict()` rejects only `type ==
-"refresh"`. Nothing anywhere requires `type == "access"` — a repo-wide search
-for such a check returns nothing. A call token carries `sub`, so it satisfies
-`get_current_user()` and authenticates every HTTP route in the app.
+1. Auction closes, winner gets a deal (`agreed`), 24-hour deadline set.
+2. Winner taps Pay at hour 23:59. STK push sent, PIN not yet entered.
+3. The sweep runs at 24:00. `lapse_unpaid_win` → `unpaid`. Deal
+   `cancelled`, listing back to `active`.
+4. Winner enters their PIN. `reconcile_econfirm_escrow` sees `FUNDED`, tries
+   `lock_deal_if_status(..., (agreed,))`, gets `None`, and takes the
+   `else: commit()  # someone else already moved it — not an error` branch.
 
-Verified directly:
-
-```
-call token payload: {'sub': 'user-123', 'room_id': 'room-abc', 'type': 'call', ...}
-get_current_user(call_token) -> {'id': 'user-123'}
-```
-
-The phone-verify token is safe by accident, not design: it has no `sub`, so it
-fails a later check with "Bad token payload" rather than a type check.
-
-Impact is bounded by the 5-minute expiry, but the token is designed to travel
-through a WebSocket URL, which is exactly the place that ends up in proxy and
-server access logs. The whole reason for scoping it is defeated.
-
-**Fix.** Have `decode_token_strict()` accept only `type == "access"`, and give
-the call and phone-verify paths their own decoders, which they already have in
-`decode_call_token()` and `decode_phone_verify_token()`.
-
----
-
-## 4. High — unauthenticated endpoint runs an unbounded query per request
-
-`GET /disputes/v2/stats/summary` has no auth dependency. That is deliberate and
-documented: the payload is aggregate-only and is shown to buyers before they
-commit to escrow. The data exposure is fine. The cost model is not.
-
-The handler reads a Redis cache and, on a miss, computes the aggregate inline.
-`api/core/stats_cache.py` returns `None` whenever Redis is not configured, so
-every request misses. The aggregation loads all closed dispute cases from a
-rolling 90-day window into Python as fully hydrated ORM objects, with no limit.
-The four-hour self-gating in `task_refresh_dispute_summary_cache` reads its own
-timestamp out of that same cache, so with Redis absent the gate never engages
-either.
-
-Result: with Redis unset or briefly down, an unauthenticated and unrate-limited
-endpoint performs an unbounded table scan on every request. README lists Redis
-as "strongly recommended", not required, so this configuration is one the
-project explicitly supports.
-
-**Fix.** Add a process-local memo with its own timestamp so the gate holds
-without Redis, bound the query, and return the null-valued fallback rather than
-computing inline on a cold cache. The frontend already handles null fields.
-
----
-
-## 5. Medium — idempotency is narrower than advertised
-
-The README says:
-
-> Double-tap the Pay button? No problem.
-
-`idempotency_guard` in `api/core/idempotency.py` is check-then-act with no
-reservation. It issues a `GET`; on a miss it returns and lets the handler run,
-and the response is stored only after the handler returns. There is no atomic
-`SET NX` at check time.
-
-Two concurrent requests carrying the same key both see a miss and both execute.
-A double-tap produces exactly that: two near-simultaneous requests. The guard
-protects sequential retries after one has already completed, which is the case
-it does handle well, but not the one the README advertises.
-
-The money path is not actually exposed here, because `EscrowService.
-fund_deal_escrow` has a separate and well-designed defence: `funding_initiated_at`
-ensures `provider.fund_escrow()` is called at most once per escrow, and the
-docstring reasons carefully about ambiguous failures versus confirmed
-rejections. That guard is what is really preventing a double STK push. It is
-itself a read-then-write without a row lock on the escrow row, so a true
-simultaneous double-tap is not fully closed either, though the window is small.
-
-Worth noting the guard also fails open on Redis errors and no-ops entirely when
-Redis is unconfigured.
-
-**Fix.** Use `SET key <placeholder> NX EX <ttl>` at check time and treat a failed
-set as in-flight, returning 409. Separately, consider taking the escrow row lock
-in the funding path, as the release paths already do via `lock_deal_if_status`.
-
----
-
-## 6. Medium — the documented local test command always fails
-
-`backend/pytest.ini` sets `--cov-fail-under=60` in `addopts`. Measured coverage
-is 45%. The README tells contributors to run:
+Final state:
 
 ```
-pytest tests/ -v --cov=api --cov-report=term-missing
+deal.status: cancelled | escrow.status: funded | listing.status: active
 ```
 
-That picks up `addopts` and exits 1 with `FAIL Required test coverage of 60% not
-reached` even though every test passed. On a single file it is worse — 32%.
+The buyer's money is held by E-Confirm against a cancelled deal. No event,
+audit row or reconciliation alert is raised. The item is back on sale and
+can be sold to someone else. The same happens for an escrow in `UNKNOWN`,
+the state that exists specifically because the payment may have succeeded.
 
-CI passes only because `.github/workflows/build.yml` overrides with
-`--cov-fail-under=35` on the command line. So the gate a contributor hits
-locally is stricter than the one that actually guards the branch, and the local
-one is unreachable.
-
-Three different numbers are in play: 60 in `pytest.ini`, 35 in CI, 35 in the
-README prose.
-
-**Fix.** Set `pytest.ini` to the number CI enforces, or better, to the measured
-45% so the floor is honest and ratchets upward.
-
-Note that roughly 832 statements of the uncovered total are the deliberately
-quarantined dead routers in section 7, which are counted in the `--cov=api`
-denominator at 0%. Excluding them, real coverage of live code is about 49%.
+**Fix.** In `lapse_unpaid_win`, load the deal's `ExternalEscrow`. If
+`funding_initiated_at` is set and the status is not a confirmed failure,
+don't lapse: reconcile first, or extend the deadline and let a later pass
+decide. Separately, in `reconcile_econfirm_escrow`, a `FUNDED` result for a
+deal that is not `agreed` should publish `EConfirmReconciliationRequired`
+rather than being treated as benign. That branch was written for a
+concurrent poller, not a cancelled deal.
 
 ---
 
-## 7. Low — dead code, duplicate files, stale counts
+## 4. High — admin is granted on an unverified email
 
-**Quarantined routers.** Five modules under `api/routers/` (`admin.py`,
-`auth.py`, `disputes.py`, `reviews.py`, `listings.py`) are dead. I confirmed
-they are neither imported nor mounted. Each carries a clear header saying so and
-naming its replacement, and the decision to quarantine rather than delete is
-explicitly recorded. This is handled well. The only cost is the coverage
-distortion above, fixable with a `.coveragerc` omit.
+**Reproduced.** `AuthService.register` sets:
 
-**Duplicate Dockerfile.** The file named `Docker` is byte-identical to
-`Dockerfile`. Neither is referenced by `render.yaml`, which points at
-`backend/Dockerfile`. Delete both root copies or point something at them.
+```python
+is_admin = bool(settings.admin_bootstrap_email) and email == settings.admin_bootstrap_email
+```
 
-**Dead environment variable.** `render.yaml` sets `TOKEN_EXPIRE_MINUTES`.
-Nothing reads it. The code reads `ACCESS_TOKEN_EXPIRE_MINUTES`, which
-`.env.example` gets right. The defaults happen to match at 15 minutes, so there
-is no behavioural difference today, but changing it in the Render dashboard
-would silently do nothing.
+`email` here can be a raw, typed, unverified address. Registering with the
+bootstrap address and no `email_verify_token` produced:
 
-**Stale README counts.** The README claims 22 Flutter screens and 25 test files.
-Actual: 39 files in `lib/screens/` (50 including feature modules) and 40 test
-files. Both undersell.
+```
+is_admin: True  email_verified: False
+```
 
-**Wide-open CORS in the production config.** `render.yaml` sets
-`ALLOWED_ORIGINS: "*"` with `ENV: production`. The code handles this correctly —
-`allow_credentials` is computed to be false whenever origins are `*`, so there
-is no credentialed-wildcard vulnerability, and startup logs a warning. Still
-worth setting to the real origin list.
+Anyone who knows or guesses `ADMIN_BOOTSTRAP_EMAIL`, typically the founder's
+public address, and registers before its owner does gets full admin,
+including `POST /admin/users/{id}/promote-admin`. The window is from the
+moment the variable is set until the real admin registers.
+
+This predates this week's work, but the email-OTP flow added this week is
+what makes it cheap to fix.
+
+**Fix.** `is_admin = email_verified and email == settings.admin_bootstrap_email`.
+The real admin then verifies their address during signup, which needs
+`RESEND_API_KEY` set (see §5.3).
 
 ---
 
-## 8. Low — rate limiter implementations disagree
+## 5. Medium / Low — new since the last review
 
-The two limiters in `api/core/rate_limit.py` behave differently under load.
+### 5.1 Medium — speech-to-text endpoints have no rate limit
 
-The in-memory path appends to the window only after the limit check passes. The
-Redis path runs `zadd` unconditionally inside the pipeline, before evaluating
-the count. A request that is rejected with 429 therefore still records itself in
-Redis, continuously extending its own window. Under sustained abuse the window
-never drains, so a throttled identifier stays locked out well past the nominal
-window rather than recovering after it.
+`POST /stt/deepgram-token`, `/stt/assemblyai-token` and `/stt/transcribe`
+spend real money per call. The first two mint streaming credentials billed to
+BROKA's accounts, and the third makes a paid Whisper call on up to 25 MB of
+audio. None of them calls a limiter. Every comparable endpoint does:
+`/calls/turn-credential` is limited explicitly because each call costs a
+Cloudflare request, and the buy-agent LLM endpoints gained `ai_chat_limiter`
+this week for the same reason.
 
-The Redis path also fails open on any error, which is a reasonable availability
-choice but means brute-force protection on login disappears entirely during a
-Redis blip. Worth a deliberate decision rather than an inherited default.
+The Deepgram token also keeps working after its 300 s TTL once the socket is
+open (per the code's own comment), so one mint can stream for as long as the
+client keeps the connection. Combined with §2 #3, a leaked call token is
+enough to mint these.
 
-**Fix.** Move the `zadd` behind the count check, or subtract the just-added
-entry when rejecting.
+**Fix.** Add a per-user `stt_token_limiter` (e.g. 10/min) to the two token
+endpoints and put `ai_chat_limiter` or similar on `/transcribe`.
+
+### 5.2 Medium — `PATCH /auctions/{id}/terms` returns 500 for any timezone-suffixed time
+
+**Reproduced.** The body's `starts_at` / `ends_at` are pydantic `datetime`s,
+so `"2026-09-24T10:00:00Z"` parses as timezone-aware. The stored columns and
+`datetime.utcnow()` are naive. Both requests below fail with
+`TypeError: can't compare offset-naive and offset-aware datetimes`:
+
+```
+PATCH terms {"ends_at": "...Z"}                  → 500
+PATCH terms {"starts_at": "...Z", "ends_at": "...Z"} → 500
+```
+
+The Flutter app sends exactly this format (`toUtc().toIso8601String()`) to
+`POST /listings`, whose parser strips the zone. No screen calls the terms
+endpoint yet, so users can't hit this today, but the first one that does
+will.
+
+Related: `listings/service.py`'s `_coerce_dt` / `_strict_dt` use
+`.replace(tzinfo=None)` without converting to UTC first. A `+03:00` time is
+silently stored three hours off. The app always sends UTC, so this is latent.
+
+**Fix.** One helper, `aware.astimezone(timezone.utc).replace(tzinfo=None)`,
+used by both the terms endpoint and the listings parsers.
+
+### 5.3 Low — production without Resend logs email OTP codes
+
+With `RESEND_API_KEY` unset, `get_email_provider()` returns `ConsoleEmail`
+in production too. It writes the full email body, code included, to the log
+at WARNING and returns `True`. The API then tells the user the code was sent.
+Startup warns about it, but the code still reaches log storage and Sentry
+breadcrumbs, and the user never gets it.
+
+Once §4 is fixed, this matters more: whoever can read logs can verify any
+address.
+
+**Fix.** In production, return 503 from `/auth/email/otp/request` when no
+provider is configured, as the phone path does when an SMS send fails.
+
+### 5.4 Low — buy-agent `history` entries are unbounded
+
+`ConverseTurnIn.history` caps the list at 40 entries but not the size of each
+entry. The last 12 are pasted into the LLM prompt verbatim
+(`ai_broker/service.py`, `history[-12:]`). `message` is capped at 1000
+characters for exactly this reason (its comment says so), and the cap doesn't
+extend to the transcript sent alongside it. At 20 calls/min per user this is
+cost exposure, not an outage.
+
+**Fix.** Validate `history` as `list[HistoryTurn]` with `content:
+str = Field(max_length=1000)`, or truncate each entry where the prompt is
+built.
 
 ---
 
-## 9. Flutter app — not verifiable here, and untested
+## 6. Flutter
 
-Flutter is not installed in this environment, so `flutter analyze` could not be
-run and the Dart findings below are structural rather than behavioural.
+Flutter was not available for the previous review. This time Flutter 3.24.5
+(the version CI pins) was installed and run:
 
-**No tests at all.** 43,785 lines of Dart, zero `*_test.dart` files, no `test/`
-directory. The backend is well covered by comparison. The app contains the
-entire negotiation, calling, and payment UX.
+| Check | Result |
+|---|---|
+| `flutter analyze` (CI flags) | **0 errors**. 24 warnings, 21 infos |
+| `flutter test` | **162 passed**, 0 failed, across 8 files |
 
-**Lints are declared but not active.** `flutter_lints: ^4.0.0` is a dev
-dependency, but there is no `analysis_options.yaml`. Without a file including
-`package:flutter_lints/flutter.yaml`, none of those rules apply. The CI
-`Analyze` step runs with `--no-fatal-warnings --no-fatal-infos`, so it is
-catching only hard analyzer errors. That is a deliberate and well-reasoned
-choice, documented at length in the workflow, but it means the declared lint set
-is doing nothing.
+The warnings are housekeeping: 10 `unused_field`, 6 `unused_import`, 3
+`unused_local_variable`, 5 redundant null checks. None is a type error. The
+test suite is new since the last review and covers the right things: signup
+wizard, OTP autofill, Home scroll, category zones, and the Deepgram →
+AssemblyAI failover state machine.
 
-**Unverified dependency versions.** `pubspec.yaml` says outright that the
-Firebase, `record`, `path_provider` and `http_parser` version constraints are
-"a best-effort estimate from training knowledge ... NOT verified against a live
-pub.dev". Adding `analysis_options.yaml` and a first widget test would be a
-cheap, high-value next step.
+Structural notes from reading the new code:
 
-**Money as `Float`.** `agreed_price`, `commission` and `amount` are SQLAlchemy
-`Float` columns in `api/database.py`. The ledger itself correctly uses
-`Numeric(18, 2)`, and `api/core/ledger.py` is careful to derive released amounts
-from the ledger rather than from caller-supplied figures, so the book of record
-is sound. The operational tables around it are not, and they are what the STK
-push amount is computed from.
+- The Zeno voice stack is well separated. `ZenoVoiceController` knows
+  nothing about vendors, `RealtimeSttManager` owns failover, and both vendor
+  services take injectable connectors, which is what makes
+  `zeno_voice_test.dart` and `stt_fallback_test.dart` possible. Permanent STT
+  keys stay on the server, and the client only ever holds short-lived tokens.
+- After an error, `ZenoVoiceController.open()` returns early because `_open`
+  is still true. The only way back is closing the card with X and reopening
+  it. If that's intended, the error card should say so. If not, reset `_open`
+  in `_failWith`.
 
 ---
 
-## 10. Suggested order of work
+## 7. What was done well this week
 
-1. Remove `alembic upgrade head &&` from the three Dockerfiles. Deployment is
-   broken until this is done.
-2. Require `type == "access"` in `decode_token_strict()`.
-3. Gate the dispute-summary aggregation without depending on Redis.
-4. Reconcile the three coverage numbers.
-5. Add `SET NX` reservation to the idempotency guard.
-6. Add `analysis_options.yaml` and a first Flutter test.
-7. Housekeeping: delete `Docker`, fix `TOKEN_EXPIRE_MINUTES`, omit dead routers
-   from coverage, refresh the README counts.
+- **Auction lifecycle.** Compare-and-swap bids and closes that hold on
+  SQLite as well as Postgres, a reserve that is evaluated only at close and
+  never exposed publicly (the old public serializer leaked it; that is fixed
+  and documented), idempotent close with a crash-recoverable deal-retry
+  claim, and an at-least-once ending-soon reminder with a bounded retry
+  budget. 2,300 lines of tests back it.
+- **OTP SMS Retriever hash** is validated against its exact format before
+  being put into an SMS, which closes an easy phishing relay.
+- **Money quantization** (`core/money.py`) is a sound interim answer to Float
+  columns, and its docstring is honest about what a real Numeric migration
+  still needs.
+- **Calling.** The room-ownership check (`_owns_room`) fixes a real
+  reconnect race, and call pushes now carry a TTL so a stale ring doesn't
+  arrive minutes later.
+
+---
+
+## 8. Suggested order of work
+
+1. §3: don't lapse an auction deal with a funding attempt in flight, and
+   alert on `FUNDED` against a non-`agreed` deal. Real money.
+2. §4: require `email_verified` for the admin bootstrap. One line.
+3. §2 #3: require `type == "access"` in `decode_token_strict()`. One line,
+   still open from last week.
+4. §5.1: rate-limit the STT endpoints.
+5. §5.2: normalize timezone-aware datetimes to naive UTC in one helper.
+6. Still open from last week: the Redis-independent dispute-summary gate,
+   `SET NX` idempotency, `pytest.ini` coverage floor (set it to 50),
+   `TOKEN_EXPIRE_MINUTES`, rate limiter `zadd` order, `analysis_options.yaml`.
+7. §5.3, §5.4.
 
 ---
 
 ## Overall
 
-This is a substantial and carefully built codebase. The escrow state machine,
-the double-entry ledger, the row-locking discipline on fund-moving transitions,
-and the M-Pesa callback authentication are all stronger than typical for a
-project this size, and the commentary explaining why each guard exists is
-genuinely excellent.
-
-The weaknesses cluster in one place: the gap between what the configuration and
-documentation assert and what the code does. Alembic is documented as unused and
-is wired into the production entrypoint. A call token is documented as scoped
-and is not. Idempotency is documented as solving double-taps and does not. A
-coverage floor is documented as 35 and enforced locally as 60. The code is in
-better shape than the things that describe it, which is an unusual and
-fortunate problem to have.
+The codebase kept its character this week. New code is carefully reasoned,
+its comments name the failure each guard prevents, and the auction work in
+particular is stronger than most production auction code. The pattern from
+last week holds, in a narrower form: the most serious problems sit at the
+seams between two carefully built systems. The auction sweep reasons only
+about auction state and the escrow reconciler only about escrow state, and
+the money falls between them. The admin bootstrap was written before email
+could be verified and was never revisited once it could.
