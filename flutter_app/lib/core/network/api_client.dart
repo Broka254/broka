@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiException implements Exception {
@@ -134,6 +135,44 @@ class ApiClient {
     return _handleResponse(response);
   }
 
+  /// POST one file as multipart/form-data under the field name "file",
+  /// with [fields] alongside. [onProgress] gets (bytes sent, total bytes)
+  /// as the body is written. Renews an expired session like every other
+  /// method here; the body is rebuilt for the retry.
+  Future<dynamic> uploadFile(
+    String path, {
+    required List<int> bytes,
+    required String filename,
+    Map<String, String> fields = const {},
+    void Function(int sent, int total)? onProgress,
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    final uri = Uri.parse('$_baseUrl$path');
+    final response = await _send(() async {
+      final request = _ProgressMultipartRequest('POST', uri, onProgress);
+      _headers.forEach((k, v) {
+        if (k.toLowerCase() != 'content-type') request.headers[k] = v;
+      });
+      request.fields.addAll(fields);
+      request.files.add(http.MultipartFile.fromBytes(
+        'file', bytes,
+        filename: filename,
+        contentType: _imageContentType(filename),
+      ));
+      final streamed = await _http.send(request).timeout(timeout);
+      return http.Response.fromStream(streamed);
+    });
+    return _handleResponse(response);
+  }
+
+  static MediaType _imageContentType(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) return MediaType('image', 'png');
+    if (lower.endsWith('.webp')) return MediaType('image', 'webp');
+    if (lower.endsWith('.gif')) return MediaType('image', 'gif');
+    return MediaType('image', 'jpeg');
+  }
+
   Future<dynamic> patch(
     String path,
     dynamic body, {
@@ -180,3 +219,28 @@ class ApiClient {
 
 // Singleton instance
 final apiClient = ApiClient();
+
+/// A multipart request that reports how much of its body has been written.
+class _ProgressMultipartRequest extends http.MultipartRequest {
+  _ProgressMultipartRequest(super.method, super.url, this.onProgress);
+
+  final void Function(int sent, int total)? onProgress;
+
+  @override
+  http.ByteStream finalize() {
+    final body = super.finalize();
+    final report = onProgress;
+    if (report == null) return body;
+    final total = contentLength;
+    var sent = 0;
+    return http.ByteStream(body.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (chunk, sink) {
+          sent += chunk.length;
+          report(sent, total);
+          sink.add(chunk);
+        },
+      ),
+    ));
+  }
+}

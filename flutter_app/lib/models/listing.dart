@@ -1,6 +1,7 @@
 // BROKA - Listing Model
 import '../utils/backend_time.dart';
 import '../features/categories/domain/category_visual.dart';
+import 'listing_photo.dart';
 
 class Listing {
   final String  id;
@@ -24,6 +25,9 @@ class Listing {
   // only to decide whether the "✨ AI Showcase" badge should render
   // (product_card.dart) - a gallery-picked cover never gets that label.
   final String? showcaseImageSource;
+  // Stored images - see BrokaListing's matching fields.
+  final List<ListingPhoto> photos;
+  final ListingPhoto? cover;
   // Seller info
   final String? sellerId;
   final String? sellerName;
@@ -33,6 +37,7 @@ class Listing {
   // Added (home-redesign brief, 2026-08-16) - see BrokaListing's matching
   // field for the full rationale.
   final String? sellerProfilePhoto;
+  final String? sellerAvatarUrl;
   final double? sellerLat;
   final double? sellerLng;
   final String? sellerPhone;
@@ -59,12 +64,15 @@ class Listing {
     this.verifiedPhotos,
     this.showcaseImageUrl,
     this.showcaseImageSource,
+    this.photos = const [],
+    this.cover,
     this.sellerId,
     this.sellerName,
     this.sellerRating,
     this.sellerCompletedDeals,
     this.sellerVerified = false,
     this.sellerProfilePhoto,
+    this.sellerAvatarUrl,
     this.sellerLat,
     this.sellerLng,
     this.sellerPhone,
@@ -90,6 +98,8 @@ class Listing {
         verifiedPhotos:       j['verified_photos'] as String?,
         showcaseImageUrl:     j['showcase_image_url'] as String?,
         showcaseImageSource:  j['showcase_image_source'] as String?,
+        photos:               ListingPhoto.listFromJson(j['photos']),
+        cover:                ListingPhoto.fromJson(j['cover']),
         sellerId:             j['seller_id']        as String?,
         sellerName:           j['seller_name']      as String?,
         sellerRating:         (j['seller_rating']   as num?)?.toDouble(),
@@ -100,6 +110,7 @@ class Listing {
         // field now, same as BrokaListing's.
         sellerVerified:       j['seller_verified']  as bool? ?? false,
         sellerProfilePhoto:   j['seller_profile_photo'] as String?,
+        sellerAvatarUrl:      j['seller_avatar_url'] as String?,
         sellerLat:            (j['seller_lat']      as num?)?.toDouble(),
         sellerLng:            (j['seller_lng']      as num?)?.toDouble(),
         sellerPhone:          j['seller_phone']     as String?,

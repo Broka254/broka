@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
+import '../widgets/broka_image.dart';
 
 class UserProfileScreen extends StatefulWidget {
   const UserProfileScreen({super.key});
@@ -935,6 +936,8 @@ class _ListingCard extends StatelessWidget {
   }
 
   Widget _buildThumb() {
+    final cover = listing.cover;
+    if (cover != null) return BrokaImage(cover.thumb, placeholder: _placeholder());
     final photos = listing.verifiedPhotos;
     if (photos != null && photos.isNotEmpty) {
       final first = photos.split(',').first.trim();

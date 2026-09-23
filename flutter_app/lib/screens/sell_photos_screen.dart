@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../main.dart';
+import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
 import '../services/sell_wizard_data.dart';
 import '../widgets/sell_step_scaffold.dart';
@@ -41,6 +42,27 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
   Future<void> _initPhotos() async {
     await _restoreDraftIfAny();
     await _retrieveLostPhotoIfAny();
+    // Restored photos that never finished uploading carry on now.
+    for (final f in _data.verifiedPhotos) {
+      _startUpload(f);
+    }
+  }
+
+  /// Uploads [file] in the background (a no-op if it already has been),
+  /// and saves the draft again once it lands so its id survives a restart.
+  void _startUpload(File file) {
+    final tracker = _data.photoUploads;
+    tracker.start(file);
+    late final VoidCallback onChange;
+    onChange = () {
+      final status = tracker.stateFor(file)?.status;
+      if (status == PhotoUploadStatus.done || status == PhotoUploadStatus.failed ||
+          status == null) {
+        tracker.removeListener(onChange);
+        if (status == PhotoUploadStatus.done) unawaited(_data.persist());
+      }
+    };
+    tracker.addListener(onChange);
   }
 
   Future<void> _restoreDraftIfAny() async {
@@ -79,6 +101,7 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
       if (_data.verifiedPhotos.any((f) => f.path == path)) return;
       setState(() => _data.verifiedPhotos.add(File(path)));
       unawaited(_data.persist());
+      _startUpload(File(path));
     } catch (_) {
       // Non-fatal - worst case this one photo still needs a retake, same
       // as before this fix, rather than surfacing a raw error for something
@@ -111,15 +134,71 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
       maxWidth: 1080,
     );
     if (xfile != null && mounted) {
-      setState(() => _data.verifiedPhotos.add(File(xfile.path)));
+      final file = File(xfile.path);
+      setState(() => _data.verifiedPhotos.add(file));
       unawaited(_data.persist());
+      _startUpload(file);
     }
   }
 
   void _removePhoto(int i) {
+    final removed = _data.verifiedPhotos[i];
     setState(() => _data.verifiedPhotos.removeAt(i));
+    _data.photoUploads.remove(removed);
     unawaited(_data.persist());
   }
+
+  /// Progress ring while a photo uploads, a tick when it's done, and a
+  /// tap-to-retry badge if it failed. Publishing retries a failed upload
+  /// too, so a missed tap here never loses the listing.
+  Widget _uploadBadge(File file) => ListenableBuilder(
+        listenable: _data.photoUploads,
+        builder: (_, __) {
+          final state = _data.photoUploads.stateFor(file);
+          if (state == null) return const SizedBox.shrink();
+          switch (state.status) {
+            case PhotoUploadStatus.uploading:
+              return Container(
+                width: 90, height: 90,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.35),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: SizedBox(
+                  width: 26, height: 26,
+                  child: CircularProgressIndicator(
+                    value: state.progress > 0 ? state.progress : null,
+                    strokeWidth: 2.5, color: Colors.white,
+                  ),
+                ),
+              );
+            case PhotoUploadStatus.done:
+              return const Positioned(
+                left: 6, bottom: 6,
+                child: Icon(Icons.check_circle_rounded, size: 18, color: Color(0xFF4DD6A5)),
+              );
+            case PhotoUploadStatus.failed:
+              return GestureDetector(
+                onTap: () => _startUpload(file),
+                child: Container(
+                  width: 90, height: 90,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Column(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.refresh_rounded, color: Colors.white, size: 22),
+                    SizedBox(height: 2),
+                    Text('Retry', style: TextStyle(color: Colors.white, fontSize: 11,
+                        fontWeight: FontWeight.w700)),
+                  ]),
+                ),
+              );
+          }
+        },
+      );
 
   void _next() {
     if (_data.verifiedPhotos.isEmpty) {
@@ -236,6 +315,7 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
                       ),
                     ),
                   ),
+                  _uploadBadge(_data.verifiedPhotos[i]),
                   Positioned(top: 4, right: 12,
                     child: GestureDetector(
                       onTap: () => _removePhoto(i),

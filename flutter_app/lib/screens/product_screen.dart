@@ -4,12 +4,14 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
 import '../services/broka_tts.dart';
 import '../services/last_screen_tracker.dart';
 import '../utils/auth_gate.dart';
+import '../widgets/broka_image.dart';
 
 class ProductScreen extends StatefulWidget {
   const ProductScreen({super.key});
@@ -80,24 +82,38 @@ class _ProductScreenState extends State<ProductScreen> {
     // avoid burning AI API calls on every listing view.
   }
 
+  /// Gallery sources, first photo first: the stored images' large size
+  /// when the listing has them, else the legacy base64 photos. BrokaImage
+  /// renders either.
   List<String> get _photos {
+    final stored = _listing?.photos ?? const [];
+    if (stored.isNotEmpty) return stored.map((p) => p.large).toList();
     final raw = _listing?.verifiedPhotos;
     if (raw == null || raw.isEmpty) return [];
     return raw.split(',').where((s) => s.isNotEmpty).toList();
   }
 
-  // Raw base64 of the first photo, for Zeno's image analysis. Only
-  // populated when the photo is already a data URI (most uploads are,
-  // per the existing _ImageBubble pattern elsewhere in the app) - remote
-  // URLs are skipped here rather than fetched, to keep this single,
-  // synchronous, and free of an extra network round-trip.
-  String? get _zenoImageBase64 {
+  /// The first photo as base64 for Zeno's analysis, or null.
+  ///
+  /// A stored image is fetched at its medium size. A legacy photo is
+  /// already base64. The version this replaces only accepted a data URI,
+  /// but listing photos were always stored as bare base64, so Zeno never
+  /// actually received the photo it was told about.
+  Future<String?> _zenoImageBase64() async {
+    final stored = _listing?.photos ?? const [];
+    if (stored.isNotEmpty) {
+      final url = BrokaImage.networkUrl(stored.first.medium);
+      if (url == null) return null;
+      try {
+        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+        return res.statusCode == 200 ? base64Encode(res.bodyBytes) : null;
+      } catch (_) {
+        return null;
+      }
+    }
     if (_photos.isEmpty) return null;
-    final first = _photos.first;
-    if (!first.startsWith('data:')) return null;
-    final commaIdx = first.indexOf(',');
-    if (commaIdx < 0) return null;
-    return first.substring(commaIdx + 1);
+    final bytes = BrokaImage.inlineBytes(_photos.first);
+    return bytes == null ? null : base64Encode(bytes);
   }
 
   bool get _isMine => _listing?.sellerId == ApiService.currentUserId;
@@ -292,20 +308,12 @@ class _ProductScreenState extends State<ProductScreen> {
           onPageChanged: (i) => setState(() => _photoIndex = i),
           itemCount: photos.length,
           itemBuilder: (_, i) {
-            final p = photos[i];
-            try {
-              final bytes = base64Decode(p);
-              final img = Image.memory(bytes, fit: BoxFit.cover,
-                  width: double.infinity,
-                  errorBuilder: (_, __, ___) => _photoFallback());
-              final id = _listing?.id;
-              return (i == 0 && id != null && id.isNotEmpty)
-                  ? Hero(tag: 'listing-photo-$id', child: img)
-                  : img;
-            } catch (_) {
-              return Image.network(p, fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => _photoFallback());
-            }
+            final img = BrokaImage(photos[i],
+                width: double.infinity, placeholder: _photoFallback());
+            final id = _listing?.id;
+            return (i == 0 && id != null && id.isNotEmpty)
+                ? Hero(tag: 'listing-photo-$id', child: img)
+                : img;
           },
         ),
       ),
@@ -794,6 +802,7 @@ class _ProductScreenState extends State<ProductScreen> {
 
     try {
       await _loadPriceComparison();
+      final zenoImage = await _zenoImageBase64();
 
       final sellerName  = listing.sellerName ?? _sellerInfo?['name'] as String? ?? 'Seller';
       final userName     = ApiService.currentUserNickname ?? ApiService.currentUserName ?? 'Buyer';
@@ -843,7 +852,7 @@ $priceBlock
 Seller credibility: ${credScore.toStringAsFixed(1)}/10
 Distance: ${distKm != null ? "${distKm.toStringAsFixed(1)} km away" : "unknown"}
 Seller: $sellerName (${listing.sellerCompletedDeals ?? 0} deals completed)
-${_zenoImageBase64 != null ? "\nA photo of the item is attached - look at it and factor in what you can actually observe (condition, apparent authenticity, anything notable)." : ""}
+${zenoImage != null ? "\nA photo of the item is attached - look at it and factor in what you can actually observe (condition, apparent authenticity, anything notable)." : ""}
 
 Cover these topics, in this order, each only as long as it deserves:
 1. PRICE: whether it's fair, using the comparison data above (or your general
@@ -858,7 +867,7 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
         message: prompt,
         history: const [],
         language: lang,
-        imageBase64: _zenoImageBase64,
+        imageBase64: zenoImage,
       );
 
       if (mounted) {

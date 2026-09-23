@@ -30,6 +30,8 @@ import '../features/listings/domain/models/listing.dart' show BrokaListing;
 import '../utils/backend_time.dart';
 import '../utils/price_format.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../models/listing_photo.dart';
+import 'broka_image.dart';
 
 class ProductCard extends StatelessWidget {
   final dynamic item; // Listing or BrokaListing
@@ -162,6 +164,24 @@ class ProductCard extends StatelessWidget {
   // Home-redesign brief §12: "trader selfie" - real photo only, no
   // generated/placeholder face (see listings/service.py's matching
   // addition). Null is the expected common case, not a bug.
+  String? get _sellerAvatarUrl {
+    try {
+      return item.sellerAvatarUrl as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The stored cover image (Online Stores phase 1), when the backend has
+  /// converted this listing's photos. Null means use the legacy base64.
+  ListingPhoto? get _cover {
+    try {
+      return item.cover as ListingPhoto?;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String? get _sellerPhotoBase64 {
     try {
       return item.sellerProfilePhoto as String?;
@@ -280,6 +300,14 @@ class ProductCard extends StatelessWidget {
   /// this from real image bytes) not to be worth a stateful widget just
   /// to close it.
   bool get _isAiShowcase {
+    final cover = _cover;
+    if (cover != null) {
+      try {
+        return cover.kind == 'showcase' && item.showcaseImageSource == 'ai';
+      } catch (_) {
+        return false;
+      }
+    }
     final uri = _showcaseImageUrl;
     if (uri == null) return false;
     try {
@@ -324,6 +352,10 @@ class ProductCard extends StatelessWidget {
   }
 
   Widget _buildImage() {
+    final cover = _cover;
+    if (cover != null) {
+      return BrokaImage(cover.thumb, placeholder: _placeholder());
+    }
     final showcase = _showcaseImageUrl;
     if (showcase != null) {
       final payload = _dataUriPayload(showcase);
@@ -381,6 +413,10 @@ class ProductCard extends StatelessWidget {
   // trust model, not decoration, and 18px read as nearly invisible next to
   // the name/rating it sits beside.
   Widget _traderAvatar() {
+    final avatar = BrokaImage.provider(_sellerAvatarUrl);
+    if (avatar != null) {
+      return CircleAvatar(radius: 10, backgroundImage: avatar);
+    }
     final photo = _sellerPhotoBase64;
     if (photo != null && photo.isNotEmpty) {
       try {

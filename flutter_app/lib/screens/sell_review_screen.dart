@@ -11,13 +11,15 @@
 // so simply omitting it from the payload is a clean, safe change.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../core/utils/result.dart';
 import '../services/api_service.dart';
+import '../services/image_upload_service.dart';
+import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
 import '../services/sell_wizard_data.dart';
+import '../widgets/broka_image.dart';
 import '../widgets/sell_step_scaffold.dart';
 import '../features/stores/data/repositories/stores_repository.dart';
 import '../features/stores/domain/models/store.dart';
@@ -55,14 +57,6 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
     );
   }
 
-  Future<String?> _fileToBase64(File f) async {
-    try {
-      return base64Encode(await f.readAsBytes());
-    } catch (_) {
-      return null;
-    }
-  }
-
   Future<void> _activate() async {
     final data = widget.data;
 
@@ -83,10 +77,20 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
     setState(() { _loading = true; _error = null; });
 
     try {
-      final photoBase64List = <String>[];
-      for (final f in data.verifiedPhotos) {
-        final b = await _fileToBase64(f);
-        if (b != null) photoBase64List.add(b);
+      // The photos have been uploading since they were taken; this waits
+      // for any still in flight and retries a failed one once.
+      final photoIds = await data.photoUploads.idsFor(data.verifiedPhotos);
+      // The showcase (a gallery pick or an AI result) is only in memory,
+      // so it uploads here.
+      String? showcaseId;
+      final showcase = data.showcaseImageDataUri;
+      if (showcase != null) {
+        final bytes = BrokaImage.inlineBytes(showcase);
+        if (bytes != null) {
+          showcaseId = (await imageUploadService.uploadBytes(
+            bytes, purpose: ImagePurpose.listingShowcase, filename: 'showcase.jpg',
+          )).id;
+        }
       }
 
       await ApiService.createListing({
@@ -102,7 +106,7 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
         'location_subcounty': data.subcounty.trim(),
         'listing_type':    data.type,
         'description':     data.description.trim(),
-        'verified_photos': photoBase64List.join(','),
+        'photo_ids':       photoIds,
         if (data.type == 'auction' && data.reserve.isNotEmpty)
           'reserve_price': double.parse(data.reserve),
         // Auction terms. Omitted entirely for a direct listing; for an
@@ -119,8 +123,9 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
         // Showcase step actually produced one; both null just means the
         // seller skipped it, which the backend already treats as valid
         // (create_listing requires the two fields together or not at all).
-        if (data.showcaseImageDataUri != null) 'showcase_image_url': data.showcaseImageDataUri,
-        if (data.showcaseImageSource != null) 'showcase_image_source': data.showcaseImageSource,
+        if (showcaseId != null) 'showcase_id': showcaseId,
+        if (showcaseId != null && data.showcaseImageSource != null)
+          'showcase_image_source': data.showcaseImageSource,
         if (data.storeId != null) 'store_id': data.storeId,
       });
 
@@ -133,6 +138,8 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
       // replace) rather than a single pop, so this works correctly no
       // matter how the flow was entered.
       Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+    } on PhotoUploadIncomplete catch (e) {
+      setState(() => _error = '$e. Check your connection and try again.');
     } on TimeoutException {
       setState(() => _error =
           'Request timed out - your connection may be slow. Please try again.');

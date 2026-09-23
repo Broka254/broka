@@ -1,4 +1,5 @@
 // BROKA v3.0 - Listing domain model
+import '../../../../models/listing_photo.dart';
 import '../../../../utils/price_format.dart';
 
 class BrokaListing {
@@ -25,6 +26,12 @@ class BrokaListing {
   // Listing models, same as verifiedPhotos above already is).
   final String? showcaseImageUrl;
   final String? showcaseImageSource; // "gallery" | "ai" | null
+  // Stored images (Online Stores phase 1). `photos` is every photo, first
+  // one first; `cover` is what a card shows (the showcase, else the first
+  // photo). Empty/null for a listing the backend hasn't converted yet -
+  // readers fall back to verifiedPhotos/showcaseImageUrl then.
+  final List<ListingPhoto> photos;
+  final ListingPhoto? cover;
   final bool isFeatured;
   final String? featuredUntil;
   final String? createdAt;
@@ -41,6 +48,9 @@ class BrokaListing {
   // (most sellers won't have uploaded one) - the card falls back to an
   // initial-letter avatar, never a generated face.
   final String? sellerProfilePhoto;
+  // The seller's avatar as a stored image (small size). Preferred over
+  // sellerProfilePhoto, which list responses stop sending once it exists.
+  final String? sellerAvatarUrl;
   // Store feature. storeId is null for a personal listing (the default,
   // unchanged case); storeName/storeSlug are only ever non-null alongside
   // it. Kept in sync with lib/models/listing.dart's matching fields, same
@@ -70,6 +80,8 @@ class BrokaListing {
     this.verifiedPhotos,
     this.showcaseImageUrl,
     this.showcaseImageSource,
+    this.photos = const [],
+    this.cover,
     this.isFeatured = false,
     this.featuredUntil,
     this.createdAt,
@@ -79,6 +91,7 @@ class BrokaListing {
     this.sellerRating = 0,
     this.sellerCompletedDeals = 0,
     this.sellerProfilePhoto,
+    this.sellerAvatarUrl,
     this.storeId,
     this.storeName,
     this.storeSlug,
@@ -106,6 +119,8 @@ class BrokaListing {
       verifiedPhotos: json['verified_photos'] as String?,
       showcaseImageUrl: json['showcase_image_url'] as String?,
       showcaseImageSource: json['showcase_image_source'] as String?,
+      photos:         ListingPhoto.listFromJson(json['photos']),
+      cover:          ListingPhoto.fromJson(json['cover']),
       isFeatured:     json['is_featured']     as bool? ?? false,
       featuredUntil:  json['featured_until']  as String?,
       createdAt:      json['created_at']      as String?,
@@ -115,6 +130,7 @@ class BrokaListing {
       sellerRating:          (json['seller_rating']          as num?)?.toDouble() ?? 0,
       sellerCompletedDeals:  json['seller_completed_deals']  as int? ?? 0,
       sellerProfilePhoto:    json['seller_profile_photo']    as String?,
+      sellerAvatarUrl:       json['seller_avatar_url']       as String?,
       storeId:    json['store_id']    as String?,
       storeName:  json['store_name']  as String?,
       storeSlug:  json['store_slug']  as String?,

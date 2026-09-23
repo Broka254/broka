@@ -15,6 +15,7 @@
 // entirely, not just hidden.
 import 'dart:io';
 import 'sell_draft_store.dart';
+import 'photo_upload_tracker.dart';
 
 class SellWizardData {
   String name = '';
@@ -48,6 +49,9 @@ class SellWizardData {
   String description = '';
   String reserve = '';
   final List<File> verifiedPhotos = [];
+  // Each photo uploads in the background as soon as it's taken (Online
+  // Stores phase 1); Publish sends the resulting ids, not the photos.
+  final PhotoUploadTracker photoUploads = PhotoUploadTracker();
   // AI Showcase/Cover Image (2026-08-29) - optional, chosen on the wizard's
   // Showcase step (gallery pick or an approved AI preview), submitted
   // alongside everything else in the single POST /listings call at
@@ -99,6 +103,9 @@ class SellWizardData {
     'attributes': attributes,
     'type': type,
     'verifiedPhotoPaths': verifiedPhotos.map((f) => f.path).toList(),
+    // path -> uploaded image id, so a restored draft doesn't upload the
+    // same photos again.
+    'photoAssetIds': photoUploads.uploadedIds,
     'storeId': storeId,
     'minBidIncrement': minBidIncrement,
     'auctionStartsAt': auctionStartsAt?.toIso8601String(),
@@ -141,6 +148,11 @@ class SellWizardData {
       ..auctionStartsAt = _parseDraftDate(draft['auctionStartsAt'])
       ..auctionEndsAt   = _parseDraftDate(draft['auctionEndsAt'])
       ..verifiedPhotos.addAll(restoredPhotos);
+    final assetIds = (draft['photoAssetIds'] as Map?)?.cast<String, String>() ?? {};
+    data.photoUploads.restore({
+      for (final f in restoredPhotos)
+        if (assetIds[f.path] != null) f.path: assetIds[f.path]!,
+    });
 
     return data.hasContent ? data : null;
   }

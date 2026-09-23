@@ -7,9 +7,9 @@
 // placeholder if the string is null, empty, malformed, or fails to
 // decode. Never throws - Phase 6's explicit requirement is "do not break
 // if media is missing/invalid."
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../main.dart';
+import '../../../widgets/broka_image.dart';
 
 class StoreMediaImage extends StatelessWidget {
   final String? dataUri;
@@ -31,23 +31,13 @@ class StoreMediaImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uri = dataUri;
-    Widget child;
-    if (uri == null || uri.isEmpty) {
-      child = _placeholder(context);
-    } else {
-      final idx = uri.indexOf(',');
-      final payload = idx == -1 ? uri : uri.substring(idx + 1);
-      try {
-        child = Image.memory(
-          base64Decode(payload),
-          width: width, height: height, fit: fit,
-          errorBuilder: (_, __, ___) => _placeholder(context),
-        );
-      } catch (_) {
-        child = _placeholder(context);
-      }
-    }
+    // Store images are URLs once the backend has stored them as image
+    // assets, data URIs before that; BrokaImage renders both.
+    final child = BrokaImage(
+      dataUri,
+      width: width, height: height, fit: fit,
+      placeholder: _placeholder(context),
+    );
     return borderRadius != null ? ClipRRect(borderRadius: borderRadius!, child: child) : child;
   }
 

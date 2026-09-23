@@ -13,7 +13,6 @@
 // nightly snapshot records, so what the seller reads today is what the
 // history will show tomorrow.
 
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -24,6 +23,7 @@ import '../main.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
 import '../theme/motion.dart';
+import '../widgets/broka_image.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/factor_trend_chart.dart';
 import '../widgets/motion_widgets.dart';
@@ -198,6 +198,17 @@ class _ListingAnalyticsScreenState extends State<ListingAnalyticsScreen> {
   // comma-separated base64. Two different shapes, two different strips -
   // getting that wrong is what produced the "XB" avatar bug.
   List<String> get _photoPayloads {
+    // Stored images first (Online Stores phase 1): the cover, then the rest.
+    // BrokaImage renders these URLs and the legacy base64 alike.
+    final stored = _listing?.photos ?? const [];
+    final cover = _listing?.cover;
+    if (cover != null || stored.isNotEmpty) {
+      return [
+        if (cover != null) cover.thumb,
+        for (final p in stored)
+          if (p.id != cover?.id) p.thumb,
+      ];
+    }
     final out = <String>[];
     final showcase = _listing?.showcaseImageUrl;
     if (showcase != null && showcase.isNotEmpty) {
@@ -249,22 +260,11 @@ class _ListingAnalyticsScreenState extends State<ListingAnalyticsScreen> {
             child: SizedBox(
               width: 120,
               child: Stack(fit: StackFit.expand, children: [
-                Builder(builder: (_) {
-                  try {
-                    return Image.memory(base64Decode(photos[i]),
-                        fit: BoxFit.cover, gaplessPlayback: true,
-                        errorBuilder: (_, __, ___) => Container(
-                            color: BrokaColors.bgCard,
-                            child: const Icon(Icons.broken_image_rounded,
-                                color: BrokaColors.textMid, size: 18)));
-                  } catch (_) {
-                    // base64Decode throws rather than routing through
-                    // errorBuilder, so it has to be caught here.
-                    return Container(color: BrokaColors.bgCard,
+                BrokaImage(photos[i],
+                    placeholder: Container(
+                        color: BrokaColors.bgCard,
                         child: const Icon(Icons.broken_image_rounded,
-                            color: BrokaColors.textMid, size: 18));
-                  }
-                }),
+                            color: BrokaColors.textMid, size: 18))),
                 if (i == 0)
                   Positioned(
                     left: 6, top: 6,
