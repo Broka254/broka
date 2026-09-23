@@ -35,7 +35,7 @@ PRIVACY MODEL:
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import httpx
 import os
@@ -312,17 +312,38 @@ async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> 
     return True
 
 
+# Size caps for POST /chat. Every field below ends up in a paid model call,
+# and this route used to accept any size from anyone - 50 unauthenticated
+# requests of 200,000 characters each all reached the model.
+#
+# CHAT_CONTENT_MAX_CHARS: the largest message the app builds is the
+# product-page verdict prompt (product_screen.dart), about 3,000 characters
+# including the listing's own name and category. 8,000 leaves room for
+# that to grow without letting a pasted document through.
+CHAT_CONTENT_MAX_CHARS = 8_000
+# Same per-entry cap the AI broker and buying agent apply to history
+# (ai_broker/service.py, buy_agent/router.py).
+CHAT_HISTORY_ENTRY_MAX_CHARS = 2_000
+# Base64 of a 10 MB image - the same ceiling media.py puts on image
+# uploads (MAX_IMAGE_MB). Listing photos are resized to 1080px on upload
+# (sell_photos_screen.dart), so real ones are a small fraction of this.
+CHAT_IMAGE_MAX_B64_CHARS = (10 * 1024 * 1024 * 4) // 3 + 4
+
+
 class ChatIn(BaseModel):
-    content:         str
-    history:         List[dict] = []
-    user_name:       Optional[str] = None
-    system_override: Optional[str] = None
-    language:        Optional[str] = None
+    content:         str = Field(max_length=CHAT_CONTENT_MAX_CHARS)
+    # The route keeps the newest MAX_HISTORY entries, so accepting a longer
+    # list only costs parsing - but there is no reason to accept an
+    # unbounded one either.
+    history:         List[dict] = Field(default_factory=list, max_length=100)
+    user_name:       Optional[str] = Field(default=None, max_length=200)
+    system_override: Optional[str] = Field(default=None, max_length=64)
+    language:        Optional[str] = Field(default=None, max_length=32)
     # Optional product photo for Zeno to analyse (e.g. condition, apparent
     # authenticity, visible features). Only used when Gemini handles the
     # request - the OpenRouter and Groq fallback models here are text-only,
     # so this is silently ignored if the request falls back to either.
-    image_base64:    Optional[str] = None
+    image_base64:    Optional[str] = Field(default=None, max_length=CHAT_IMAGE_MAX_B64_CHARS)
 
 
 class MessageOut(BaseModel):
@@ -1605,9 +1626,30 @@ def _build_messages_for_party(history, new_message, viewer_role) -> List[dict]:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/chat", response_model=MessageOut)
-async def free_chat(data: ChatIn):
-    """Free-form AI chat - BROKA or Zeno. Supports language preference."""
-    trimmed  = data.history[-MAX_HISTORY:]
+async def free_chat(
+    data: ChatIn,
+    current_user: dict = Depends(get_current_user),
+):
+    """Free-form AI chat - BROKA or Zeno. Supports language preference.
+
+    Requires a signed-in user and is rate-limited per user. It used to need
+    neither, which made it an open proxy to BROKA's paid model keys: anyone
+    who found the URL could send unlimited prompts (and images) billed to
+    BROKA. The shadowed ai_broker /chat always had both checks; only this
+    handler, the one actually serving the path, was missing them. Every app
+    caller already sends the user's token, and talking to Zeno is
+    account-gated in the app (utils/auth_gate.dart).
+    """
+    from api.core.rate_limit import zeno_chat_limiter
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+
+    # Entries are clipped, not rejected: the app resends its whole
+    # transcript, and one long earlier reply should not fail every later
+    # message in the conversation.
+    trimmed = [
+        {**h, "content": str(h.get("content") or "")[:CHAT_HISTORY_ENTRY_MAX_CHARS]}
+        for h in data.history[-MAX_HISTORY:]
+    ]
     messages = trimmed + [{"role": "user", "content": data.content}]
 
     lang_instruction = _language_instruction(data.language)

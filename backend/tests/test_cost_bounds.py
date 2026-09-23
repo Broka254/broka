@@ -6,7 +6,10 @@
     unbounded in size, and the buying agent 422'd once a conversation passed
     40 entries because the app never trims its transcript;
   * the degraded-mode AI cache was keyed on the latest message alone, so a
-    personalised reply could be served to a different user.
+    personalised reply could be served to a different user;
+  * POST /negotiate/chat - the handler that actually serves Zeno - took no
+    token, no rate limit and no size limit, so anyone could run unlimited
+    prompts and images through BROKA's model keys.
 """
 import uuid
 from unittest.mock import patch
@@ -51,6 +54,88 @@ async def headers():
         await db.commit()
         await db.refresh(user)
     return {"Authorization": f"Bearer {create_access_token({'sub': user.id})}"}
+
+
+# ── Zeno chat (/negotiate/chat) ──────────────────────────────────────────────
+
+class TestZenoChatIsBounded:
+    """negotiate.free_chat serves this path (see test_route_ordering.py)."""
+
+    @pytest.mark.asyncio
+    async def test_it_requires_a_signed_in_user(self, client):
+        with patch("api.routers.negotiate._call_ai") as ai:
+            r = await client.post("/negotiate/chat", json={"content": "hi"})
+        assert r.status_code == 401
+        ai.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_non_access_token_is_refused(self, client):
+        from api.security import create_refresh_token
+        refresh, _, _ = create_refresh_token("someone")
+        with patch("api.routers.negotiate._call_ai") as ai:
+            r = await client.post("/negotiate/chat", json={"content": "hi"},
+                                  headers={"Authorization": f"Bearer {refresh}"})
+        assert r.status_code == 401
+        ai.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_it_is_limited_per_user(self, client, headers):
+        strict = RateLimiter("zeno_chat_test", limit=2, window_seconds=60)
+
+        async def fake_ai(*a, **kw):
+            return "ok"
+
+        with patch("api.core.rate_limit.zeno_chat_limiter", strict), \
+             patch("api.routers.negotiate._call_ai", fake_ai):
+            codes = [(await client.post("/negotiate/chat", json={"content": "hi"},
+                                        headers=headers)).status_code for _ in range(3)]
+        assert codes == [200, 200, 429]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [
+        {"content": "x" * 8_001},
+        {"content": "hi", "image_base64": "A" * ((10 * 1024 * 1024 * 4) // 3 + 5)},
+        {"content": "hi", "history": [{"role": "user", "content": "x"}] * 101},
+    ], ids=["content", "image", "history_length"])
+    async def test_oversized_requests_never_reach_the_model(self, client, headers, body):
+        with patch("api.routers.negotiate._call_ai") as ai:
+            r = await client.post("/negotiate/chat", json=body, headers=headers)
+        assert r.status_code == 422
+        ai.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_product_verdict_prompt_still_fits(self, client, headers):
+        """The largest prompt the app builds (product_screen.dart) is ~3,000
+        characters with a listing photo attached."""
+        async def fake_ai(*a, **kw):
+            return "verdict"
+
+        with patch("api.routers.negotiate._call_ai", fake_ai):
+            r = await client.post("/negotiate/chat", headers=headers, json={
+                "content": "p" * 4_000, "image_base64": "A" * 600_000,
+                "system_override": "zeno", "language": "english",
+            })
+        assert r.status_code == 200
+        assert r.json()["content"] == "verdict"
+
+    @pytest.mark.asyncio
+    async def test_history_is_trimmed_and_clipped_before_the_model(self, client, headers):
+        seen = {}
+
+        async def fake_ai(system, messages, image_base64=None, **kw):
+            seen["messages"] = messages
+            return "ok"
+
+        history = [{"role": "user", "content": f"{i}" + "y" * 5_000} for i in range(30)]
+        with patch("api.routers.negotiate._call_ai", fake_ai):
+            r = await client.post("/negotiate/chat", headers=headers,
+                                  json={"content": "latest", "history": history})
+        assert r.status_code == 200
+        sent = seen["messages"]
+        assert len(sent) == 21                      # newest 20 + the new message
+        assert sent[0]["content"].startswith("10")  # the oldest ten were dropped
+        assert all(len(m["content"]) <= 2_000 for m in sent[:-1])
+        assert sent[-1] == {"role": "user", "content": "latest"}
 
 
 # ── Speech-to-text ───────────────────────────────────────────────────────────

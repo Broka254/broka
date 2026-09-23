@@ -27,25 +27,28 @@ These tests therefore ask the only question with an unambiguous answer:
 send the request and see what comes back. No route objects, no internals,
 nothing that a framework upgrade can quietly redefine.
 
-The discriminator between the two handlers is authentication, and it needs
-no network, no database and no AI call:
+The discriminator between the two handlers is the request model, and it
+needs no network, no database and no AI call. `image_base64` exists on
+negotiate.ChatIn and not on ai_broker.ChatIn, and pydantic ignores unknown
+fields rather than rejecting them, so a wrong-typed image_base64 fails
+validation naming that field only if the legacy model is the one bound.
 
-    negotiate.free_chat(data: ChatIn)            - no auth dependency
-    ai_broker.broker_chat(body, Depends(get_current_user)) - requires auth
-
-An unauthenticated POST with an empty body therefore returns 422 (body
-validation) from the legacy handler and 401/403 from the broker one, and
-404 from neither. The empty body matters: it fails validation before any
-handler body executes, so nothing reaches an AI provider.
+Authentication used to be the discriminator (the legacy handler took no
+token), until that turned out to make it an open proxy to BROKA's paid
+model keys. Both handlers now require an access token, so every request
+below that expects to reach validation carries one. get_current_user only
+decodes the token, so no user row is needed.
 """
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from api.security import create_access_token
 from main import app
 
 
 CHAT_URL = "/negotiate/chat"
+AUTH = {"Authorization": f"Bearer {create_access_token({'sub': 'route-ordering-test'})}"}
 
 
 def _diagnostics() -> str:
@@ -81,23 +84,26 @@ async def test_chat_endpoint_is_registered(client):
     )
 
 
-async def test_chat_resolves_to_legacy_free_chat(client):
-    """...and it is the legacy handler answering, not the broker one.
-
-    422 == the no-auth legacy handler rejected an empty body.
-    401/403 == the broker handler's auth dependency ran first, which means
-    ai_broker_router won the collision.
-    """
-    r = await client.post(CHAT_URL, json={})
-    assert r.status_code not in (401, 403), (
-        f"POST {CHAT_URL} returned {r.status_code}, which only the "
-        f"authenticated ai_broker handler produces. Mount negotiate.router "
-        f"BEFORE ai_broker_router in main.py - only the legacy implementation "
-        f"accepts image_base64 and the Zeno personas.{_diagnostics()}"
+async def test_chat_requires_a_signed_in_user(client):
+    """No token, no model call - whichever handler serves the path."""
+    r = await client.post(CHAT_URL, json={"content": "hi"})
+    assert r.status_code == 401, (
+        f"POST {CHAT_URL} without a token returned {r.status_code}; it must "
+        f"be 401. An unauthenticated chat route bills every caller's prompt "
+        f"to BROKA's model keys.{_diagnostics()}"
     )
+
+
+async def test_chat_resolves_to_legacy_free_chat(client):
+    """With a token, an empty body is rejected by request validation.
+
+    422 == the token was accepted and the bound request model rejected the
+    body. Which handler that was is settled by the schema test below.
+    """
+    r = await client.post(CHAT_URL, json={}, headers=AUTH)
     assert r.status_code == 422, (
-        f"POST {CHAT_URL} with an empty body returned {r.status_code}, "
-        f"expected 422 from ChatIn validation in negotiate.free_chat. "
+        f"POST {CHAT_URL} with a valid token and an empty body returned "
+        f"{r.status_code}, expected 422 from ChatIn validation. "
         f"Body: {r.text[:300]}{_diagnostics()}"
     )
 
@@ -115,7 +121,7 @@ async def test_chat_schema_is_the_legacy_one(client):
     OpenRouter. A test that calls a live AI provider is a test that fails
     on someone else's outage.
     """
-    r = await client.post(CHAT_URL, json={"image_base64": 123})
+    r = await client.post(CHAT_URL, json={"image_base64": 123}, headers=AUTH)
     assert r.status_code == 422, (
         f"expected 422 from request-model validation, got {r.status_code}: "
         f"{r.text[:300]}{_diagnostics()}"

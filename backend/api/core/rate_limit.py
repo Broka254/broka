@@ -167,6 +167,7 @@ if _settings.is_test:
     otp_verify_limiter  = _make_limiter("otp_verify",  limit=1000, window_seconds=300)
     stt_token_limiter      = _make_limiter("stt_token",      limit=1000, window_seconds=60)
     stt_transcribe_limiter = _make_limiter("stt_transcribe", limit=1000, window_seconds=60)
+    zeno_chat_limiter      = _make_limiter("zeno_chat",      limit=1000, window_seconds=60)
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
@@ -182,6 +183,11 @@ else:
     # none for scripted minting. Same reasoning as turn_credential_limiter.
     stt_token_limiter      = _make_limiter("stt_token",      limit=12, window_seconds=60)
     stt_transcribe_limiter = _make_limiter("stt_transcribe", limit=10, window_seconds=60)
+    # POST /negotiate/chat (Zeno and the free-chat broker), keyed by user.
+    # Each call is a paid model call, and may carry an image. Same budget as
+    # ai_chat_limiter below, but its own bucket so a busy Zeno conversation
+    # doesn't eat the buying agent's allowance or the reverse.
+    zeno_chat_limiter      = _make_limiter("zeno_chat",      limit=20, window_seconds=60)
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)
