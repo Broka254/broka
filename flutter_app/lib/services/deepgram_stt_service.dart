@@ -110,6 +110,9 @@ class DeepgramSttService implements RealtimeSttProvider {
     MicrophoneSource? microphone,
     Future<String> Function()? fetchToken,
     DeepgramConnector? connect,
+    this.tokenTimeout = SttTimeouts.token,
+    this.handshakeTimeout = SttTimeouts.handshake,
+    this.microphoneTimeout = SttTimeouts.microphoneStart,
   })  : _mic = microphone ?? MicrophoneSource(),
         _fetchToken = fetchToken ?? _defaultFetchToken,
         _connect = connect ?? _defaultConnect;
@@ -119,6 +122,12 @@ class DeepgramSttService implements RealtimeSttProvider {
   final MicrophoneSource _mic;
   final Future<String> Function() _fetchToken;
   final DeepgramConnector _connect;
+
+  /// See [SttTimeouts]. Constructor parameters, not constants, so a test can
+  /// drive every timeout branch in milliseconds.
+  final Duration tokenTimeout;
+  final Duration handshakeTimeout;
+  final Duration microphoneTimeout;
 
   static const _host = 'api.deepgram.com';
   static const _path = '/v1/listen';
@@ -238,7 +247,16 @@ class DeepgramSttService implements RealtimeSttProvider {
       _assertCurrent(generation);
 
       // ── Token ─────────────────────────────────────────────────────────────
-      final token = await _fetchToken();
+      final String token;
+      try {
+        token = await _fetchToken().timeout(tokenTimeout);
+      } on TimeoutException {
+        throw VoiceSessionException(
+          VoiceFailure.tokenUnavailable,
+          'token request timed out after ${tokenTimeout.inMilliseconds}ms',
+          _diag(SttStage.token, 'DEEPGRAM_TOKEN_TIMEOUT'),
+        );
+      }
       _assertCurrent(generation);
       _log(SttStage.token, 'DEEPGRAM_TOKEN_OK');
 
@@ -256,6 +274,8 @@ class DeepgramSttService implements RealtimeSttProvider {
       VoiceSessionException? handshakeFailure;
       for (final mode in order) {
         _stage = SttStage.handshake;
+        _log(SttStage.handshake, 'DEEPGRAM_HANDSHAKE_START',
+            info: {'auth_mode': mode.name});
         try {
           await _openSocket(config: config, token: token, mode: mode);
           handshakeFailure = null;
@@ -269,6 +289,12 @@ class DeepgramSttService implements RealtimeSttProvider {
           handshakeFailure = e;
           await _closeSocket();
           _assertCurrent(generation);
+          // A timeout means the network path itself is not answering, not
+          // that this particular transport was rejected - retrying the other
+          // auth mode over the same dead path buys nothing and costs a
+          // second full timeout window. Only retry on a fast, definitive
+          // failure (a rejected upgrade, a closed connection).
+          if (e.diagnostic?.event.endsWith('_TIMEOUT') == true) break;
         }
       }
       if (handshakeFailure != null) throw handshakeFailure;
@@ -293,7 +319,14 @@ class DeepgramSttService implements RealtimeSttProvider {
       _stage = SttStage.microphone;
       final Stream<Uint8List> audio;
       try {
-        audio = await _mic.start();
+        audio = await _mic.start().timeout(microphoneTimeout);
+      } on TimeoutException {
+        throw VoiceSessionException(
+          VoiceFailure.microphoneStartFailed,
+          'microphone did not start within '
+          '${microphoneTimeout.inMilliseconds}ms',
+          _diag(SttStage.microphone, 'MICROPHONE_START_TIMEOUT'),
+        );
       } on VoiceSessionException {
         rethrow;
       } catch (e) {
@@ -384,7 +417,20 @@ class DeepgramSttService implements RealtimeSttProvider {
     _channel = channel;
 
     try {
-      await channel.ready;
+      await channel.ready.timeout(handshakeTimeout);
+    } on TimeoutException {
+      // Independent of whatever `connectTimeout` the connector itself may or
+      // may not honour - see [SttTimeouts]. This is the guarantee that
+      // "Connecting…" ends.
+      throw VoiceSessionException(
+        VoiceFailure.handshakeFailed,
+        'handshake timed out after ${handshakeTimeout.inMilliseconds}ms',
+        _diag(SttStage.handshake, 'DEEPGRAM_HANDSHAKE_TIMEOUT',
+            info: {
+              'auth_mode': mode.name,
+              'timeout_ms': handshakeTimeout.inMilliseconds,
+            }),
+      );
     } catch (e) {
       throw VoiceSessionException(
         VoiceFailure.handshakeFailed,

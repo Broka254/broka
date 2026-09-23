@@ -18,7 +18,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// A WebSocket that never leaves the process.
 class FakeSocket implements WebSocketChannel {
-  FakeSocket({Object? handshakeError}) : _handshakeError = handshakeError {
+  FakeSocket({Object? handshakeError, this.hangs = false})
+      : _handshakeError = handshakeError {
     _sink.onAdd = (data) {
       if (data is Uint8List) {
         sentBinary.add(data);
@@ -43,6 +44,13 @@ class FakeSocket implements WebSocketChannel {
 
   Object? _handshakeError;
 
+  /// The handshake that never answers: no accept, no refusal, no close.
+  ///
+  /// This is the shape of the bug this whole timeout layer exists for - a
+  /// socket a proxy or a dead radio swallows, where every other fake would
+  /// have produced an error the code already handled.
+  final bool hangs;
+
   /// The handshake result. This is what "the provider accepted this
   /// connection" means now - a service waits for it before it opens the
   /// microphone, so a fake that never resolves it is a fake that never
@@ -55,9 +63,12 @@ class FakeSocket implements WebSocketChannel {
   /// `await channel.ready` would deadlock the whole test. `Future.value`
   /// resolves in the caller's zone, which is the one being pumped.
   @override
-  Future<void> get ready => _handshakeError == null
-      ? Future<void>.value()
-      : Future<void>.error(_handshakeError!);
+  Future<void> get ready {
+    if (hangs) return Completer<void>().future;
+    return _handshakeError == null
+        ? Future<void>.value()
+        : Future<void>.error(_handshakeError!);
+  }
 
   /// Refuse the upgrade. Set before the session starts.
   void failHandshake(Object error) => _handshakeError = error;
@@ -115,9 +126,17 @@ class FakeSink implements WebSocketSink {
 }
 
 class FakeRecorder implements AudioRecorder {
-  FakeRecorder({this.permitted = true, this.failToStart = false});
+  FakeRecorder({
+    this.permitted = true,
+    this.failToStart = false,
+    this.hangsOnStart = false,
+  });
 
   final bool permitted;
+
+  /// startStream never returns - a wedged platform channel, which throws
+  /// nothing and answers nothing.
+  final bool hangsOnStart;
 
   /// Permission granted, recorder still will not open - another app holding
   /// the microphone, a platform channel failure, a device with no input.
@@ -145,6 +164,7 @@ class FakeRecorder implements AudioRecorder {
     expect(config.sampleRate, 16000);
     expect(config.numChannels, 1);
     if (failToStart) throw StateError('recorder unavailable');
+    if (hangsOnStart) return Completer<Stream<Uint8List>>().future;
     startCount++;
     running = true;
     return _audio.stream;

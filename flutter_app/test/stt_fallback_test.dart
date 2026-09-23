@@ -257,6 +257,234 @@ void main() {
     });
   });
 
+  // ══ Nothing may wait forever ═══════════════════════════════════════════════
+
+  group('startup timeouts', () {
+    // The bug these exist for: the card sat on "Connecting…" permanently. A
+    // socket that is refused, reset or closed produces an error the code
+    // already handled - but one that is simply swallowed by a proxy or a dead
+    // radio produces nothing at all, and every await below `start()` waited
+    // on it for as long as the user was willing to look at the screen.
+    //
+    // Short timeouts here so the branches run in milliseconds; production
+    // values live in SttTimeouts.
+    const fast = Duration(milliseconds: 40);
+
+    test('a handshake that never answers times out instead of hanging',
+        () async {
+      final recorder = FakeRecorder();
+      final service = DeepgramSttService(
+        microphone: MicrophoneSource(recorder: recorder),
+        fetchToken: () async => 't',
+        connect: (_, __) => FakeSocket(hangs: true),
+        handshakeTimeout: fast,
+      );
+
+      await expectLater(
+        service.start(),
+        throwsA(isA<VoiceSessionException>().having(
+            (e) => e.failure, 'failure', VoiceFailure.handshakeFailed)),
+      );
+
+      expect(sawEvent('DEEPGRAM_HANDSHAKE_START'), isTrue);
+      expect(sawEvent('DEEPGRAM_HANDSHAKE_TIMEOUT'), isTrue);
+      // And the ordering rule holds even here: no microphone before a
+      // provider is actually connected.
+      expect(recorder.startCount, 0);
+      expect(service.isListening, isFalse);
+      expect(service.isConnected, isFalse);
+      await service.dispose();
+    });
+
+    test('a timed-out handshake does not spend a second timeout on the other '
+        'auth transport', () async {
+      // A refusal says "this transport was rejected" and is worth retrying
+      // the documented alternative. Silence says the path is dead, and the
+      // alternative travels the same path - so retrying only doubles the
+      // time the user spends watching "Connecting…" before the fallback.
+      var connects = 0;
+      final service = DeepgramSttService(
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
+        fetchToken: () async => 't',
+        connect: (_, __) {
+          connects++;
+          return FakeSocket(hangs: true);
+        },
+        handshakeTimeout: fast,
+      );
+
+      await expectLater(service.start(), throwsA(isA<VoiceSessionException>()));
+      expect(connects, 1);
+      await service.dispose();
+    });
+
+    test('a token request that never answers times out', () async {
+      final service = DeepgramSttService(
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
+        fetchToken: () => Completer<String>().future,
+        connect: (_, __) => FakeSocket(),
+        tokenTimeout: fast,
+      );
+
+      await expectLater(
+        service.start(),
+        throwsA(isA<VoiceSessionException>().having(
+            (e) => e.failure, 'failure', VoiceFailure.tokenUnavailable)),
+      );
+      expect(sawEvent('DEEPGRAM_TOKEN_TIMEOUT'), isTrue);
+      await service.dispose();
+    });
+
+    test('a microphone that never starts times out', () async {
+      final service = DeepgramSttService(
+        microphone: MicrophoneSource(recorder: FakeRecorder(hangsOnStart: true)),
+        fetchToken: () async => 't',
+        connect: (_, __) => FakeSocket(),
+        microphoneTimeout: fast,
+      );
+
+      await expectLater(
+        service.start(),
+        throwsA(isA<VoiceSessionException>().having(
+            (e) => e.failure, 'failure', VoiceFailure.microphoneStartFailed)),
+      );
+      expect(sawEvent('MICROPHONE_START_TIMEOUT'), isTrue);
+      await service.dispose();
+    });
+
+    test('AssemblyAI bounds its handshake too', () async {
+      // Otherwise the identical bug simply moves to the fallback, and the
+      // card hangs on "Reconnecting voice…" instead of "Connecting…".
+      final service = AssemblyAiSttService(
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
+        fetchToken: () async => 't',
+        connect: (_) => FakeSocket(hangs: true),
+        handshakeTimeout: fast,
+      );
+
+      await expectLater(
+        service.start(),
+        throwsA(isA<VoiceSessionException>().having(
+            (e) => e.failure, 'failure', VoiceFailure.handshakeFailed)),
+      );
+      expect(sawEvent('ASSEMBLYAI_HANDSHAKE_START'), isTrue);
+      expect(sawEvent('ASSEMBLYAI_HANDSHAKE_TIMEOUT'), isTrue);
+      await service.dispose();
+    });
+
+    test('AssemblyAI bounds its token request too', () async {
+      final service = AssemblyAiSttService(
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
+        fetchToken: () => Completer<String>().future,
+        connect: (_) => FakeSocket(),
+        tokenTimeout: fast,
+      );
+
+      await expectLater(
+        service.start(),
+        throwsA(isA<VoiceSessionException>().having(
+            (e) => e.failure, 'failure', VoiceFailure.tokenUnavailable)),
+      );
+      expect(sawEvent('ASSEMBLYAI_TOKEN_TIMEOUT'), isTrue);
+      await service.dispose();
+    });
+
+    test('a hung Deepgram handshake reaches AssemblyAI, which becomes active',
+        () async {
+      // The whole point. Before the timeout, a swallowed handshake meant
+      // RealtimeSttManager never learned Deepgram had failed, so the fallback
+      // it was built for could never run.
+      final recorder = FakeRecorder();
+      final mic = MicrophoneSource(recorder: recorder);
+      final manager = RealtimeSttManager(
+        microphone: mic,
+        providers: [
+          DeepgramSttService(
+            microphone: mic,
+            fetchToken: () async => 'dg-token',
+            connect: (_, __) => FakeSocket(hangs: true),
+            handshakeTimeout: fast,
+          ),
+          AssemblyAiSttService(
+            microphone: mic,
+            fetchToken: () async => 'aai-token',
+            connect: (_) => FakeSocket(),
+            handshakeTimeout: fast,
+          ),
+        ],
+      );
+
+      await manager.start(brokaLanguage: 'english');
+
+      expect(manager.activeProvider, 'assemblyai');
+      expect(manager.isListening, isTrue);
+      // One microphone, and it belongs to the provider that actually
+      // connected.
+      expect(recorder.startCount, 1);
+      expect(recorder.running, isTrue);
+
+      expect(sawEvent('DEEPGRAM_HANDSHAKE_TIMEOUT'), isTrue);
+      expect(sawEvent('STT_PROVIDER_FAILED_TRYING_NEXT'), isTrue);
+      expect(sawEvent('ASSEMBLYAI_STREAMING'), isTrue);
+      await manager.dispose();
+    });
+
+    test('the card leaves Connecting even when Deepgram never answers',
+        () async {
+      // The same thing one layer up, in the state the user actually sees.
+      final mic = MicrophoneSource(recorder: FakeRecorder());
+      final manager = RealtimeSttManager(
+        microphone: mic,
+        providers: [
+          DeepgramSttService(
+            microphone: mic,
+            fetchToken: () async => 'dg',
+            connect: (_, __) => FakeSocket(hangs: true),
+            handshakeTimeout: fast,
+          ),
+          AssemblyAiSttService(
+            microphone: mic,
+            fetchToken: () async => 'aai',
+            connect: (_) => FakeSocket(),
+          ),
+        ],
+      );
+      final c = ZenoVoiceController(
+        onSubmit: (_) async {},
+        languageKey: () => 'english',
+        service: manager,
+      );
+
+      await c.open();
+
+      expect(c.state, VoiceSessionState.listening);
+      expect(c.state, isNot(VoiceSessionState.connecting));
+      expect(c.errorMessage, isNull);
+      c.dispose();
+    });
+
+    test('a provider that never returns at all still hands control back',
+        () async {
+      // The backstop. Every stage inside a provider is bounded, but the point
+      // of a watchdog is the stage somebody forgets to bound.
+      final hung = _Scripted('deepgram', hangsForever: true);
+      final b = _Scripted('assemblyai');
+      final manager = RealtimeSttManager(
+        microphone: MicrophoneSource(recorder: FakeRecorder()),
+        providers: [hung, b],
+        providerStartWatchdog: fast,
+      );
+
+      await manager.start();
+
+      expect(manager.activeProvider, 'assemblyai');
+      expect(sawEvent('STT_PROVIDER_START_WATCHDOG_TIMEOUT'), isTrue);
+      // The abandoned start is cancelled, not left running.
+      expect(hung.cancelCount, greaterThanOrEqualTo(1));
+      await manager.dispose();
+    });
+  });
+
   // ══ Diagnostics must never carry a credential ══════════════════════════════
 
   group('diagnostic redaction', () {
@@ -718,12 +946,16 @@ void main() {
 /// question is only which provider runs and when, and a scripted one keeps
 /// those tests about failover rather than about JSON.
 class _Scripted implements RealtimeSttProvider {
-  _Scripted(this.name, {this.failsOnStart});
+  _Scripted(this.name, {this.failsOnStart, this.hangsForever = false});
 
   @override
   final String name;
 
   final VoiceSessionException? failsOnStart;
+
+  /// start() never completes - the failure mode the manager's watchdog is
+  /// the last line of defence against.
+  final bool hangsForever;
 
   int startCount = 0;
   int cancelCount = 0;
@@ -752,6 +984,7 @@ class _Scripted implements RealtimeSttProvider {
     startCount++;
     final failure = failsOnStart;
     if (failure != null) throw failure;
+    if (hangsForever) await Completer<void>().future;
     _listening = true;
   }
 

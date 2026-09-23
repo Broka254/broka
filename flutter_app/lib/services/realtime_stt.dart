@@ -212,6 +212,34 @@ class SttDiagnostics {
   }
 }
 
+/// How long a startup stage may run before it counts as hung, so
+/// "Connecting…" is never permanent.
+///
+/// Each provider bounds every awaited stage of `start()` with one of these -
+/// token fetch, WebSocket handshake, microphone start - independently of
+/// whatever timeout the underlying HTTP or WebSocket library claims to
+/// apply internally. That independence is the point: a library's own
+/// `connectTimeout` is one line easy to get right and just as easy to have
+/// silently stop applying after a dependency bump, and the cost of a
+/// redundant `.timeout()` here is a few characters against the cost of a
+/// permanently stuck "Connecting…" screen.
+///
+/// Durations are generous enough for a real round trip over a weak Kenyan
+/// mobile connection and short enough that a genuinely dead path fails into
+/// the next thing - a retry, or the other provider - inside a time a person
+/// will wait for once, not stare at.
+///
+/// Each service takes these as constructor parameters with these values as
+/// defaults, so a test can inject a handful of milliseconds instead of
+/// actually waiting out a production timeout.
+class SttTimeouts {
+  const SttTimeouts._();
+
+  static const Duration token = Duration(seconds: 12);
+  static const Duration handshake = Duration(seconds: 10);
+  static const Duration microphoneStart = Duration(seconds: 8);
+}
+
 /// A provider's answer for one BROKA language.
 ///
 /// [supported] is a claim about the vendor's documentation, not a hope. The

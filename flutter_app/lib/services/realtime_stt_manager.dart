@@ -27,6 +27,7 @@ class RealtimeSttManager implements RealtimeSttProvider {
   RealtimeSttManager({
     MicrophoneSource? microphone,
     List<RealtimeSttProvider>? providers,
+    this.providerStartWatchdog = const Duration(seconds: 45),
   }) : _mic = microphone ?? MicrophoneSource() {
     _providers = providers ??
         [
@@ -34,6 +35,22 @@ class RealtimeSttManager implements RealtimeSttProvider {
           AssemblyAiSttService(microphone: _mic),
         ];
   }
+
+  /// A last-resort bound on one provider's whole `start()`.
+  ///
+  /// Not the primary mechanism and not expected to fire: each provider
+  /// already bounds its own token fetch, handshake and microphone start (see
+  /// [SttTimeouts]), and the sum of those is comfortably under this. It
+  /// exists because "the UI is stuck on Connecting…" is a failure mode with
+  /// no floor - one un-bounded await anywhere below here, in this provider or
+  /// the next one somebody writes, and the card hangs forever with no error
+  /// and no failover. This guarantees the manager gets control back and moves
+  /// on, whatever a provider does.
+  ///
+  /// 45s is deliberately above the worst legitimate sum (12s token + 2x10s
+  /// handshake + 8s microphone = 40s), so a slow-but-working connection on a
+  /// bad Kenyan mobile link is never cut off by the safety net.
+  final Duration providerStartWatchdog;
 
   /// One recorder for every provider. See the file header.
   final MicrophoneSource _mic;
@@ -123,7 +140,28 @@ class RealtimeSttManager implements RealtimeSttProvider {
 
       _bind(provider);
       try {
-        await provider.start(brokaLanguage: _language);
+        await provider.start(brokaLanguage: _language).timeout(
+          providerStartWatchdog,
+          onTimeout: () {
+            // Recorded here rather than in the catch below, because that
+            // catch also sees exceptions a provider has already recorded -
+            // and a diagnostic logged twice is a diagnostic nobody trusts to
+            // mean what it says.
+            final d = SttDiagnostic(
+              provider: provider.name,
+              stage: SttStage.handshake,
+              event: 'STT_PROVIDER_START_WATCHDOG_TIMEOUT',
+              info: {'watchdog_ms': providerStartWatchdog.inMilliseconds},
+            );
+            SttDiagnostics.record(d);
+            throw VoiceSessionException(
+              VoiceFailure.unknown,
+              'provider start exceeded '
+              '${providerStartWatchdog.inMilliseconds}ms',
+              d,
+            );
+          },
+        );
         if (_generation != generation || _disposed) {
           // Closed during the handshake. Do not leave a live session behind.
           await _unbind();
@@ -141,6 +179,10 @@ class RealtimeSttManager implements RealtimeSttProvider {
       } on VoiceSessionException catch (e) {
         last = e;
         await _unbind();
+        // Also what stops a watchdog-abandoned start: `Future.timeout` does
+        // not cancel the work it gave up on, but cancel() bumps the
+        // provider's own session generation, so if that start does eventually
+        // get past its next await it finds itself superseded and stops.
         await provider.cancel();
         if (!e.isProviderFault) {
           // A denied or broken microphone. No vendor can help, and trying one

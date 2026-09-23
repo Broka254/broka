@@ -75,6 +75,9 @@ class AssemblyAiSttService implements RealtimeSttProvider {
     MicrophoneSource? microphone,
     Future<String> Function()? fetchToken,
     AssemblyAiConnector? connect,
+    this.tokenTimeout = SttTimeouts.token,
+    this.handshakeTimeout = SttTimeouts.handshake,
+    this.microphoneTimeout = SttTimeouts.microphoneStart,
   })  : _mic = microphone ?? MicrophoneSource(),
         _fetchToken = fetchToken ?? _defaultFetchToken,
         _connect = connect ?? _defaultConnect;
@@ -82,6 +85,11 @@ class AssemblyAiSttService implements RealtimeSttProvider {
   final MicrophoneSource _mic;
   final Future<String> Function() _fetchToken;
   final AssemblyAiConnector _connect;
+
+  /// See [SttTimeouts] and the identical fields on DeepgramSttService.
+  final Duration tokenTimeout;
+  final Duration handshakeTimeout;
+  final Duration microphoneTimeout;
 
   static const _host = 'streaming.assemblyai.com';
   static const _path = '/v3/ws';
@@ -186,11 +194,21 @@ class AssemblyAiSttService implements RealtimeSttProvider {
       }
       _assertCurrent(generation);
 
-      final token = await _fetchToken();
+      final String token;
+      try {
+        token = await _fetchToken().timeout(tokenTimeout);
+      } on TimeoutException {
+        throw VoiceSessionException(
+          VoiceFailure.tokenUnavailable,
+          'token request timed out after ${tokenTimeout.inMilliseconds}ms',
+          _diag(SttStage.token, 'ASSEMBLYAI_TOKEN_TIMEOUT'),
+        );
+      }
       _assertCurrent(generation);
       _log(SttStage.token, 'ASSEMBLYAI_TOKEN_OK');
 
       _stage = SttStage.handshake;
+      _log(SttStage.handshake, 'ASSEMBLYAI_HANDSHAKE_START');
       final uri = Uri(
         scheme: 'wss',
         host: _host,
@@ -222,9 +240,18 @@ class AssemblyAiSttService implements RealtimeSttProvider {
       _channel = channel;
 
       // As with Deepgram: a channel object is not a connection. `ready` is
-      // what separates "constructed" from "AssemblyAI accepted this token".
+      // what separates "constructed" from "AssemblyAI accepted this token" -
+      // and it is bounded independently of whatever the connector's own
+      // internal timeout may or may not do. See [SttTimeouts].
       try {
-        await channel.ready;
+        await channel.ready.timeout(handshakeTimeout);
+      } on TimeoutException {
+        throw VoiceSessionException(
+          VoiceFailure.handshakeFailed,
+          'handshake timed out after ${handshakeTimeout.inMilliseconds}ms',
+          _diag(SttStage.handshake, 'ASSEMBLYAI_HANDSHAKE_TIMEOUT',
+              info: {'timeout_ms': handshakeTimeout.inMilliseconds}),
+        );
       } catch (e) {
         throw VoiceSessionException(
           VoiceFailure.handshakeFailed,
@@ -255,7 +282,14 @@ class AssemblyAiSttService implements RealtimeSttProvider {
       _stage = SttStage.microphone;
       final Stream<Uint8List> audio;
       try {
-        audio = await _mic.start();
+        audio = await _mic.start().timeout(microphoneTimeout);
+      } on TimeoutException {
+        throw VoiceSessionException(
+          VoiceFailure.microphoneStartFailed,
+          'microphone did not start within '
+          '${microphoneTimeout.inMilliseconds}ms',
+          _diag(SttStage.microphone, 'MICROPHONE_START_TIMEOUT'),
+        );
       } on VoiceSessionException {
         rethrow;
       } catch (e) {
