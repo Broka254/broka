@@ -18,7 +18,7 @@ BROKA is a mobile marketplace where every transaction is mediated by an AI broke
 
 | Layer | Technology |
 |---|---|
-| Mobile app | Flutter (Dart) — 22 screens |
+| Mobile app | Flutter (Dart) |
 | Backend API | FastAPI (Python 3.11) + async SQLAlchemy |
 | AI broker | Multi-provider fallback chain (Gemini, DeepSeek, Groq Llama) — active provider depends on configured API keys |
 | Event bus | ✨ Redis Streams (production) · asyncio (dev fallback) |
@@ -39,13 +39,13 @@ Gemini/Groq/M-Pesa wrapped in circuit breakers. If Gemini slows down — breaker
 Events written to Redis Streams in production. Survive process restarts and deployments. Same `publish()` / `@subscribe()` API — no changes needed in domain code. Falls back to asyncio in dev.
 
 ### Idempotency Keys
-Double-tap the Pay button? No problem. `X-Idempotency-Key` header on payment endpoints. First response cached in Redis for 24 hours. Retries replay the cached response — no double charge.
+Double-tap the Pay button? No problem. `X-Idempotency-Key` header on payment endpoints: the key is reserved atomically (`SET NX`) before the handler runs, so a concurrent duplicate gets `409` instead of a second execution, and the first response is cached in Redis for 24 hours so retries replay it. Independently of Redis, the escrow fund path claims each attempt in the database under the deal row lock, so a second STK push can't be sent even with a fresh key or with Redis down.
 
 ### ARQ Background Workers
 Named queues (`notifications`, `ai`, `fraud`, `payments`, `listings`) backed by Redis in production. Jobs survive crashes. Horizontal scaling by adding more worker processes. Degrades to asyncio in dev.
 
 ### Expanded Test Suite
-25 test files covering circuit breakers, idempotency, event bus, workers, AI broker, auth, escrow, fraud, listings, Stores, and WebSocket — CI fails the build if coverage drops below 35% (`--cov-fail-under=35` in `.github/workflows/build.yml`; raise this only alongside genuinely higher measured coverage, not as a number to chase).
+Backend tests cover circuit breakers, idempotency, rate limiting, the event bus, workers, the AI broker, auth, escrow and payment races, auctions, fraud, listings, Stores and WebSockets; the Flutter app has its own widget/unit suite under `flutter_app/test/`. The backend build fails if coverage drops below 50% — the same floor in `.github/workflows/build.yml` and `backend/pytest.ini`, so the command below behaves locally exactly as it does in CI. Raise it only alongside genuinely higher measured coverage, not as a number to chase.
 
 ---
 
@@ -177,7 +177,7 @@ recreated from the models).
 - [x] Circuit breakers (AI + M-Pesa)
 - [x] Idempotency keys (payment safety)
 - [x] ARQ Redis-backed worker queues
-- [x] CI-enforced test coverage floor (35%, `--cov-fail-under` in `.github/workflows/build.yml`)
+- [x] CI-enforced test coverage floor (50%, `--cov-fail-under` in `.github/workflows/build.yml` and `backend/pytest.ini`)
 - [x] VoIP calling (WebRTC)
 - [x] STT / TTS voice support
 - [ ] Event sourcing for payments (Phase 3)

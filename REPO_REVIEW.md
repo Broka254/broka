@@ -14,6 +14,76 @@ not by reading comments.
 
 ---
 
+## 0. Status after the fix pass (2026-09-23)
+
+Every finding below has been fixed, with one exception: CORS
+(`ALLOWED_ORIGINS`, from the previous review), which needs your real origin
+list. Each fix has a regression test that was run
+against the OLD code and failed there, then passed on the new code.
+
+| Check after the fixes | Result |
+|---|---|
+| Backend, CI configuration (real Redis, `pytest.ini` gate) | **835 passed**, 0 skipped, coverage **57%** (gate 50%) |
+| Backend, no Redis | 828 passed, 7 skipped (the real-Redis tests) |
+| Flutter `analyze` (CI flags) | exit 0 — **0 errors, 0 warnings**, 21 infos |
+| Flutter `test` | **164 passed** |
+
+**Fixed findings from this review**
+
+| Finding | Fix | Test file |
+|---|---|---|
+| §3 Auction lapse cancels a deal mid-payment | Lapse checks the escrow and legacy M-Pesa attempts first. It lapses only on a provider-confirmed "not funded" after a settle window (`AUCTION_FUNDING_SETTLE_MINUTES`, default 30), re-checks under the deal and escrow row locks, and raises a reconciliation alert when money moved but the deal didn't follow. The Pay path now claims its attempt under the same deal lock, so a Pay tap and a lapse can't both win. | `test_payment_races.py` |
+| §4 Admin via unverified email | Bootstrap requires `email_verified`. The quarantined `/admin/bootstrap` route is closed the same way. | `test_auth_hardening.py` |
+| §2 #3 Call token = account token | `decode_access_token()` requires `type == "access"`. It's used by the HTTP auth and all three WebSockets (deal, auction, media), which previously accepted refresh and verify tokens too. The media socket no longer logs token payloads. | `test_auth_hardening.py` |
+| §2 #4 Unbounded public dispute query | Process-local memo in front of Redis, single-flight compute, failure backoff, and a 3-column query with a row cap. ARQ can now call the task (it lacked `ctx`). | `test_dispute_summary.py` |
+| §2 #5 Idempotency check-then-act | Atomic `SET NX` reservation, 409 while in flight, and a yield-dependency that releases the key however the request ends, including a body that fails validation. | `test_idempotency.py` (real Redis) |
+| §2 #6 Coverage floors disagree | 50% in both `pytest.ini` and CI (measured 57%). `.coveragerc` omits the three genuinely unreferenced routers. | CI |
+| §2 #7 Dead `TOKEN_EXPIRE_MINUTES` | Renamed to `ACCESS_TOKEN_EXPIRE_MINUTES` in `render.yaml`. | — |
+| §2 #8 Rate limiter records rejections | Add-then-count in one MULTI, rejected entries removed, unique members, and in-process fallback instead of fail-open. Phone/email limiter keys normalised. | `test_redis_rate_limit.py`, `test_auth_hardening.py` |
+| §2 #9 Lints inert | `analysis_options.yaml` added. All 24 analyzer warnings fixed; `dart fix` applied (127 mechanical fixes); 4 `BuildContext`-across-async-gap bugs and 2 deprecated geolocator calls fixed. 0 errors, 0 warnings. | `flutter analyze` |
+| §5.1 STT unmetered | Per-user limiters on both token endpoints (shared budget) and `/stt/transcribe`; bounded upload read. | `test_cost_bounds.py` |
+| §5.2 Terms PATCH 500s | One `to_naive_utc` helper (convert, then drop the zone) for the terms endpoint and the listing parsers. | `test_timestamps.py` |
+| §5.3 OTP codes logged in production | Console SMS/email refuse in production (send fails → 503), never logging the body. | `test_auth_hardening.py` |
+| §5.4 Unbounded chat history | History entries clipped where every LLM prompt is built. The buying agent keeps the newest 40 turns instead of 422-ing the 21st exchange (the app never trims). | `test_cost_bounds.py` |
+| §6 Voice card stuck on error | Tapping the mic after an error retries in place, keeping the transcript. | `zeno_voice_test.dart` |
+
+**Found and fixed during the fix pass** (pre-existing; not in the review
+below):
+
+| Bug | Impact | Test file |
+|---|---|---|
+| Timed dispute auto-refund paid the buyer **twice** (a direct B2C call, then `execute_fund_action` paying again) | Double refund on every timed auto-refund | `test_settlement_sweeps.py` |
+| `lock_deal_if_status` returned the session's **stale** copy of the deal (identity map + `expire_on_commit=False`) | The "second poller sees paid and stands down" guarantee never held; a waiting poller re-applied FUNDED (double ledger entry) | `test_payment_races.py` |
+| Deal-timer auto refund/release and chat "all good"/"refund" settled **E-Confirm** deals as if BROKA held the money | Buyer refunded from BROKA's pocket while funds stayed at E-Confirm; seller told "released" with no payout requested | `test_settlement_sweeps.py`, `test_chat_settlement_econfirm.py` |
+| Automatic and chat settlements published no `EscrowReleased`/`EscrowRefunded` | Missing ledger entries; open deal screens never updated | same |
+| Auto-release gave the seller +0.05 rating | A review nobody wrote | `test_settlement_sweeps.py` |
+| `/mpesa/query` set `paid` from any status, skipped `EscrowFunded`, and was open to any user | Could revive cancelled deals; a query beating the callback lost the ledger entry | `test_payment_races.py` |
+| `_call_groq`/`_call_openrouter` referenced an undefined `image_base64` | NameError on every call: those fallbacks never worked | `test_negotiate_fallback_providers.py` |
+| Degraded-mode AI cache keyed on `hash(message)` | A personalised reply (with the user's name) served to another user; key unstable across workers | `test_cost_bounds.py` |
+
+**Still needs a decision (not changed)**
+
+1. **Legacy refunds pay 97% of the price out of BROKA's account.** In the
+   legacy flow BROKA holds only the 3% commission (goods settle
+   off-platform, per `ESCROW_AUDIT.md`), yet `execute_fund_action`, the deal
+   timers and the chat refund all B2C 97% of `agreed_price` to the buyer.
+   Refund policy is a business decision, so the amount was left as it is.
+2. **E-Confirm deals in the dispute/condition-check flows** now fail closed:
+   no money moves, an audit row is written (`econfirm_*_blocked`), and the
+   reply is honest. Automated release/refund for them still has to be
+   built against E-Confirm's API.
+3. **Nothing subscribes to reconciliation alerts.** They land in the audit
+   log (`GET /admin/audit-logs`) and ERROR logs. Wire
+   `EConfirmReconciliationRequired` and the `*_blocked` / `*_on_inactive_deal`
+   audit actions to Sentry or an admin notification so a person actually
+   sees them.
+4. **`ALLOWED_ORIGINS: "*"`** in `render.yaml`: safe today (credentials are
+   off with a wildcard), but set real origins once a browser client exists.
+5. **Seller dashboard:** nine unreferenced private UI helpers remain (lint
+   infos). The file keeps at least one on purpose, so removal is your call.
+
+---
+
 ## 1. Baseline
 
 | Check | Result |
