@@ -1,84 +1,142 @@
-# BROKA v6.0 — AI-Powered P2P Marketplace for East Africa
+# BROKA — AI-Mediated P2P Marketplace for East Africa
 
-> **Score: 9.2/10** — Production-grade marketplace with trust, escrow, and AI negotiation.
+BROKA is a mobile marketplace where buyers and sellers deal through **Zeno**,
+an AI broker that negotiates, translates, privately coaches each side, and
+mediates disputes. Money moves through escrow, and BROKA takes a **3%
+commission** on each deal.
 
-**v4.0 changes:** Durable Redis Streams event bus · Circuit breakers · Idempotency keys · ARQ Redis workers · Split domain models · CI-enforced test coverage floor · Two-stage CI (tests + APK)
-
----
-
-## What is BROKA?
-
-BROKA is a mobile marketplace where every transaction is mediated by an AI broker with automatic multi-provider fallback (Gemini, DeepSeek, and Groq/Llama are all present in the current code's fallback chain — the effective primary depends on which API keys are configured in the deployment environment, so treat any single model name here as illustrative, not a guaranteed-current default; see `api/domains/ai_broker/service.py` for the live chain). Buyers and sellers negotiate through BROKA — an impartial AI that protects both parties and drives fair deals.
-
-**3% transaction fee** covers escrow protection, fraud prevention, and verified payments.
-
----
-
-## Stack
-
-| Layer | Technology |
+| Part | Stack |
 |---|---|
-| Mobile app | Flutter (Dart) |
-| Backend API | FastAPI (Python 3.11) + async SQLAlchemy |
-| AI broker | Multi-provider fallback chain (Gemini, DeepSeek, Groq Llama) — active provider depends on configured API keys |
-| Event bus | ✨ Redis Streams (production) · asyncio (dev fallback) |
-| Background jobs | ✨ ARQ + Redis (production) · asyncio queue (dev fallback) |
-| Rate limiting | Redis sliding-window (multi-instance safe) |
-| Observability | Sentry · Prometheus · OpenTelemetry · JSON logs |
-| DB | PostgreSQL (production) · SQLite (dev/test) |
-| CI/CD | GitHub Actions (backend tests + APK build) |
+| `backend/` | FastAPI (Python 3.11) + async SQLAlchemy. PostgreSQL in production, SQLite in dev and tests |
+| `flutter_app/` | Flutter 3.24.5 (the version CI pins), `provider` for state |
+
+Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
+`CALLING.md`, `EVENT_ARCHITECTURE.md`, `PRIVACY.md`, `ZENO_ACTIONS.md` and
+`SELLER_METRICS.md`, plus the audit write-ups (`ESCROW_AUDIT.md`,
+`DISPUTE_AUDIT.md`, `AI_AUDIT.md`, `COMMUNICATIONS_AUDIT.md`,
+`REPO_REVIEW.md`).
 
 ---
 
-## v4.0 What's New
+## Recent changes (2026-09-23)
 
-### Circuit Breakers
-Gemini/Groq/M-Pesa wrapped in circuit breakers. If Gemini slows down — breaker opens after 5 failures, auto-falls back to Groq, then cached response, then clean 503. No request hangs forever.
+- **Zeno chat requires sign-in.** `POST /negotiate/chat`, the handler that
+  serves every Zeno conversation, took no token, no rate limit and no size
+  limit, so anyone who found the URL could send unlimited prompts and images
+  billed to BROKA's AI keys. It now requires an access token, allows 20
+  requests a minute per user, and caps the message (8,000 characters), each
+  history entry (2,000 characters; the newest 20 are kept) and the image
+  (10 MB). In the app, a guest who opens Zeno's verdict on a product page is
+  asked to sign in first.
+- **An E-Confirm payout can't be requested twice.** When two "confirm
+  delivery" requests overlapped, the second one's safety re-check read its
+  own earlier copy of the escrow row, so it could ask E-Confirm to release
+  the same payment again. Escrow lookups now always read the current row.
+- **The app stays signed in past 15 minutes.** Access tokens last 15
+  minutes. The app's newer HTTP client, used for escrow, disputes, auctions,
+  stores and the buying agent, never picked up a refreshed token and never
+  retried on a 401, so those screens failed until the app was restarted. It
+  now renews the session on a 401 (one renewal shared by requests that fail
+  together) and retries once. The Zeno chat calls do the same.
 
-### Durable Event Bus
-Events written to Redis Streams in production. Survive process restarts and deployments. Same `publish()` / `@subscribe()` API — no changes needed in domain code. Falls back to asyncio in dev.
-
-### Idempotency Keys
-Double-tap the Pay button? No problem. `X-Idempotency-Key` header on payment endpoints: the key is reserved atomically (`SET NX`) before the handler runs, so a concurrent duplicate gets `409` instead of a second execution, and the first response is cached in Redis for 24 hours so retries replay it. Independently of Redis, the escrow fund path claims each attempt in the database under the deal row lock, so a second STK push can't be sent even with a fresh key or with Redis down.
-
-### ARQ Background Workers
-Named queues (`notifications`, `ai`, `fraud`, `payments`, `listings`) backed by Redis in production. Jobs survive crashes. Horizontal scaling by adding more worker processes. Degrades to asyncio in dev.
-
-### Expanded Test Suite
-Backend tests cover circuit breakers, idempotency, rate limiting, the event bus, workers, the AI broker, auth, escrow and payment races, auctions, fraud, listings, Stores and WebSockets; the Flutter app has its own widget/unit suite under `flutter_app/test/`. The backend build fails if coverage drops below 50% — the same floor in `.github/workflows/build.yml` and `backend/pytest.ini`, so the command below behaves locally exactly as it does in CI. Raise it only alongside genuinely higher measured coverage, not as a number to chase.
+Regression tests: `backend/tests/test_cost_bounds.py`,
+`backend/tests/test_route_ordering.py`, `backend/tests/test_payment_races.py`
+and `flutter_app/test/session_renewal_test.dart`.
 
 ---
 
-## Getting Started
+## How it works
 
-### Backend (Python)
+### Money
+
+Two escrow paths run side by side:
+
+- **E-Confirm** holds the **full agreed price**. E-Confirm doesn't call
+  BROKA back, so BROKA polls it: on every payment-status request, and every
+  5 minutes in the background. The release code is stored encrypted and
+  never leaves the server.
+- **Legacy M-Pesa (Safaricom Daraja):** the STK push charges only the
+  commission, and the goods money changes hands off-platform. Daraja also
+  handles listing boosts and seller verification payments.
+
+A deal moves `agreed → paid → released` (or `refunded`), with dispute
+sub-states in between. Every money movement is written to a double-entry
+ledger (`api/core/ledger.py`). `POST /deal/{deal_id}/fund` accepts an
+`X-Idempotency-Key` header and also claims each attempt under the deal's
+row lock, so a double tap can't send two payment prompts. Anything
+that needs a person, such as money arriving for a cancelled deal, raises a
+reconciliation alert to Sentry tagged `alert:reconciliation`.
+
+### AI
+
+Model calls go through a fallback chain: Gemini → DeepSeek → OpenRouter →
+Groq → a cached reply → an error. A provider is skipped when its key is
+unset, and each has a circuit breaker that stops calling it for 30 seconds
+after a run of consecutive failures. Groq currently does nothing, because its
+configured model was decommissioned. See `api/routers/negotiate.py`'s
+`_call_ai` for the live chain.
+
+Zeno writes a separate, private reply to each side of a conversation.
+`backend/tests/test_message_visibility_guard.py` scans every chat-message query so
+that neither side can read the other's copy (see `PRIVACY.md`).
+
+### Auctions
+
+The server clock decides whether an auction is upcoming, live or ended. Bids
+and closes are single atomic updates that only succeed if the row hasn't
+changed since it was read. The reserve price is judged once, at close, and
+is never exposed publicly. A win becomes a normal deal. See `AUCTIONS.md`.
+
+### Events and background work
+
+- **Events are handled in-process.** `event_catalog.emit()` awaits every
+  subscriber inside the request that raised the event. With `REDIS_URL`
+  set, events are also appended to Redis Streams, but nothing reads those
+  streams yet, so treat them as a log rather than a delivery mechanism. See
+  `EVENT_ARCHITECTURE.md`.
+- **Scheduled work runs inside the web process**, in two loops started at
+  boot:
+  - every 60 seconds: auction closes, ending-soon reminders, unpaid-win
+    lapses and seller availability reminders;
+  - every 5 minutes: deal and dispute timers, E-Confirm reconciliation,
+    seller metrics and call expiry.
+- **Queued jobs** (today, trust-score recalculation after a review or a
+  fraud flag) go to ARQ when `REDIS_URL` is set, and need a worker process:
+  `arq api.core.workers.WorkerSettings`. Without Redis they run in-process.
+
+### Calling
+
+WebRTC audio and video between the two phones. The backend relays call
+setup over a WebSocket and keeps call state in Redis, and Cloudflare TURN
+relays media when a direct connection fails. See `CALLING.md`.
+
+---
+
+## Getting started
+
+### Backend
 
 ```bash
 cd backend
 pip install -r requirements.txt
-cp ../.env.example .env       # fill in SECRET_KEY, GEMINI_API_KEY, MPESA_*, etc.
-uvicorn main:app --reload --port 8000
+cp ../.env.example .env       # fill in SECRET_KEY, an AI provider key, MPESA_*, etc.
+uvicorn main:app --reload --port 8000 --env-file .env
 ```
 
-**With Redis (recommended — enables all v4.0 features):**
+Nothing in the code loads `.env` by itself, so pass `--env-file` (or export
+the variables in your shell).
+
+With Redis (Redis-backed rate limits, idempotency keys, call state and the
+ARQ queue):
+
 ```bash
 docker run -d -p 6379:6379 redis:7-alpine
 export REDIS_URL=redis://localhost:6379/0
-uvicorn main:app --reload
+uvicorn main:app --reload --env-file .env
+arq api.core.workers.WorkerSettings        # in a second terminal
 ```
 
-**Background workers (production):**
-```bash
-arq api.core.workers.WorkerSettings
-```
-
-**Run tests:**
-```bash
-cd backend
-pytest tests/ -v --cov=api --cov-report=term-missing
-```
-
-### Flutter App
+### Flutter app
 
 ```bash
 cd flutter_app
@@ -86,47 +144,87 @@ flutter pub get
 flutter run --dart-define=API_URL=https://your-backend.onrender.com
 ```
 
+### Tests
+
+Backend, the way CI runs it (`pytest.ini` also enforces the 50% coverage
+floor):
+
+```bash
+cd backend
+ENV=test SECRET_KEY=ci-test-secret-key-long-enough-for-testing-purposes \
+  DATABASE_URL="sqlite+aiosqlite:///:memory:" \
+  REDIS_URL=redis://localhost:6379/0 \
+  python -m pytest tests/
+```
+
+Leave out `REDIS_URL` to skip the handful of tests that need a real Redis.
+
+Flutter:
+
+```bash
+cd flutter_app
+flutter analyze --no-fatal-warnings --no-fatal-infos   # CI runs this
+flutter test                                           # CI does not run this yet
+```
+
 ---
 
-## Environment Variables
+## Environment variables
 
-See `.env.example` for the full reference. Key variables:
+`.env.example` has the full list. The ones that matter most:
 
-| Variable | Required | Purpose |
+| Variable | Needed | Purpose |
 |---|---|---|
-| `SECRET_KEY` | ✅ | JWT signing (min 32 chars — startup validates) |
-| `DATABASE_URL` | ✅ | PostgreSQL in production, SQLite in dev |
-| `REDIS_URL` | ⭐ Strongly recommended | Enables all v4.0 features |
-| `GEMINI_API_KEY` | ✅ | Primary AI broker |
-| `GROQ_API_KEY` | ✅ | Fallback AI |
-| `SENTRY_DSN` | ⭐ Production | Error tracking, and reconciliation alerts for money that needs a person (tag `alert:reconciliation`) |
-| `MPESA_*` | ✅ | M-Pesa Daraja API |
+| `SECRET_KEY` | Required | JWT signing. Production refuses to start with a default or a key under 32 characters |
+| `DATABASE_URL` | Required | PostgreSQL in production (production refuses SQLite) |
+| `MPESA_CALLBACK_SECRET` | Required in production | Authenticates Safaricom callbacks. Production refuses to start without it |
+| `ECONFIRM_API_KEY` | Required in production | E-Confirm escrow. Production refuses to start without it |
+| `ZAC_SECRET` | Required in production | Signs dispute resolution codes. Production refuses the default |
+| `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` | At least one | AI providers, tried in that order |
+| `REDIS_URL` | Strongly recommended | Rate limits and idempotency across instances, call state, the ARQ queue |
+| `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
+| `MPESA_*` | For M-Pesa | Safaricom Daraja |
+| `AT_*` or `MOBITECH_*` | For SMS | Phone OTP codes and SMS reminders |
+| `RESEND_API_KEY`, `RESEND_FROM` | Optional | Email verification codes (requests return 503 without them) |
+| `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY` | Optional | Zeno voice input. The app only ever receives short-lived tokens |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Optional | Call relay for networks where a direct connection fails |
+| `FAL_KEY` | Optional | AI showcase images for listings |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Default 15 | Access token lifetime. The refresh token (30 days) renews it |
 
 ---
 
-## API Reference
+## API overview
 
-### Auth (`/auth/`)
-`POST /register` · `POST /login` · `GET /me` · `PATCH /profile` · `GET /search`
+A running server serves the full interactive reference at `/docs`. Most
+routes need `Authorization: Bearer <access token>`.
 
-### Listings (`/listings/`)
-`GET /` · `POST /` · `GET /{id}` · `POST /{id}/interest` · `PATCH /{id}/status`
+| Prefix | Covers |
+|---|---|
+| `/auth` | Phone and email OTP, register, login, profile, token refresh and revoke |
+| `/listings` | Browse, create and edit listings; listing and seller metrics; AI showcase images |
+| `/categories`, `/trending`, `/traders` | Discovery |
+| `/stores`, `/store/{slug}` | Store API, and the public HTML storefront page |
+| `/auctions` (legacy `/auction`) | Auction grid, detail and terms |
+| `/negotiate` | Zeno chat (`/chat`), mediated messages, direct chat, inbox, read receipts, deal timers, scam check, price advice |
+| `/buy-agent-requests` | Standing "find and negotiate for me" requests |
+| `/deal` | Finalize a deal; E-Confirm fee quote, funding, payment status and delivery confirmation |
+| `/escrow` | Legacy escrow (the M-Pesa commission flow) |
+| `/mpesa`, `/featured`, `/verify` | Daraja STK push and callbacks, listing boosts, seller verification |
+| `/disputes/v2` | Dispute cases, evidence, AI analysis and resolution |
+| `/reviews` | Seller reviews |
+| `/calls` | Call setup, TURN credentials, call logging |
+| `/stt`, `/tts` | Speech-to-text tokens and transcription, text-to-speech |
+| `/media` | Voice note and image upload |
+| `/admin` | Summary, users, audit logs, fraud events, ledger integrity, AI savings |
+| `/health`, `/ready`, `/live` | Liveness and readiness probes |
 
-### Escrow (`/escrow/`)
-`POST /finalize` · `POST /fund/{deal_id}` · `POST /confirm-delivery/{deal_id}` · `GET /state/{deal_id}`
-
-### AI Broker (`/negotiate/`)
-`POST /chat` · `POST /scam-check` · `POST /price-recommend` · `POST /dispute-analysis`
-
-### Disputes (`/disputes/`)
-`POST /open/{deal_id}` · `GET /{id}` · `POST /resolve/{id}`
-
-### Admin (`/admin/`)
-`GET /summary` · `GET /audit-logs` · `GET /circuit-breakers`
+WebSockets: `/deal-ws/ws/{deal_id}` (deal status), `/auction-ws/ws/{listing_id}`
+(live bids), `/media/ws/{listing_id}` (chat) and `/calls/ws/{room_id}` (call
+signalling).
 
 ---
 
-## Database Schema Changes
+## Database schema changes
 
 This project does **not** currently use Alembic migrations, despite the
 Alembic scaffolding present under `backend/migrations/` — verified by
@@ -150,17 +248,27 @@ recreated from the models).
 
 ## Deployment
 
-**Backend:** Render (`render.yaml` included) · Railway · Fly.io · AWS ECS
+`render.yaml` deploys the backend as one Docker web service plus a
+PostgreSQL database, both on Render's free plan.
 
 **Minimum production config:**
-1. PostgreSQL database
-2. Redis instance (Upstash free tier is sufficient to start)
-3. At least one ARQ worker process
-4. `ENV=production` set
+1. PostgreSQL.
+2. `ENV=production` and the required secrets in the table above. Startup
+   checks them and refuses to run without them.
+3. Redis (Upstash's free tier is enough to start).
+4. An ARQ worker whenever `REDIS_URL` is set:
+   `arq api.core.workers.WorkerSettings`. `render.yaml` doesn't define one
+   yet, and without it queued trust-score jobs wait in Redis unprocessed.
 
-**Never in production:**
-- `DATABASE_URL=sqlite://...` (startup rejects this)
-- Default `SECRET_KEY` placeholder (startup rejects this)
+**Worth knowing:**
+- Scheduled work lives in the web process. Render's free plan puts an idle
+  service to sleep, and while it sleeps, auction closes, deal timers and
+  E-Confirm reconciliation don't run. They catch up once it wakes.
+- CI (`.github/workflows/build.yml`) runs on every push to `main`: backend
+  tests against Redis with the 50% coverage gate, then `flutter analyze`
+  (errors only), then an APK build that replaces the `latest-release`
+  GitHub release. Without a keystore configured, that APK is signed with the
+  debug key.
 
 ---
 
@@ -170,16 +278,19 @@ recreated from the models).
 - [x] 6-signal trust score + fraud engine
 - [x] Double-entry escrow ledger
 - [x] M-Pesa STK Push + B2C payout
+- [x] E-Confirm escrow for the full agreed price
 - [x] WebSocket real-time deal status
-- [x] AI broker with multi-provider fallback (Gemini, DeepSeek, Groq)
+- [x] AI broker with multi-provider fallback (Gemini, DeepSeek, OpenRouter)
 - [x] Store/business layer (User → Store → Listings, public storefront page at `/store/{slug}`) — see `ARCHITECTURE.md`'s Store section; AI store intelligence, analytics, and bundle negotiation are NOT part of this
-- [x] Redis Streams durable event bus
+- [x] Auction lifecycle (window, atomic bids, close, winner → deal)
 - [x] Circuit breakers (AI + M-Pesa)
 - [x] Idempotency keys (payment safety)
 - [x] ARQ Redis-backed worker queues
 - [x] CI-enforced test coverage floor (50%, `--cov-fail-under` in `.github/workflows/build.yml` and `backend/pytest.ini`)
 - [x] VoIP calling (WebRTC)
 - [x] STT / TTS voice support
+- [ ] Consume the Redis event streams (events are written there but only handled in-process today)
+- [ ] Run `flutter test` in CI
 - [ ] Event sourcing for payments (Phase 3)
 - [ ] ML-based fraud models (Phase 4)
 - [ ] Seller reputation graph (Phase 4)
