@@ -303,8 +303,12 @@ async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> 
         f"(deal status left at {deal.status.value})",
     )
     await db.commit()
-    logger.error("[negotiate] RECONCILIATION_REQUIRED deal=%s: chat %s on an E-Confirm deal",
-                 deal.id, action)
+    from api.core.reconciliation import report_reconciliation
+    report_reconciliation(
+        f"econfirm_chat_{action}_blocked", deal_id=deal.id,
+        reason=f"buyer chose {action} in chat on an E-Confirm deal; complete the {action} "
+               f"with E-Confirm by hand (deal status left at {deal.status.value})",
+    )
     return True
 
 

@@ -89,7 +89,9 @@ services:
       - key: ENV
         value: "production"
       - key: SENTRY_DSN
-        sync: false          # Optional: free tier covers 5k errors/month
+        sync: false          # Error tracking AND reconciliation alerts (money that needs a
+                             # person - see api/core/reconciliation.py). Without it those
+                             # alerts only reach the logs. Free tier covers 5k errors/month.
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false          # Optional: FCM push notifications
       - key: CLOUDFLARE_TURN_KEY_ID

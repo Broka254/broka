@@ -72,11 +72,14 @@ below):
    no money moves, an audit row is written (`econfirm_*_blocked`), and the
    reply is honest. Automated release/refund for them still has to be
    built against E-Confirm's API.
-3. **Nothing subscribes to reconciliation alerts.** They land in the audit
-   log (`GET /admin/audit-logs`) and ERROR logs. Wire
-   `EConfirmReconciliationRequired` and the `*_blocked` / `*_on_inactive_deal`
-   audit actions to Sentry or an admin notification so a person actually
-   sees them.
+3. ~~Nothing subscribes to reconciliation alerts.~~ **Done:** every
+   reconciliation alert now raises a Sentry event via
+   `api/core/reconciliation.py` (one issue per kind and deal, tagged
+   `alert:reconciliation`, re-sent at most hourly while a deal stays stuck;
+   `error` = a person must act, `warning` = should self-heal). ARQ workers initialise Sentry too. What remains is on the
+   Sentry side: set `SENTRY_DSN` in production and add an alert rule on
+   `alert:reconciliation` (new issues, level error), routed to whoever
+   handles payments.
 4. **`ALLOWED_ORIGINS: "*"`** in `render.yaml`: safe today (credentials are
    off with a wildcard), but set real origins once a browser client exists.
 5. **Seller dashboard:** nine unreferenced private UI helpers remain (lint

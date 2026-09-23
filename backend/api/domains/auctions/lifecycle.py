@@ -1114,8 +1114,9 @@ async def _alert_funded_but_unpaid(db: AsyncSession, meta: AuctionMeta, deal, es
 
     Never lapsed and never auto-corrected: which side is right needs a human
     with the provider's dashboard. The deadline is cleared so the sweep stops
-    re-examining it, and the audit row is the durable alert
-    (GET /admin/audit-logs).
+    re-examining it; the audit row is the durable record
+    (GET /admin/audit-logs) and report_reconciliation raises the Sentry
+    alert.
     """
     from api.core.audit import record_audit
     from api.core.events import EConfirmReconciliationRequired, publish
@@ -1132,9 +1133,12 @@ async def _alert_funded_but_unpaid(db: AsyncSession, meta: AuctionMeta, deal, es
             db, "system", "auction_payment_reconciliation_required", "deal", deal.id, reason,
         )
     await db.commit()
-    logger.error(
-        "[auction] PAYMENT_RECONCILIATION_REQUIRED listing=%s deal=%s: %s",
-        meta.listing_id, getattr(deal, "id", None), reason,
+    from api.core.reconciliation import report_reconciliation
+    report_reconciliation(
+        "auction_payment_reconciliation_required", deal_id=getattr(deal, "id", None),
+        provider_transaction_id=tx or None, listing_id=meta.listing_id,
+        reason=f"{reason} - the item was NOT relisted; confirm the payment and move the "
+               f"deal on by hand",
     )
     if deal is not None:
         await publish(EConfirmReconciliationRequired(

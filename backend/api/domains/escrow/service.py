@@ -39,6 +39,7 @@ from api.core.events import (
     EConfirmReconciliationRequired,
 )
 from api.core.audit import record_audit
+from api.core.reconciliation import report_reconciliation
 from api.core.fraud import flag_fraud, compute_trust_score
 from api.core.config import settings
 from api.core.money import add_money, money, pct_of
@@ -346,6 +347,11 @@ class EscrowService:
                         "create_transaction outcome unknown",
                     )
                     await self.db.commit()
+                    report_reconciliation(
+                        "econfirm_create_outcome_unknown", deal_id=deal.id,
+                        reason="E-Confirm create_transaction outcome unknown (no response/id) - "
+                               "check E-Confirm for a transaction before anyone retries",
+                    )
                     await publish(EConfirmReconciliationRequired(
                         deal_id=deal.id, provider_transaction_id="", reason="create_transaction outcome unknown",
                     ))
@@ -433,6 +439,12 @@ class EscrowService:
             escrow.last_error = f"fund attempt: connection error ({type(exc).__name__})"
             await self.external_escrows.save(escrow)
             await self.db.commit()
+            report_reconciliation(
+                "econfirm_fund_outcome_unknown", deal_id=deal_id, level="warning",
+                provider_transaction_id=escrow.provider_transaction_id,
+                reason=f"STK push outcome unknown ({type(exc).__name__}); reconciliation will "
+                       f"poll E-Confirm - act only if this deal stays pending",
+            )
             await publish(EConfirmReconciliationRequired(
                 deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
                 reason="fund_stk_push timed out/network error",
@@ -641,6 +653,12 @@ class EscrowService:
             logger.warning("[escrow] unrecognized provider status %r for deal=%s", result.raw_status, deal_id)
             await self.external_escrows.save(escrow)
             await self.db.commit()
+            report_reconciliation(
+                "econfirm_unrecognized_status", deal_id=deal_id,
+                provider_transaction_id=escrow.provider_transaction_id,
+                reason=f"E-Confirm reported a status BROKA does not recognise: {result.raw_status!r}",
+                raw_status=result.raw_status,
+            )
             await publish(EConfirmReconciliationRequired(
                 deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
                 reason=f"unrecognized provider status: {result.raw_status}",
@@ -690,8 +708,8 @@ class EscrowService:
                 # into escrow for something they will not get, and nothing
                 # would ever notice. That needs a human with the provider's
                 # dashboard, so it is recorded as an audit row (the durable
-                # alert, GET /admin/audit-logs), logged at ERROR and
-                # published for any subscriber.
+                # record, GET /admin/audit-logs), raised to Sentry through
+                # report_reconciliation, and published for any subscriber.
                 current = await self.deals.get_by_id(deal_id)
                 current_status = current.status if current is not None else None
                 if current_status in _FUNDED_OR_LATER:
@@ -706,9 +724,11 @@ class EscrowService:
                         f"provider_transaction_id={escrow.provider_transaction_id} {reason}",
                     )
                     await self.db.commit()
-                    logger.error(
-                        "[escrow] RECONCILIATION_REQUIRED deal=%s tx=%s: %s",
-                        deal_id, escrow.provider_transaction_id, reason,
+                    report_reconciliation(
+                        "econfirm_funded_on_inactive_deal", deal_id=deal_id,
+                        provider_transaction_id=escrow.provider_transaction_id,
+                        reason=f"{reason} - the buyer's money is in escrow for a deal that "
+                               f"will not complete; refund through E-Confirm",
                     )
                     await publish(EConfirmReconciliationRequired(
                         deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
@@ -977,6 +997,12 @@ class EscrowService:
                 # reconciliation case, not as a new payout." escrow.status
                 # is already RELEASE_PENDING from above — nothing further
                 # to change; a later reconciliation pass resolves it.
+                report_reconciliation(
+                    "econfirm_release_in_progress", deal_id=deal.id, level="warning",
+                    provider_transaction_id=escrow.provider_transaction_id,
+                    reason="E-Confirm answered the release with 409 (already in progress); "
+                           "reconciliation will finish it",
+                )
                 await publish(EConfirmReconciliationRequired(
                     deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
                     reason="release returned 409 (already in progress)",
@@ -999,6 +1025,12 @@ class EscrowService:
             escrow.last_error = f"release attempt: connection error ({type(exc).__name__})"
             await self.external_escrows.save(escrow)
             await self.db.commit()
+            report_reconciliation(
+                "econfirm_release_outcome_unknown", deal_id=deal.id, level="warning",
+                provider_transaction_id=escrow.provider_transaction_id,
+                reason=f"release call outcome unknown ({type(exc).__name__}); reconciliation "
+                       f"will poll E-Confirm - act only if this deal stays release-pending",
+            )
             await publish(EConfirmReconciliationRequired(
                 deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
                 reason="release call timed out/network error",
@@ -1079,6 +1111,13 @@ class EscrowService:
         await self.external_escrows.save(escrow)
         await self.db.commit()
         if result.status == EConfirmEscrowStatus.UNKNOWN:
+            report_reconciliation(
+                "econfirm_unexpected_release_status", deal_id=deal.id,
+                provider_transaction_id=escrow.provider_transaction_id,
+                reason=f"E-Confirm answered the release with an unrecognised status: "
+                       f"{result.raw_status!r}",
+                raw_status=result.raw_status,
+            )
             await publish(EConfirmReconciliationRequired(
                 deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
                 reason=f"unexpected release response status: {result.raw_status}",

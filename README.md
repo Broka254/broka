@@ -99,7 +99,7 @@ See `.env.example` for the full reference. Key variables:
 | `REDIS_URL` | ⭐ Strongly recommended | Enables all v4.0 features |
 | `GEMINI_API_KEY` | ✅ | Primary AI broker |
 | `GROQ_API_KEY` | ✅ | Fallback AI |
-| `SENTRY_DSN` | ⭐ Production | Error tracking |
+| `SENTRY_DSN` | ⭐ Production | Error tracking, and reconciliation alerts for money that needs a person (tag `alert:reconciliation`) |
 | `MPESA_*` | ✅ | M-Pesa Daraja API |
 
 ---

@@ -302,11 +302,29 @@ async def enqueue(queue_name: str, fn: Task, **kwargs: Any) -> None:
 
 # ── ARQ WorkerSettings ─────────────────────────────────────────────────────────
 
+async def _arq_on_startup(ctx: dict) -> None:
+    """Initialise Sentry in an ARQ worker process.
+
+    Workers are launched by `arq`, not by main.py, so init_observability
+    never runs in them. Without this, anything a job reports to Sentry - a
+    reconciliation alert raised inside task_reconcile_econfirm_escrows, an
+    unhandled job error - was silently dropped in exactly the processes
+    that run the money-reconciliation jobs.
+    """
+    from api.core.config import settings
+    if settings.sentry_dsn:
+        from api.core.observability import _init_sentry
+        _init_sentry(settings.sentry_dsn, settings.env)
+    else:
+        logger.info("[worker] SENTRY_DSN not set - Sentry disabled in this worker")
+
+
 class WorkerSettings:
     """
     ARQ worker config. Launch with:
         arq api.core.workers.WorkerSettings
     """
+    on_startup = _arq_on_startup
     functions = [
         "api.core.workers.task_recompute_trust_score",
         "api.core.workers.task_send_fcm_notification",
@@ -1618,7 +1636,8 @@ async def _econfirm_deal_fails_closed(session, deal, action: str) -> bool:
         f"resolve with E-Confirm (deal status left at {deal.status.value})"
     )
     await record_audit(session, "system", f"econfirm_auto_{action}_blocked", "deal", deal.id, reason)
-    logger.error("[sweep] RECONCILIATION_REQUIRED deal=%s: %s", deal.id, reason)
+    from api.core.reconciliation import report_reconciliation
+    report_reconciliation(f"econfirm_auto_{action}_blocked", deal_id=deal.id, reason=reason)
     return True
 
 

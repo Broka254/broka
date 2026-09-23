@@ -352,8 +352,9 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
             )
         else:
             # Money for a deal that is cancelled (or gone). Somebody has to
-            # refund this by hand; the audit row is the durable alert
-            # (GET /admin/audit-logs).
+            # refund this by hand: the audit row is the durable record
+            # (GET /admin/audit-logs) and report_reconciliation raises the
+            # Sentry alert that tells a person.
             reason = (
                 f"M-Pesa payment {txn.mpesa_receipt or txn.checkout_request_id} "
                 f"of KES {txn.amount} received for deal in status "
@@ -362,7 +363,12 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
             await record_audit(
                 db, "system", "mpesa_payment_on_inactive_deal", "deal", txn.deal_id, reason,
             )
-            logger.error("[mpesa] RECONCILIATION_REQUIRED deal=%s: %s", txn.deal_id, reason)
+            from api.core.reconciliation import report_reconciliation
+            report_reconciliation(
+                "mpesa_payment_on_inactive_deal", deal_id=txn.deal_id,
+                reason=f"{reason} - refund the buyer by hand",
+                checkout_request_id=txn.checkout_request_id,
+            )
         await db.commit()
         return
 
