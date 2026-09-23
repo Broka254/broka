@@ -71,4 +71,11 @@ class TrendingService:
         # (domains/listings/service.py) so trending results carry the same
         # image/verified/price fields as everywhere else in the API,
         # rather than a second, thinner listing JSON shape.
-        return [ListingService._listing_dict(l, seller=sellers_by_id.get(l.seller_id)) for l in page]
+        from api.domains.listings.service import load_listing_media
+        assets = await load_listing_media(self.db, page, sellers_by_id.values())
+        return [
+            ListingService._listing_dict(
+                l, seller=sellers_by_id.get(l.seller_id), assets=assets, card=True,
+            )
+            for l in page
+        ]

@@ -523,6 +523,8 @@ class AuthService:
             updates["nickname"] = nickname
         if profile_photo is not None:
             updates["profile_photo"] = profile_photo
+            # Converted to an image asset again by the media backfill.
+            updates["profile_photo_id"] = None
         if updates:
             user = await self.repo.update(user, **updates)
         return self._user_dict(user)

@@ -1,0 +1,79 @@
+"""Image upload and serving.
+
+POST /media/images      Upload one image for a stated purpose. Returns the
+                        asset id to send with the listing or store, and the
+                        URL of each size.
+GET  /media/i/{key}     Serve an image stored by the database driver. Images
+                        on R2 are served by R2's own domain and never come
+                        through here.
+
+Mounted at /media alongside the older negotiation-media router
+(api/routers/media.py), whose paths (/upload, /ws/...) don't overlap.
+"""
+from __future__ import annotations
+
+import re
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.core.image_processing import MAX_UPLOAD_BYTES, ImageRejected
+from api.core.media_storage import CACHE_FOREVER, StorageError, storage_named
+from api.database import get_db
+from api.models.media import MediaPurpose
+from api.security import get_current_user
+from .service import asset_urls, create_image_asset
+
+router = APIRouter()
+
+# Exactly the keys create_image_asset writes. Anything else is a 404
+# without a database lookup.
+_KEY_RE = re.compile(r"^img/[0-9a-f-]{36}/(thumb|medium|large)\.webp$")
+
+
+@router.post("/images", status_code=201)
+async def upload_image(
+    file: UploadFile = File(...),
+    purpose: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if purpose not in MediaPurpose.UPLOADABLE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"purpose must be one of: {', '.join(sorted(MediaPurpose.UPLOADABLE))}",
+        )
+    from api.core.rate_limit import image_upload_limiter
+    await image_upload_limiter.check_and_record(current_user["id"])
+
+    # Bounded read: one byte past the limit is enough to know it's too big,
+    # without buffering whatever size the client chose to send.
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Images must be 10 MB or smaller.")
+
+    try:
+        asset = await create_image_asset(db, current_user["id"], purpose, raw)
+    except ImageRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except StorageError:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail="Couldn't save the image right now. Please try again.")
+    await db.commit()
+    return {**asset_urls(asset), "purpose": asset.purpose}
+
+
+@router.get("/i/{key:path}")
+async def serve_image(key: str):
+    if not _KEY_RE.match(key):
+        raise HTTPException(status_code=404, detail="Not found")
+    found = await storage_named("db").get(key)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    data, content_type = found
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": CACHE_FOREVER},
+    )

@@ -193,6 +193,10 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
             await task_check_call_expiry()
         except Exception as exc:
             logger.error("[sweep] call expiry check failed: %s", exc)
+        try:
+            await task_backfill_media()
+        except Exception as exc:
+            logger.error("[sweep] media backfill failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -234,6 +238,15 @@ async def task_reconcile_econfirm_escrows(ctx: dict) -> None:
                     escrow.deal_id, exc,
                 )
         logger.info("[sweep] econfirm reconciliation: checked=%d failed=%d", checked, failed)
+
+
+async def task_backfill_media(ctx: dict | None = None) -> None:
+    """Convert a bounded batch of base64 images into image assets. See
+    api/domains/media/backfill.py. Bounded in rows and time, so a large
+    backlog is worked through over many passes without stalling the
+    sweep."""
+    from api.domains.media.backfill import run_backfill_pass
+    await run_backfill_pass()
 
 
 async def start_periodic_sweep(interval_seconds: int = 300) -> None:

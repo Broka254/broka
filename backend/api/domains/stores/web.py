@@ -58,7 +58,13 @@ def _listing_card(listing: dict) -> str:
     name = _esc(listing.get("name"))
     price = listing.get("price")
     price_html = f"KSh {price:,.0f}" if isinstance(price, (int, float)) else ""
-    image = listing.get("showcase_image_url")  # data URI or None - see module docstring
+    # The card image: the listing's cover asset when it has one, else the
+    # legacy showcase data URI, else its first legacy base64 photo.
+    cover = listing.get("cover") or {}
+    image = cover.get("medium") or listing.get("showcase_image_url")
+    if not image and listing.get("verified_photos"):
+        first = listing["verified_photos"].split(",")[0].strip()
+        image = f"data:image/jpeg;base64,{first}" if first else None
     img_html = (
         f'<img src="{_esc(image)}" alt="{name}" loading="lazy">'
         if image else '<div class="ph-noimg">BROKA</div>'
@@ -110,6 +116,13 @@ def render_store_page(store: dict, listings: list) -> str:
     )
 
     description_html = f'<p class="description">{description}</p>' if description else ""
+    # A link preview needs an absolute https image URL; data URIs and
+    # relative database-served paths don't qualify, so those get no tag.
+    preview = (store.get("cover") or {}).get("large") or (store.get("logo") or {}).get("large")
+    og_image_html = (
+        f'<meta property="og:image" content="{_esc(preview)}">'
+        if preview and preview.startswith("https://") else ""
+    )
     og_description = subtitle_parts[0] if subtitle_parts else f"{name} on BROKA"
 
     return f"""<!DOCTYPE html>
@@ -123,7 +136,7 @@ def render_store_page(store: dict, listings: list) -> str:
 <meta property="og:title" content="{name} · BROKA">
 <meta property="og:description" content="{_esc(og_description)}">
 <meta property="og:url" content="https://broka.co.ke/store/{slug}">
-<!-- og:image intentionally omitted - see module docstring -->
+{og_image_html}
 <style>
   :root {{
     --bg:#03040A; --bg-mid:#070B16; --bg-card:#111D35; --gold:#8B5CF6;

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
@@ -301,3 +301,15 @@ async def get_event_catalog(
         "total_event_types": len(EventType),
         "by_domain": catalog,
     }
+
+
+@router.post("/media/backfill")
+async def run_media_backfill(
+    rows_per_kind: int = Query(50, ge=1, le=500),
+    admin: User = Depends(require_admin),
+):
+    """Run one media backfill pass now (the 5-minute sweep runs smaller
+    ones on its own) and report what is left."""
+    from api.domains.media.backfill import pending_counts, run_backfill_pass
+    done = await run_backfill_pass(rows_per_kind=rows_per_kind, time_budget=60.0)
+    return {"converted": done, "remaining": await pending_counts()}

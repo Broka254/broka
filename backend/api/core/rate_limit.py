@@ -168,6 +168,7 @@ if _settings.is_test:
     stt_token_limiter      = _make_limiter("stt_token",      limit=1000, window_seconds=60)
     stt_transcribe_limiter = _make_limiter("stt_transcribe", limit=1000, window_seconds=60)
     zeno_chat_limiter      = _make_limiter("zeno_chat",      limit=1000, window_seconds=60)
+    image_upload_limiter   = _make_limiter("image_upload",   limit=1000, window_seconds=60)
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
@@ -188,6 +189,11 @@ else:
     # ai_chat_limiter below, but its own bucket so a busy Zeno conversation
     # doesn't eat the buying agent's allowance or the reverse.
     zeno_chat_limiter      = _make_limiter("zeno_chat",      limit=20, window_seconds=60)
+    # POST /media/images, keyed by user. Each upload is decoded and
+    # re-encoded three times (CPU on this process) and stored. A listing
+    # takes up to 6 photos and store setup about 8 images; 30/min leaves
+    # room for retries on a bad connection.
+    image_upload_limiter   = _make_limiter("image_upload",   limit=30, window_seconds=60)
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)

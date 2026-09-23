@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,11 @@ class ListingIn(BaseModel):
     location_county: Optional[str] = None
     location_subcounty: Optional[str] = None
     listing_type: str = "direct"
+    # Image assets from POST /media/images (purpose "listing_photo"), first
+    # photo first. What current app builds send; verified_photos (base64)
+    # is still accepted from older builds, and converted by the media
+    # backfill.
+    photo_ids: Optional[List[str]] = Field(default=None, max_length=6)
     verified_photos: Optional[str] = None
     verified_video: Optional[str] = None
     advert_video: Optional[str] = None
@@ -67,6 +72,9 @@ class ListingIn(BaseModel):
     # reference both fields by name in one message.
     showcase_image_url: Optional[str] = None
     showcase_image_source: Optional[str] = None  # "gallery" | "ai"
+    # The showcase as an image asset (purpose "listing_showcase"), in place
+    # of showcase_image_url. Needs showcase_image_source like the URL does.
+    showcase_id: Optional[str] = None
     # Store feature. None = personal listing (unchanged default behavior);
     # set = create this listing directly under a store the seller owns
     # (ownership verified server-side in ListingService.create_listing).
@@ -193,7 +201,11 @@ MIN_HOURS_BETWEEN_PRICE_CHANGES = 12
 
 class ListingEdit(BaseModel):
     price: Optional[float] = None
-    verified_photos: Optional[str] = None      # comma-separated base64
+    # Replaces the photos, in this order (image asset ids).
+    photo_ids: Optional[List[str]] = Field(default=None, min_length=1, max_length=6)
+    verified_photos: Optional[str] = None      # comma-separated base64 (older app builds)
+    # Replaces the showcase with this image asset; "" removes it.
+    showcase_id: Optional[str] = None
     showcase_image_url: Optional[str] = None
 
 
@@ -225,11 +237,39 @@ async def update_listing(
     changed: Dict[str, Any] = {}
 
     # ── Photos: unrestricted ────────────────────────────────────────────
-    if body.verified_photos is not None:
+    from api.domains.media.service import dump_id_list, require_owned_assets
+    from api.models.media import MediaPurpose
+
+    if body.photo_ids is not None:
+        ids = await require_owned_assets(
+            db, current_user["id"], body.photo_ids, {MediaPurpose.LISTING_PHOTO},
+        )
+        listing.photo_ids = dump_id_list(ids)
+        # The base64 copy would now show older app builds the old photos.
+        listing.verified_photos = None
+        changed["photos"] = True
+    elif body.verified_photos is not None:
         listing.verified_photos = body.verified_photos
+        # NULL = convert again: the media backfill picks this up.
+        listing.photo_ids = None
         changed["verified_photos"] = True
-    if body.showcase_image_url is not None:
+
+    if body.showcase_id is not None:
+        if body.showcase_id == "":
+            listing.showcase_id = None
+            listing.showcase_image_url = None
+            listing.showcase_image_source = None
+        else:
+            await require_owned_assets(
+                db, current_user["id"], [body.showcase_id],
+                {MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO},
+            )
+            listing.showcase_id = body.showcase_id
+            listing.showcase_image_url = None
+        changed["showcase"] = True
+    elif body.showcase_image_url is not None:
         listing.showcase_image_url = body.showcase_image_url
+        listing.showcase_id = None
         changed["showcase_image_url"] = True
 
     # ── Price: gated ────────────────────────────────────────────────────

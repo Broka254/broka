@@ -164,6 +164,21 @@ def _derive_location_name(county: Optional[str], subcounty: Optional[str], fallb
     return ", ".join(parts) if parts else fallback
 
 
+async def load_listing_media(db: AsyncSession, listings, sellers=()) -> dict:
+    """Every image asset a page of listings refers to - photos, showcase
+    images and the sellers' avatars - in one query, for _listing_dict."""
+    from api.domains.media.service import load_assets, parse_id_list
+    ids: set[str] = set()
+    for listing in listings:
+        ids.update(parse_id_list(listing.photo_ids))
+        if listing.showcase_id:
+            ids.add(listing.showcase_id)
+    for seller in sellers:
+        if seller is not None and seller.profile_photo_id:
+            ids.add(seller.profile_photo_id)
+    return await load_assets(db, ids)
+
+
 class ListingService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -186,14 +201,30 @@ class ListingService:
         # creation arrives bundled into this same call instead of a
         # separate one. Same two allowed values as that endpoint.
         showcase_url = data.get("showcase_image_url")
+        showcase_id = data.get("showcase_id") or None
         showcase_source = data.get("showcase_image_source")
-        if bool(showcase_url) != bool(showcase_source):
+        if bool(showcase_url or showcase_id) != bool(showcase_source):
             raise HTTPException(
                 status_code=400,
-                detail="showcase_image_url and showcase_image_source must be given together",
+                detail="showcase_image_url (or showcase_id) and showcase_image_source must be given together",
             )
         if showcase_source and showcase_source not in ("gallery", "ai"):
             raise HTTPException(status_code=400, detail="showcase_image_source must be 'gallery' or 'ai'")
+
+        # Image assets. Ownership and purpose are checked here, before the
+        # listing exists, so a bad id leaves no half-created listing.
+        from api.domains.media.service import dump_id_list, require_owned_assets
+        from api.models.media import MediaPurpose
+        photo_ids_json = None
+        if data.get("photo_ids"):
+            photo_ids_json = dump_id_list(await require_owned_assets(
+                self.db, seller_id, data["photo_ids"], {MediaPurpose.LISTING_PHOTO},
+            ))
+        if showcase_id:
+            await require_owned_assets(
+                self.db, seller_id, [showcase_id],
+                {MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO},
+            )
 
         # Store association (optional - spec §5/§11: "[No Store] / [My
         # Store]" at creation time). Ownership is checked server-side
@@ -258,6 +289,8 @@ class ListingService:
             ),
             showcase_image_url=showcase_url,
             showcase_image_source=showcase_source,
+            photo_ids=photo_ids_json,
+            showcase_id=showcase_id,
         )
         self.db.add(listing)
         await self.db.commit()
@@ -281,7 +314,8 @@ class ListingService:
 
         # The authenticated creator, reading back what they just created -
         # so the owner view, reserve included.
-        return self._owner_listing_dict(listing, seller=seller, store=store)
+        assets = await load_listing_media(self.db, [listing], [seller])
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
 
     async def _create_auction_meta(self, listing: Listing, terms: dict) -> None:
         """Write the auction's authoritative window from validated terms.
@@ -330,7 +364,8 @@ class ListingService:
         await self.db.commit()
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
-        return self._listing_dict(listing, seller=seller, store=store)
+        assets = await load_listing_media(self.db, [listing], [seller])
+        return self._listing_dict(listing, seller=seller, store=store, assets=assets)
 
     async def list_listings(
         self,
@@ -531,10 +566,14 @@ class ListingService:
             store_rows = (await self.db.execute(select(Store).where(Store.id.in_(store_ids)))).scalars().all()
             stores_by_id = {s.id: s for s in store_rows}
 
+        # Images: one query for the page's photos, showcases and avatars.
+        assets = await load_listing_media(self.db, candidates, sellers_by_id.values())
+
         for listing in candidates:
             d = self._listing_dict(
                 listing, seller=sellers_by_id.get(listing.seller_id),
                 store=stores_by_id.get(listing.store_id),
+                assets=assets, card=True,
             )
             if viewer_lat is not None and viewer_lng is not None:
                 d["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng), 1)
@@ -729,7 +768,8 @@ class ListingService:
         await self.db.refresh(listing)
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         # _get_owned_listing_or_403 above established ownership.
-        return self._owner_listing_dict(listing, seller=seller, store=store)
+        assets = await load_listing_media(self.db, [listing], [seller])
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
 
     async def remove_listing_store(self, listing_id: str, requester_id: str) -> dict:
         """Inverse of set_listing_store - returns the listing to a
@@ -741,7 +781,8 @@ class ListingService:
         await self.db.refresh(listing)
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         # Ownership established by _get_owned_listing_or_403.
-        return self._owner_listing_dict(listing, seller=seller, store=None)
+        assets = await load_listing_media(self.db, [listing], [seller])
+        return self._owner_listing_dict(listing, seller=seller, store=None, assets=assets)
 
     async def get_own_listing(self, listing_id: str, requester_id: str) -> dict:
         """The seller's own listing, including the fields buyers never see.
@@ -756,7 +797,8 @@ class ListingService:
             select(User).where(User.id == listing.seller_id)
         )).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
-        return self._owner_listing_dict(listing, seller=seller, store=store)
+        assets = await load_listing_media(self.db, [listing], [seller])
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
 
     async def _get_owned_listing_or_403(self, listing_id: str, requester_id: str) -> Listing:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))
@@ -770,6 +812,7 @@ class ListingService:
     @staticmethod
     def _owner_listing_dict(
         listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
+        assets: Optional[dict] = None,
     ) -> dict:
         """The seller's own view of their listing. NEVER for a public route.
 
@@ -785,7 +828,7 @@ class ListingService:
         serializer is the only one it can reach by name.
         """
         return {
-            **ListingService._listing_dict(listing, seller=seller, store=store),
+            **ListingService._listing_dict(listing, seller=seller, store=store, assets=assets),
             # The seller's secret walk-away price. Public responses carry
             # has_reserve/reserve_met instead - see the note in
             # _listing_dict and lifecycle.public_state.
@@ -793,8 +836,25 @@ class ListingService:
         }
 
     @staticmethod
-    def _listing_dict(listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None) -> dict:
+    def _listing_dict(
+        listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
+        assets: Optional[dict] = None, card: bool = False,
+    ) -> dict:
         """PUBLIC listing payload. Anything added here is world-readable.
+
+        Images. `assets` is what load_listing_media returned for the page;
+        without it the listing is served as if it had no image assets.
+          photos  every photo's URLs (thumb/medium/large), first one first
+          cover   the image a card shows: the showcase if there is one,
+                  else the first photo
+          seller_avatar_url  the seller's avatar, small size
+        card=True is for list endpoints (Home, categories, search, store
+        catalogues). Once a listing's images are assets it drops the base64
+        copies - photos, showcase, the seller's selfie - and always drops
+        the videos, none of which a card shows. A listing still on legacy
+        base64 sends only its first photo, which is all a card reads. The
+        single-listing read (card=False) keeps everything for app builds
+        that predate assets.
 
         Used by GET /listings/ and GET /listings/{id}, both unauthenticated.
 
@@ -810,6 +870,35 @@ class ListingService:
         number. Sellers get the real value from _owner_listing_dict, on
         authenticated owner-only paths.
         """
+        from api.domains.media.service import asset_urls, parse_id_list, split_legacy_photos
+
+        assets = assets or {}
+        photo_assets = [assets[i] for i in parse_id_list(listing.photo_ids) if i in assets]
+        showcase_asset = assets.get(listing.showcase_id) if listing.showcase_id else None
+        cover_asset = showcase_asset or (photo_assets[0] if photo_assets else None)
+        avatar_asset = (
+            assets.get(seller.profile_photo_id)
+            if seller is not None and seller.profile_photo_id else None
+        )
+
+        verified_photos = listing.verified_photos
+        showcase_image_url = listing.showcase_image_url
+        seller_profile_photo = seller.profile_photo if seller else None
+        verified_video = listing.verified_video
+        advert_video = listing.advert_video
+        if card:
+            if photo_assets:
+                verified_photos = None
+            elif verified_photos:
+                legacy = split_legacy_photos(verified_photos)
+                verified_photos = legacy[0] if legacy else None
+            if showcase_asset is not None:
+                showcase_image_url = None
+            if avatar_asset is not None:
+                seller_profile_photo = None
+            verified_video = None
+            advert_video = None
+
         return {
             "id": listing.id,
             "seller_id": listing.seller_id,
@@ -831,16 +920,23 @@ class ListingService:
             "views": listing.views or 0,
             "target_bidders": listing.target_bidders,
             "auction_date": listing.auction_date.isoformat() if listing.auction_date else None,
-            "verified_photos": listing.verified_photos,
-            "verified_video": listing.verified_video,
-            "advert_video": listing.advert_video,
+            "verified_photos": verified_photos,
+            "verified_video": verified_video,
+            "advert_video": advert_video,
+            "photos": [asset_urls(a) for a in photo_assets],
+            # kind: "showcase" | "photo" - lets a card label an AI showcase.
+            "cover": (
+                {**asset_urls(cover_asset),
+                 "kind": "showcase" if cover_asset is showcase_asset else "photo"}
+                if cover_asset is not None else None
+            ),
             "is_featured": bool(listing.is_featured),
             "featured_until": listing.featured_until.isoformat() if listing.featured_until else None,
             # AI Showcase/Cover Image (2026-08-29). showcase_image_url is
             # data:...;base64 (see the Listing model comment) - never
             # verified_photos, and never shown on View Deal; that screen
             # must keep reading verified_photos directly, same as today.
-            "showcase_image_url": listing.showcase_image_url,
+            "showcase_image_url": showcase_image_url,
             "showcase_image_source": listing.showcase_image_source,
             "created_at": listing.created_at.isoformat() if listing.created_at else None,
             # FIX (redesign-guide audit): these four were never returned by
@@ -860,7 +956,8 @@ class ListingService:
             # part of a listing response, so there was no real photo for a
             # product card to show at all. Same optional-seller pattern as
             # the four fields above - no seller fetched, no photo, not an error.
-            "seller_profile_photo": seller.profile_photo if seller else None,
+            "seller_profile_photo": seller_profile_photo,
+            "seller_avatar_url": asset_urls(avatar_asset)["thumb"] if avatar_asset else None,
             # Store feature. store_id is always present (None for a
             # personal listing); store_name/store_slug are only populated
             # when the caller passed the resolved Store in (matching the

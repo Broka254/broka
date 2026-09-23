@@ -249,6 +249,26 @@ class Settings:
     def email_enabled(self) -> bool:
         return bool(self.resend_api_key and self.resend_from)
 
+    # ── Image storage (Cloudflare R2) ────────────────────────────────────────
+    # Listing, store and avatar images are processed into WebP sizes and
+    # stored as objects, served from MEDIA_PUBLIC_BASE_URL (the bucket's
+    # public custom domain or its r2.dev URL). With any of the four R2
+    # values unset, images go to the database instead (media_blobs, served
+    # by GET /media/i/...) - fine for dev and tests, not for production
+    # traffic. See api/core/media_storage.py.
+    r2_account_id: str = field(default_factory=lambda: os.getenv("R2_ACCOUNT_ID", "").strip())
+    r2_access_key_id: str = field(default_factory=lambda: os.getenv("R2_ACCESS_KEY_ID", "").strip())
+    r2_secret_access_key: str = field(default_factory=lambda: os.getenv("R2_SECRET_ACCESS_KEY", "").strip())
+    r2_bucket: str = field(default_factory=lambda: os.getenv("R2_BUCKET", "").strip())
+    media_public_base_url: str = field(default_factory=lambda: os.getenv(
+        "MEDIA_PUBLIC_BASE_URL", "").strip().rstrip("/"))
+    # This API's own public address, e.g. https://broka-dbjd.onrender.com.
+    # Only used to make database-stored image URLs absolute, which the web
+    # storefront and link previews need. Unset, those URLs are relative
+    # ("/media/i/...") and the app resolves them against its API base.
+    public_api_base_url: str = field(default_factory=lambda: os.getenv(
+        "PUBLIC_API_BASE_URL", "").strip().rstrip("/"))
+
     # ── Redis (for rate-limiting, pub/sub, and distributed workers) ───────────
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
 
@@ -348,6 +368,13 @@ class Settings:
     @property
     def redis_enabled(self) -> bool:
         return bool(self.redis_url)
+
+    @property
+    def r2_configured(self) -> bool:
+        return bool(
+            self.r2_account_id and self.r2_access_key_id and self.r2_secret_access_key
+            and self.r2_bucket and self.media_public_base_url
+        )
 
     @property
     def cloudflare_turn_configured(self) -> bool:
@@ -470,6 +497,17 @@ def validate_startup() -> None:
             "[startup] ⚠  FAL_KEY not set — AI showcase image generation "
             "will return a clear error instead of calling fal.ai. Gallery "
             "covers and skipping the showcase step are unaffected."
+        )
+
+    # ── Warn if image storage is not on R2 ─────────────────────────────────────
+    # Not fatal: images still work from the database. But every image then
+    # rides in the database and is served by this process, which is what
+    # the move to R2 exists to stop.
+    if s.is_production and not s.r2_configured:
+        logger.warning(
+            "[startup] ⚠  R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/"
+            "R2_BUCKET/MEDIA_PUBLIC_BASE_URL not all set — images are stored in "
+            "the database and served by the API instead of from Cloudflare R2."
         )
 
     # ── Warn if Cloudflare TURN not configured ─────────────────────────────────

@@ -125,6 +125,12 @@ class StoreService:
 
         logo_url = self._safe_normalize_single_media(data.get("logo_url"))
         photos = self._safe_normalize_photo_list(data.get("photos"))
+        image_columns = await self._image_columns(owner_id, data)
+        # An asset replaces the legacy base64 copy of the same image.
+        if image_columns.get("logo_id"):
+            logo_url = None
+        if image_columns.get("photo_ids"):
+            photos = None
         official_phone = self._normalize_contact(data.get("official_phone"))
         official_whatsapp = self._normalize_contact(data.get("official_whatsapp"))
         official_email = self._normalize_email(data.get("official_email"))
@@ -152,6 +158,8 @@ class StoreService:
             )
             for field, value in text_values.items():
                 setattr(store, field, value)
+            for column, value in image_columns.items():
+                setattr(store, column, value)
 
             self.db.add(store)
             try:
@@ -210,7 +218,8 @@ class StoreService:
         # (it scans listings, not stores). One grouped COUNT for the whole
         # page instead, passed down so _store_dict doesn't re-query.
         counts = await self._listing_counts_for([s.id for s in stores])
-        items = [await self._store_dict(s, listing_count=counts.get(s.id, 0))
+        assets = await self._assets_for(stores)
+        items = [await self._store_dict(s, listing_count=counts.get(s.id, 0), assets=assets)
                  for s in stores]
         return {"items": items, "total": total} if with_total else items
 
@@ -300,6 +309,8 @@ class StoreService:
         # the shape of the fix: a small table of retired slugs per store,
         # checked in get_store_by_slug/the web page's lookup when the
         # primary slug misses, before falling through to 404.
+        image_columns = await self._image_columns(requester_id, data)
+
         for _attempt in range(_MAX_SLUG_RETRIES):
             if new_name is not None and new_name != store.name:
                 store.name = new_name
@@ -309,10 +320,20 @@ class StoreService:
                 if field in data:
                     value = data[field]
                     setattr(store, field, value.strip() if isinstance(value, str) and value.strip() else None)
-            if "logo_url" in data:
+            if "logo_id" in data:
+                store.logo_id = image_columns["logo_id"]
+                store.logo_url = None
+            elif "logo_url" in data:
                 store.logo_url = self._safe_normalize_single_media(data["logo_url"])
-            if "photos" in data:
+                store.logo_id = None      # the media backfill converts it
+            if "cover_id" in data:
+                store.cover_id = image_columns["cover_id"]
+            if "photo_ids" in data:
+                store.photo_ids = image_columns["photo_ids"]
+                store.photos = None
+            elif "photos" in data:
                 store.photos = self._safe_normalize_photo_list(data["photos"])
+                store.photo_ids = None    # the media backfill converts them
             if "official_phone" in data:
                 store.official_phone = self._normalize_contact(data["official_phone"])
             if "official_whatsapp" in data:
@@ -421,7 +442,46 @@ class StoreService:
             raise HTTPException(status_code=400, detail="official_email is not a valid email address")
         return value
 
-    async def _store_dict(self, store: Store, listing_count: Optional[int] = None) -> dict:
+    async def _image_columns(self, owner_id: str, data: dict) -> dict:
+        """Validated image-asset columns for the keys present in `data`:
+        each id must be the owner's own upload, for a store purpose."""
+        from api.domains.media.service import (
+            MAX_STORE_PHOTOS, dump_id_list, require_owned_assets,
+        )
+        from api.models.media import MediaPurpose as P
+
+        out: dict = {}
+        if "logo_id" in data:
+            logo_id = data.get("logo_id") or None
+            if logo_id:
+                await require_owned_assets(self.db, owner_id, [logo_id], {P.STORE_LOGO})
+            out["logo_id"] = logo_id
+        if "cover_id" in data:
+            cover_id = data.get("cover_id") or None
+            if cover_id:
+                await require_owned_assets(
+                    self.db, owner_id, [cover_id], {P.STORE_COVER, P.STORE_PHOTO},
+                )
+            out["cover_id"] = cover_id
+        if "photo_ids" in data:
+            ids = data.get("photo_ids") or []
+            ids = await require_owned_assets(
+                self.db, owner_id, ids, {P.STORE_PHOTO, P.STORE_COVER},
+            ) if ids else []
+            out["photo_ids"] = dump_id_list(ids[:MAX_STORE_PHOTOS]) if ids else None
+        return out
+
+    async def _assets_for(self, stores) -> dict:
+        from api.domains.media.service import load_assets, parse_id_list
+        ids: set[str] = set()
+        for store in stores:
+            ids.update(i for i in (store.logo_id, store.cover_id) if i)
+            ids.update(parse_id_list(store.photo_ids))
+        return await load_assets(self.db, ids)
+
+    async def _store_dict(
+        self, store: Store, listing_count: Optional[int] = None, assets: Optional[dict] = None,
+    ) -> dict:
         # Was: SELECT every matching Listing.id, transfer all of them to
         # Python, then len(...) - correct but doesn't scale (a store with
         # thousands of active listings shipped thousands of id strings
@@ -438,6 +498,15 @@ class StoreService:
                     Listing.store_id == store.id, Listing.status == ListingStatus.active,
                 )
             )).scalar_one()
+        from api.domains.media.service import asset_urls, parse_id_list
+        if assets is None:
+            assets = await self._assets_for([store])
+        logo = asset_urls(assets.get(store.logo_id)) if store.logo_id else None
+        cover = asset_urls(assets.get(store.cover_id)) if store.cover_id else None
+        photo_images = [
+            asset_urls(assets[i]) for i in parse_id_list(store.photo_ids) if i in assets
+        ]
+
         return {
             # Hardening-pass: owner_id was previously included here for
             # every caller, public or not - checked and confirmed nothing
@@ -450,8 +519,17 @@ class StoreService:
             "id": store.id,
             "name": store.name,
             "slug": store.slug,
-            "logo_url": store.logo_url,
-            "photos": parse_photo_list(store.photos),
+            # logo_url/photos stay plain strings for the current app: image
+            # URLs once the store's images are assets, the legacy data URIs
+            # until the media backfill has converted them.
+            "logo_url": logo["medium"] if logo else store.logo_url,
+            "photos": (
+                [p["large"] for p in photo_images] if photo_images
+                else parse_photo_list(store.photos)
+            ),
+            "logo": logo,
+            "cover": cover,
+            "photo_images": photo_images,
             "specialization": store.specialization,
             "description": store.description,
             "country": store.country,

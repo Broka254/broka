@@ -85,6 +85,14 @@ class Store(Base):
     # file, not every place a store photo is read.
     logo_url = Column(Text, nullable=True)
     photos   = Column(Text, nullable=True)   # JSON list of media-item dicts
+    # Image assets (api/models/media.py) - what the store's images really
+    # are from Online Stores phase 1 on. logo_url/photos above only hold
+    # base64 sent by app builds that predate assets, until the media
+    # backfill converts it and clears them. NULL = unset or not converted
+    # yet; "" / "[]" = legacy data that couldn't be converted.
+    logo_id   = Column(String, nullable=True)
+    cover_id  = Column(String, nullable=True)
+    photo_ids = Column(Text, nullable=True)   # ordered JSON list of asset ids
 
     specialization = Column(String, nullable=True)   # e.g. "Electronics"
     description    = Column(Text, nullable=True)

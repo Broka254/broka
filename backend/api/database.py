@@ -190,6 +190,12 @@ class User(Base):
     biometric_enrolled = Column(String, nullable=True)   # 'fingerprint' | 'face' | None
     # Profile selfie stored as base64 string
     profile_photo      = Column(Text, nullable=True)
+    # The same photo as an image asset (api/models/media.py), made from
+    # profile_photo by the media backfill. NULL = not converted yet (or the
+    # photo changed since); "" = the stored photo couldn't be converted.
+    # Product cards use the asset's small size instead of shipping the
+    # base64 selfie with every listing.
+    profile_photo_id   = Column(String, nullable=True)
     fcm_token          = Column(String, nullable=True)   # Firebase Cloud Messaging device token
     # iOS PushKit VoIP token. Deliberately a SEPARATE column from
     # fcm_token: iOS needs a VoIP push (not a normal alert) to wake a
@@ -358,6 +364,17 @@ class Listing(Base):
     # without re-deriving it from anything else. NULL alongside a NULL
     # showcase_image_url just means "never set."
     showcase_image_source = Column(String, nullable=True)
+    # Image assets (api/models/media.py). photo_ids is an ordered JSON list
+    # of asset ids - the listing's photos, first one first. showcase_id is
+    # the showcase image as an asset. For both:
+    #   NULL  = not set, or legacy base64 not converted yet (the media
+    #           backfill picks these up; see api/domains/media/backfill.py)
+    #   "[]" / "" = legacy data existed but couldn't be converted
+    # verified_photos/showcase_image_url above keep their base64 for app
+    # builds that predate assets; list responses stop sending it once
+    # assets exist.
+    photo_ids     = Column(Text, nullable=True)
+    showcase_id   = Column(String, nullable=True)
     # Store feature (Phase 1). NULL = a personal listing, exactly as before -
     # every existing seller keeps working unchanged. Set = this listing is
     # merchandised under that Store's public catalog, in addition to still
@@ -1069,6 +1086,7 @@ async def init_db():
         ("api.models.dispute", ("DisputeCase", "DisputeEvent", "DisputeEvidence", "DisputeTimer")),
         ("api.models.store", ("Store",)),
         ("api.models.external_escrow", ("ExternalEscrow",)),
+        ("api.models.media", ("MediaAsset", "MediaBlob")),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))
@@ -1211,6 +1229,14 @@ async def init_db():
             # lifecycle.claim_ending_soon_attempt can compare against a
             # number on existing rows rather than against NULL.
             "ALTER TABLE auction_meta ADD COLUMN ending_soon_attempts INTEGER NOT NULL DEFAULT 0",
+            # Image assets (Online Stores phase 1). media_assets/media_blobs
+            # are new tables; these point existing rows at them.
+            "ALTER TABLE listings ADD COLUMN photo_ids TEXT",
+            "ALTER TABLE listings ADD COLUMN showcase_id VARCHAR",
+            "ALTER TABLE users ADD COLUMN profile_photo_id VARCHAR",
+            "ALTER TABLE stores ADD COLUMN logo_id VARCHAR",
+            "ALTER TABLE stores ADD COLUMN cover_id VARCHAR",
+            "ALTER TABLE stores ADD COLUMN photo_ids TEXT",
         ]
         # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
         # inside its own SAVEPOINT. Previously they shared this function's

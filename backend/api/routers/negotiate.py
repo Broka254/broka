@@ -380,6 +380,25 @@ class MessageOut(BaseModel):
 
 # ── Individual AI callers ─────────────────────────────────────────────────────
 
+def _image_mime(image_base64: str) -> str:
+    """The image type, read from the magic bytes at the start of the data.
+
+    The app attaches listing photos, which are WebP once stored as image
+    assets (api/core/image_processing.py) and JPEG before that. Labelling a
+    WebP as image/jpeg makes a provider misread or reject it, so the label
+    comes from the bytes. base64 of a fixed byte prefix is itself a fixed
+    prefix, so no decoding is needed.
+    """
+    head = (image_base64 or "").lstrip()[:16]
+    if head.startswith("UklGR"):       # "RIFF" - WebP
+        return "image/webp"
+    if head.startswith("iVBORw0KGgo"):  # PNG
+        return "image/png"
+    if head.startswith("R0lGOD"):       # GIF
+        return "image/gif"
+    return "image/jpeg"
+
+
 async def _call_gemini(system: str, messages: List[dict], image_base64: Optional[str] = None,
                        max_tokens: Optional[int] = None) -> str:
     """
@@ -410,7 +429,7 @@ async def _call_gemini(system: str, messages: List[dict], image_base64: Optional
             default=len(contents) - 1,
         )
         contents[last_user_idx]["parts"].append({
-            "inline_data": {"mime_type": "image/jpeg", "data": image_base64}
+            "inline_data": {"mime_type": _image_mime(image_base64), "data": image_base64}
         })
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -485,7 +504,7 @@ async def _call_deepseek(system: str, messages: List[dict],
             "content": [
                 {"type": "text", "text": merged[-1]["content"]},
                 {"type": "image_url", "image_url": {
-                    "url": f"data:image/jpeg;base64,{image_base64}"}},
+                    "url": f"data:{_image_mime(image_base64)};base64,{image_base64}"}},
             ],
         }
 

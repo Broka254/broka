@@ -89,6 +89,7 @@ from api.domains.ai_broker.router  import router as ai_broker_router
 from api.domains.admin.router      import router as admin_router
 from api.domains.deal_ws.router    import router as deal_ws_router
 from api.domains.auth.refresh_router import router as refresh_router
+from api.domains.media.router      import router as media_assets_router
 
 # ── Wire Event Catalog subscribers (must import after router imports) ─────────
 # All six of these register on api.core.event_catalog's @subscribe_to, not the
@@ -397,6 +398,7 @@ app.include_router(verify.router,     prefix="/verify",     tags=["Verification"
 app.include_router(featured.router,   prefix="/featured",   tags=["Featured"])
 app.include_router(sms.router,        prefix="/sms",        tags=["SMS"])
 app.include_router(media.router,      prefix="/media",      tags=["Media/WebSocket"])
+app.include_router(media_assets_router, prefix="/media",    tags=["Images"])
 
 if _has_tts:
     app.include_router(tts.router,    prefix="/tts",        tags=["TTS"])

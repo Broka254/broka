@@ -26,6 +26,7 @@ prompt shape, and preservation instructions can't drift between the two.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from typing import Optional
@@ -57,7 +58,24 @@ _DEFAULT_CREATIVE_BRIEF = (
 )
 
 
-def _first_actual_photo_data_uri(listing: Listing) -> str:
+async def _first_actual_photo_data_uri(db: AsyncSession, listing: Listing) -> str:
+    """The first photo as a JPEG data URI - from the image assets when the
+    listing has them (listings created by current app builds carry no
+    base64 at all), otherwise from the legacy verified_photos."""
+    from api.core.image_processing import to_jpeg
+    from api.domains.media.service import load_assets, parse_id_list, read_variant
+
+    ids = parse_id_list(listing.photo_ids)
+    if ids:
+        asset = (await load_assets(db, ids[:1])).get(ids[0])
+        data = await read_variant(asset, "large") if asset else None
+        if data:
+            jpeg = await asyncio.to_thread(to_jpeg, data)
+            return f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode()}"
+    return _legacy_first_photo_data_uri(listing)
+
+
+def _legacy_first_photo_data_uri(listing: Listing) -> str:
     """The seller's primary actual product photo, as a data: URI fal.ai
     can use directly as image_url. verified_photos stores raw base64
     chunks with no data: prefix and no per-photo mime tag (see
@@ -146,7 +164,7 @@ async def generate_showcase_preview(
     or discards it by simply not calling that."""
     listing = await _get_owned_listing(db, listing_id, user_id)
     await _require_premium_if_enabled(db, user_id)
-    image_ref = _first_actual_photo_data_uri(listing)
+    image_ref = await _first_actual_photo_data_uri(db, listing)
     prompt = _build_prompt(listing, description)
     return await _run_generation(prompt, image_ref)
 
@@ -190,6 +208,9 @@ async def set_showcase_image(
     listing = await _get_owned_listing(db, listing_id, user_id)
     listing.showcase_image_url = image_data_uri
     listing.showcase_image_source = source
+    # The media backfill turns this data URI into an image asset; until it
+    # does, cards fall back to the data URI.
+    listing.showcase_id = None
     await db.commit()
     return {"showcase_image_url": listing.showcase_image_url,
             "showcase_image_source": listing.showcase_image_source}
@@ -202,5 +223,6 @@ async def remove_showcase_image(db: AsyncSession, listing_id: str, user_id: str)
     listing = await _get_owned_listing(db, listing_id, user_id)
     listing.showcase_image_url = None
     listing.showcase_image_source = None
+    listing.showcase_id = None
     await db.commit()
     return {"showcase_image_url": None, "showcase_image_source": None}

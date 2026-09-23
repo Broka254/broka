@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
@@ -44,6 +44,12 @@ class StoreIn(BaseModel):
     official_phone: Optional[str] = None
     official_whatsapp: Optional[str] = None
     official_email: Optional[str] = None
+    # Image assets from POST /media/images: purposes store_logo,
+    # store_cover and store_photo. logo_url/photos (data URIs) are still
+    # accepted from older app builds, converted by the media backfill.
+    logo_id: Optional[str] = None
+    cover_id: Optional[str] = None
+    photo_ids: Optional[List[str]] = Field(default=None, max_length=6)
     logo_url: Optional[str] = None
     photos: Optional[List[str]] = None
 
@@ -58,6 +64,12 @@ class StorePatch(BaseModel):
     official_phone: Optional[str] = None
     official_whatsapp: Optional[str] = None
     official_email: Optional[str] = None
+    # Image assets from POST /media/images: purposes store_logo,
+    # store_cover and store_photo. logo_url/photos (data URIs) are still
+    # accepted from older app builds, converted by the media backfill.
+    logo_id: Optional[str] = None
+    cover_id: Optional[str] = None
+    photo_ids: Optional[List[str]] = Field(default=None, max_length=6)
     logo_url: Optional[str] = None
     photos: Optional[List[str]] = None
 
