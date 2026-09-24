@@ -2,6 +2,9 @@
 // Updated: shows profile selfie, allows retake, shows nickname
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../core/utils/result.dart';
+import '../features/stores/data/repositories/stores_repository.dart';
+import '../features/stores/presentation/store_entry.dart';
 import '../main.dart';
 import '../widgets/gradient_button.dart';
 import '../services/api_service.dart';
@@ -23,6 +26,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int    _dealsCount    = 0;
   double _rating        = 5.0;
   double _volumeTraded  = 0;
+  // For the store entry: whether this account already has a store, and
+  // its seller tier ("long_term" sellers can open one straight away).
+  bool _hasStore = false;
+  String? _sellerTier;
   bool   _isVerified    = false;
 
   String get _name     => ApiService.currentUserName  ?? 'BROKA User';
@@ -57,7 +64,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (photo    != null) ApiService.currentUserPhoto    = photo;
         if (nickname != null) ApiService.currentUserNickname = nickname;
         if (accountType != null) ApiService.currentUserAccountType = accountType;
+        final sellerTier = data['seller_tier'] as String?;
         setState(() {
+          _sellerTier = sellerTier;
           _listingCount = (data['listing_count']   as num?)?.toInt()    ?? 0;
           _dealsCount   = (data['completed_deals'] as num?)?.toInt()    ?? 0;
           _rating       = (data['rating']          as num?)?.toDouble() ?? 5.0;
@@ -69,6 +78,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (mounted) setState(() => _loadingStats = false);
     }
+    final mine = await storesRepository.getMyStore();
+    if (!mounted) return;
+    final hasStore = mine.fold(onSuccess: (s) => s != null, onFailure: (_, __) => _hasStore);
+    setState(() => _hasStore = hasStore);
   }
 
   Future<void> _updateSelfie() async {
@@ -117,10 +130,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _buildStatsRow(),
             const SizedBox(height: 16),
             _buildSellerDashboardTile(),
-            if (ApiService.currentUserAccountType == 'buyer_seller') ...[
+            // Anyone can open a store: sellers who haven't given their
+            // business details (and buyers) add them in the setup wizard.
+            if (_hasStore || ApiService.currentUserAccountType == 'buyer_seller') ...[
               const SizedBox(height: 10),
-              _buildNavTile(Icons.storefront_outlined, 'My Store',
-                  () => Navigator.pushNamed(context, '/store-manage')),
+              _buildNavTile(Icons.storefront_outlined,
+                  _hasStore
+                      ? 'My Store'
+                      : (_sellerTier == 'long_term'
+                          ? 'Open your online store'
+                          : 'Open an online store'),
+                  () => StoreEntry.open(context).then((_) {
+                    if (mounted) _loadProfile();
+                  })),
             ],
             const SizedBox(height: 24),
             _buildSectionLabel('Account'),

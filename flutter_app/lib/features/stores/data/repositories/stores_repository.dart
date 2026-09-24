@@ -1,129 +1,181 @@
 // BROKA — Stores Repository
+import 'dart:async';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
+import '../../../../services/api_service.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
+
+/// Store catalogue sort orders the backend accepts.
+enum StoreSort {
+  featured('featured', 'Recommended'),
+  newest('newest', 'Newest'),
+  priceLow('price_low', 'Price: low to high'),
+  priceHigh('price_high', 'Price: high to low');
+
+  const StoreSort(this.value, this.label);
+  final String value;
+  final String label;
+}
 
 class StoresRepository {
   final ApiClient _client;
   StoresRepository({ApiClient? client}) : _client = client ?? apiClient;
 
-  /// Phase 4 discovery/browse - active stores only (same as the backend
-  /// default), optionally filtered by a free-text name search.
+  /// Runs [call], turning every failure into a [Failure] whose message can
+  /// be shown to the person as-is.
+  Future<Result<T>> _guard<T>(Future<T> Function() call) async {
+    try {
+      return Success(await call());
+    } on ApiException catch (e) {
+      return Failure(e.message, statusCode: e.statusCode);
+    } on SocketException {
+      return const Failure("You're offline. Check your connection and try again.");
+    } on TimeoutException {
+      return const Failure('BROKA is taking too long to answer. Try again.');
+    } on http.ClientException {
+      return const Failure("Couldn't reach BROKA. Try again.");
+    } catch (e) {
+      return Failure(e.toString());
+    }
+  }
+
+  /// Browse active stores.
   Future<Result<List<Store>>> listStores({
     String? search,
-    String? specialization,
+    String? category,
     String? county,
     int limit = 20,
     int offset = 0,
-  }) async {
-    try {
-      final data = await _client.get('/stores', queryParams: {
-        if (search != null && search.isNotEmpty) 'search': search,
-        if (specialization != null) 'specialization': specialization,
-        if (county != null) 'county': county,
-        'limit': limit.toString(),
-        'offset': offset.toString(),
-      }) as List;
-      return Success(data.map((e) => Store.fromJson(e)).toList());
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  }) =>
+      _guard(() async {
+        final data = await _client.get('/stores', queryParams: {
+          if (search != null && search.isNotEmpty) 'search': search,
+          if (category != null) 'category': category,
+          if (county != null) 'county': county,
+          'limit': limit.toString(),
+          'offset': offset.toString(),
+        }) as List;
+        return data.map((e) => Store.fromJson(e as Map<String, dynamic>)).toList();
+      });
 
-  Future<Result<Store>> createStore(Map<String, dynamic> payload) async {
-    try {
-      final data = await _client.post('/stores', payload);
-      return Success(Store.fromJson(data));
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  Future<Result<Store>> createStore(Map<String, dynamic> payload) =>
+      _guard(() async => Store.fromJson(await _client.post('/stores', payload)));
 
-  Future<Result<Store>> getStore(String storeId) async {
-    try {
-      final data = await _client.get('/stores/$storeId');
-      return Success(Store.fromJson(data));
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  Future<Result<Store>> getStore(String storeId) =>
+      _guard(() async => Store.fromJson(await _client.get('/stores/$storeId')));
 
-  Future<Result<Store>> getStoreBySlug(String slug) async {
-    try {
-      final data = await _client.get('/stores/slug/$slug');
-      return Success(Store.fromJson(data));
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  Future<Result<Store>> getStoreBySlug(String slug) =>
+      _guard(() async => Store.fromJson(await _client.get('/stores/slug/$slug')));
 
-  /// Returns Success(null) - not a Failure - when the signed-in user has no
-  /// store yet. That's the normal, expected state for most accounts, not
-  /// an error; callers use this to decide whether to show "Create Store"
-  /// or "Manage Store" (spec §9/§10's Store Mode entry point).
-  Future<Result<Store?>> getMyStore() async {
-    try {
-      final data = await _client.get('/stores/mine');
-      return Success(data == null ? null : Store.fromJson(data));
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  /// Success(null) - not a Failure - when the signed-in user has no store
+  /// yet, which is the normal state for most accounts.
+  Future<Result<Store?>> getMyStore() => _guard(() async {
+        final data = await _client.get('/stores/mine');
+        return data == null ? null : Store.fromJson(data as Map<String, dynamic>);
+      });
 
-  Future<Result<Store>> updateStore(String storeId, Map<String, dynamic> payload) async {
-    try {
-      final data = await _client.patch('/stores/$storeId', payload);
-      return Success(Store.fromJson(data));
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  Future<Result<Store>> updateStore(String storeId, Map<String, dynamic> payload) =>
+      _guard(() async => Store.fromJson(await _client.patch('/stores/$storeId', payload)));
 
-  Future<Result<Store>> setStoreStatus(String storeId, bool isActive) async {
-    try {
-      final data = await _client.post('/stores/$storeId/status', {'is_active': isActive});
-      return Success(Store.fromJson(data));
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
-  }
+  Future<Result<Store>> setStoreStatus(String storeId, bool isActive) => _guard(() async =>
+      Store.fromJson(await _client.post('/stores/$storeId/status', {'is_active': isActive})));
 
-  /// A store's public catalog. The backend delegates this to the same
-  /// ListingService Home/search use (spec: "do not duplicate listings"),
-  /// so this returns plain BrokaListing rows - reuse ProductCard to
-  /// render them, don't build a second card widget for store catalogs.
+  /// A store's catalogue, in the same card format as Home - render with
+  /// ProductCard.
   Future<Result<List<BrokaListing>>> getStoreListings(
     String storeId, {
     int limit = 20,
     int offset = 0,
-  }) async {
+    String? search,
+    String? category,
+    StoreSort sort = StoreSort.featured,
+  }) =>
+      _guard(() async {
+        final data = await _client.get('/stores/$storeId/listings', queryParams: {
+          'limit': limit.toString(),
+          'offset': offset.toString(),
+          if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+          if (category != null) 'category': category,
+          if (sort != StoreSort.featured) 'sort': sort.value,
+        }) as List;
+        return data.map((e) => BrokaListing.fromJson(e as Map<String, dynamic>)).toList();
+      });
+
+  /// The categories the store has products in, biggest first.
+  Future<Result<List<StoreCategoryCount>>> getStoreCategories(String storeId) =>
+      _guard(() async {
+        final data = await _client.get('/stores/$storeId/categories') as List;
+        return data.map((e) => StoreCategoryCount.fromJson(e as Map<String, dynamic>)).toList();
+      });
+
+  /// The setup wizard's live check of a link name.
+  Future<Result<LinkNameCheck>> checkLinkName(String name) => _guard(() async =>
+      LinkNameCheck.fromJson(
+          await _client.get('/stores/name-available', queryParams: {'name': name})));
+
+  /// Emails a code to [email] to prove the store owner receives mail
+  /// there. Returns the code itself only on development servers.
+  Future<Result<String?>> requestEmailCode(String email) => _guard(() async {
+        final data = await _client.post('/stores/email/request-code', {'email': email});
+        return (data as Map?)?['debug_code'] as String?;
+      });
+
+  /// Checks the emailed code; returns the token that proves the address
+  /// when the store is saved (`business_email_token`).
+  Future<Result<String>> verifyEmailCode(String email, String code) => _guard(() async {
+        final data = await _client.post('/stores/email/verify', {'email': email, 'code': code});
+        return (data as Map)['email_verify_token'] as String;
+      });
+
+  /// Tells the backend this store was opened, for the owner's visit
+  /// counts. Fire-and-forget: failures are ignored.
+  Future<void> recordVisit(String storeId, {String? via}) async {
     try {
-      final data = await _client.get('/stores/$storeId/listings', queryParams: {
-        'limit': limit.toString(),
-        'offset': offset.toString(),
-      }) as List;
-      return Success(data.map((e) => BrokaListing.fromJson(e)).toList());
-    } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
-    } catch (e) {
-      return Failure(e.toString());
-    }
+      await _client.post('/stores/$storeId/visit', {if (via != null) 'via': via});
+    } catch (_) {}
   }
+
+  /// Counts a share-button tap. Fire-and-forget.
+  Future<void> recordShare(String storeId, String channel) async {
+    try {
+      await _client.post('/stores/$storeId/share', {'channel': channel});
+    } catch (_) {}
+  }
+
+  /// The signed-in seller, for the setup wizard.
+  Future<Result<StoreOwnerProfile>> getOwnerProfile() => _guard(() async =>
+      StoreOwnerProfile.fromJson(await _client.get('/auth/me') as Map<String, dynamic>));
+
+  /// Makes the signed-in account a long-term seller with these business
+  /// details - what opening a store needs. Works for buyers and short-term
+  /// sellers alike.
+  Future<Result<StoreOwnerProfile>> upgradeToLongTerm({
+    required String businessName,
+    required String businessCategory,
+    required String businessLocation,
+    String? businessDescription,
+  }) =>
+      _guard(() async {
+        final data = await _client.post('/auth/upgrade-to-seller', {
+          'business_name': businessName,
+          'business_category': businessCategory,
+          'business_location': businessLocation,
+          if (businessDescription != null && businessDescription.isNotEmpty)
+            'business_description': businessDescription,
+        }) as Map<String, dynamic>;
+        final profile = StoreOwnerProfile.fromJson(data);
+        await ApiService.rememberAccountType(profile.accountType);
+        return profile;
+      });
+
+  Future<Result<StoreStats>> getStats(String storeId, {int days = 7}) => _guard(() async =>
+      StoreStats.fromJson(await _client.get('/stores/$storeId/stats',
+          queryParams: {'days': days.toString()}) as Map<String, dynamic>));
 }
 
 final storesRepository = StoresRepository();

@@ -40,8 +40,8 @@ import 'screens/dispute_screen.dart';
 import 'screens/verification_screen.dart';
 import 'screens/boost_screen.dart';
 import 'screens/review_screen.dart';
-import 'features/stores/presentation/create_store_screen.dart';
-import 'features/stores/presentation/store_management_screen.dart';
+import 'features/stores/presentation/my_store_screen.dart';
+import 'features/stores/presentation/setup/store_setup_screen.dart';
 import 'features/stores/presentation/store_view_screen.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
@@ -524,8 +524,11 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/verify':           (_) => const VerificationScreen(),
         '/boost':            (_) => const BoostScreen(),
         '/review':           (_) => const ReviewScreen(),
-        '/create-store':     (_) => const CreateStoreScreen(),
-        '/store-manage':     (_) => const StoreManagementScreen(),
+        '/store-setup':      (_) => const StoreSetupScreen(),
+        // The old name of the store-setup route; kept so any link to it
+        // lands on the setup wizard.
+        '/create-store':     (_) => const StoreSetupScreen(),
+        '/store-manage':     (_) => const MyStoreScreen(),
         '/store-view':       (_) => const StoreViewScreen(),
       },
     );

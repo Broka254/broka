@@ -25,11 +25,12 @@ import '../services/sms_autofill_service.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/country_phone_field.dart';
 import '../widgets/otp_code_field.dart';
+import '../widgets/wizard_scaffold.dart';
 
 /// Primary call-to-action gradient: violet into blue, the left two thirds of
 /// the BROKA logo sweep. BrokaColors.gradMid (a deep purple) is the app-wide
 /// default and reads much flatter at this button size.
-const List<Color> _kCtaGradient = [Color(0xFF8B5CF6), Color(0xFF3B82F6)];
+const List<Color> _kCtaGradient = kWizardCtaGradient;
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -977,88 +978,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         : (_kStepTitles[_step] ?? '');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Ten circles still fit comfortably across a phone, so a buyer keeps
-      // the dotted indicator. Past that they shrink below legibility and the
-      // connectors vanish — a long-term seller sees sixteen steps — so those
-      // paths get a plain bar and an explicit count, which stays readable at
-      // any length.
-      if (total > 10)
-        _buildProgressBar(pos, total)
-      else
-        _buildStepDots(steps, pos),
+      // Numbered dots up to ten steps (a buyer); a bar with an explicit
+      // count past that (a long-term seller sees sixteen). See
+      // WizardProgress.
+      WizardProgress(position: pos, total: total),
       const SizedBox(height: 10),
-      Text(title, style: const TextStyle(
-          color: BrokaColors.textHigh, fontSize: 20,
-          fontWeight: FontWeight.w800, letterSpacing: -0.3)),
-      const SizedBox(height: 2),
-      Text(_stepSubtitle(), style: const TextStyle(
-          color: BrokaColors.textMid, fontSize: 13)),
-    ]);
-  }
-
-  Widget _buildStepDots(List<int> steps, int pos) {
-    final total = steps.length;
-    return Row(children: List.generate(total, (i) {
-      final done    = i < pos;
-      final current = i == pos;
-      return Expanded(child: Row(children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          width: total > 7 ? 18 : 22,
-          height: total > 7 ? 18 : 22,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: done || current ? BrokaColors.gold : BrokaColors.bgCard,
-            border: Border.all(
-              color: done || current ? BrokaColors.gold : BrokaColors.border,
-              width: current ? 2 : 1,
-            ),
-          ),
-          child: Center(
-            child: done
-                ? Icon(Icons.check_rounded, color: Colors.white,
-                    size: total > 7 ? 10 : 12)
-                : Text('${i + 1}', style: TextStyle(
-                    color: current ? Colors.white : BrokaColors.textLow,
-                    fontSize: total > 7 ? 9 : 10,
-                    fontWeight: FontWeight.w700)),
-          ),
-        ),
-        if (i < total - 1) Expanded(child: Container(
-          height: 2,
-          color: done ? BrokaColors.gold : BrokaColors.border,
-        )),
-      ]));
-    }));
-  }
-
-  Widget _buildProgressBar(int pos, int total) {
-    final done = pos < 0 ? 0.0 : (pos + 1) / total;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Text('Step ${pos + 1} of $total',
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12,
-                fontWeight: FontWeight.w600)),
-        const Spacer(),
-        Text('${(done * 100).round()}%',
-            style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
-                fontWeight: FontWeight.w700)),
-      ]),
-      const SizedBox(height: 8),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: Stack(children: [
-          Container(height: 6, color: BrokaColors.bgCard),
-          LayoutBuilder(builder: (_, c) => AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            height: 6,
-            width: c.maxWidth * done,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: _kCtaGradient),
-            ),
-          )),
-        ]),
-      ),
+      WizardStepHeader(title: title, subtitle: _stepSubtitle()),
     ]);
   }
 
@@ -2117,54 +2042,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   Widget _buildStepButtons() {
     if (_isFinalStep) return const SizedBox.shrink(); // final step has its own CTA
-    return Row(children: [
-      if (_stepPosition > 0) ...[
-        GestureDetector(
-          onTap: _prevStep,
-          child: Container(
-            height: 58,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: BrokaColors.bgCard.withOpacity(0.55),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
-            ),
-            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.arrow_back_rounded, color: BrokaColors.textMid, size: 20),
-              SizedBox(width: 8),
-              Text('Back', style: TextStyle(color: BrokaColors.textMid,
-                  fontWeight: FontWeight.w600, fontSize: 16)),
-            ]),
-          ),
-        ),
-        const SizedBox(width: 12),
-      ],
-      Expanded(
-        child: GradientButton(
-          height: 58,
-          borderRadius: 16,
-          colors: _kCtaGradient,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          onPressed: _loading ? null : _nextStep,
-          child: _loading
-              ? const SizedBox(width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : Row(mainAxisSize: MainAxisSize.min, children: [
-                  Flexible(
-                    child: Text(_continueLabel(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 17,
-                            fontWeight: FontWeight.w700, color: Colors.white)),
-                  ),
-                  const SizedBox(width: 10),
-                  const Icon(Icons.arrow_forward_rounded,
-                      color: Colors.white, size: 20),
-                ]),
-        ),
-      ),
-    ]);
+    return WizardNavButtons(
+      onBack: _stepPosition > 0 ? _prevStep : null,
+      onNext: _nextStep,
+      nextLabel: _continueLabel(),
+      loading: _loading,
+    );
   }
 
   // ── Shared widgets ────────────────────────────────────────────────────────
@@ -2249,21 +2132,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     ),
   );
 
-  Widget _buildError() => Container(
-    margin: const EdgeInsets.only(bottom: 4),
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: BrokaColors.danger.withOpacity(0.08),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: BrokaColors.danger.withOpacity(0.3)),
-    ),
-    child: Row(children: [
-      const Icon(Icons.error_outline, color: BrokaColors.danger, size: 16),
-      const SizedBox(width: 10),
-      Expanded(child: Text(_error!,
-          style: const TextStyle(color: BrokaColors.danger, fontSize: 12))),
-    ]),
-  );
+  Widget _buildError() => WizardErrorBanner(_error!);
 
   Widget _buildDivider() => Row(children: [
     Expanded(child: Container(height: 1,

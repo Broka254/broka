@@ -12,14 +12,23 @@
 // object directly, matching home_screen.dart's exact pattern (ProductScreen
 // only recognizes the older Listing model or a listingId map - passing a
 // BrokaListing object straight through silently fails to load).
+//
+// Phase 2 of Online Stores: no phone or WhatsApp contacts (buyers reach a
+// store through BROKA), a verified business email where there is one, the
+// owner's real seller record, sharing through the share sheet, and a visit
+// counted for the owner's stats whenever someone else opens the store.
+// The full storefront (categories, search, cart) replaces this screen in
+// phase 3.
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../main.dart';
+import '../../../services/api_service.dart';
+import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
 import '../../../core/utils/result.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/stores_repository.dart';
+import '../data/store_share.dart';
 import '../domain/models/store.dart';
 import 'store_media_image.dart';
 
@@ -35,6 +44,9 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
   bool _isOwner = false;
   String? _error;
   String? _storeId;
+  // Where the visitor came from, when the opener knows (a deep link's
+  // ?via= tag); "direct" otherwise.
+  String? _via;
 
   @override
   void didChangeDependencies() {
@@ -43,6 +55,7 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map && args['storeId'] is String) {
         _storeId = args['storeId'] as String;
+        _via = args['via'] as String?;
         _load();
       } else {
         setState(() { _loading = false; _error = 'Store not specified.'; });
@@ -63,19 +76,25 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
     );
 
     // Best-effort ownership check - a failed lookup just means no Manage
-    // button shows, never blocks the public view itself.
-    final mine = await storesRepository.getMyStore();
-    if (!mounted) return;
-    mine.fold(
-      onSuccess: (myStore) => setState(() => _isOwner = myStore?.id == id),
-      onFailure: (_, __) {},
-    );
+    // button shows, never blocks the public view itself. Signed-out
+    // visitors can't own it, so there's nothing to ask.
+    var isOwner = false;
+    if (ApiService.currentUserId != null) {
+      final mine = await storesRepository.getMyStore();
+      if (!mounted) return;
+      isOwner = mine.fold(onSuccess: (myStore) => myStore?.id == id, onFailure: (_, __) => false);
+      setState(() => _isOwner = isOwner);
+    }
+    // The owner looking at their own store isn't a visit (the backend
+    // checks too; this just saves the request).
+    if (!isOwner && _store != null) {
+      storesRepository.recordVisit(id, via: _via ?? 'direct');
+    }
   }
 
-  void _copyLink(Store store) {
-    // The lightweight public SSR page (spec §14, Phase 5) isn't built yet
-    // - this URL becomes live the moment that ships, no app update needed.
-    Clipboard.setData(ClipboardData(text: 'https://broka.co.ke/store/${store.slug}'));
+  Future<void> _share(Store store) async {
+    final outcome = await StoreShare().share(store, ShareDestination.more);
+    if (!mounted || outcome == ShareOutcome.shared) return;
     ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Store link copied')));
   }
@@ -102,7 +121,8 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
           if (store != null)
             IconButton(
               icon: const Icon(Icons.share_outlined, color: BrokaColors.textHigh),
-              onPressed: () => _copyLink(store),
+              tooltip: 'Share store',
+              onPressed: () => _share(store),
             ),
           if (_isOwner)
             TextButton(
@@ -111,7 +131,7 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
             ),
         ],
       ),
-      body: SafeArea(
+      body: ConstellationBackground(child: SafeArea(
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : (_error != null || store == null)
@@ -136,7 +156,7 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
                       ),
                     ),
                   ]),
-      ),
+      )),
     );
   }
 
@@ -179,10 +199,17 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
                   ),
                 ],
               ]),
-              if (store.specialization != null || store.locationLine != null)
-                Text([store.specialization, store.locationLine]
-                        .where((s) => s != null && s.isNotEmpty).join(' · '),
+              if (store.category != null || store.locationLine != null)
+                Text([store.category, store.locationLine]
+                        .whereType<String>().where((s) => s.isNotEmpty).join(' · '),
                     style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+              if (_trustLine(store) != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(_trustLine(store)!,
+                      style: const TextStyle(color: BrokaColors.gold, fontSize: 11.5,
+                          fontWeight: FontWeight.w600)),
+                ),
               Text('${store.listingCount} listing${store.listingCount == 1 ? '' : 's'}',
                   style: const TextStyle(color: BrokaColors.textLow, fontSize: 11.5)),
             ]),
@@ -207,19 +234,26 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
             ),
           ),
         ],
-        if (store.officialPhone != null || store.officialWhatsapp != null || store.officialEmail != null) ...[
+        if (store.businessEmail != null && store.businessEmailVerified) ...[
           const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            if (store.officialPhone != null)
-              _contactChip(Icons.call_outlined, 'Call', () => _launch('tel:${store.officialPhone}')),
-            if (store.officialWhatsapp != null)
-              _contactChip(Icons.chat_outlined, 'WhatsApp', () => _launch('https://wa.me/${store.officialWhatsapp}')),
-            if (store.officialEmail != null)
-              _contactChip(Icons.email_outlined, 'Email', () => _launch('mailto:${store.officialEmail}')),
-          ]),
+          _contactChip(Icons.email_outlined, store.businessEmail!,
+              () => _launch('mailto:${store.businessEmail}')),
         ],
       ]),
     );
+  }
+
+  /// The owner's real seller record: verified, deals, rating.
+  String? _trustLine(Store store) {
+    final o = store.owner;
+    if (o == null) return null;
+    final parts = [
+      if (o.verified) 'Verified seller',
+      if (o.completedDeals > 0)
+        '${o.completedDeals} completed deal${o.completedDeals == 1 ? '' : 's'}',
+      if (o.completedDeals > 0 && o.rating != null) '★ ${o.rating!.toStringAsFixed(1)}',
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
   }
 
   Widget _contactChip(IconData icon, String label, VoidCallback onTap) => GestureDetector(
@@ -234,7 +268,11 @@ class _StoreViewScreenState extends State<StoreViewScreen> {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 14, color: BrokaColors.gold),
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12, fontWeight: FontWeight.w600)),
+        Flexible(
+          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+        ),
       ]),
     ),
   );

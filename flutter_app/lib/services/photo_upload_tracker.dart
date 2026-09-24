@@ -20,11 +20,15 @@ class PhotoUploadState {
   final String? assetId;
   final String? error;
 
-  const PhotoUploadState._(this.status, this.progress, this.assetId, this.error);
+  /// The stored image's URLs, when this upload finished in this session
+  /// (a state restored from a draft has only the id).
+  final UploadedImage? image;
+
+  const PhotoUploadState._(this.status, this.progress, this.assetId, this.error, [this.image]);
   const PhotoUploadState.uploading(double progress)
       : this._(PhotoUploadStatus.uploading, progress, null, null);
-  const PhotoUploadState.done(String assetId)
-      : this._(PhotoUploadStatus.done, 1, assetId, null);
+  const PhotoUploadState.done(String assetId, {UploadedImage? image})
+      : this._(PhotoUploadStatus.done, 1, assetId, null, image);
   const PhotoUploadState.failed(String error)
       : this._(PhotoUploadStatus.failed, 0, null, error);
 }
@@ -85,7 +89,7 @@ class PhotoUploadTracker extends ChangeNotifier {
       });
       // A photo removed while uploading stays removed.
       if (_states.containsKey(file.path)) {
-        _states[file.path] = PhotoUploadState.done(uploaded.id);
+        _states[file.path] = PhotoUploadState.done(uploaded.id, image: uploaded);
       }
       return uploaded.id;
     } catch (e) {

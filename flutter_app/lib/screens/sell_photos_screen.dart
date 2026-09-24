@@ -16,7 +16,11 @@ import '../widgets/sell_step_scaffold.dart';
 import 'sell_basics_screen.dart';
 
 class SellPhotosScreen extends StatefulWidget {
-  const SellPhotosScreen({super.key});
+  const SellPhotosScreen({super.key, this.presetStoreId});
+
+  /// Set when adding a product from My Store: the listing goes into that
+  /// store (the review step still lets the seller change it).
+  final String? presetStoreId;
   @override
   State<SellPhotosScreen> createState() => _SellPhotosScreenState();
 }
@@ -41,6 +45,7 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
   /// photo the draft never had a chance to persist (see below).
   Future<void> _initPhotos() async {
     await _restoreDraftIfAny();
+    if (widget.presetStoreId != null) _data.storeId = widget.presetStoreId;
     await _retrieveLostPhotoIfAny();
     // Restored photos that never finished uploading carry on now.
     for (final f in _data.verifiedPhotos) {
@@ -112,7 +117,7 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
   void _discardDraft() {
     SellDraftStore.clear();
     setState(() {
-      _data = SellWizardData();
+      _data = SellWizardData()..storeId = widget.presetStoreId;
       _draftRestored = false;
     });
   }

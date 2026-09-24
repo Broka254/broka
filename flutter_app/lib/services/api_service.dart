@@ -455,6 +455,14 @@ class ApiService {
     return data;
   }
 
+  /// Records an account-type change made elsewhere (e.g. the store
+  /// wizard's upgrade step), so Profile and friends see it immediately.
+  static Future<void> rememberAccountType(String accountType) async {
+    currentUserAccountType = accountType;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_account_type', accountType);
+  }
+
   static Future<Map<String, dynamic>> getMe() async {
     final response = await http.get(
       Uri.parse('$baseUrl/auth/me'),

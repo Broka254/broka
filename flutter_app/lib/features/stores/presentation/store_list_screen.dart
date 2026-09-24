@@ -289,9 +289,9 @@ class _StoreCard extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 15)),
-              if (store.specialization != null) ...[
+              if (store.category != null) ...[
                 const SizedBox(height: 3),
-                Text(store.specialization!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                Text(store.category!, maxLines: 1, overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: BrokaColors.neonBlue, fontSize: 11.5, fontWeight: FontWeight.w600)),
               ],
               if (store.locationLine != null) ...[

@@ -41,6 +41,7 @@ dependencies:
   record: ^6.2.1
   path_provider: ^2.1.2
   http_parser: ^4.0.2
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:

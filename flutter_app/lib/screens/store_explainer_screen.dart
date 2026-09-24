@@ -21,12 +21,26 @@
 
 import 'package:flutter/material.dart';
 
+import '../features/stores/presentation/store_entry.dart';
 import '../main.dart';
-import '../widgets/chat_ambient_background.dart';
+import '../widgets/constellation_background.dart';
 import '../widgets/motion_widgets.dart';
 
-class StoreExplainerScreen extends StatelessWidget {
+class StoreExplainerScreen extends StatefulWidget {
   const StoreExplainerScreen({super.key});
+
+  @override
+  State<StoreExplainerScreen> createState() => _StoreExplainerScreenState();
+}
+
+class _StoreExplainerScreenState extends State<StoreExplainerScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Shown once as the introduction; after this, store buttons go
+    // straight to My Store.
+    StoreEntry.markExplainerSeen();
+  }
 
   static const _reasons = [
     (
@@ -72,28 +86,29 @@ class StoreExplainerScreen extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => ChatAmbientBackground(
-        intensity: 0.85,
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          appBar: AppBar(
-            backgroundColor: BrokaColors.bg.withOpacity(0.55),
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            title: const Text('YOUR ONLINE STORE',
-                style: TextStyle(fontSize: 13, letterSpacing: 1.5,
-                    fontWeight: FontWeight.w900, color: BrokaColors.textHigh)),
-            centerTitle: false,
-          ),
-          body: ListView(
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: BrokaColors.bg,
+        appBar: AppBar(
+          backgroundColor: BrokaColors.bg.withOpacity(0.55),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: const Text('YOUR ONLINE STORE',
+              style: TextStyle(fontSize: 13, letterSpacing: 1.5,
+                  fontWeight: FontWeight.w900, color: BrokaColors.textHigh)),
+          centerTitle: false,
+        ),
+        body: ConstellationBackground(
+          child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
               FadeSlideIn(index: 0, child: _hero()),
               const SizedBox(height: 18),
               for (int i = 0; i < _reasons.length; i++)
-                FadeSlideIn(index: i + 1, child: _reasonCard(_reasons[i])),
+                FadeSlideIn(index: i + 1,
+                    child: _reasonCard(_reasons[i])),
               const SizedBox(height: 6),
-              FadeSlideIn(index: _reasons.length + 1, child: _previewStub()),
+              FadeSlideIn(index: _reasons.length + 1,
+                  child: _previewStub()),
               const SizedBox(height: 18),
               FadeSlideIn(
                 index: _reasons.length + 2,
@@ -101,8 +116,8 @@ class StoreExplainerScreen extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               const Text(
-                'Free. Takes a few minutes. You can change the name and '
-                'layout afterwards.',
+                'Free. Takes a few minutes. You can change the name, photos and '
+                'details afterwards; your link stays the same.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: BrokaColors.textMid, fontSize: 11),
               ),
@@ -227,7 +242,7 @@ class StoreExplainerScreen extends StatelessWidget {
       );
 
   Widget _cta(BuildContext context) => PressableScale(
-        onTap: () => Navigator.pushReplacementNamed(context, '/create-store'),
+        onTap: () => Navigator.pushReplacementNamed(context, '/store-setup'),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 16),
           decoration: BoxDecoration(
@@ -240,7 +255,7 @@ class StoreExplainerScreen extends StatelessWidget {
             children: [
               Icon(Icons.storefront_rounded, color: Colors.white, size: 18),
               SizedBox(width: 9),
-              Text('Create my store',
+              Text('Set up my store',
                   style: TextStyle(color: Colors.white, fontSize: 14.5,
                       fontWeight: FontWeight.w900)),
             ],
