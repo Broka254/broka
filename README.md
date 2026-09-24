@@ -9,6 +9,7 @@ commission** on each deal.
 |---|---|
 | `backend/` | FastAPI (Python 3.11) + async SQLAlchemy. PostgreSQL in production, SQLite in dev and tests |
 | `flutter_app/` | Flutter 3.24.5 (the version CI pins), `provider` for state |
+| `web/` | The web storefront at `broka.co.ke/store/<name>`: Next.js 16 (App Router) + TypeScript on Vercel |
 
 Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
 `CALLING.md`, `EVENT_ARCHITECTURE.md`, `PRIVACY.md`, `ZENO_ACTIONS.md` and
@@ -20,6 +21,18 @@ Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
 
 ## Recent changes (2026-09-24)
 
+- **Store links open a real storefront, on the web and in the app**
+  (Online Stores phase 3, see `STORES_PLAN.md`). `broka.co.ke/store/<name>`
+  is a web store (`web/`) that works without the app: the store's cover,
+  logo, seller record, search, category pills with product counts, sort,
+  and product pages with photos and "Make an offer in the BROKA app", on
+  the same glowing connected-dots background. Shared links show a real
+  preview in WhatsApp and elsewhere: the store's or product's photo as a
+  JPEG, since WhatsApp doesn't show WebP. Android visitors get an "Open in
+  the app" banner, and with the app installed the links open the new store
+  home screen in the app, which replaces the old store page there too.
+  Web visits count toward the owner's stats with their source. The API's
+  old HTML store page now redirects to the web store.
 - **Setting up an online store, and "My Store"** (Online Stores phase 2,
   see `STORES_PLAN.md`). Store setup is a step-by-step wizard on the
   signup screens' look: name, a link the owner picks
@@ -68,8 +81,9 @@ Regression tests: `backend/tests/test_cost_bounds.py`,
 `backend/tests/test_route_ordering.py`, `backend/tests/test_payment_races.py`,
 `backend/tests/test_media_assets.py`, `backend/tests/test_store_setup.py`,
 `flutter_app/test/session_renewal_test.dart`,
-`flutter_app/test/image_upload_test.dart` and
-`flutter_app/test/store_setup_test.dart`.
+`flutter_app/test/image_upload_test.dart`,
+`flutter_app/test/store_setup_test.dart`,
+`flutter_app/test/storefront_test.dart` and `web/src/**/*.test.ts(x)`.
 
 ---
 
@@ -161,12 +175,19 @@ search. The owner picks the store's link name once, at setup
 hyphens, no reserved words), and renaming the store never changes it. The
 full link is `{STORE_LINK_BASE}/<name>`.
 
-`GET /store/<name>` is the public web page, and `GET /stores/{id}/listings`
-and `/categories` feed the storefront (search, category and sort). Store
-visits (the app's `POST /stores/{id}/visit` and web page views) and share
-taps are counted per day in `store_daily_counts`, once per visitor per
-half hour, never for the owner or for crawlers; the owner reads them with
-`GET /stores/{id}/stats`. A business email is only saved once proven with
+The storefront is `StoreHomeScreen` in the app and the `web/` project on
+the web, both fed by `GET /stores/slug/{name}`, `GET /stores/{id}/listings`
+and `/categories` (search, category and sort). The web project calls the
+API from its own server, caches reads for 60 seconds, and serves link
+previews as `/og/<image id>.jpg` (1200x630 JPEGs made by
+`GET /media/og/{id}.jpg`). Store links (`https://broka.co.ke/store/<name>`
+and `/store/<name>/p/<id>`) open in the app through an Android intent
+filter and `lib/services/deep_link_service.dart`. The API's own
+`GET /store/<name>` page redirects to the link base when that's another
+host. Store visits (`POST /stores/{id}/visit`, from the app, or from the
+web page with a browser visitor id) and share taps are counted per day in
+`store_daily_counts`, once per visitor per half hour, never for the owner
+or for crawlers; the owner reads them with `GET /stores/{id}/stats`. A business email is only saved once proven with
 an emailed code (`POST /stores/email/request-code`, `/stores/email/verify`),
 unless it's the owner's own verified account email. The phased plan,
 including checkout and the web storefront, is in `STORES_PLAN.md`.
@@ -211,6 +232,19 @@ flutter pub get
 flutter run --dart-define=API_URL=https://your-backend.onrender.com
 ```
 
+### Web storefront
+
+Node 22.
+
+```bash
+cd web
+npm ci
+BROKA_API_URL=http://127.0.0.1:8000 npm run dev    # http://localhost:3000/store/<name>
+```
+
+`web/.env.example` lists its settings. `BROKA_API_URL` defaults to the
+production API.
+
 ### Tests
 
 Backend, the way CI runs it (`pytest.ini` also enforces the 50% coverage
@@ -234,6 +268,13 @@ flutter analyze --no-fatal-warnings --no-fatal-infos
 flutter test
 ```
 
+Web:
+
+```bash
+cd web
+npm run typecheck && npm run lint && npm test && npm run build
+```
+
 ---
 
 ## Environment variables
@@ -250,7 +291,7 @@ flutter test
 | `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` | At least one | AI providers, tried in that order |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `MEDIA_PUBLIC_BASE_URL` | Production | Image storage on Cloudflare R2. Any unset: images are stored in the database |
 | `PUBLIC_API_BASE_URL` | Optional | This API's own URL, for absolute links to database-stored images |
-| `STORE_LINK_BASE` | Default `https://broka.co.ke/store` | Base of every store's shareable link. Links open once broka.co.ke serves `/store/*` (the web storefront, phase 3) |
+| `STORE_LINK_BASE` | Default `https://broka.co.ke/store` | Base of every store's shareable link, served by the web storefront. The API's own store page redirects there |
 | `REDIS_URL` | Strongly recommended | Rate limits and idempotency across instances, call state, the ARQ queue |
 | `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |
@@ -260,6 +301,16 @@ flutter test
 | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Optional | Call relay for networks where a direct connection fails |
 | `FAL_KEY` | Optional | AI showcase images for listings |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Default 15 | Access token lifetime. The refresh token (30 days) renews it |
+
+The web storefront's settings, set in Vercel:
+
+| Variable | Needed | Purpose |
+|---|---|---|
+| `BROKA_API_URL` | Required | The API (the Render URL). Read on the server only |
+| `NEXT_PUBLIC_SITE_URL` | Default `https://broka.co.ke` | The site's own address, for canonical links and link previews |
+| `NEXT_PUBLIC_APP_DOWNLOAD_URL` | Optional | Where "Get the app" goes. Defaults to the latest APK on GitHub releases |
+| `ANDROID_CERT_SHA256` | For App Links | The release key's SHA-256 fingerprint(s), comma-separated, served in `/.well-known/assetlinks.json` so store links open the app directly |
+| `APPLE_APP_IDS` | For an iOS build | `<TeamID>.com.broka.app`, for Universal Links |
 
 ---
 
@@ -273,7 +324,7 @@ routes need `Authorization: Bearer <access token>`.
 | `/auth` | Phone and email OTP, register, login, profile, token refresh and revoke |
 | `/listings` | Browse, create and edit listings; listing and seller metrics; AI showcase images |
 | `/categories`, `/trending`, `/traders` | Discovery |
-| `/stores`, `/store/{slug}` | Store setup (link check, business-email codes), catalogue and categories, visit/share counting, owner stats, and the public HTML storefront page |
+| `/stores`, `/store/{slug}` | Store setup (link check, business-email codes), catalogue and categories, visit/share counting, owner stats. `/store/{slug}` redirects to the web storefront |
 | `/auctions` (legacy `/auction`) | Auction grid, detail and terms |
 | `/negotiate` | Zeno chat (`/chat`), mediated messages, direct chat, inbox, read receipts, deal timers, scam check, price advice |
 | `/buy-agent-requests` | Standing "find and negotiate for me" requests |
@@ -284,7 +335,7 @@ routes need `Authorization: Bearer <access token>`.
 | `/reviews` | Seller reviews |
 | `/calls` | Call setup, TURN credentials, call logging |
 | `/stt`, `/tts` | Speech-to-text tokens and transcription, text-to-speech |
-| `/media` | Image upload (`/media/images`) and serving, chat voice notes and images |
+| `/media` | Image upload (`/media/images`) and serving, link-preview JPEGs (`/media/og/{id}.jpg`), chat voice notes and images |
 | `/admin` | Summary, users, audit logs, fraud events, ledger integrity, AI savings |
 | `/health`, `/ready`, `/live` | Liveness and readiness probes |
 
@@ -319,7 +370,9 @@ recreated from the models).
 ## Deployment
 
 `render.yaml` deploys the backend as one Docker web service plus a
-PostgreSQL database, both on Render's free plan.
+PostgreSQL database, both on Render's free plan. The web storefront is a
+Vercel project with Root Directory `web` and the domain `broka.co.ke`
+(settings above); Vercel deploys it on every push.
 
 **Minimum production config:**
 1. PostgreSQL.
@@ -337,8 +390,12 @@ PostgreSQL database, both on Render's free plan.
 - CI (`.github/workflows/build.yml`) runs on every push to `main`: backend
   tests against Redis with the 50% coverage gate, then `flutter analyze`
   (errors only) and `flutter test`, then an APK build that replaces the `latest-release`
-  GitHub release. Without a keystore configured, that APK is signed with the
-  debug key.
+  GitHub release. Alongside, a separate job typechecks, lints, tests and
+  builds `web/`. The APK is signed with the release key when the
+  `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`
+  and `ANDROID_KEY_PASSWORD` secrets are set, and with the debug key
+  otherwise. Store links only open the app directly (App Links) with the
+  release key.
 
 ---
 
@@ -351,7 +408,7 @@ PostgreSQL database, both on Render's free plan.
 - [x] E-Confirm escrow for the full agreed price
 - [x] WebSocket real-time deal status
 - [x] AI broker with multi-provider fallback (Gemini, DeepSeek, OpenRouter)
-- [x] Store/business layer (User → Store → Listings, public storefront page at `/store/{slug}`) — see `ARCHITECTURE.md`'s Store section; AI store intelligence, analytics, and bundle negotiation are NOT part of this
+- [x] Store/business layer (User → Store → Listings, public storefront at `broka.co.ke/store/{slug}`) — see `ARCHITECTURE.md`'s Store section; AI store intelligence, analytics, and bundle negotiation are NOT part of this
 - [x] Auction lifecycle (window, atomic bids, close, winner → deal)
 - [x] Circuit breakers (AI + M-Pesa)
 - [x] Idempotency keys (payment safety)
@@ -362,7 +419,8 @@ PostgreSQL database, both on Render's free plan.
 - [x] Image storage on Cloudflare R2 (WebP sizes, metadata stripped)
 - [x] `flutter test` in CI
 - [x] Online stores: setup wizard with a fixed shareable link, My Store with visit stats (Online Stores phase 2)
-- [ ] Online stores: full storefront in the app and on the web, cart and checkout (phases 3-5 of `STORES_PLAN.md`)
+- [x] Online stores: storefront in the app and on the web, store links opening the app, link previews (Online Stores phase 3)
+- [ ] Online stores: stock, cart and checkout, seller tools (phases 4-5 of `STORES_PLAN.md`)
 - [ ] Consume the Redis event streams (events are written there but only handled in-process today)
 - [ ] Event sourcing for payments (Phase 3)
 - [ ] ML-based fraud models (Phase 4)

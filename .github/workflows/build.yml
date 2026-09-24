@@ -63,6 +63,48 @@ jobs:
           fail_ci_if_error: false
         continue-on-error: true
 
+  # ── Web storefront (broka.co.ke/store/<name>) ─────────────────────
+  # Vercel builds and deploys web/ on its own; this job is the gate that
+  # catches a type, lint, test or build failure before it gets there. It
+  # doesn't hold up the APK: the app and the website ship independently.
+  web:
+    name: Web Storefront (Next.js)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: web
+
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web/package.json
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        # Nothing is fetched at build time - store pages render on request -
+        # so the build needs no API or network.
+        run: npm run build
+
   # ── Build Flutter APK ─────────────────────────────────────────────
   build-apk:
     name: Build Android APK
@@ -134,6 +176,35 @@ jobs:
         run: |
           cd flutter_app
           flutter test
+
+      - name: Release signing key
+        # With the ANDROID_KEYSTORE_* secrets set, the APK is signed with
+        # BROKA's release key (android/app/build.gradle reads
+        # android/app/key.properties); without them it's signed with the
+        # debug key, as before. A fixed key is what lets broka.co.ke store
+        # links open the app directly (Android App Links).
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No release key configured: signing with the debug key."
+            exit 0
+          fi
+          cd flutter_app/android/app
+          echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+          # key.properties is a Java properties file: a backslash in a
+          # password must be doubled to survive.
+          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$(esc "$KEYSTORE_PASSWORD")"
+            echo "keyAlias=$(esc "$KEY_ALIAS")"
+            echo "keyPassword=$(esc "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}")"
+          } > key.properties
+          echo "Signing with the release key."
 
       - name: Build APK
         # flutter build apk's own post-build .apk existence check can return

@@ -204,8 +204,8 @@ This is a different concept from **Trader** (`api/domains/traders/`),
 which stays exactly as designed — a read-only view derived from
 `User` + `UserSpecialization`, not a first-class ownable row. A Store has
 its own id, its own editable branding/location/contact fields, and a
-unique public `slug` (`GET /stores/slug/{slug}` — the future
-`broka.co.ke/store/{slug}` public page reads through this same slug).
+unique public `slug` (`GET /stores/slug/{slug}` — the
+`broka.co.ke/store/{slug}` web storefront reads through this same slug).
 
 **Ownership** on every Store/listing-association mutation is checked
 server-side against the JWT-derived user id — never trusted from a
@@ -242,22 +242,24 @@ already were; (2) `ProductScreen` doesn't recognize that second model as
 route arguments, only the older `Listing` or a `{'listingId': ...}` map —
 every Store screen that navigates to a listing uses the map form.
 
-**Not yet built** (separate, larger passes): individual public product
-pages and Android/iOS deep linking, store logo/photo upload in the
-create/edit form, Store Intelligence / "Ask this store", and multi-item
-bundle negotiation. See `CHANGES.md`'s Store entries for the full
-"deliberately deferred" list.
+**Not yet built** (separate, larger passes): stock, cart and checkout
+(`STORES_PLAN.md` phase 4), Store Intelligence / "Ask this store", and
+multi-item bundle negotiation. Store setup, images, product pages and
+store links opening the app are built; see `STORES_PLAN.md`.
 
-**Public web page**: `GET /store/{slug}` (`api/domains/stores/web.py`,
-registered at `/store` - singular, separate from the `/stores` JSON API)
-is a plain FastAPI `HTMLResponse`, no templating dependency, no separate
-web app. Every piece of store/listing text is escaped before being
-written into the page - it's the only endpoint in this codebase where
-user text becomes raw HTML for an unauthenticated visitor. `og:image` is
-deliberately left out of its Open Graph tags: a base64 data URI (today's
-only media format) isn't a URL a social crawler can fetch, so it would
-silently not work once R2/object storage lands, this is the one line to
-revisit.
+**Public web storefront**: `web/`, a Next.js app on Vercel serving
+`broka.co.ke/store/{slug}` and `/store/{slug}/p/{listing id}`. It reads the
+public `/stores` JSON API from its own server (never from the visitor's
+browser), caches those reads for 60 seconds, and relays the few browser
+calls it needs (load more, visit and share counts) through its own
+`/api/stores/*` routes. Link previews point at `broka.co.ke/og/{id}.jpg`,
+proxied from the API's `GET /media/og/{id}.jpg`.
+
+The API's older HTML page, `GET /store/{slug}` (`api/domains/stores/web.py`,
+registered at `/store` - singular, separate from the `/stores` JSON API),
+now redirects to `STORE_LINK_BASE` when that's another host, and still
+renders itself when it isn't (local development). Every piece of
+store/listing text it writes is escaped.
 
 ---
 

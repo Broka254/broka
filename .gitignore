@@ -39,6 +39,7 @@ flutter_app/android/gradlew
 flutter_app/android/gradlew.bat
 flutter_app/android/local.properties
 flutter_app/android/key.properties
+flutter_app/android/app/key.properties
 flutter_app/android/app/*.jks
 flutter_app/android/app/*.keystore
 flutter_app/android/app/google-services.json

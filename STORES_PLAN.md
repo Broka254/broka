@@ -260,7 +260,54 @@ The original Phase 2 plan follows.
   - the explainer screen is shown once, as the introduction.
 - `CreateStoreScreen` and the old contact fields are removed.
 
-### Phase 3 — The storefront (app and web), browsing
+### Phase 3 — The storefront (app and web), browsing ✅ (2026-09-24)
+
+Shipped as planned, with these differences and additions:
+- **Link previews are JPEG.** WhatsApp doesn't draw WebP previews, and
+  every stored image is WebP. `GET /media/og/{id}.jpg` makes a 1200x630
+  JPEG of a product photo, cover or logo once, stores it next to the other
+  sizes, and serves it from then on; the web storefront serves it as
+  `broka.co.ke/og/<id>.jpg` so previews never point at the Render host.
+  Stores with no photo use a BROKA default image.
+- **Pages refresh within 60 seconds** of a change (cached API reads with a
+  60-second life). Refreshing the moment the owner saves would need the
+  API to call the website with a shared secret; it's left for when it's
+  needed. A cached store still loads while Render is asleep; one nobody
+  has opened recently waits for the API to wake (up to 25 seconds), then
+  shows "BROKA is waking up" with a retry.
+- **No loading skeleton on the web.** Streaming a skeleton first sends a
+  200 before the page knows whether the store exists, so a missing store
+  would not be a real 404 and a mixed-case link could not redirect. Pages
+  arrive whole, with the right status: 404 for an unknown store or
+  product, 308 from `/store/Clanix` to `/store/clanix`.
+- **"Open in the app"** on Android uses an `intent:` link, which Chrome
+  follows whether or not App Links are verified, and falls back to the APK
+  download. App Links (links opening the app without the browser) verify
+  once `ANDROID_CERT_SHA256` has the release key's fingerprint; until then
+  `/.well-known/assetlinks.json` is an empty list. `apple-app-site-association`
+  is served only once `APPLE_APP_IDS` is set; there is no iOS build yet.
+- **Web visits** are counted from the visitor's browser: a random visitor
+  id kept in the browser (visitors behind the same proxy can share an IP
+  address), and the source from the link's `?via=` tag, or failing that
+  the referrer. Link-preview crawlers aren't counted.
+- **A product link opened in the app** goes to the product screen and
+  counts a visit to its store.
+- **The API's old HTML store page** (`GET /store/<name>` on Render)
+  redirects to `broka.co.ke/store/<name>` with a 302, so it can be undone
+  if the domain ever changes.
+- **"Sold out" / "Only 2 left"** labels wait for stock counts in Phase 4.
+- **CI runs the web project**: typecheck, lint, tests and a production
+  build, in a job of its own that doesn't hold up the APK release.
+
+Tests: `backend/tests/test_store_setup.py` (web visits, the redirect),
+`backend/tests/test_media_assets.py` (`TestLinkPreviews`),
+`flutter_app/test/storefront_test.dart` (store screen, link parsing,
+cold-start links, no overflow at 320 dp), and `web/src/**/*.test.ts(x)`
+(46: links, catalogue filters, category parity with the backend and the
+app, link previews and search-engine data, the API proxy routes,
+`assetlinks.json`).
+
+The original Phase 3 plan follows.
 
 **App**
 - **`StoreHomeScreen`** (replaces `StoreViewScreen`), on
@@ -399,8 +446,8 @@ The original Phase 2 plan follows.
 | When | What |
 |---|---|
 | Before Phase 1 goes live | **Cloudflare R2**: create a bucket (e.g. `broka-media`), connect a public custom domain (e.g. `media.broka.co.ke`), and create an API token for it. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` and `MEDIA_PUBLIC_BASE_URL` on Render. Until then the database fallback works, so development isn't blocked. |
-| Before Phase 3's web store | Tell me what `broka.co.ke` shows today (open `https://broka.co.ke/store/test` on your phone). In the Vercel project that owns the domain, point it at this repo with root directory `web/`, and set `BROKA_API_URL` to the Render URL. |
-| Before Phase 3's deep links | An **Android release signing key**. App Links only verify against a fixed key, and CI currently falls back to the debug key. Add it to the GitHub repo as CI secrets. If you ship iOS, your **Apple Team ID**. |
+| To put Phase 3's web store live | In Vercel, import this repo as a project with **Root Directory `web`** (Next.js is detected; Node 22 comes from `web/package.json`). Set `BROKA_API_URL` to the Render URL and `NEXT_PUBLIC_SITE_URL` to `https://broka.co.ke`. Add the domain `broka.co.ke` (and `www.broka.co.ke`, redirecting to it) under the project's Domains and set the DNS records Vercel shows. If `broka.co.ke` already serves another site, tell me first: the store only needs `/store/*`, `/og/*`, `/api/stores/*` and `/.well-known/*`. |
+| For store links to open the app directly | An **Android release signing key**: App Links only verify against the key the app is signed with, and CI signs with a debug key until it has one. Add the keystore to the GitHub repo's Actions secrets as `ANDROID_KEYSTORE_BASE64` (`base64 -w0 release.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; CI's "Release signing key" step then signs with it. Put the key's SHA-256 fingerprint (`keytool -list -v -keystore release.jks`) in Vercel as `ANDROID_CERT_SHA256`. Keep the keystore backed up: an app signed with it can only be updated by builds signed with it. Until then the "Open" banner on Android still opens the app. If you ship iOS, your **Apple Team ID** (`APPLE_APP_IDS`). |
 | Before Phase 4 goes live | Ask **E-Confirm** whether buyer and seller email can be optional (it's required today). Decide on **Render's paid plan**: browsing is covered by the cached web pages, but checkout needs the backend awake. |
 
 ---
