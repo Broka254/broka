@@ -50,6 +50,11 @@ async def client():
 
 _n = itertools.count(1)
 
+# The API's own store page only renders when it is the link host (a
+# deployment whose STORE_LINK_BASE is this service); otherwise it
+# redirects to the web storefront. See TestWebStorefrontSupport.
+ON_LINK_HOST = {"x-forwarded-host": "broka.co.ke"}
+
 
 async def _register(client, tier="long_term", business_category="Electronics", email=None):
     """(user_id, headers). tier: "long_term", "short_term" or None (buyer)."""
@@ -219,7 +224,7 @@ class TestLinkNames:
         _, headers = await _register(client)
         await _store(client, headers, slug="casey-shop")
         assert (await client.get("/stores/slug/Casey-Shop")).status_code == 200
-        assert (await client.get("/store/CASEY-SHOP")).status_code == 200
+        assert (await client.get("/store/CASEY-SHOP", headers=ON_LINK_HOST)).status_code == 200
 
     async def test_a_store_without_a_chosen_link_gets_a_valid_one(self, client):
         _, headers = await _register(client)
@@ -384,7 +389,7 @@ class TestStorePayload:
             row.official_phone = "0700123456"
             row.official_whatsapp = "254700123456"
             await db.commit()
-        page = (await client.get("/store/no-phones")).text
+        page = (await client.get("/store/no-phones", headers=ON_LINK_HOST)).text
         assert "0700123456" not in page and "wa.me" not in page and "tel:" not in page
         assert "0700123456" not in (await client.get(f"/stores/{store['id']}")).text
 
@@ -491,10 +496,10 @@ class TestVisitsAndStats:
         store = await _store(client, owner, slug="web-visits")
         phone_a = "Mozilla/5.0 (Linux; Android 13) Chrome/120.0 Mobile"
         phone_b = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1"
-        await client.get("/store/web-visits?via=instagram", headers={"user-agent": phone_a})
-        await client.get("/store/web-visits?via=instagram", headers={"user-agent": phone_a})
+        await client.get("/store/web-visits?via=instagram", headers={**ON_LINK_HOST, "user-agent": phone_a})
+        await client.get("/store/web-visits?via=instagram", headers={**ON_LINK_HOST, "user-agent": phone_a})
         await client.get("/store/web-visits", headers={
-            "user-agent": phone_b, "referer": "https://www.tiktok.com/@web"})
+            **ON_LINK_HOST, "user-agent": phone_b, "referer": "https://www.tiktok.com/@web"})
         stats = (await client.get(f"/stores/{store['id']}/stats", headers=owner)).json()
         assert stats["visits"]["by_surface"]["web"] == 2
         assert stats["visits"]["by_source"]["instagram"] == 1
@@ -510,10 +515,11 @@ class TestVisitsAndStats:
             "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
             "",
         ]:
-            r = await client.get("/store/preview-bots?via=whatsapp", headers={"user-agent": ua})
+            r = await client.get("/store/preview-bots?via=whatsapp",
+                                 headers={**ON_LINK_HOST, "user-agent": ua})
             assert r.status_code == 200
         await client.get("/store/preview-bots?via=whatsapp", headers={
-            "user-agent": "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 "
+            **ON_LINK_HOST, "user-agent": "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"})
         stats = (await client.get(f"/stores/{store['id']}/stats", headers=owner)).json()
         assert stats["visits"]["total"] == 1
@@ -583,3 +589,54 @@ async def test_old_stores_get_a_category_at_startup(client):
     found = (await client.get("/stores", params={"category": "Fashion", "limit": 100})).json()
     assert store["id"] in [s["id"] for s in found]
     assert await backfill_store_categories() == 0
+
+
+# ── Web storefront support (phase 3) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestWebStorefrontSupport:
+    async def test_the_old_page_sends_browsers_to_the_web_storefront(self, client):
+        r = await client.get("/store/Clanix-Shop?via=qr")
+        assert r.status_code == 302
+        assert r.headers["location"] == "https://broka.co.ke/store/clanix-shop?via=qr"
+
+    async def test_on_the_link_host_the_page_still_renders(self, client):
+        _, headers = await _register(client)
+        await _store(client, headers, slug="served-here")
+        r = await client.get("/store/served-here", headers=ON_LINK_HOST)
+        assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+
+    async def test_web_visits_come_from_the_browser_with_a_visitor_id(self, client):
+        _, owner = await _register(client)
+        store = await _store(client, owner)
+        sid = store["id"]
+        chrome = {"user-agent": "Mozilla/5.0 (Linux; Android 14) Chrome/124.0 Mobile Safari/537.36"}
+
+        async def visit(**body):
+            r = await client.post(f"/stores/{sid}/visit", json={"surface": "web", **body},
+                                  headers=chrome)
+            assert r.status_code == 202, r.text
+            return r.json()["counted"]
+
+        assert await visit(visitor="browser-aaaa-1111", via="tiktok") is True
+        assert await visit(visitor="browser-aaaa-1111", via="tiktok") is False
+        # Another browser, arriving from an Instagram link with no tag.
+        assert await visit(visitor="browser-bbbb-2222",
+                           referrer="https://l.instagram.com/?u=x") is True
+        # A crawler running the page's script is still a crawler.
+        r = await client.post(f"/stores/{sid}/visit",
+                              json={"surface": "web", "visitor": "browser-cccc-3333"},
+                              headers={"user-agent": "Googlebot/2.1"})
+        assert r.json()["counted"] is False
+
+        stats = (await client.get(f"/stores/{sid}/stats", headers=owner)).json()["visits"]
+        assert stats["total"] == 2
+        assert stats["by_surface"] == {"app": 0, "web": 2}
+        assert stats["by_source"]["tiktok"] == 1 and stats["by_source"]["instagram"] == 1
+
+    async def test_a_malformed_visitor_id_is_refused(self, client):
+        _, owner = await _register(client)
+        store = await _store(client, owner)
+        r = await client.post(f"/stores/{store['id']}/visit",
+                              json={"surface": "web", "visitor": "<script>"})
+        assert r.status_code == 422

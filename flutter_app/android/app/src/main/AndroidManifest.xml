@@ -66,6 +66,27 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Store links (https://broka.co.ke/store/<name>, and its
+                 products at /store/<name>/p/<id>) open in the app.
+                 autoVerify makes them open without asking once
+                 https://broka.co.ke/.well-known/assetlinks.json lists this
+                 app's signing certificate. MainActivity passes the link to
+                 lib/services/deep_link_service.dart. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"/>
+                <data android:host="broka.co.ke"/>
+                <data android:host="www.broka.co.ke"/>
+                <data android:pathPrefix="/store/"/>
+            </intent-filter>
+            <!-- Flutter's own deep-link routing stays off: links are routed by
+                 DeepLinkService once the splash screen is done, not pushed
+                 as raw route names on top of it. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false"/>
         </activity>
 
         <provider

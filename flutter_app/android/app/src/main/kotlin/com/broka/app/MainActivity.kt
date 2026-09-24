@@ -14,6 +14,11 @@ class MainActivity : FlutterFragmentActivity() {
     private val SMS_RETRIEVER_CHANNEL = "com.broka.app/sms_retriever"
     private val SMS_RETRIEVER_EVENTS = "com.broka.app/sms_retriever_events"
     private val SHARE_CHANNEL = "com.broka.app/share"
+    private val LINKS_CHANNEL = "com.broka.app/links"
+
+    private var linksChannel: MethodChannel? = null
+    // The store link that launched the app, handed to Dart once.
+    private var initialLinkConsumed = false
 
     private var smsRetriever: SmsRetrieverBridge? = null
 
@@ -114,6 +119,24 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
+        // ── Store links (lib/services/deep_link_service.dart) ───────────
+        //   getInitialLink - the https link this activity was started with,
+        //     once; null afterwards (and for a normal launcher start).
+        //   onLink (to Dart) - a link that arrived while the app was running.
+        linksChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LINKS_CHANNEL)
+            .also { channel ->
+                channel.setMethodCallHandler { call, result ->
+                    when (call.method) {
+                        "getInitialLink" -> {
+                            val link = if (initialLinkConsumed) null else viewLink(intent)
+                            initialLinkConsumed = true
+                            result.success(link)
+                        }
+                        else -> result.notImplemented()
+                    }
+                }
+            }
+
         // ── OTP auto-capture (SMS Retriever API) ─────────────────────────
         // Lets the verify-code screen fill itself with no prompt and no SMS
         // permission. See SmsRetrieverBridge.kt and
@@ -136,6 +159,19 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        viewLink(intent)?.let { linksChannel?.invokeMethod("onLink", it) }
+    }
+
+    /** The https link an ACTION_VIEW intent carries, if any. */
+    private fun viewLink(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val data = intent.data ?: return null
+        return if (data.scheme == "https") data.toString() else null
     }
 
     override fun onDestroy() {

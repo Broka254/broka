@@ -11,7 +11,7 @@
 // rail and Zeno CTA scroll away into the same viewport the grid lives in,
 // which is impossible while the grid runs its own ScrollController inside
 // an Expanded. Every existing caller (trending_screen, category_zone_screen,
-// trader_profile_screen, store_view_screen) passes nothing new and keeps the
+// trader_profile_screen, the store screens) passes nothing new and keeps the
 // exact widget tree it had before.
 //
 // The two modes differ in three places, all of them consequences of "who

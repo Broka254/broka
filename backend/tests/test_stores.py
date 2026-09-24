@@ -466,7 +466,8 @@ class TestStorePublicWebPage:
         }, headers=_auth(owner_token))
         slug = created.json()["slug"]
 
-        resp = await client.get(f"/store/{slug}")
+        # As the link host: elsewhere this page redirects to the web store.
+        resp = await client.get(f"/store/{slug}", headers={"x-forwarded-host": "broka.co.ke"})
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
         assert "Web Page Store" in resp.text
@@ -477,7 +478,8 @@ class TestStorePublicWebPage:
 
     @pytest.mark.asyncio
     async def test_public_page_404s_gracefully_for_unknown_slug(self, client):
-        resp = await client.get("/store/does-not-exist-at-all")
+        resp = await client.get("/store/does-not-exist-at-all",
+                                headers={"x-forwarded-host": "broka.co.ke"})
         assert resp.status_code == 404
         assert "text/html" in resp.headers["content-type"]
 

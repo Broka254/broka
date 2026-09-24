@@ -4,6 +4,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../services/deep_link_service.dart';
 import '../services/global_poller_service.dart';
 import '../services/notification_service.dart';
 import '../services/sell_draft_store.dart';
@@ -138,6 +139,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     pendingColdStartCallData = null; // consume once, regardless of outcome
     if (loggedIn && coldStartCall != null) {
       await NotificationService.instance.navigateFromPayload(coldStartCall);
+      DeepLinkService.instance.appReady(openPending: false);
       return;
     }
 
@@ -163,6 +165,8 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     if (!mounted) return;
     if (hasDraft) {
       Navigator.of(context).pushReplacement(_smoothRoute(const SellPhotosScreen()));
+      // A store link that opened the app goes on top; Back returns here.
+      DeepLinkService.instance.appReady();
       return;
     }
 
@@ -171,6 +175,8 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // to Zeno, negotiations, Profile) prompt sign-up only when actually
     // attempted (see lib/utils/auth_gate.dart), not up front.
     Navigator.of(context).pushReplacement(_smoothRoute(const HomeScreen()));
+    // A store link that opened the app goes on top; Back returns to Home.
+    DeepLinkService.instance.appReady();
   }
 
   /// A calm fade + very slight scale so the boot sequence hands off to the

@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import html as _html
 from typing import Optional
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.database import get_db
 from . import stats as store_stats
 from .service import StoreService
@@ -236,7 +238,7 @@ def render_not_found_page(slug: str) -> str:
 </div></body></html>"""
 
 
-@router.get("/{slug}", response_class=HTMLResponse)
+@router.get("/{slug}", response_class=HTMLResponse, response_model=None)
 async def store_public_page(
     slug: str,
     request: Request,
@@ -247,6 +249,20 @@ async def store_public_page(
     unauthenticated, and deliberately tolerant: a bad/unknown slug renders
     a friendly HTML page (still 404 status) rather than a raw JSON error,
     since a browser - not the app - is the caller here."""
+    # The storefront lives on the web project ({STORE_LINK_BASE}); this
+    # page is only a fallback for a deployment whose link base is this
+    # service itself. A redirect only ever goes to another host, so it
+    # can't loop. 302 rather than 301: browsers keep a 301 forever, and a
+    # mistaken link base must stay correctable.
+    target = urlparse(settings.store_link_base)
+    forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    serving_host = forwarded_host or request.url.netloc
+    if target.netloc and target.netloc.lower() != serving_host.lower():
+        location = f"{settings.store_link_base}/{quote(slug.lower(), safe='-')}"
+        if request.url.query:
+            location += f"?{request.url.query}"
+        return RedirectResponse(location, status_code=302)
+
     svc = StoreService(db)
     try:
         store = await svc.get_store_by_slug(slug)

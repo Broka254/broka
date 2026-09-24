@@ -94,6 +94,15 @@ class EmailVerifyIn(BaseModel):
 class VisitIn(BaseModel):
     # The ?via= tag of the link that opened the store, if any.
     via: Optional[str] = Field(default=None, max_length=32)
+    # "web": the web storefront, reporting from the visitor's browser.
+    surface: Literal["app", "web"] = "app"
+    # The web page's document.referrer, where visitors came from when the
+    # link had no ?via= tag.
+    referrer: Optional[str] = Field(default=None, max_length=512)
+    # A random id the web storefront keeps in the browser, so a returning
+    # visitor is recognised without relying on IP addresses (behind the
+    # hosting proxy, many visitors can share one).
+    visitor: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
 
 
 class ShareIn(BaseModel):
@@ -262,21 +271,32 @@ async def record_visit(
     current_user: Optional[dict] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ):
-    """The app opened this store. Counted once per visitor per half hour;
-    the owner's own visits aren't counted."""
-    await store_counter_limiter.check_and_record(_client_key(request, current_user))
+    """The app or the web storefront opened this store. Counted once per
+    visitor per half hour; the owner's own visits, and crawlers, aren't
+    counted."""
+    limiter_key = (
+        f"visitor:{body.visitor}" if body.visitor and not current_user
+        else _client_key(request, current_user)
+    )
+    await store_counter_limiter.check_and_record(limiter_key)
     store = await StoreService(db).get_row(store_id)
     if current_user and current_user["id"] == store.owner_id:
         return {"counted": False}
-    visitor = (
-        f"u:{current_user['id']}" if current_user
-        else store_stats.anonymous_visitor_key(
-            request.client.host if request.client else None, request.headers.get("user-agent"),
+    user_agent = request.headers.get("user-agent")
+    if body.surface == "web" and store_stats.is_bot(user_agent):
+        return {"counted": False}
+    if current_user:
+        visitor = f"u:{current_user['id']}"
+    elif body.visitor:
+        visitor = f"v:{body.visitor}"
+    else:
+        visitor = store_stats.anonymous_visitor_key(
+            request.client.host if request.client else None, user_agent,
         )
+    source = store_stats.visit_source(
+        body.via, body.referrer if body.surface == "web" else None,
     )
-    counted = await store_stats.record_visit(
-        db, store_id, "app", store_stats.visit_source(body.via), visitor,
-    )
+    counted = await store_stats.record_visit(db, store_id, body.surface, source, visitor)
     return {"counted": counted}
 
 

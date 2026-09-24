@@ -24,7 +24,7 @@ import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import 'store_media_image.dart';
-import 'store_view_screen.dart';
+import 'store_home_screen.dart';
 
 class StoreListScreen extends StatefulWidget {
   const StoreListScreen({super.key});
@@ -235,9 +235,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
               onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => const StoreViewScreen(),
-                      settings: RouteSettings(
-                          arguments: {'storeId': _stores[i].id}))),
+                      builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
             ),
             childCount: _stores.length,
           ),

@@ -42,10 +42,11 @@ import 'screens/boost_screen.dart';
 import 'screens/review_screen.dart';
 import 'features/stores/presentation/my_store_screen.dart';
 import 'features/stores/presentation/setup/store_setup_screen.dart';
-import 'features/stores/presentation/store_view_screen.dart';
+import 'features/stores/presentation/store_home_screen.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
 import 'services/callkit_service.dart';
+import 'services/deep_link_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -99,6 +100,9 @@ void main() async {
   // request comes back 401, then retries with the new token.
   apiClient.onUnauthorized = ApiService.renewSession;
   await NotificationService.instance.initialize(navKey: navigatorKey);
+  // broka.co.ke/store links: held until the splash screen is done. Not
+  // awaited - startup never waits on it.
+  unawaited(DeepLinkService.instance.init(navigatorKey));
 
   // Firebase is optional at this point in BROKA's rollout (see
   // FCM_SETUP_REMAINING.md for exactly what's still externally
@@ -529,7 +533,8 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         // lands on the setup wizard.
         '/create-store':     (_) => const StoreSetupScreen(),
         '/store-manage':     (_) => const MyStoreScreen(),
-        '/store-view':       (_) => const StoreViewScreen(),
+        // Arguments: {storeId} or {slug}, and optionally {via}.
+        '/store-view':       (_) => const StoreHomeScreen(),
       },
     );
   }
