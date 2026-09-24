@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.image_processing import VARIANTS, process_image
 from api.core.media_storage import current_storage, storage_named
-from api.models.media import MediaAsset
+from api.models.media import MediaAsset, MediaPurpose
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,44 @@ async def read_variant(asset: MediaAsset, name: str = "large") -> Optional[bytes
             if found:
                 return found[0]
     return None
+
+
+# ── Link previews ─────────────────────────────────────────────────────────────
+
+PREVIEW_VARIANT = "og"
+# Images that appear on public store and product pages. Profile photos are
+# never turned into shareable previews.
+PREVIEWABLE = frozenset({
+    MediaPurpose.LISTING_PHOTO, MediaPurpose.LISTING_SHOWCASE,
+    MediaPurpose.STORE_LOGO, MediaPurpose.STORE_COVER, MediaPurpose.STORE_PHOTO,
+})
+
+
+def preview_key(asset_id: str) -> str:
+    return f"img/{asset_id}/{PREVIEW_VARIANT}.jpg"
+
+
+async def link_preview(db: AsyncSession, asset: MediaAsset) -> Optional[tuple[str, Optional[bytes]]]:
+    """(storage key, JPEG bytes if made just now) of the asset's 1200x630
+    link-preview JPEG, made on first request and stored with its other
+    sizes. None when the asset has no image to make it from."""
+    from api.core.image_processing import to_link_preview
+
+    stored = asset.variant_map()
+    entry = stored.get(PREVIEW_VARIANT)
+    if entry and entry.get("key"):
+        return entry["key"], None
+    source = await read_variant(asset, "large")
+    if source is None:
+        return None
+    fit = "contain" if asset.purpose == MediaPurpose.STORE_LOGO else "cover"
+    jpeg = await asyncio.to_thread(to_link_preview, source, fit)
+    key = preview_key(asset.id)
+    await storage_named(asset.storage).put(key, jpeg, "image/jpeg")
+    stored[PREVIEW_VARIANT] = {"key": key, "width": 1200, "height": 630}
+    asset.variants = json.dumps(stored)
+    await db.commit()
+    return key, jpeg
 
 
 # ── Validate what a client sends ──────────────────────────────────────────────

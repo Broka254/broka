@@ -1,0 +1,20 @@
+.footer {
+  position: relative;
+  z-index: 1;
+  max-width: var(--page-width);
+  margin: 40px auto 0;
+  padding: 24px 16px 40px;
+  border-top: 1px solid var(--border);
+  color: var(--text-mid);
+  font-size: 13px;
+  text-align: center;
+}
+
+.footer p {
+  margin: 0 0 8px;
+}
+
+.small {
+  color: var(--text-low);
+  font-size: 12px;
+}

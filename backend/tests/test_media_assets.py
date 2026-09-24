@@ -560,3 +560,62 @@ class TestShowcaseInput:
         assert uri.startswith("data:image/jpeg;base64,")
         img = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1])))
         assert img.format == "JPEG"
+
+
+# ── Link previews (og:image) ──────────────────────────────────────────────────
+
+class TestLinkPreviews:
+    @pytest.mark.asyncio
+    async def test_a_store_cover_becomes_a_1200x630_jpeg_made_once(self, client):
+        _, headers = await _store_owner()
+        cover = await _upload(client, headers, purpose="store_cover", raw=_jpeg((1600, 1600)))
+        first = await client.get(f"/media/og/{cover['id']}.jpg")
+        assert first.status_code == 200
+        assert first.headers["content-type"] == "image/jpeg"
+        assert "immutable" in first.headers["cache-control"]
+        img = Image.open(io.BytesIO(first.content))
+        assert (img.format, img.size) == ("JPEG", (1200, 630))
+
+        # Stored with the image's other sizes, and served from there after.
+        async with AsyncSessionLocal() as db:
+            asset = await db.get(MediaAsset, cover["id"])
+        assert asset.variant_map()["og"]["key"] == f"img/{cover['id']}/og.jpg"
+        second = await client.get(f"/media/og/{cover['id']}.jpg")
+        assert second.content == first.content
+        served = await client.get(f"/media/i/img/{cover['id']}/og.jpg")
+        assert served.status_code == 200 and served.content == first.content
+
+    @pytest.mark.asyncio
+    async def test_a_logo_is_fitted_whole_not_cropped(self, client):
+        _, headers = await _store_owner()
+        buf = io.BytesIO()
+        Image.new("RGBA", (400, 400), (200, 50, 50, 255)).save(buf, "PNG")
+        logo = await _upload(client, headers, purpose="store_logo", raw=buf.getvalue())
+        r = await client.get(f"/media/og/{logo['id']}.jpg")
+        img = Image.open(io.BytesIO(r.content)).convert("RGB")
+        # The corners are BROKA's background, the middle is the logo.
+        assert img.getpixel((5, 5)) == pytest.approx(image_processing.PREVIEW_BACKGROUND, abs=6)
+        assert img.getpixel((600, 315)) == pytest.approx((200, 50, 50), abs=8)
+        # Fitted, not stretched: a square logo stays square (504 px tall
+        # inside the 630 px frame, so 504 px wide too).
+        assert img.getpixel((600 - 240, 315)) == pytest.approx((200, 50, 50), abs=8)
+        assert img.getpixel((600 - 270, 315)) == pytest.approx(
+            image_processing.PREVIEW_BACKGROUND, abs=6)
+
+    @pytest.mark.asyncio
+    async def test_unknown_ids_and_private_images_have_no_preview(self, client):
+        assert (await client.get(f"/media/og/{uuid.uuid4()}.jpg")).status_code == 404
+        assert (await client.get("/media/og/not-an-id.jpg")).status_code == 404
+        user, _ = await _user()
+        async with AsyncSessionLocal() as db:
+            avatar = MediaAsset(owner_id=user.id, purpose="avatar", storage="db", width=1,
+                                height=1, sha256="x", variants="{}")
+            db.add(avatar)
+            await db.commit()
+            avatar_id = avatar.id
+        assert (await client.get(f"/media/og/{avatar_id}.jpg")).status_code == 404
+
+    def test_preview_rendering_directly(self):
+        webp = process_image(_jpeg((3000, 1000))).variants["large"][0]
+        out = Image.open(io.BytesIO(image_processing.to_link_preview(webp)))
+        assert out.size == (1200, 630) and out.format == "JPEG"

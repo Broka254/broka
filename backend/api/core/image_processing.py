@@ -143,3 +143,38 @@ def to_jpeg(webp_bytes: bytes, quality: int = 88) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+# Link previews (og:image). WhatsApp - how most store links are shared -
+# doesn't show WebP preview images, so previews are JPEG, at the 1.91:1 size
+# every preview card uses.
+PREVIEW_SIZE = (1200, 630)
+PREVIEW_BACKGROUND = (3, 4, 10)   # BROKA's near-black
+
+
+def to_link_preview(image_bytes: bytes, fit: str = "cover", quality: int = 82) -> bytes:
+    """A 1200x630 JPEG of a stored image. "cover" fills the frame and crops
+    the overflow from the centre (photos); "contain" fits the whole image on
+    BROKA's dark background (logos, which must not be cropped)."""
+    img = Image.open(io.BytesIO(image_bytes))
+    img.load()
+    has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+    img = img.convert("RGBA" if has_alpha else "RGB")
+    width, height = PREVIEW_SIZE
+    canvas = Image.new("RGB", PREVIEW_SIZE, PREVIEW_BACKGROUND)
+    if fit == "contain":
+        inner = (int(width * 0.8), int(height * 0.8))
+        scale = min(inner[0] / img.width, inner[1] / img.height)
+        size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+        placed = img.resize(size, Image.Resampling.LANCZOS)
+        offset = ((width - size[0]) // 2, (height - size[1]) // 2)
+        canvas.paste(placed, offset, placed if placed.mode == "RGBA" else None)
+    else:
+        if img.mode == "RGBA":
+            flat = Image.new("RGB", img.size, PREVIEW_BACKGROUND)
+            flat.paste(img, mask=img.split()[3])
+            img = flat
+        canvas = ImageOps.fit(img, PREVIEW_SIZE, Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=quality, optimize=True, progressive=True)
+    return buf.getvalue()
