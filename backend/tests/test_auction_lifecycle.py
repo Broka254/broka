@@ -13,6 +13,7 @@ tests what both callers actually depend on. The one HTTP test here exists
 to prove the endpoint really does delegate rather than keeping a second
 copy of the rules.
 """
+import re
 import asyncio
 import uuid
 from datetime import datetime, timedelta
@@ -2267,7 +2268,11 @@ class TestEveryRouteObeysTheLifecycle:
         ):
             assert res.status_code == 200 or res.status_code == 201, name
             assert "reserve_price" not in res.text, f"{name} leaks the reserve"
-            assert "99000" not in res.text, f"{name} leaks the reserve value"
+            # The reserve as a value on its own (99000, 99000.0, "99,000"),
+            # not any run of those digits: responses are full of ids and
+            # microsecond timestamps, and "...:56.990008" contains "99000".
+            assert not re.search(r"(?<![\w.])99,?000(?:\.0+)?(?!\w)", res.text), (
+                f"{name} leaks the reserve value")
 
     @pytest.mark.asyncio
     async def test_the_websocket_snapshot_carries_state_not_the_reserve(self):
