@@ -18,8 +18,24 @@ Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
 
 ---
 
-## Recent changes (2026-09-23)
+## Recent changes (2026-09-24)
 
+- **Setting up an online store, and "My Store"** (Online Stores phase 2,
+  see `STORES_PLAN.md`). Store setup is a step-by-step wizard on the
+  signup screens' look: name, a link the owner picks
+  (`broka.co.ke/store/<name>`, checked live as they type and fixed once
+  the store opens), one of BROKA's 16 categories, county and area from a
+  list of all 47 counties, logo, cover and shop photos, and an optional
+  business email proven with an emailed code. The draft is kept on the
+  phone after every change. Only long-term sellers can open a store; a
+  short-term seller (or buyer) adds business details as the wizard's
+  first step. When the store opens, the owner gets its link, a QR code
+  and one-tap sharing to WhatsApp, TikTok, Instagram, Facebook and X.
+  My Store shows real visit counts for the last 7 days and where visitors
+  came from (each shared link carries a `?via=` tag; link-preview crawlers
+  aren't counted), lets the owner pause the store, add products straight
+  into it or move existing listings in, and edit every part of it. Stores
+  no longer have phone or WhatsApp contact fields.
 - **Images are stored files, not text in the database** (Online Stores
   phase 1, see `STORES_PLAN.md`). Every photo is checked, turned upright,
   stripped of its metadata (phone photos carry GPS coordinates) and saved
@@ -50,8 +66,10 @@ Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
 
 Regression tests: `backend/tests/test_cost_bounds.py`,
 `backend/tests/test_route_ordering.py`, `backend/tests/test_payment_races.py`,
-`backend/tests/test_media_assets.py`, `flutter_app/test/session_renewal_test.dart`
-and `flutter_app/test/image_upload_test.dart`.
+`backend/tests/test_media_assets.py`, `backend/tests/test_store_setup.py`,
+`flutter_app/test/session_renewal_test.dart`,
+`flutter_app/test/image_upload_test.dart` and
+`flutter_app/test/store_setup_test.dart`.
 
 ---
 
@@ -133,6 +151,26 @@ base64; a background pass every 5 minutes converts a batch at a time
 first legacy photo only until a row is converted, and single-listing reads
 keep the base64 for older app builds.
 
+### Online stores
+
+A store is a long-term seller's business page: `Listing.store_id` puts a
+listing in it, and every store product still appears on Home and in
+search. The owner picks the store's link name once, at setup
+(`GET /stores/name-available` checks it; rules in
+`api/domains/stores/naming.py`: 3-30 lowercase letters, digits and single
+hyphens, no reserved words), and renaming the store never changes it. The
+full link is `{STORE_LINK_BASE}/<name>`.
+
+`GET /store/<name>` is the public web page, and `GET /stores/{id}/listings`
+and `/categories` feed the storefront (search, category and sort). Store
+visits (the app's `POST /stores/{id}/visit` and web page views) and share
+taps are counted per day in `store_daily_counts`, once per visitor per
+half hour, never for the owner or for crawlers; the owner reads them with
+`GET /stores/{id}/stats`. A business email is only saved once proven with
+an emailed code (`POST /stores/email/request-code`, `/stores/email/verify`),
+unless it's the owner's own verified account email. The phased plan,
+including checkout and the web storefront, is in `STORES_PLAN.md`.
+
 ### Calling
 
 WebRTC audio and video between the two phones. The backend relays call
@@ -212,6 +250,7 @@ flutter test
 | `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` | At least one | AI providers, tried in that order |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `MEDIA_PUBLIC_BASE_URL` | Production | Image storage on Cloudflare R2. Any unset: images are stored in the database |
 | `PUBLIC_API_BASE_URL` | Optional | This API's own URL, for absolute links to database-stored images |
+| `STORE_LINK_BASE` | Default `https://broka.co.ke/store` | Base of every store's shareable link. Until broka.co.ke serves `/store/*`, set it to this API's URL + `/store` so shared links open |
 | `REDIS_URL` | Strongly recommended | Rate limits and idempotency across instances, call state, the ARQ queue |
 | `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |
@@ -234,7 +273,7 @@ routes need `Authorization: Bearer <access token>`.
 | `/auth` | Phone and email OTP, register, login, profile, token refresh and revoke |
 | `/listings` | Browse, create and edit listings; listing and seller metrics; AI showcase images |
 | `/categories`, `/trending`, `/traders` | Discovery |
-| `/stores`, `/store/{slug}` | Store API, and the public HTML storefront page |
+| `/stores`, `/store/{slug}` | Store setup (link check, business-email codes), catalogue and categories, visit/share counting, owner stats, and the public HTML storefront page |
 | `/auctions` (legacy `/auction`) | Auction grid, detail and terms |
 | `/negotiate` | Zeno chat (`/chat`), mediated messages, direct chat, inbox, read receipts, deal timers, scam check, price advice |
 | `/buy-agent-requests` | Standing "find and negotiate for me" requests |
@@ -322,6 +361,8 @@ PostgreSQL database, both on Render's free plan.
 - [x] STT / TTS voice support
 - [x] Image storage on Cloudflare R2 (WebP sizes, metadata stripped)
 - [x] `flutter test` in CI
+- [x] Online stores: setup wizard with a fixed shareable link, My Store with visit stats (Online Stores phase 2)
+- [ ] Online stores: full storefront in the app and on the web, cart and checkout (phases 3-5 of `STORES_PLAN.md`)
 - [ ] Consume the Redis event streams (events are written there but only handled in-process today)
 - [ ] Event sourcing for payments (Phase 3)
 - [ ] ML-based fraud models (Phase 4)

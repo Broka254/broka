@@ -139,7 +139,51 @@ the create-store request uploads up to 13 images in one body.
 is under ~200 KB of JSON plus thumbnails, and existing listings are
 backfilled.
 
-### Phase 2 — Store setup and "My Store"
+### Phase 2 — Store setup and "My Store" ✅ (2026-09-24)
+
+Shipped as planned, with these differences and additions:
+- **No new upgrade endpoint.** `POST /auth/upgrade-to-seller` already
+  turns a buyer or short-term seller into a long-term seller with business
+  name, category and location, so the wizard's first step (shown only to
+  those sellers) calls it.
+- **The link's base is a setting**, `STORE_LINK_BASE` (default
+  `https://broka.co.ke/store`). Until broka.co.ke serves `/store/*`
+  (phase 3), point it at the API's own `/store` page so links shared now
+  open; the link *name* never changes either way.
+- **Business email** codes come from `POST /stores/email/request-code` and
+  `/stores/email/verify` (signup's email step refuses addresses that
+  already have an account, and the owner's own address usually does). The
+  owner's already-verified account email needs no code. An unproven
+  address is refused, not saved unverified; app builds before phase 2
+  still send `official_email`, saved as unverified, and nothing is sent to
+  an unverified address.
+- **Visits**: counted once per visitor per store per 30 minutes (Redis
+  `SET NX`, in-process fallback), never for the owner, and never for
+  crawlers or link-preview fetchers (WhatsApp and Facebook fetch every
+  shared link to draw its preview). Sources: whatsapp, tiktok, instagram,
+  facebook, x, qr, direct, other. Days are Kenyan days (UTC+3).
+- **Sharing** uses a small Android share bridge in `MainActivity.kt`
+  rather than a share plugin, since CI builds on a pinned Flutter/AGP:
+  WhatsApp (or WhatsApp Business) directly, Facebook directly or its web
+  sharer, X's web intent, Instagram's share target with the link also
+  copied, TikTok copies the link and opens the app, and "More" opens the
+  system sheet. The QR code (`qr_flutter`, pure Dart) carries `?via=qr`.
+- **Subcounties** are the 290 constituencies, with "My area isn't listed"
+  for free text.
+- **Old stores** get a category from their `specialization` at startup,
+  so the directory's category filter finds them.
+- **Settings** reuse the wizard's own pages, one section at a time; the
+  link is shown locked.
+- My Store's orders and revenue wait for checkout (phase 4): nothing is
+  shown in their place.
+- Found on the way: `list_listings`'s "newest" sort was really BROKA's
+  ranking; the store catalogue's "Newest" uses a new strict `recent` sort.
+
+Tests: `backend/tests/test_store_setup.py` (67),
+`flutter_app/test/store_setup_test.dart` (27, including no-overflow at
+320 and 430 dp for every wizard page and store screen).
+
+The original Phase 2 plan follows.
 
 **Backend**
 - Store fields:
