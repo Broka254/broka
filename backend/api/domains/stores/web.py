@@ -25,17 +25,22 @@ URI is NOT usable as an Open Graph og:image - most social crawlers
 previews will show no image until real object-storage URLs exist. og:image
 is deliberately omitted below rather than set to something that silently
 doesn't work.
+
+Each page view is also a store visit for the owner's stats
+(api/domains/stores/stats.py), attributed from the link's `?via=` tag or
+the Referer header.
 """
 from __future__ import annotations
 
 import html as _html
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
+from . import stats as store_stats
 from .service import StoreService
 
 router = APIRouter()
@@ -81,8 +86,7 @@ def _listing_card(listing: dict) -> str:
 
 def render_store_page(store: dict, listings: list) -> str:
     name = _esc(store["name"])
-    slug = _esc(store["slug"])
-    specialization = _esc(store.get("specialization"))
+    category = _esc(store.get("category"))
     location = ", ".join(p for p in [store.get("subcounty"), store.get("county")] if p)
     location = _esc(location) if location else ""
     description = _esc(store.get("description"))
@@ -90,7 +94,7 @@ def render_store_page(store: dict, listings: list) -> str:
     logo = store.get("logo_url")
     initial = _esc((store["name"][:1] or "?").upper())
 
-    subtitle_parts = [p for p in [specialization, location] if p]
+    subtitle_parts = [p for p in [category, location] if p]
     subtitle = " &middot; ".join(subtitle_parts)
 
     logo_html = (
@@ -98,16 +102,26 @@ def render_store_page(store: dict, listings: list) -> str:
         if logo else f'<div class="logo-fallback">{initial}</div>'
     )
 
+    # Buyers reach a store through BROKA (chat, offers, checkout), so the
+    # page shows no phone numbers; a verified business email is the one
+    # direct contact a store can list.
     contacts_html = ""
-    contact_items = []
-    if store.get("official_phone"):
-        contact_items.append(f'<a href="tel:{_esc(store["official_phone"])}">Call</a>')
-    if store.get("official_whatsapp"):
-        contact_items.append(f'<a href="https://wa.me/{_esc(store["official_whatsapp"])}">WhatsApp</a>')
-    if store.get("official_email"):
-        contact_items.append(f'<a href="mailto:{_esc(store["official_email"])}">Email</a>')
-    if contact_items:
-        contacts_html = f'<div class="contacts">{"".join(contact_items)}</div>'
+    if store.get("business_email") and store.get("business_email_verified"):
+        contacts_html = (
+            f'<div class="contacts"><a href="mailto:{_esc(store["business_email"])}">'
+            f'{_esc(store["business_email"])}</a></div>'
+        )
+
+    owner = store.get("owner") or {}
+    trust_items = []
+    if owner.get("verified"):
+        trust_items.append("Verified seller")
+    if owner.get("completed_deals"):
+        n = owner["completed_deals"]
+        trust_items.append(f"{n} completed deal{'s' if n != 1 else ''}")
+    trust_html = (
+        f'<p class="trust">{" &middot; ".join(trust_items)}</p>' if trust_items else ""
+    )
 
     cards_html = "".join(_listing_card(l) for l in listings)
     catalog_html = (
@@ -135,7 +149,7 @@ def render_store_page(store: dict, listings: list) -> str:
 <meta property="og:type" content="website">
 <meta property="og:title" content="{name} · BROKA">
 <meta property="og:description" content="{_esc(og_description)}">
-<meta property="og:url" content="https://broka.co.ke/store/{slug}">
+<meta property="og:url" content="{_esc(store.get("url"))}">
 {og_image_html}
 <style>
   :root {{
@@ -157,6 +171,7 @@ def render_store_page(store: dict, listings: list) -> str:
   h1 {{ margin:0 0 4px; font-size:20px; }}
   .subtitle {{ color:var(--text-mid); font-size:13px; margin:0; }}
   .count {{ color:var(--text-low); font-size:12px; margin-top:4px; }}
+  .trust {{ color:var(--gold); font-size:12px; font-weight:600; margin:4px 0 0; }}
   .description {{ color:var(--text-mid); font-size:13.5px; line-height:1.5; margin:16px 0 0; }}
   .contacts {{ margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; }}
   .contacts a {{ color:var(--text-high); text-decoration:none; font-size:12.5px; font-weight:600;
@@ -186,6 +201,7 @@ def render_store_page(store: dict, listings: list) -> str:
       <h1>{name}</h1>
       <p class="subtitle">{subtitle}</p>
       <p class="count">{listing_count} listing{'s' if listing_count != 1 else ''}</p>
+      {trust_html}
     </div>
   </div>
   {description_html}
@@ -221,8 +237,13 @@ def render_not_found_page(slug: str) -> str:
 
 
 @router.get("/{slug}", response_class=HTMLResponse)
-async def store_public_page(slug: str, db: AsyncSession = Depends(get_db)):
-    """https://broka.co.ke/store/{slug} - the public storefront. Public,
+async def store_public_page(
+    slug: str,
+    request: Request,
+    via: Optional[str] = Query(None, max_length=32),
+    db: AsyncSession = Depends(get_db),
+):
+    """{STORE_LINK_BASE}/{slug} - the public storefront. Public,
     unauthenticated, and deliberately tolerant: a bad/unknown slug renders
     a friendly HTML page (still 404 status) rather than a raw JSON error,
     since a browser - not the app - is the caller here."""
@@ -233,4 +254,13 @@ async def store_public_page(slug: str, db: AsyncSession = Depends(get_db)):
         return HTMLResponse(content=render_not_found_page(slug), status_code=404)
 
     listings = await svc.list_store_listings(store["id"], limit=24)
+    user_agent = request.headers.get("user-agent")
+    if request.method == "GET" and not store_stats.is_bot(user_agent):
+        await store_stats.record_visit(
+            db, store["id"], "web",
+            store_stats.visit_source(via, request.headers.get("referer")),
+            store_stats.anonymous_visitor_key(
+                request.client.host if request.client else None, user_agent,
+            ),
+        )
     return HTMLResponse(content=render_store_page(store, listings))

@@ -209,12 +209,16 @@ class AuthService:
 
     async def request_email_otp(
         self, email: str, purpose: OtpPurpose = OtpPurpose.registration,
+        allow_registered: bool = False,
     ) -> dict:
+        """Email a verification code. `allow_registered` is for proving an
+        address for something other than a new account - a store's business
+        email may well be an address that already has a BROKA account."""
         email = _normalize_email(email)
         if not email:
             raise HTTPException(status_code=400, detail="Enter a valid email address")
 
-        if purpose == OtpPurpose.registration:
+        if purpose == OtpPurpose.registration and not allow_registered:
             existing = await self.repo.get_by_email(email)
             if existing:
                 raise HTTPException(status_code=409, detail="That email is already in use")

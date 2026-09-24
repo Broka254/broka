@@ -1084,7 +1084,7 @@ async def init_db():
     _init_log = _logging.getLogger(__name__)
     for _module, _names in (
         ("api.models.dispute", ("DisputeCase", "DisputeEvent", "DisputeEvidence", "DisputeTimer")),
-        ("api.models.store", ("Store",)),
+        ("api.models.store", ("Store", "StoreDailyCount")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
     ):
@@ -1237,6 +1237,10 @@ async def init_db():
             "ALTER TABLE stores ADD COLUMN logo_id VARCHAR",
             "ALTER TABLE stores ADD COLUMN cover_id VARCHAR",
             "ALTER TABLE stores ADD COLUMN photo_ids TEXT",
+            # Online Stores phase 2. FALSE rather than 0: Postgres won't
+            # take an integer default for a boolean column.
+            "ALTER TABLE stores ADD COLUMN category VARCHAR",
+            "ALTER TABLE stores ADD COLUMN business_email_verified BOOLEAN NOT NULL DEFAULT FALSE",
         ]
         # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
         # inside its own SAVEPOINT. Previously they shared this function's
@@ -1358,6 +1362,15 @@ async def init_db():
             print(f"✅ Categories seeded: {seed_result}")
     except Exception as e:
         print(f"⚠️ Category seeding failed (non-fatal, app will still start): {e!r}")
+
+    # Online Stores phase 2: stores made before `category` existed.
+    try:
+        from api.domains.stores.categories import backfill_store_categories
+        updated = await backfill_store_categories()
+        if updated:
+            print(f"✅ Store categories filled in for {updated} store(s)")
+    except Exception as e:
+        print(f"⚠️ Store category backfill failed (non-fatal): {e!r}")
 
     print("✅ Database initialised (v5.0)")
 

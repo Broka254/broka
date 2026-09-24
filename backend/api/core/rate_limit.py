@@ -169,6 +169,8 @@ if _settings.is_test:
     stt_transcribe_limiter = _make_limiter("stt_transcribe", limit=1000, window_seconds=60)
     zeno_chat_limiter      = _make_limiter("zeno_chat",      limit=1000, window_seconds=60)
     image_upload_limiter   = _make_limiter("image_upload",   limit=1000, window_seconds=60)
+    store_name_check_limiter = _make_limiter("store_name_check", limit=1000, window_seconds=60)
+    store_counter_limiter    = _make_limiter("store_counter",    limit=1000, window_seconds=60)
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
@@ -194,6 +196,13 @@ else:
     # takes up to 6 photos and store setup about 8 images; 30/min leaves
     # room for retries on a bad connection.
     image_upload_limiter   = _make_limiter("image_upload",   limit=30, window_seconds=60)
+    # GET /stores/name-available, keyed by user: the setup wizard checks as
+    # the owner types (debounced). 60/min is plenty for that and stops the
+    # endpoint being used to enumerate every store link.
+    store_name_check_limiter = _make_limiter("store_name_check", limit=60, window_seconds=60)
+    # POST /stores/{id}/visit and /share, keyed by user or IP. Counting is
+    # de-duplicated per visitor anyway; this caps what a script can write.
+    store_counter_limiter    = _make_limiter("store_counter",    limit=60, window_seconds=60)
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)

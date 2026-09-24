@@ -268,6 +268,13 @@ class Settings:
     # ("/media/i/...") and the app resolves them against its API base.
     public_api_base_url: str = field(default_factory=lambda: os.getenv(
         "PUBLIC_API_BASE_URL", "").strip().rstrip("/"))
+    # Where a store's shareable link points: {STORE_LINK_BASE}/{link name}.
+    # broka.co.ke/store/* is the storefront's permanent home. Until that
+    # domain routes /store/* to a storefront, point this at this service
+    # ({PUBLIC_API_BASE_URL}/store), which serves a store page itself, so
+    # links shared in the meantime open.
+    store_link_base: str = field(default_factory=lambda: os.getenv(
+        "STORE_LINK_BASE", "https://broka.co.ke/store").strip().rstrip("/"))
 
     # ── Redis (for rate-limiting, pub/sub, and distributed workers) ───────────
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))

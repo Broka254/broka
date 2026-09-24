@@ -384,7 +384,8 @@ class ListingService:
         search: Optional[str] = None,
         location: Optional[str] = None,
         attributes: Optional[dict] = None,
-        sort: Optional[str] = None,  # "newest" (default) | "price_low" | "price_high"
+        # None/"newest": BROKA's ranking. "recent": strictly newest first.
+        sort: Optional[str] = None,  # | "recent" | "price_low" | "price_high"
         limit: int = 20,
         offset: int = 0,
         with_total: bool = False,
@@ -465,7 +466,9 @@ class ListingService:
             # location_name, same portable .ilike() as search above.
             q = q.where(Listing.location_name.ilike(f"%{location.strip()}%"))
 
-        if sort == "price_low":
+        if sort == "recent":
+            q = q.order_by(desc(Listing.created_at))
+        elif sort == "price_low":
             q = q.order_by(Listing.price.asc())
         elif sort == "price_high":
             q = q.order_by(Listing.price.desc())

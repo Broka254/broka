@@ -42,7 +42,9 @@ import re
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import (
+    Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint,
+)
 from api.database import Base
 
 
@@ -71,10 +73,12 @@ class Store(Base):
     owner_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
 
     name = Column(String, nullable=False)
-    # Unique, URL-safe, never a raw display name (see slugify above and
-    # StoreService._unique_slug for the collision-handling that keeps this
-    # deterministic AND unique together). Powers GET /stores/slug/{slug}
-    # and the future public broka.co.ke/store/{slug} page.
+    # The store's link name: broka.co.ke/store/{slug}. Chosen by the owner
+    # when the store is set up (rules in api/domains/stores/naming.py) and
+    # fixed from then on - the link is printed on flyers and shared in
+    # WhatsApp groups, so renaming the store never changes it. Stores made
+    # by app builds that don't send one get a name derived from the store
+    # name (StoreService._unique_slug).
     slug = Column(String, nullable=False, unique=True, index=True)
 
     # Branding/media. Same "JSON-as-Text" convention this codebase already
@@ -94,7 +98,12 @@ class Store(Base):
     cover_id  = Column(String, nullable=True)
     photo_ids = Column(Text, nullable=True)   # ordered JSON list of asset ids
 
-    specialization = Column(String, nullable=True)   # e.g. "Electronics"
+    # One of BROKA's top-level categories (api/domains/categories/seed.py).
+    # Replaces `specialization`, a free-text value from an older 11-item
+    # list; stores that only have that are mapped on read
+    # (api/domains/stores/categories.py).
+    category       = Column(String, nullable=True)
+    specialization = Column(String, nullable=True)   # legacy, see category
     description    = Column(Text, nullable=True)
 
     country              = Column(String, nullable=False, default="Kenya")
@@ -102,9 +111,15 @@ class Store(Base):
     subcounty            = Column(String, nullable=True)
     location_description = Column(String, nullable=True)
 
+    # No longer read or written: buyers reach a store through BROKA's own
+    # chat and checkout. Kept so existing rows aren't disturbed.
     official_phone    = Column(String, nullable=True)
     official_whatsapp = Column(String, nullable=True)
-    official_email     = Column(String, nullable=True)
+    # The store's business email (API name: business_email). Optional.
+    # business_email_verified says the owner proved they receive mail
+    # there; only a verified address is used to send anything.
+    official_email          = Column(String, nullable=True)
+    business_email_verified = Column(Boolean, default=False, nullable=False)
 
     is_active  = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
@@ -117,3 +132,37 @@ class Store(Base):
     # store<->listing lookups. Matching that keeps this model consistent
     # with how the rest of the codebase actually queries, and avoids any
     # async lazy-load surprise from an unused relationship attribute.
+
+
+class StoreDailyCount(Base):
+    """Per-day counters behind a store owner's stats: storefront visits
+    and share-button taps.
+
+    One row per (store, day, kind, surface, source), incremented in place -
+    never one row per visit - so the table grows by at most a handful of
+    rows per store per day however busy the store is, and a 7-day chart is
+    a small indexed read.
+
+      kind    "visit" or "share"
+      surface where it happened: "app" or "web"
+      source  visits: where the visitor came from (whatsapp, tiktok,
+              instagram, facebook, x, qr, direct, other); shares: the
+              channel the owner or a buyer shared to (whatsapp, ..., copy,
+              qr, other)
+
+    Counting rules (de-duplication, the owner's own visits) live in
+    api/domains/stores/stats.py.
+    """
+    __tablename__ = "store_daily_counts"
+    __table_args__ = (
+        UniqueConstraint("store_id", "day", "kind", "surface", "source",
+                         name="uq_store_daily_count"),
+    )
+
+    id       = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id = Column(String, ForeignKey("stores.id"), nullable=False, index=True)
+    day      = Column(Date, nullable=False)
+    kind     = Column(String(16), nullable=False)
+    surface  = Column(String(8), nullable=False)
+    source   = Column(String(16), nullable=False)
+    count    = Column(Integer, nullable=False, default=0)

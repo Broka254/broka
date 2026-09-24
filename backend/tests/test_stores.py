@@ -49,14 +49,19 @@ async def client():
 async def _register(client, phone: str, name: str, email: str, password: str) -> tuple[str, str]:
     """Returns (user_id, access_token). Phone-first registration (v6.1) -
     same otp/request -> otp/verify -> register -> login round trip as
-    test_traders.py/test_listings.py."""
+    test_traders.py/test_listings.py. Registers a long-term seller: only
+    they can open a store (tests/test_store_setup.py covers the others)."""
     req = await client.post("/auth/otp/request", json={"phone": phone})
+    assert "debug_code" in req.json(), req.text
     code = req.json()["debug_code"]
     verify = await client.post("/auth/otp/verify", json={"phone": phone, "code": code})
     verify_token = verify.json()["phone_verify_token"]
     reg = await client.post("/auth/register", json={
         "phone_verify_token": verify_token, "name": name, "email": email,
         "password": password, "lat": -1.286, "lng": 36.817,
+        "account_type": "buyer_seller", "seller_tier": "long_term",
+        "business_name": name, "business_category": "Electronics",
+        "business_location": "Nairobi",
     })
     login = await client.post("/auth/login", json={"phone": phone, "password": password})
     return reg.json()["user_id"], login.json()["access_token"]
@@ -107,18 +112,24 @@ class TestStoreCRUD:
         owner_id, owner_token = owner
         resp = await client.post("/stores", json={
             "name": "Clanix Electronics",
-            "specialization": "Electronics",
+            "category": "Electronics",
             "county": "Nairobi",
             "subcounty": "Westlands",
+            # No longer part of a store: ignored, never stored or returned.
             "official_phone": "0700111222",
+            "official_whatsapp": "0700111222",
         }, headers=_auth(owner_token))
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "Clanix Electronics"
         assert data["slug"] == "clanix-electronics"
+        assert data["url"].endswith("/clanix-electronics")
         assert data["is_active"] is True
         assert data["listing_count"] == 0
+        assert data["category"] == "Electronics"
         assert data["specialization"] == "Electronics"
+        assert "official_phone" not in data
+        assert "official_whatsapp" not in data
         # Fields never set at creation must be absent, not fabricated -
         # spec §7/§19: no invented reputation numbers.
         assert "rating" not in data

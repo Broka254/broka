@@ -51,6 +51,9 @@ async def _register(client, phone: str, name: str, email: str, password: str):
     reg = await client.post("/auth/register", json={
         "phone_verify_token": verify_token, "name": name, "email": email,
         "password": password, "lat": -1.286, "lng": 36.817,
+        "account_type": "buyer_seller", "seller_tier": "long_term",
+        "business_name": name, "business_category": "Electronics",
+        "business_location": "Nairobi",
     })
     login = await client.post("/auth/login", json={"phone": phone, "password": password})
     return reg.json()["user_id"], login.json()["access_token"]

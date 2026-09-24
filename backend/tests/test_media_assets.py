@@ -33,7 +33,9 @@ from sqlalchemy import select
 from api.core import image_processing
 from api.core.image_processing import ImageRejected, process_image
 from api.core.media_storage import R2Storage, StorageError, current_storage, use_storage
-from api.database import AsyncSessionLocal, Listing, User, init_db, reset_engine
+from api.database import (
+    AccountType, AsyncSessionLocal, Listing, SellerTier, User, init_db, reset_engine,
+)
 from api.models.media import MediaAsset
 from api.models.store import Store
 from api.security import create_access_token
@@ -92,6 +94,11 @@ async def _user(name="Seller", **extra) -> tuple[User, dict]:
         await db.commit()
         await db.refresh(u)
     return u, {"Authorization": f"Bearer {create_access_token({'sub': u.id})}"}
+
+
+async def _store_owner() -> tuple[User, dict]:
+    """Only long-term sellers can open a store."""
+    return await _user(account_type=AccountType.buyer_seller, seller_tier=SellerTier.long_term)
 
 
 async def _upload(client, headers, purpose="listing_photo", raw=None) -> dict:
@@ -423,7 +430,7 @@ class TestListings:
 class TestStores:
     @pytest.mark.asyncio
     async def test_a_store_made_from_uploads_returns_urls(self, client):
-        _, headers = await _user()
+        _, headers = await _store_owner()
         logo = await _upload(client, headers, purpose="store_logo", raw=_png_rgba())
         photo = await _upload(client, headers, purpose="store_photo")
         r = await client.post("/stores", headers=headers, json={
@@ -439,7 +446,7 @@ class TestStores:
     @pytest.mark.asyncio
     async def test_a_legacy_logo_is_converted_and_its_base64_cleared(self, client):
         from api.domains.media.backfill import run_backfill_pass
-        _, headers = await _user()
+        _, headers = await _store_owner()
         data_uri = "data:image/jpeg;base64," + base64.b64encode(_jpeg((200, 200))).decode()
         r = await client.post("/stores", headers=headers, json={
             "name": f"Legacy {uuid.uuid4().hex[:5]}", "logo_url": data_uri})
@@ -454,7 +461,7 @@ class TestStores:
 
     @pytest.mark.asyncio
     async def test_a_listing_photo_cant_be_a_store_logo(self, client):
-        _, headers = await _user()
+        _, headers = await _store_owner()
         photo = await _upload(client, headers)
         r = await client.post("/stores", headers=headers, json={
             "name": f"Wrong {uuid.uuid4().hex[:5]}", "logo_id": photo["id"]})
