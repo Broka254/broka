@@ -107,7 +107,7 @@ services:
       - key: PUBLIC_API_BASE_URL
         sync: false          # This service's own URL; absolute links for database-stored images
       - key: STORE_LINK_BASE
-        sync: false          # Store links: https://broka.co.ke/store once that domain serves stores; until then https://<this service>/store
+        value: https://broka.co.ke/store   # Every store link: https://broka.co.ke/store/<name>
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false          # Optional: FCM push notifications
       - key: CLOUDFLARE_TURN_KEY_ID

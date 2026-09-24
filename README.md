@@ -250,7 +250,7 @@ flutter test
 | `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` | At least one | AI providers, tried in that order |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `MEDIA_PUBLIC_BASE_URL` | Production | Image storage on Cloudflare R2. Any unset: images are stored in the database |
 | `PUBLIC_API_BASE_URL` | Optional | This API's own URL, for absolute links to database-stored images |
-| `STORE_LINK_BASE` | Default `https://broka.co.ke/store` | Base of every store's shareable link. Until broka.co.ke serves `/store/*`, set it to this API's URL + `/store` so shared links open |
+| `STORE_LINK_BASE` | Default `https://broka.co.ke/store` | Base of every store's shareable link. Links open once broka.co.ke serves `/store/*` (the web storefront, phase 3) |
 | `REDIS_URL` | Strongly recommended | Rate limits and idempotency across instances, call state, the ARQ queue |
 | `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |

@@ -146,10 +146,11 @@ Shipped as planned, with these differences and additions:
   turns a buyer or short-term seller into a long-term seller with business
   name, category and location, so the wizard's first step (shown only to
   those sellers) calls it.
-- **The link's base is a setting**, `STORE_LINK_BASE` (default
-  `https://broka.co.ke/store`). Until broka.co.ke serves `/store/*`
-  (phase 3), point it at the API's own `/store` page so links shared now
-  open; the link *name* never changes either way.
+- **Links are `https://broka.co.ke/store/<name>` from the first store**
+  (`STORE_LINK_BASE`, set in `render.yaml`), so nothing shared ever has to
+  change. They open once broka.co.ke serves `/store/*`: that's the web
+  storefront in phase 3, or, sooner, pointing broka.co.ke's `/store/*` at
+  the API's own store page.
 - **Business email** codes come from `POST /stores/email/request-code` and
   `/stores/email/verify` (signup's email step refuses addresses that
   already have an account, and the owner's own address usually does). The
