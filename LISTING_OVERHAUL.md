@@ -209,7 +209,7 @@ agree.
 | Check | Result |
 |---|---|
 | Backend, SQLite + Redis | **1146 passed**, 2 skipped (1108 before; 38 new in `test_listing_overhaul.py`) |
-| Backend, PostgreSQL 16 | **1140 passed**, 8 skipped (the Redis-only tests, run without Redis) |
+| Backend, PostgreSQL 16 + Redis | **1148 passed**, none skipped |
 | New backend tests on the old code | all 38 fail there |
 | Flutter `analyze` (CI flags) | 0 errors, 0 warnings (21 infos, down from 22) |
 | Flutter `test` | **285 passed** (252 before; 30 new in `sell_wizard_overhaul_test.dart`, 3 new in `listing_publish_test.dart`), including a run of every new screen with animations on |
