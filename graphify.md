@@ -762,6 +762,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `sms_autofill_service.dart` — BROKA — Automatic OTP capture (Android SMS Retriever API).
 - `sound_preference_service.dart` — Persists the splash boot-sound on/off toggle so the user isn't asked to reconfigure it every time BROKA opens (splash spec §8: "The sound p…
 - `webrtc_service.dart` — BROKA - WebRTC Service Manages one P2P audio or video call via WebSocket signaling on the BROKA backend.
+- `zeno_sms_prompts.dart` — How Zeno asks "should I SMS you when a buyer shows up?" on the sell wizard's last step.
 - `zeno_voice_controller.dart` — lib/services/zeno_voice_controller.dart
 
 ### `flutter_app/lib/models/`
@@ -803,6 +804,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `voice_waveform.dart` — lib/widgets/voice_waveform.dart
 - `wizard_scaffold.dart` — BROKA - step-by-step wizard chrome
 - `zeno_avatar.dart` — lib/widgets/zeno_avatar.dart
+- `zeno_streaming_text.dart` — Zeno's words, arriving the way a language model's do.
 - `zeno_voice_card.dart` — lib/widgets/zeno_voice_card.dart
 
 ### `flutter_app/lib/theme/`
@@ -833,6 +835,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
+- `zeno_sms_prompts_test.dart` — How Zeno asks about SMS alerts on the sell wizard's last step (ZenoSmsPrompts, ZenoStreamingBubble): ten phrasings, never the same one twic…
 - `zeno_voice_test.dart` — Covers the Zeno voice layer: the Deepgram service, the session controller, and the floating card.
 
 ## Web storefront
