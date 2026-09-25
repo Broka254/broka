@@ -472,3 +472,50 @@ the rest of this document. They are reasoned from the flutter_webrtc 0.11.7
 source (`getSenders()` round-trips to native, `parameters` is a cached
 field, `AndroidAudioConfiguration.media` exists) rather than from a call
 placed on real hardware.
+
+---
+
+# Incoming-call notification: Accept and Decline (2026-09-25)
+
+**The notification had no buttons.** `showIncomingCall` posted no actions,
+so the only thing it could do was open the app: a call could not be declined
+from the shade or the lock screen at all. It now carries **Decline** and
+**Accept** (Android actions; an iOS notification category for the local
+notification — CallKit still owns ringing on iOS).
+
+- **Accept** opens the app and goes through `navigateFromPayload`, exactly
+  like a tap on the notification, which already answers (`autoAccept`).
+- **Decline** records `declined` through `POST /calls/log-result`, the same
+  request the call screen's Decline makes, which also hangs up the caller.
+  Android runs actions that don't open the app in a **separate background
+  isolate, even while the app is running** — so the handler
+  (`notificationActionBackgroundHandler`) forwards to the main isolate through
+  `IsolateNameServer` when there is one (that is where the ringer lives), and
+  declines by itself only when the app is dead.
+- `ActionBroadcastReceiver` is declared in the app manifest: this version of
+  flutter_local_notifications does not declare it, and without it Decline
+  does nothing.
+- `logCallResult` now retries once after renewing an expired session, since
+  Decline is often pressed from an app that has been in the background past
+  the 15-minute access token.
+
+Two faults on the same path, fixed here:
+
+- **An un-stoppable ring.** The FCM background handler called
+  `showIncomingCall`, which started `RingtoneService` in *that* isolate. The
+  platform ringtone channel doesn't exist there, so it fell back to the
+  bundled tone. Accept, Decline and the caller hanging up all stop the main
+  isolate's ringer, so this one played for its full 45 seconds, over the
+  call when the user answered. The background handler now passes
+  `ringInApp: false`, and a notification that is the only sound is posted
+  with `FLAG_INSISTENT`: its ringtone repeats until the notification is
+  answered, declined or cancelled.
+- **Answering a call to a closed app opened the home screen.** The call
+  notification is local (drawn from a data-only push), so
+  `FirebaseMessaging.getInitialMessage()` never sees it, and nothing read
+  `getNotificationAppLaunchDetails()`. `main()` now does, and hands the
+  payload to the splash screen's existing cold-start route.
+
+Covered by `flutter_app/test/incoming_call_notification_test.dart`, which
+fails against the previous code. **Not device-verified**: that needs an APK
+on a phone.

@@ -1451,20 +1451,31 @@ class ApiService {
     int? durationSecs,
     String callType = 'audio', // 'audio' | 'video'
   }) async {
+    final body = jsonEncode({
+      'room_id':      roomId,
+      'listing_id':   listingId,
+      'buyer_id':     buyerId,
+      'outcome':      outcome,
+      'caller_role':  callerRole,
+      if (durationSecs != null) 'duration_secs': durationSecs,
+      'call_type':    callType,
+    });
+    Future<http.Response> send() => http.post(
+      Uri.parse('$baseUrl/calls/log-result'),
+      headers: _headers,
+      body: body,
+    ).timeout(const Duration(seconds: 10));
     try {
-      await http.post(
-        Uri.parse('$baseUrl/calls/log-result'),
-        headers: _headers,
-        body: jsonEncode({
-          'room_id':      roomId,
-          'listing_id':   listingId,
-          'buyer_id':     buyerId,
-          'outcome':      outcome,
-          'caller_role':  callerRole,
-          if (durationSecs != null) 'duration_secs': durationSecs,
-          'call_type':    callType,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      // Same 401-retry-once as the other /calls requests. This one matters
+      // more than it looks: "declined" is also how the caller learns they
+      // were declined, and Decline on the incoming-call notification is
+      // often pressed from an app that has sat in the background past the
+      // 15-minute access token - without the retry the caller just kept
+      // ringing.
+      final response = await send();
+      if (response.statusCode == 401 && await _tryRelogin()) {
+        await send();
+      }
     } catch (_) {} // non-fatal - don't block call teardown on logging
   }
 

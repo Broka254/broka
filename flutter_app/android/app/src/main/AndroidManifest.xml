@@ -115,6 +115,12 @@
             android:exported="false"
             android:foregroundServiceType="microphone|camera"/>
 
+        <!-- Delivers Decline on the incoming-call notification (an action
+             that doesn't open the app). flutter_local_notifications does
+             not declare it itself; without it the button does nothing. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false"/>
         <meta-data android:name="flutterEmbedding" android:value="2"/>
     </application>
 </manifest>

@@ -22,10 +22,47 @@
 // navigateFromPayload/showIncomingCall below.
 
 import 'dart:convert';
+import 'dart:isolate';
+import 'dart:typed_data';
+import 'dart:ui' show DartPluginRegistrant, IsolateNameServer;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import 'ringtone_service.dart';
+
+/// Runs when Decline is pressed on an incoming-call notification.
+///
+/// Android delivers every action that doesn't open the app to a separate
+/// background isolate, even while the app is running - so this must be a
+/// top-level entry point, and it shares no state with the app. Whatever is
+/// ringing belongs to the main isolate (RingtoneService and the
+/// ringtone platform channel only exist there), so if the main isolate is
+/// alive the decline is handed to it: declining from here would tell the
+/// caller but leave this phone ringing for the rest of the 45 seconds.
+/// Only when there is no main isolate - the app was killed and the
+/// notification was posted from an FCM background isolate, whose sound
+/// stops with the notification - does this isolate decline by itself.
+@pragma('vm:entry-point')
+Future<void> notificationActionBackgroundHandler(NotificationResponse response) async {
+  final port = IsolateNameServer.lookupPortByName(NotificationService.callActionsPortName);
+  if (port != null) {
+    port.send({'actionId': response.actionId, 'payload': response.payload});
+    return;
+  }
+  if (response.actionId != NotificationService.callDeclineActionId) return;
+  final data = NotificationService.decodePayload(response.payload);
+  if (data == null) return;
+  DartPluginRegistrant.ensureInitialized();
+  // This isolate can outlive many calls, and SharedPreferences caches per
+  // isolate - without a reload it would send whatever access token it read
+  // the first time, long since rotated by the app.
+  try {
+    await (await SharedPreferences.getInstance()).reload();
+  } catch (_) {}
+  await ApiService.loadSavedSession();
+  await NotificationService.instance.declineFromPayload(data);
+}
 
 class NotificationService {
   NotificationService._();
@@ -79,6 +116,28 @@ class NotificationService {
     enableVibration: true,
   );
 
+  // Buttons on the incoming-call notification. Without them the only thing
+  // the notification could do was open the app, so a call could not be
+  // declined from the shade or lock screen at all, and answering meant
+  // finding and tapping the notification body.
+  static const String callAcceptActionId = 'call_accept';
+  static const String callDeclineActionId = 'call_decline';
+  static const String _darwinCallCategoryId = 'broka_incoming_call';
+
+  /// Where notificationActionBackgroundHandler finds the main isolate.
+  static const String callActionsPortName = 'broka_call_actions';
+  ReceivePort? _actionsPort;
+
+  // Rooms declined from this device. The poller re-posts a ringing call on
+  // every tick until the server has recorded the decline, so a tick landing
+  // between the tap and that request would put the call straight back up.
+  final Set<String> _declinedRooms = {};
+
+  // Android's FLAG_INSISTENT: the notification's sound repeats until the
+  // notification is cancelled or opened. Used only when no in-app ringer
+  // is running (see showIncomingCall).
+  static const int _flagInsistent = 4;
+
   Future<void> initialize({
     required GlobalKey<NavigatorState> navKey,
   }) async {
@@ -86,18 +145,35 @@ class NotificationService {
 
     const androidInit =
         AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosInit = DarwinInitializationSettings(
+    final iosInit = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
+      notificationCategories: [
+        DarwinNotificationCategory(
+          _darwinCallCategoryId,
+          actions: [
+            DarwinNotificationAction.plain(
+              callAcceptActionId, 'Accept',
+              options: {DarwinNotificationActionOption.foreground},
+            ),
+            DarwinNotificationAction.plain(
+              callDeclineActionId, 'Decline',
+              options: {DarwinNotificationActionOption.destructive},
+            ),
+          ],
+        ),
+      ],
     );
-    const settings =
+    final settings =
         InitializationSettings(android: androidInit, iOS: iosInit);
 
     try {
       await _plugin.initialize(
         settings,
         onDidReceiveNotificationResponse: _onTap,
+        onDidReceiveBackgroundNotificationResponse:
+            notificationActionBackgroundHandler,
       );
 
       // Register channels (Android 8+). No-op elsewhere.
@@ -117,15 +193,98 @@ class NotificationService {
 
   int _idFor(String key) => key.hashCode & 0x7fffffff;
 
-  void _onTap(NotificationResponse response) {
-    final raw = response.payload;
-    if (raw == null || raw.isEmpty) return;
+  /// Main isolate only: receive Decline (and any other background action)
+  /// forwarded by notificationActionBackgroundHandler. Not part of
+  /// initialize(), which also runs in the FCM background isolate - claiming
+  /// the name there would route actions to an isolate that has no ringer
+  /// to stop and no navigator to open.
+  void listenForCallActions() {
+    if (_actionsPort != null) return;
+    final port = ReceivePort();
+    // A previous main isolate (hot restart, or an engine Android tore down)
+    // can leave its dead port registered; registering fails while it is.
+    IsolateNameServer.removePortNameMapping(callActionsPortName);
+    IsolateNameServer.registerPortWithName(port.sendPort, callActionsPortName);
+    port.listen((message) {
+      if (message is! Map) return;
+      handleResponse(
+        actionId: message['actionId'] as String?,
+        payload: message['payload'] as String?,
+      );
+    });
+    _actionsPort = port;
+  }
+
+  static Map<String, dynamic>? decodePayload(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
     try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      navigateFromPayload(data);
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
     } catch (e) {
       debugPrint('[Notifications] payload decode failed: $e');
+      return null;
     }
+  }
+
+  void _onTap(NotificationResponse response) =>
+      handleResponse(actionId: response.actionId, payload: response.payload);
+
+  /// A tap on a notification or on one of its buttons. Accept and a tap on
+  /// the body are the same thing - navigateFromPayload already answers.
+  Future<void> handleResponse({String? actionId, String? payload}) async {
+    final data = decodePayload(payload);
+    if (data == null) return;
+    if (actionId == callDeclineActionId) {
+      await declineFromPayload(data);
+      return;
+    }
+    await navigateFromPayload(data);
+  }
+
+  /// The app was started by the user acting on one of our notifications
+  /// (for an incoming call: a tap on it, or Accept). That launch never
+  /// reaches _onTap, and FirebaseMessaging.getInitialMessage() only knows
+  /// about notifications FCM drew itself - the call notification is posted
+  /// locally from a data-only push - so without this, answering a call
+  /// that arrived while the app was closed just opened the home screen.
+  Future<Map<String, dynamic>?> launchCallPayload() async {
+    if (!_ready) return null;
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      final response = details?.notificationResponse;
+      if (details?.didNotificationLaunchApp != true || response == null) return null;
+      if (response.actionId == callDeclineActionId) return null;
+      final data = decodePayload(response.payload);
+      return data?['type'] == 'incoming_call' ? data : null;
+    } catch (e) {
+      debugPrint('[Notifications] launch details unavailable: $e');
+      return null;
+    }
+  }
+
+  /// Decline an incoming call from its notification: stop ringing, take
+  /// the notification down and tell the server, which ends the caller's
+  /// ring straight away (POST /calls/log-result with "declined" is what the
+  /// call screen's own Decline button records, and it hangs up the
+  /// caller's socket).
+  Future<void> declineFromPayload(Map<String, dynamic> data) async {
+    final roomId = data['roomId'] as String?;
+    final listingId = data['listingId'] as String?;
+    if (roomId == null || roomId.isEmpty) return;
+    _declinedRooms.add(roomId);
+    await cancelIncomingCall(roomId);
+    if (listingId == null) return;
+    final buyerId = data['buyerId'] as String? ?? '';
+    final iAmBuyer = ApiService.currentUserId != null &&
+        ApiService.currentUserId == buyerId;
+    await ApiService.logCallResult(
+      roomId:     roomId,
+      listingId:  listingId,
+      buyerId:    buyerId,
+      outcome:    'declined',
+      // The caller's role, and I'm the callee.
+      callerRole: iAmBuyer ? 'seller' : 'buyer',
+      callType:   data['callType'] as String? ?? 'audio',
+    );
   }
 
   /// Handles an FCM data message that arrived while the app was in the
@@ -310,17 +469,68 @@ class NotificationService {
     bool isVideo = false,
     Map<String, dynamic>? payload,
     Duration ringFor = const Duration(seconds: 45),
+    // False from the FCM background isolate. A ring started there belongs
+    // to that isolate's RingtoneService, which nothing in the app can
+    // reach: answering, declining or the caller hanging up all stop the
+    // main isolate's ringer, so that one played on for its full 45 seconds
+    // - over the call itself when the user answered. Without it the
+    // notification rings instead, insistently, and stops when cancelled.
+    bool ringInApp = true,
   }) async {
     if (!_ready) return;
+    if (_declinedRooms.contains(roomId)) return;
 
     bool ringing = false;
-    try {
-      ringing = await RingtoneService.instance.play(autoStopAfter: ringFor);
-    } catch (e) {
-      debugPrint('[Notifications] ringtone start failed: $e');
+    if (ringInApp) {
+      try {
+        ringing = await RingtoneService.instance.play(autoStopAfter: ringFor);
+      } catch (e) {
+        debugPrint('[Notifications] ringtone start failed: $e');
+      }
     }
 
-    final details = NotificationDetails(
+    // Everything Decline needs travels in the payload, because Decline can
+    // run in an isolate that has only this to go on. The poller's payload
+    // lacks the call type; declining an audio/video call records the
+    // session's own type server-side either way.
+    final fullPayload = <String, dynamic>{
+      ...?payload,
+      'type': 'incoming_call',
+      'roomId': roomId,
+      if (payload?['callType'] == null) 'callType': isVideo ? 'video' : 'audio',
+    };
+
+    final details = incomingCallDetails(ringing: ringing, ringFor: ringFor);
+    try {
+      await _plugin.show(
+        // Room-scoped, not a fixed constant - two different incoming calls
+        // (rare, but possible: two different people calling in quick
+        // succession) get distinct notification slots instead of the
+        // second silently replacing the first. The *same* call detected
+        // through more than one path (FCM data message, poller) still
+        // correctly collapses into one, since both resolve to this same id.
+        _idFor('call_$roomId'),
+        isVideo
+            ? '📹 Incoming video call from $callerName'
+            : '📞 Incoming call from $callerName',
+        'About: $listingName',
+        details,
+        payload: jsonEncode(fullPayload),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showIncomingCall failed: $e');
+    }
+  }
+
+  /// What the incoming-call notification looks like - its buttons, sound
+  /// and lifetime. Separate from showIncomingCall so it can be checked
+  /// without a device.
+  @visibleForTesting
+  static NotificationDetails incomingCallDetails({
+    required bool ringing,
+    required Duration ringFor,
+  }) {
+    return NotificationDetails(
       android: AndroidNotificationDetails(
         callChannelId,
         'Incoming Calls',
@@ -354,6 +564,26 @@ class NotificationService {
         // is missed, rather than leaving a dead "Incoming call" in the tray.
         timeoutAfter: ringFor.inMilliseconds + 5000,
         icon: '@mipmap/ic_launcher',
+        // A channel sound plays once. When it is the only sound (no in-app
+        // ringer), make it repeat like a ringtone until the notification
+        // is answered, declined or cancelled.
+        additionalFlags:
+            ringing ? null : Int32List.fromList(const [_flagInsistent]),
+        actions: const [
+          // Handled without opening the app - see
+          // notificationActionBackgroundHandler.
+          AndroidNotificationAction(
+            callDeclineActionId, 'Decline',
+            titleColor: Color(0xFFEF4444),
+            cancelNotification: true,
+          ),
+          AndroidNotificationAction(
+            callAcceptActionId, 'Accept',
+            titleColor: Color(0xFF10B981),
+            showsUserInterface: true,
+            cancelNotification: true,
+          ),
+        ],
       ),
       // iOS cannot play the system ringtone from a local notification -
       // only CallKit can, and that path is wired separately in
@@ -361,27 +591,9 @@ class NotificationService {
       // bundled tone, which was never the user's ringtone either.
       iOS: DarwinNotificationDetails(
         presentSound: !ringing,
+        categoryIdentifier: _darwinCallCategoryId,
       ),
     );
-    try {
-      await _plugin.show(
-        // Room-scoped, not a fixed constant - two different incoming calls
-        // (rare, but possible: two different people calling in quick
-        // succession) get distinct notification slots instead of the
-        // second silently replacing the first. The *same* call detected
-        // through more than one path (FCM data message, poller) still
-        // correctly collapses into one, since both resolve to this same id.
-        _idFor('call_$roomId'),
-        isVideo
-            ? '📹 Incoming video call from $callerName'
-            : '📞 Incoming call from $callerName',
-        'About: $listingName',
-        details,
-        payload: payload != null ? jsonEncode(payload) : null,
-      );
-    } catch (e) {
-      debugPrint('[Notifications] showIncomingCall failed: $e');
-    }
   }
 
   /// Take down the incoming-call notification for [roomId].

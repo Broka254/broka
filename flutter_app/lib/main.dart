@@ -82,6 +82,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       listingName: message.data['listingName'] as String? ?? 'your listing',
       isVideo: message.data['callType'] == 'video',
       payload: message.data,
+      // Nothing outside this isolate could stop a ringer started here -
+      // see showIncomingCall's ringInApp.
+      ringInApp: false,
     );
   }
 }
@@ -122,6 +125,11 @@ void main() async {
   // away, or revoked), the session is over: back to sign-in.
   ApiService.onSessionEnded = _returnToSignIn;
   await NotificationService.instance.initialize(navKey: navigatorKey);
+  NotificationService.instance.listenForCallActions();
+  // Launched by tapping (or pressing Accept on) an incoming-call
+  // notification - SplashScreen routes it, as it does an FCM cold start.
+  pendingColdStartCallData =
+      await NotificationService.instance.launchCallPayload();
   // broka.co.ke/store links: held until the splash screen is done. Not
   // awaited - startup never waits on it.
   unawaited(DeepLinkService.instance.init(navigatorKey));
