@@ -84,7 +84,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U broka"
+          --health-cmd "pg_isready -U broka -d broka_test"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -121,9 +121,12 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           POSTGRES_TEST_URL: "postgresql+asyncpg://broka:broka@localhost:5432/broka_test"
           REDIS_URL: redis://localhost:6379/0
+        # python -m pytest, not the pytest command: the plugin is imported
+        # as tests.postgres_plugin, which needs backend/ on the import path,
+        # and only `python -m` puts the working directory there.
         run: |
           cd backend
-          pytest tests/ -q -o addopts="" --tb=short -p tests.postgres_plugin
+          python -m pytest tests/ -q -o addopts="" --tb=short -p tests.postgres_plugin
 
   # ── Web storefront (broka.co.ke/store/<name>) ─────────────────────
   # Vercel builds and deploys web/ on its own; this job is the gate that
