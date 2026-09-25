@@ -53,7 +53,6 @@ class AuthRepository {
 
   Future<void> _persistSession(Map<String, dynamic> data, {
     required String email,
-    String? password,
     double? lat,
     double? lng,
     String? phone,
@@ -78,7 +77,6 @@ class AuthRepository {
     if (_currentUserLat      != null) await prefs.setDouble('user_lat',      _currentUserLat!);
     if (_currentUserLng      != null) await prefs.setDouble('user_lng',      _currentUserLng!);
     if (phone                != null) await prefs.setString('user_phone',    phone);
-    if (password             != null) await prefs.setString('user_password', password);
   }
 
   Future<void> clearSession() async {
@@ -114,8 +112,7 @@ class AuthRepository {
         if (nickname     != null) 'nickname':      nickname,
         if (profilePhoto != null) 'profile_photo': profilePhoto,
       });
-      await _persistSession(data, email: email, password: password,
-          lat: lat, lng: lng, phone: phone);
+      await _persistSession(data, email: email, lat: lat, lng: lng, phone: phone);
       return Success(BrokaUser.fromJson({...data, 'email': email}));
     } on ApiException catch (e) {
       return Failure(e.message, statusCode: e.statusCode);
@@ -132,7 +129,7 @@ class AuthRepository {
       final data = await _client.post('/auth/login', {
         'email': email, 'password': password,
       });
-      await _persistSession(data, email: email, password: password);
+      await _persistSession(data, email: email);
       return Success(BrokaUser.fromJson({...data, 'email': email}));
     } on ApiException catch (e) {
       return Failure(e.message, statusCode: e.statusCode);

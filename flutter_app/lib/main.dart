@@ -86,6 +86,25 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
+/// The session ended (ApiService.onSessionEnded): show sign-in, saying why.
+/// Left alone on the splash and sign-in screens, which already handle a
+/// signed-out user, and during a call, which is never interrupted - the
+/// next screen after it finds the user signed out.
+void _returnToSignIn() {
+  final nav = navigatorKey.currentState;
+  if (nav == null) return;
+  String? current;
+  nav.popUntil((route) {
+    current = route.settings.name;
+    return true;
+  });
+  if (current == '/auth' || current == '/splash' || current == '/voip-call') return;
+  nav.pushNamedAndRemoveUntil('/auth', (_) => false);
+  ScaffoldMessenger.maybeOf(nav.context)?.showSnackBar(const SnackBar(
+    content: Text('Your session has ended. Please sign in again.'),
+  ));
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -99,6 +118,9 @@ void main() async {
   // ApiService owns the refresh token; apiClient asks it to renew when a
   // request comes back 401, then retries with the new token.
   apiClient.onUnauthorized = ApiService.renewSession;
+  // When the server refuses the refresh token (expired after a long time
+  // away, or revoked), the session is over: back to sign-in.
+  ApiService.onSessionEnded = _returnToSignIn;
   await NotificationService.instance.initialize(navKey: navigatorKey);
   // broka.co.ke/store links: held until the splash screen is done. Not
   // awaited - startup never waits on it.

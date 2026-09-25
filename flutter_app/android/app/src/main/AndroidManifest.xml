@@ -43,11 +43,20 @@
         </intent>
     </queries>
 
+    <!-- No backups of app data. Its preferences hold the sign-in tokens
+         (and, in builds before 2026-09, the account password in plain
+         text); Android's default auto-backup copied them into the user's
+         Google Drive and onto new phones. allowBackup covers Android 11
+         and below, dataExtractionRules Android 12 and up (where
+         allowBackup alone no longer stops device-to-device transfer). -->
     <application
         android:label="BROKA"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
 
         <activity
             android:name=".MainActivity"

@@ -56,7 +56,16 @@ class ApiService {
     if (lng != null) currentUserLng = lng;
     currentUserLanguage = prefs.getString('user_language') ?? 'english';
     _refreshToken = prefs.getString('refresh_token');
+    // Builds before 2026-09 kept the account password here, in plain text,
+    // to log back in with - where Android's auto-backup copied it into the
+    // user's Google Drive. It is never written any more; remove any copy
+    // an earlier build left behind.
+    if (prefs.containsKey(_legacyPasswordKey)) {
+      await prefs.remove(_legacyPasswordKey);
+    }
   }
+
+  static const _legacyPasswordKey = 'user_password';
 
   static Future<void> _saveSession(
     String token,
@@ -65,7 +74,6 @@ class ApiService {
     String? nickname,
     String? email,
     String? phone,
-    String? password,
     String? accountType,
     double? lat,
     double? lng,
@@ -95,7 +103,6 @@ class ApiService {
     if (email        != null) await prefs.setString('user_email',     email);
     if (phone        != null) await prefs.setString('user_phone',     phone);
     if (accountType  != null) await prefs.setString('user_account_type', accountType);
-    if (password     != null) await prefs.setString('user_password',  password);
     if (lat          != null) await prefs.setDouble('user_lat',       lat);
     if (lng          != null) await prefs.setDouble('user_lng',       lng);
     if (photo        != null) await prefs.setString('user_photo',     photo);
@@ -123,7 +130,7 @@ class ApiService {
     await prefs.remove('user_email');
     await prefs.remove('user_phone');
     await prefs.remove('user_account_type');
-    await prefs.remove('user_password');
+    await prefs.remove(_legacyPasswordKey);
     await prefs.remove('user_lat');
     await prefs.remove('user_lng');
     await prefs.remove('user_language');
@@ -181,71 +188,79 @@ class ApiService {
   ///
   /// One renewal at a time: every request that finds the token expired at
   /// the same moment (Home loads several repositories at once) waits on the
-  /// same attempt instead of each starting its own. That matters most for
-  /// the fallback, a full re-login, which the server limits to 5 a minute.
+  /// same attempt instead of each starting its own - and the refresh token
+  /// rotates on use, so two concurrent refreshes would revoke each other.
   static Future<bool> renewSession() =>
-      _renewal ??= _tryRefreshOrRelogin().whenComplete(() => _renewal = null);
+      _renewal ??= _refreshSession().whenComplete(() => _renewal = null);
 
-  /// v4: Try refresh token first; fall back to relogin with stored credentials.
-  /// FIX (2026-08-13): the refresh-token attempt below was reaching a
-  /// broken URL (a `\$baseUrl` escaped-dollar typo prevented interpolation
-  /// - fixed), AND register()/login() never actually issued a refresh
-  /// token for it to use in the first place (fixed server-side, see
-  /// AuthService._issue_refresh_token) - so this function's "Attempt 1"
-  /// silently never worked, every single time, for every caller. It was
-  /// also only ever invoked by 3 methods in this whole file
-  /// (createListing, checkIncomingCall, getInbox, initiateCall - the
-  /// latter three added in this same fix) - most other methods here still
-  /// have no 401 recovery of their own and will keep failing silently
-  /// once the access token expires (15 min) until this function's use is
-  /// broadened. Flagging rather than doing that sweep now: it would touch
-  /// a large fraction of this file's ~50 methods with no way to compile
-  /// or run the result in this environment to catch a mistake.
-  static Future<bool> _tryRefreshOrRelogin() async {
-    // Attempt 1: use refresh token (preferred — no stored password needed)
-    if (_refreshToken != null) {
-      try {
-        final res = await http.post(
-          Uri.parse('$baseUrl/auth/token/refresh'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'refresh_token': _refreshToken}),
-        ).timeout(const Duration(seconds: 15));
-        if (res.statusCode == 200) {
-          final data  = jsonDecode(res.body) as Map<String, dynamic>;
-          final token = data['access_token'] as String?;
-          final newRt = data['refresh_token'] as String?;
-          if (token != null) {
-            _token = token;
-            // Hand the new token to apiClient too - it persists it under
-            // the same 'auth_token' key. This used to update only this
-            // class, leaving every ApiClient-based repository sending the
-            // expired token until the app was restarted.
-            await apiClient.saveToken(token);
-            if (newRt != null) {
-              _refreshToken = newRt;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('refresh_token', newRt);
-            }
-            return true;
-          }
-        }
-        // Refresh token rejected — clear it and try relogin
-        _refreshToken = null;
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('refresh_token');
-      } catch (_) {}
+  /// Called when the server has ended this session for good: the refresh
+  /// token was refused (expired, revoked, signed out elsewhere) or there is
+  /// none. The session is already cleared by then; main.dart points this at
+  /// the sign-in screen.
+  static void Function()? onSessionEnded;
+
+  /// Exchanges the refresh token for a new access token.
+  ///
+  /// There is deliberately no other way back in. Earlier builds fell back
+  /// to logging in again with the account password, which meant keeping
+  /// the password on the phone in plain text - and Android's auto-backup
+  /// copied it to the user's Google Drive. Now the refresh token is the
+  /// only credential kept, and when the server refuses it the user signs
+  /// in again.
+  ///
+  /// A failure that says nothing about the session - no network, a timeout,
+  /// a server error - leaves the session as it is: the next request tries
+  /// again. Only the server refusing the token (401/403), or having no
+  /// token to send, ends it.
+  static Future<bool> _refreshSession() async {
+    final refreshToken = _refreshToken;
+    if (refreshToken == null) {
+      await _endSession();
+      return false;
     }
-    // Attempt 2: relogin with stored credentials
+    final http.Response res;
     try {
-      final prefs    = await SharedPreferences.getInstance();
-      final phone    = prefs.getString('user_phone');
-      final password = prefs.getString('user_password');
-      if (phone == null || password == null) return false;
-      await login(phone: phone, password: password);
+      res = await http.post(
+        Uri.parse('$baseUrl/auth/token/refresh'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'refresh_token': refreshToken}),
+      ).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      return false;
+    }
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      await _endSession();
+      return false;
+    }
+    if (res.statusCode != 200) return false;
+    try {
+      final data  = jsonDecode(res.body) as Map<String, dynamic>;
+      final token = data['access_token'] as String?;
+      final newRt = data['refresh_token'] as String?;
+      if (token == null) return false;
+      _token = token;
+      // Hand the new token to apiClient too - it persists it under the
+      // same 'auth_token' key. This used to update only this class,
+      // leaving every ApiClient-based repository sending the expired token
+      // until the app was restarted.
+      await apiClient.saveToken(token);
+      if (newRt != null) {
+        _refreshToken = newRt;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('refresh_token', newRt);
+      }
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  /// The session can't be renewed: clear it and tell the app. Nothing to do
+  /// for a guest, who had no session to end.
+  static Future<void> _endSession() async {
+    if (currentUserId == null && _token == null) return;
+    await clearSession();
+    onSessionEnded?.call();
   }
 
   // Keep old name as alias so unchanged call-sites still compile
@@ -388,11 +403,14 @@ class ApiService {
         nickname: data['nickname'] as String?,
         email: email,
         phone: (data['phone'] as String?) ?? phone,
-        password: password,
         accountType: data['account_type'] as String?,
         lat: lat,
         lng: lng,
         photo: data['profile_photo'] as String?,
+        // Signup returns a refresh token just like login. It used to be
+        // dropped here, so a new account could only be renewed by logging
+        // in again with the stored password.
+        refreshToken: data['refresh_token'] as String?,
       );
     }
     return data;
@@ -414,7 +432,6 @@ class ApiService {
         name: data['name'],
         nickname: data['nickname'] as String?,
         phone: (data['phone'] as String?) ?? phone,
-        password: password,
         accountType: data['account_type'] as String?,
         lat: (data['lat'] as num?)?.toDouble(),
         lng: (data['lng'] as num?)?.toDouble(),
