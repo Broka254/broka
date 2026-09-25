@@ -26,8 +26,10 @@ import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
 import '../services/sell_photo_store.dart';
 import '../services/sell_wizard_data.dart';
+import '../services/zeno_sms_prompts.dart';
 import '../utils/price_format.dart';
 import '../widgets/sell_step_scaffold.dart';
+import '../widgets/zeno_streaming_text.dart';
 import 'sell_flow.dart';
 
 /// "07•• ••• 123" - enough for the seller to recognise the number Zeno
@@ -45,7 +47,10 @@ class SellZenoAlertScreen extends StatefulWidget {
   /// For tests.
   final ListingPublisher? publisher;
 
-  const SellZenoAlertScreen({super.key, required this.data, this.publisher});
+  /// For tests: the question, instead of one picked at random.
+  final String? question;
+
+  const SellZenoAlertScreen({super.key, required this.data, this.publisher, this.question});
   @override
   State<SellZenoAlertScreen> createState() => _SellZenoAlertScreenState();
 }
@@ -58,7 +63,14 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
 
   bool _loading = false;
   bool _live = false;
+  // The celebration has played: the "what next" buttons can show.
+  bool _celebrated = false;
   String? _error;
+
+  // Zeno's question, one of several phrasings (ZenoSmsPrompts), and
+  // whether it has finished "writing" - the answers wait for it.
+  String? _question;
+  bool _questionDone = false;
 
   SellWizardData get _data => widget.data;
   bool get _still => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
@@ -69,6 +81,13 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     _float = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
     _ripple = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
     _celebrate = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
+    _question = widget.question;
+    if (_question == null) {
+      ZenoSmsPrompts.next(sellerName: ApiService.currentUserName, itemName: _data.name)
+          .then((q) {
+        if (mounted) setState(() => _question = q);
+      });
+    }
   }
 
   @override
@@ -89,11 +108,6 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     _ripple.dispose();
     _celebrate.dispose();
     super.dispose();
-  }
-
-  String get _greeting {
-    final name = (ApiService.currentUserName ?? '').trim().split(' ').first;
-    return name.isEmpty ? 'Hi there!' : 'Hi $name!';
   }
 
   void _choose(bool value) {
@@ -145,11 +159,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
       HapticFeedback.heavyImpact();
       setState(() => _live = true);
       await _celebrate.forward(from: 0);
-      if (!mounted) return;
-      // Clears the whole wizard stack (variable depth - and sometimes just
-      // part of it, if reached through the splash screen's crash recovery)
-      // rather than a single pop, so this works however the flow was entered.
-      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+      if (mounted) setState(() => _celebrated = true);
     } on PhotoUploadIncomplete catch (e) {
       _showError('$e. Check your connection and try again.');
     } on ApiException catch (e) {
@@ -166,6 +176,18 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     }
   }
 
+  /// Leaves the wizard for Home - clearing the whole wizard stack (variable
+  /// depth, and sometimes only part of it when reached through the splash
+  /// screen's crash recovery) rather than one pop - and, if the seller
+  /// asked, opens the Seller Dashboard on top, so Back from it is Home.
+  /// Many new sellers never find the dashboard on their own; this is the
+  /// moment it has something of theirs to show.
+  void _leave({required bool toDashboard}) {
+    final nav = Navigator.of(context);
+    nav.pushNamedAndRemoveUntil('/home', (route) => false);
+    if (toDashboard) nav.pushNamed('/seller-dashboard');
+  }
+
   void _showError(String message) {
     if (mounted) setState(() => _error = message);
   }
@@ -173,13 +195,14 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   @override
   Widget build(BuildContext context) {
     final phone = maskedPhone(ApiService.currentUserPhone);
-    final item = _data.name.isEmpty ? 'your listing' : '"${_data.name}"';
     return Stack(children: [
       SellStepScaffold(
         step: SellFlow.goLive, totalSteps: SellFlow.total, title: SellFlow.title(SellFlow.goLive),
         data: _data,
         error: _error,
-        loading: _loading,
+        // Once live there's no going back into the wizard: the draft is
+        // gone, and the way out is the celebration's buttons.
+        loading: _loading || _live,
         onNext: _goLive,
         bottom: _LaunchButton(
           key: const Key('sell-go-live'),
@@ -191,42 +214,64 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
           const SizedBox(height: 4),
           _zeno(),
           const SizedBox(height: 18),
-          _SpeechBubble(
-            still: _still,
-            text: '$_greeting 👋 I\'ll look after buyers for $item. When a buyer shows up and '
-                'you haven\'t replied yet, should I send you an SMS?',
+          ZenoStreamingBubble(
+            key: const Key('zeno-question'),
+            text: _question,
+            onDone: () {
+              if (mounted) setState(() => _questionDone = true);
+            },
           ),
-          if (phone != null) ...[
-            const SizedBox(height: 8),
-            Text('I\'d text $phone', style: const TextStyle(
-                color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
-          const SizedBox(height: 18),
-          SellChoiceCard(
-            key: const Key('sell-sms-yes'),
-            emoji: '📲',
-            title: 'Yes, SMS me',
-            subtitle: 'One text per buyer, only if you haven\'t replied - never at night.',
-            selected: _data.smsAlerts == true,
-            accent: BrokaColors.neonGreen,
-            onTap: () => _choose(true),
+          // The answers arrive once Zeno has finished asking.
+          _AfterQuestion(
+            visible: _questionDone,
+            index: 0,
+            child: phone == null
+                ? const SizedBox(height: 18)
+                : Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 18),
+                    child: Text('I\'d text $phone', style: const TextStyle(
+                        color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w600)),
+                  ),
+          ),
+          _AfterQuestion(
+            visible: _questionDone,
+            index: 1,
+            child: SellChoiceCard(
+              key: const Key('sell-sms-yes'),
+              emoji: '📲',
+              title: 'Yes, SMS me',
+              subtitle: 'One text per buyer, only if you haven\'t replied - never at night.',
+              selected: _data.smsAlerts == true,
+              accent: BrokaColors.neonGreen,
+              onTap: () => _choose(true),
+            ),
           ),
           const SizedBox(height: 10),
-          SellChoiceCard(
-            key: const Key('sell-sms-no'),
-            emoji: '🔕',
-            title: "No thanks, I'll check the app",
-            subtitle: 'You still get notifications in BROKA.',
-            selected: _data.smsAlerts == false,
-            accent: BrokaColors.neonBlue,
-            onTap: () => _choose(false),
+          _AfterQuestion(
+            visible: _questionDone,
+            index: 2,
+            child: SellChoiceCard(
+              key: const Key('sell-sms-no'),
+              emoji: '🔕',
+              title: "No thanks, I'll check the app",
+              subtitle: 'You still get notifications in BROKA.',
+              selected: _data.smsAlerts == false,
+              accent: BrokaColors.neonBlue,
+              onTap: () => _choose(false),
+            ),
           ),
           const SizedBox(height: 16),
           _summary(),
         ]),
       ),
       if (_live)
-        Positioned.fill(child: _Celebration(animation: _celebrate, name: _data.name)),
+        Positioned.fill(child: _Celebration(
+          animation: _celebrate,
+          name: _data.name,
+          showActions: _celebrated,
+          onDashboard: () => _leave(toDashboard: true),
+          onHome: () => _leave(toDashboard: false),
+        )),
     ]);
   }
 
@@ -322,44 +367,6 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   }
 }
 
-/// Zeno's question, typed out.
-class _SpeechBubble extends StatelessWidget {
-  const _SpeechBubble({required this.text, required this.still});
-  final String text;
-  final bool still;
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<int>(
-      tween: IntTween(begin: still ? text.length : 0, end: text.length),
-      duration: Duration(milliseconds: still ? 0 : 22 * text.length),
-      builder: (_, n, __) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(6), topRight: Radius.circular(20),
-            bottomLeft: Radius.circular(20), bottomRight: Radius.circular(20),
-          ),
-          gradient: LinearGradient(colors: [
-            BrokaColors.gold.withOpacity(0.28), BrokaColors.neonBlue.withOpacity(0.16),
-          ]),
-          border: Border.all(color: BrokaColors.gold.withOpacity(0.55)),
-        ),
-        child: Stack(children: [
-          // The full text, invisible, holds the bubble at its final size so
-          // it doesn't grow line by line as it types.
-          Opacity(opacity: 0, child: _text(text)),
-          _text(text.substring(0, n) + (n < text.length ? '▍' : '')),
-        ]),
-      ),
-    );
-  }
-
-  Widget _text(String s) => Text(s, style: const TextStyle(
-      color: Colors.white, fontSize: 15, height: 1.45, fontWeight: FontWeight.w600));
-}
-
 class _LaunchButton extends StatelessWidget {
   const _LaunchButton({super.key, required this.loading, required this.animation, required this.onPressed});
   final bool loading;
@@ -398,9 +405,19 @@ class _LaunchButton extends StatelessWidget {
 
 /// Confetti and a big tick: the listing is live.
 class _Celebration extends StatelessWidget {
-  const _Celebration({required this.animation, required this.name});
+  const _Celebration({
+    required this.animation,
+    required this.name,
+    required this.showActions,
+    required this.onDashboard,
+    required this.onHome,
+  });
   final Animation<double> animation;
   final String name;
+  // Once the confetti has flown: the seller chooses where to go next.
+  final bool showActions;
+  final VoidCallback onDashboard;
+  final VoidCallback onHome;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -413,36 +430,163 @@ class _Celebration extends StatelessWidget {
             child: Stack(children: [
               Positioned.fill(child: CustomPaint(painter: _ConfettiPainter(t))),
               Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Transform.scale(
-                    scale: pop,
-                    child: Container(
-                      width: 110, height: 110,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(colors: [BrokaColors.neonGreen, BrokaColors.neonCyan]),
-                        boxShadow: [BoxShadow(color: Color(0x8810B981), blurRadius: 40)],
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Transform.scale(
+                      scale: pop,
+                      child: Container(
+                        width: 110, height: 110,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(colors: [BrokaColors.neonGreen, BrokaColors.neonCyan]),
+                          boxShadow: [BoxShadow(color: Color(0x8810B981), blurRadius: 40)],
+                        ),
+                        child: const Icon(Icons.check_rounded, color: Colors.white, size: 64),
                       ),
-                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 64),
                     ),
-                  ),
-                  const SizedBox(height: 22),
-                  Opacity(
-                    opacity: (t * 2).clamp(0.0, 1.0),
-                    child: Column(children: [
-                      const Text('Your listing is live!', style: TextStyle(color: Colors.white,
-                          fontSize: 22, fontWeight: FontWeight.w900)),
-                      const SizedBox(height: 6),
-                      Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-                    ]),
-                  ),
-                ]),
+                    const SizedBox(height: 22),
+                    Opacity(
+                      opacity: (t * 2).clamp(0.0, 1.0),
+                      child: Column(children: [
+                        const Text('Your listing is live!', style: TextStyle(color: Colors.white,
+                            fontSize: 22, fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 6),
+                        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+                      ]),
+                    ),
+                    _WhatNext(
+                      visible: showActions,
+                      onDashboard: onDashboard,
+                      onHome: onHome,
+                    ),
+                  ]),
+                ),
               ),
             ]),
           );
         },
       );
+}
+
+/// Where to go once the listing is live: the Seller Dashboard - offered,
+/// with a line on what it's for, because new sellers don't know it exists -
+/// or straight back Home.
+class _WhatNext extends StatelessWidget {
+  const _WhatNext({required this.visible, required this.onDashboard, required this.onHome});
+  final bool visible;
+  final VoidCallback onDashboard;
+  final VoidCallback onHome;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!visible) return const SizedBox.shrink();
+    final buttons = Padding(
+      padding: const EdgeInsets.only(top: 28),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              key: const Key('sell-open-dashboard'),
+              borderRadius: BorderRadius.circular(20),
+              onTap: onDashboard,
+              child: Ink(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: LinearGradient(colors: [
+                    BrokaColors.gold.withOpacity(0.32), BrokaColors.neonBlue.withOpacity(0.22),
+                  ]),
+                  border: Border.all(color: BrokaColors.gold.withOpacity(0.7), width: 1.4),
+                  boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.25), blurRadius: 24)],
+                ),
+                child: Row(children: [
+                  Container(
+                    width: 46, height: 46,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.08),
+                      border: Border.all(color: BrokaColors.gold.withOpacity(0.5)),
+                    ),
+                    child: const Text('📊', style: TextStyle(fontSize: 22)),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Open my Seller Dashboard', style: TextStyle(color: Colors.white,
+                          fontSize: 15.5, fontWeight: FontWeight.w900)),
+                      SizedBox(height: 3),
+                      Text('Track views, buyer interest and deals - and get Zeno\'s tips on '
+                          'pricing.', style: TextStyle(color: BrokaColors.textMid,
+                          fontSize: 12, height: 1.35)),
+                    ]),
+                  ),
+                  const Icon(Icons.arrow_forward_rounded, color: BrokaColors.gold),
+                ]),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextButton(
+            key: const Key('sell-back-home'),
+            onPressed: onHome,
+            style: TextButton.styleFrom(
+              foregroundColor: BrokaColors.textMid,
+              minimumSize: const Size(double.infinity, 48),
+            ),
+            child: const Text('Back to Home', style: TextStyle(fontSize: 14,
+                fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      ),
+    );
+    // Rises in under the headline. (No AnimatedSize: at zero duration,
+    // under reduced motion, it re-dirties its own layout and asserts.)
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return buttons;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+      builder: (_, v, child) => Opacity(
+        opacity: v,
+        child: Transform.translate(offset: Offset(0, 24 * (1 - v)), child: child),
+      ),
+      child: buttons,
+    );
+  }
+}
+
+/// Fades and lifts [child] in once [visible] - the answers under Zeno's
+/// question, one after another by [index]. Hidden, it takes no taps.
+class _AfterQuestion extends StatelessWidget {
+  const _AfterQuestion({required this.visible, required this.index, required this.child});
+  final bool visible;
+  final int index;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final duration = still ? Duration.zero : Duration(milliseconds: 380 + index * 140);
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedSlide(
+        offset: visible ? Offset.zero : const Offset(0, 0.25),
+        duration: duration,
+        curve: Curves.easeOutCubic,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: duration,
+          curve: Curves.easeOut,
+          child: child,
+        ),
+      ),
+    );
+  }
 }
 
 class _ConfettiPainter extends CustomPainter {

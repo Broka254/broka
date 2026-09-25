@@ -12,7 +12,9 @@
 //     fixed; the stock step asks how many and about delivery
 //   * the cover step asks for the chosen look with the uploaded photo's id
 //     and keeps the result by id
-//   * the last step won't go live without an answer to Zeno, and sends it
+//   * the last step won't go live without an answer to Zeno, and sends it;
+//     the answers appear once Zeno has finished asking, and once live the
+//     seller chooses the Seller Dashboard or Home
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -560,10 +562,82 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('Your listing is live!'), findsOneWidget);
       await tester.pumpAndSettle();
-      expect(find.text('HOME'), findsOneWidget);
+      // No leaving on its own: the seller picks where to go.
+      expect(find.text('HOME'), findsNothing);
+      expect(find.byKey(const Key('sell-open-dashboard')), findsOneWidget);
       expect(bodies.single['sms_alerts'], isFalse);
       expect(bodies.single['price_unit'], '90kg bag');
       expect(bodies.single['quantity'], 100);
+
+      await tester.tap(find.byKey(const Key('sell-back-home')));
+      await tester.pumpAndSettle();
+      expect(find.text('HOME'), findsOneWidget);
+      expect(find.byKey(const Key('sell-open-dashboard')), findsNothing);
+    });
+
+    testWidgets('offers the Seller Dashboard once live, with Home under it', (tester) async {
+      final client = ApiClient(client: MockClient((req) async => http.Response(
+          jsonEncode({'id': 'l1'}), 201, headers: {'content-type': 'application/json'})));
+      await _open(
+        tester,
+        SellZenoAlertScreen(
+            data: _complete()..smsAlerts = true,
+            publisher: ListingPublisher(client: client, uploader: _FakeUploader())),
+        routes: {
+          '/home': (_) => const Text('HOME'),
+          '/seller-dashboard': (context) => Scaffold(
+                body: TextButton(onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('DASHBOARD')),
+              ),
+        },
+      );
+      // Before going live there's nothing to open.
+      expect(find.byKey(const Key('sell-open-dashboard')), findsNothing);
+      await _tap(tester, find.byKey(const Key('sell-go-live')));
+      await tester.pumpAndSettle();
+      expect(find.text('Open my Seller Dashboard'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('sell-open-dashboard')));
+      await tester.pumpAndSettle();
+      expect(find.text('DASHBOARD'), findsOneWidget);
+      // Back from the dashboard is Home, not the finished wizard.
+      await tester.tap(find.text('DASHBOARD'));
+      await tester.pumpAndSettle();
+      expect(find.text('HOME'), findsOneWidget);
+      expect(find.byType(SellZenoAlertScreen), findsNothing);
+    });
+
+    testWidgets('the answers wait until Zeno has finished asking', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      const question = 'Hi Wanjiku! Want a heads-up by SMS when a buyer shows interest '
+          'in "Dry maize" and you haven\'t replied?';
+      final data = _complete();
+      await tester.pumpWidget(MaterialApp(
+          home: SellZenoAlertScreen(data: data, question: question)));
+      await tester.pump(const Duration(milliseconds: 200));
+      // Thinking first; nothing to answer yet, and a tap does nothing.
+      expect(find.text('Zeno is thinking…'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('sell-sms-yes')), warnIfMissed: false);
+      await tester.pump();
+      expect(data.smsAlerts, isNull);
+
+      // Then the words, a few at a time.
+      await tester.pump(const Duration(milliseconds: 1500));
+      expect(find.text('Zeno is thinking…'), findsNothing);
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      // All of it - the caret gone - and the answers with it.
+      expect(find.byWidgetPredicate((w) => w is RichText && w.text.toPlainText() == question),
+          findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.byKey(const Key('sell-sms-yes')));
+      await tester.pump();
+      expect(data.smsAlerts, isTrue);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
     });
 
     testWidgets('every step draws its animations without error', (tester) async {

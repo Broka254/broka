@@ -55,9 +55,9 @@ Future<String?> pickFromList(
   return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: BrokaColors.bgMid,
-    shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+    // Drawn by _SearchList itself: the violet-lit card the wizards use,
+    // not a flat grey sheet that read as part of some other app.
+    backgroundColor: Colors.transparent,
     builder: (_) => _SearchList(title: title, options: options, selected: selected),
   );
 }
@@ -81,58 +81,109 @@ class _SearchListState extends State<_SearchList> {
     final shown = q.isEmpty
         ? widget.options
         : widget.options.where((o) => o.toLowerCase().contains(q)).toList();
-    return SafeArea(
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Color(0xFF16103A), BrokaColors.bgMid, BrokaColors.bg],
+          stops: [0, 0.35, 1],
+        ),
+        border: Border(top: BorderSide(color: BrokaColors.gold.withOpacity(0.55), width: 1.2)),
+        boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.25), blurRadius: 30)],
+      ),
+      child: SafeArea(
       child: Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
         child: SizedBox(
           height: MediaQuery.of(context).size.height * 0.75,
           child: Column(children: [
             const SizedBox(height: 10),
-            Container(width: 40, height: 4, decoration: BoxDecoration(
-                color: BrokaColors.border, borderRadius: BorderRadius.circular(2))),
+            Container(width: 42, height: 4, decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+                borderRadius: BorderRadius.circular(2))),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
               child: Row(children: [
                 Expanded(child: Text(widget.title, style: const TextStyle(
-                    color: BrokaColors.textHigh, fontSize: 17, fontWeight: FontWeight.w800))),
+                    color: BrokaColors.textHigh, fontSize: 18, fontWeight: FontWeight.w800))),
+                Text('${shown.length}', style: const TextStyle(
+                    color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w700)),
               ]),
             ),
             if (widget.options.length > 8)
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                child: TextField(
-                  autofocus: false,
-                  onChanged: (v) => setState(() => _query = v),
-                  style: const TextStyle(color: BrokaColors.textHigh),
-                  decoration: const InputDecoration(
-                    hintText: 'Search',
-                    prefixIcon: Icon(Icons.search_rounded, color: BrokaColors.textLow),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: BrokaColors.bgCard.withOpacity(0.85),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.4)),
+                    boxShadow: const [BrokaColors.glowBlue],
+                  ),
+                  child: TextField(
+                    autofocus: false,
+                    onChanged: (v) => setState(() => _query = v),
+                    style: const TextStyle(color: BrokaColors.textHigh),
+                    decoration: const InputDecoration(
+                      hintText: 'Search',
+                      hintStyle: TextStyle(color: BrokaColors.textMid),
+                      prefixIcon: Icon(Icons.search_rounded, color: BrokaColors.textMid),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      filled: false,
+                      contentPadding: EdgeInsets.symmetric(vertical: 14),
+                    ),
                   ),
                 ),
               ),
             Expanded(
               child: shown.isEmpty
                   ? const Center(child: Text('No matches',
-                      style: TextStyle(color: BrokaColors.textLow)))
+                      style: TextStyle(color: BrokaColors.textMid)))
                   : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                       itemCount: shown.length,
                       itemBuilder: (_, i) {
                         final o = shown[i];
                         final isSelected = o == widget.selected;
-                        return ListTile(
-                          title: Text(o, style: TextStyle(
-                              color: isSelected ? BrokaColors.gold : BrokaColors.textHigh,
-                              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500)),
-                          trailing: isSelected
-                              ? const Icon(Icons.check_rounded, color: BrokaColors.gold)
-                              : null,
-                          onTap: () => Navigator.pop(context, o),
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => Navigator.pop(context, o),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                gradient: isSelected
+                                    ? LinearGradient(colors: [
+                                        BrokaColors.gold.withOpacity(0.3),
+                                        BrokaColors.neonBlue.withOpacity(0.12),
+                                      ])
+                                    : null,
+                                border: Border.all(color: isSelected
+                                    ? BrokaColors.gold.withOpacity(0.7)
+                                    : BrokaColors.border.withOpacity(0.5)),
+                              ),
+                              child: Row(children: [
+                                Expanded(child: Text(o, style: TextStyle(
+                                    color: isSelected ? Colors.white : BrokaColors.textHigh,
+                                    fontSize: 14.5,
+                                    fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500))),
+                                if (isSelected)
+                                  const Icon(Icons.check_circle_rounded, color: BrokaColors.gold, size: 20),
+                              ]),
+                            ),
+                          ),
                         );
                       },
                     ),
             ),
           ]),
         ),
+      ),
       ),
     );
   }

@@ -341,9 +341,12 @@ void main() {
       final data = await open(tester);
       await tester.tap(find.byKey(const Key('sell-county-picker')));
       await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(find.text('Mombasa'), 200,
+      // In the sheet: "Mombasa" is also a quick pick on the step itself.
+      final inSheet = find.descendant(
+          of: find.byType(BottomSheet), matching: find.text('Mombasa'));
+      await tester.scrollUntilVisible(inSheet, 200,
           scrollable: find.byType(Scrollable).last);
-      await tester.tap(find.text('Mombasa'));
+      await tester.tap(inSheet);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('sell-area-picker')));
       await tester.pumpAndSettle();
@@ -366,6 +369,21 @@ void main() {
       await tester.pump();
       expect(find.text('Choose the county the item is in.'), findsOneWidget);
       expect(data.county, 'Nbi', reason: 'nothing overwritten until a county is chosen');
+    });
+
+    testWidgets('a popular county is one tap away', (tester) async {
+      final data = await open(tester);
+      await tester.tap(find.byKey(const Key('sell-county-quick-Nakuru')));
+      await tester.pumpAndSettle();
+      expect(data.county, 'Nakuru');
+      // Chosen: the quick picks make way.
+      expect(find.byKey(const Key('sell-county-quick-Nakuru')), findsNothing);
+      await tester.tap(find.byKey(const Key('sell-area-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Njoro'));
+      await tester.pumpAndSettle();
+      expect(data.location, 'Njoro, Nakuru');
+      expect(find.text('Njoro, Nakuru'), findsOneWidget, reason: 'what buyers see');
     });
 
     testWidgets('an area the list lacks can be typed', (tester) async {

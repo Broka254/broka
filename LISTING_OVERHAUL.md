@@ -26,10 +26,20 @@ phone asks for reduced motion.
 | 4 | Description | **Required** (20+ characters), with tap-to-add prompts per category | now required |
 | 5 | Price | Amount, **what it's for** (whole item / per bag / per kg / per plot…), **fixed or open to offers** | unit + negotiable new |
 | 6 | Stock & delivery | **How many** ("100 bags"), **can you arrange delivery** (+ where) | new step |
-| 7 | Location | County and area | — |
+| 7 | Location | County and area — one-tap popular counties, a "buyers see" preview | restyled |
 | 8 | Cover image | AI cover in a chosen look, a gallery cover, or skip | redesigned |
 | 9 | Review | Everything, checked again | — |
-| 10 | Go live | **Zeno asks: "should I SMS you when a buyer shows up?"**, then publishes | new step |
+| 10 | Go live | **Zeno asks: "should I SMS you when a buyer shows up?"**, then publishes and **offers the Seller Dashboard** | new step |
+
+On the last step Zeno's question is one of **ten phrasings** with a random
+greeting (`flutter_app/lib/services/zeno_sms_prompts.dart`), never the one
+the seller saw on their previous listing, and it arrives the way a model's
+reply does (`widgets/zeno_streaming_text.dart`): a moment of "thinking",
+then the words streaming in a few at a time, slower after punctuation, with
+a caret. The yes/no answers rise in only once the question is complete;
+under reduced motion everything shows at once. After the confetti the
+seller chooses **Open my Seller Dashboard** (Home stays underneath, so Back
+returns there) or **Back to Home** — nothing navigates on its own.
 
 ---
 
