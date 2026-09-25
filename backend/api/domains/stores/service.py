@@ -115,12 +115,6 @@ class StoreService:
 
         logo_url = self._safe_normalize_single_media(data.get("logo_url"))
         photos = self._safe_normalize_photo_list(data.get("photos"))
-        image_columns = await self._image_columns(owner_id, data)
-        # An asset replaces the legacy base64 copy of the same image.
-        if image_columns.get("logo_id"):
-            logo_url = None
-        if image_columns.get("photo_ids"):
-            photos = None
         email = self._business_email(owner, data, current=(None, False))
         text_values = {field: self._clean_text(field, data.get(field)) for field in _TEXT_FIELDS}
 
@@ -129,6 +123,17 @@ class StoreService:
             if attempt:
                 # The rollback released the lock and expired `owner`.
                 owner = await self._lock_owner_for_create(owner_id)
+            # Inside the loop: checking the images also marks them in use
+            # (media.service.require_owned_assets), in this transaction - so
+            # a retry after a rollback must mark them again, or the store
+            # would reference uploads the clean-up later deletes.
+            await self._check_legacy_media(owner_id, data)
+            image_columns = await self._image_columns(owner_id, data)
+            # An asset replaces the legacy base64 copy of the same image.
+            if image_columns.get("logo_id"):
+                logo_url = None
+            if image_columns.get("photo_ids"):
+                photos = None
             slug = chosen_slug or await self._unique_slug(name)
             store = Store(
                 owner_id=owner_id, name=name, slug=slug, category=category,
@@ -150,7 +155,7 @@ class StoreService:
                 await self.db.rollback()
                 continue
             await self.db.refresh(store)
-            return await self._store_dict(store, owner=owner)
+            return await self._store_dict(store, owner=owner, owner_view=True)
 
         if chosen_slug:
             raise HTTPException(
@@ -307,7 +312,7 @@ class StoreService:
         normal state for most users, not an error. The schema allows more
         than one per owner, so this takes the newest."""
         store = await self._my_store(owner_id)
-        return await self._store_dict(store) if store else None
+        return await self._store_dict(store, owner_view=True) if store else None
 
     async def _my_store(self, owner_id: str) -> Optional[Store]:
         return (await self.db.execute(
@@ -384,6 +389,7 @@ class StoreService:
             if field in data:
                 setattr(store, field, self._clean_text(field, data[field]))
 
+        await self._check_legacy_media(requester_id, data)
         image_columns = await self._image_columns(requester_id, data)
         if "logo_id" in data:
             store.logo_id = image_columns["logo_id"]
@@ -411,7 +417,7 @@ class StoreService:
         store.updated_at = datetime.utcnow()
         await self.db.commit()
         await self.db.refresh(store)
-        return await self._store_dict(store)
+        return await self._store_dict(store, owner_view=True)
 
     async def set_store_status(self, store_id: str, requester_id: str, is_active: bool) -> dict:
         store = await self._get_or_404(store_id)
@@ -420,7 +426,7 @@ class StoreService:
         store.updated_at = datetime.utcnow()
         await self.db.commit()
         await self.db.refresh(store)
-        return await self._store_dict(store)
+        return await self._store_dict(store, owner_view=True)
 
     async def get_row(self, store_id: str) -> Store:
         return await self._get_or_404(store_id)
@@ -549,6 +555,20 @@ class StoreService:
         except MediaTooLargeError as e:
             raise HTTPException(status_code=413, detail=str(e))
 
+    async def _check_legacy_media(self, owner_id: str, data: dict) -> None:
+        """logo_url / photos from app builds that predate image assets may
+        only be inline images or the owner's own BROKA image URLs."""
+        from api.domains.media.service import check_legacy_images
+        from api.models.media import MediaPurpose as P
+
+        if "logo_url" in data:
+            await check_legacy_images(self.db, owner_id, [data.get("logo_url")], P.STORE_LOGO)
+        if "photos" in data:
+            photos = data.get("photos") or []
+            await check_legacy_images(
+                self.db, owner_id, [p for p in photos if isinstance(p, str)], P.STORE_PHOTO,
+            )
+
     async def _image_columns(self, owner_id: str, data: dict) -> dict:
         """Validated image-asset columns for the keys present in `data`:
         each id must be the owner's own upload, for a store purpose."""
@@ -610,7 +630,11 @@ class StoreService:
         listing_count: Optional[int] = None,
         assets: Optional[dict] = None,
         owner: Optional[User] = None,
+        owner_view: bool = False,
     ) -> dict:
+        """The store payload. owner_view=True only for responses to the
+        owner themselves (create, update, status, /stores/mine); every other
+        read is public."""
         # listing_count and assets may come from a caller that loaded them
         # for a whole page at once (list_stores); single-store reads load
         # them here.
@@ -620,7 +644,7 @@ class StoreService:
                     Listing.store_id == store.id, Listing.status == ListingStatus.active,
                 )
             )).scalar_one()
-        from api.domains.media.service import asset_urls, parse_id_list
+        from api.domains.media.service import asset_urls, legacy_image_or_none, parse_id_list
         if assets is None:
             assets = await self._assets_for([store])
         if owner is None:
@@ -640,10 +664,12 @@ class StoreService:
             # logo_url/photos stay plain strings for app builds before phase
             # 1: image URLs once the store's images are assets, the legacy
             # data URIs until the media backfill has converted them.
-            "logo_url": logo["medium"] if logo else store.logo_url,
+            # Legacy values are filtered on the way out too: rows saved
+            # before these fields were checked may hold links elsewhere.
+            "logo_url": logo["medium"] if logo else legacy_image_or_none(store.logo_url),
             "photos": (
                 [p["large"] for p in photo_images] if photo_images
-                else parse_photo_list(store.photos)
+                else [p for p in parse_photo_list(store.photos) if legacy_image_or_none(p)]
             ),
             "logo": logo,
             "cover": cover,
@@ -656,7 +682,13 @@ class StoreService:
             "county": store.county,
             "subcounty": store.subcounty,
             "location_description": store.location_description,
-            "business_email": store.official_email,
+            # Public reads show only a verified address: an unverified one
+            # (saved by app builds that couldn't verify) may be a typo or
+            # someone else's. The owner always sees what they saved.
+            "business_email": (
+                store.official_email
+                if owner_view or store.business_email_verified else None
+            ),
             "business_email_verified": bool(store.business_email_verified),
             "owner": self._owner_facts(owner),
             "is_active": bool(store.is_active),

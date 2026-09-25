@@ -213,8 +213,19 @@ class ListingService:
 
         # Image assets. Ownership and purpose are checked here, before the
         # listing exists, so a bad id leaves no half-created listing.
-        from api.domains.media.service import dump_id_list, require_owned_assets
+        from api.domains.media.service import (
+            check_legacy_images, dump_id_list, require_owned_assets, split_legacy_photos,
+        )
         from api.models.media import MediaPurpose
+        # Base64 photos and showcase from older app builds: inline images
+        # only (or the seller's own BROKA image URLs), never a link elsewhere.
+        await check_legacy_images(
+            self.db, seller_id, split_legacy_photos(data.get("verified_photos")),
+            MediaPurpose.LISTING_PHOTO,
+        )
+        await check_legacy_images(
+            self.db, seller_id, [showcase_url], MediaPurpose.LISTING_SHOWCASE,
+        )
         photo_ids_json = None
         if data.get("photo_ids"):
             photo_ids_json = dump_id_list(await require_owned_assets(
@@ -873,7 +884,9 @@ class ListingService:
         number. Sellers get the real value from _owner_listing_dict, on
         authenticated owner-only paths.
         """
-        from api.domains.media.service import asset_urls, parse_id_list, split_legacy_photos
+        from api.domains.media.service import (
+            asset_urls, legacy_image_or_none, parse_id_list, split_legacy_photos,
+        )
 
         assets = assets or {}
         photo_assets = [assets[i] for i in parse_id_list(listing.photo_ids) if i in assets]
@@ -885,8 +898,15 @@ class ListingService:
         )
 
         verified_photos = listing.verified_photos
-        showcase_image_url = listing.showcase_image_url
-        seller_profile_photo = seller.profile_photo if seller else None
+        # Rows saved before legacy image fields were checked may hold a link
+        # to another site; those never leave the API.
+        showcase_image_url = legacy_image_or_none(listing.showcase_image_url)
+        seller_profile_photo = legacy_image_or_none(seller.profile_photo) if seller else None
+        if verified_photos:
+            parts = split_legacy_photos(verified_photos)
+            kept = [p for p in parts if legacy_image_or_none(p)]
+            if len(kept) != len(parts):
+                verified_photos = ",".join(kept) or None
         verified_video = listing.verified_video
         advert_video = listing.advert_video
         if card:

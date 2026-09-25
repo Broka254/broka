@@ -213,3 +213,77 @@ class TestAgainstRealRedis:
             r = await c.post("/pay", json={"amount": 5}, headers=key)
             assert r.status_code == 200 and r.json() == {"paid": 5}
         assert calls["n"] == 2  # the failing call and the one success
+
+
+# ── Scope ────────────────────────────────────────────────────────────────────
+
+class TestScope:
+    def test_the_same_key_differs_by_user_and_path(self):
+        from api.core.idempotency import redis_key
+        base = redis_key("k", "user:a\nPOST\n/deal/d1/fund")
+        assert base == redis_key("k", "user:a\nPOST\n/deal/d1/fund")
+        assert base != redis_key("k", "user:b\nPOST\n/deal/d1/fund")
+        assert base != redis_key("k", "user:a\nPOST\n/deal/d2/fund")
+        # Fixed length whatever the client sent: a hex digest after the prefix.
+        digest = base.removeprefix("broka:idempotency:")
+        assert len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest)
+
+    @pytest.mark.asyncio
+    async def test_an_absurdly_long_key_is_refused(self):
+        with pytest.raises(HTTPException) as exc:
+            await reserve_idempotency_key("x" * 5000)
+        assert exc.value.status_code == 400
+
+
+@pytest.mark.skipif(REAL_REDIS is None, reason="needs a reachable REDIS_URL (CI provides one)")
+class TestScopeAgainstRealRedis:
+    """A key used to be global: the same key from another user, or for
+    another deal, replayed the earlier request's response and the handler
+    never ran - no STK push for the second deal."""
+
+    @pytest.fixture(autouse=True)
+    def _redis_settings(self):
+        with patch("api.core.config.settings") as s:
+            s.redis_enabled = True
+            s.redis_url = REAL_REDIS
+            yield
+
+    @pytest.mark.asyncio
+    async def test_users_and_paths_never_share_a_response(self):
+        from fastapi import Depends, FastAPI
+        from httpx import ASGITransport, AsyncClient
+
+        from api.core.idempotency import idempotency_guard
+        from api.security import create_access_token
+
+        ran: list[tuple[str, str]] = []
+        mini = FastAPI()
+
+        @mini.post("/deal/{deal_id}/fund")
+        async def fund(deal_id: str, guard=Depends(idempotency_guard)):
+            if guard.cached:
+                return guard.response
+            ran.append((deal_id, guard.key))
+            result = {"deal": deal_id}
+            await guard.store(result)
+            return result
+
+        def auth(user: str) -> dict:
+            return {"Authorization": f"Bearer {create_access_token({'sub': user})}"}
+
+        key = {"X-Idempotency-Key": "key-A"}      # deliberately reused everywhere
+        alice, bob = f"alice-{uuid.uuid4().hex}", f"bob-{uuid.uuid4().hex}"
+        d1, d2 = uuid.uuid4().hex, uuid.uuid4().hex
+        async with AsyncClient(transport=ASGITransport(app=mini), base_url="http://t") as c:
+            r = await c.post(f"/deal/{d1}/fund", headers={**key, **auth(alice)})
+            assert r.json() == {"deal": d1}
+            # Alice, same key, another deal: runs, answers for THAT deal.
+            r = await c.post(f"/deal/{d2}/fund", headers={**key, **auth(alice)})
+            assert r.json() == {"deal": d2}
+            # Bob, same key, Alice's first deal's path: runs for Bob.
+            r = await c.post(f"/deal/{d1}/fund", headers={**key, **auth(bob)})
+            assert r.json() == {"deal": d1}
+            # Alice retrying her first request: replayed, not run again.
+            r = await c.post(f"/deal/{d1}/fund", headers={**key, **auth(alice)})
+            assert r.json() == {"deal": d1}
+        assert len(ran) == 3

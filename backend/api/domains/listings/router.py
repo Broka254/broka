@@ -237,8 +237,18 @@ async def update_listing(
     changed: Dict[str, Any] = {}
 
     # ── Photos: unrestricted ────────────────────────────────────────────
-    from api.domains.media.service import dump_id_list, require_owned_assets
+    from api.domains.media.service import (
+        check_legacy_images, dump_id_list, require_owned_assets, split_legacy_photos,
+    )
     from api.models.media import MediaPurpose
+
+    # Older app builds send base64; never a link to an image elsewhere.
+    await check_legacy_images(
+        db, current_user["id"], split_legacy_photos(body.verified_photos), MediaPurpose.LISTING_PHOTO,
+    )
+    await check_legacy_images(
+        db, current_user["id"], [body.showcase_image_url], MediaPurpose.LISTING_SHOWCASE,
+    )
 
     if body.photo_ids is not None:
         ids = await require_owned_assets(

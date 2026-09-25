@@ -108,6 +108,16 @@ services:
         sync: false          # This service's own URL; absolute links for database-stored images
       - key: STORE_LINK_BASE
         value: https://broka.co.ke/store   # Every store link: https://broka.co.ke/store/<name>
+      - key: CLIENT_IP_HEADER
+        value: CF-Connecting-IP   # Render is behind Cloudflare: the TCP peer is Render's proxy,
+                                  # shared by every user. Per-IP rate limits (login, signup,
+                                  # OTP) read the caller from this header. Check it with
+                                  # GET /admin/diagnostics/client-ip. See api/core/client_ip.py.
+      - key: STOREFRONT_API_KEY
+        sync: false          # 32+ random characters, the SAME value as in the web project
+                             # (Vercel). Lets the storefront pass on which visitor a store
+                             # visit or share came from; without it those are rate-limited
+                             # by Vercel's addresses.
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false          # Optional: FCM push notifications
       - key: CLOUDFLARE_TURN_KEY_ID

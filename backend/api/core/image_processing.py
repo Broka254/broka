@@ -30,7 +30,7 @@ import hashlib
 import io
 from dataclasses import dataclass, field
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps
 
 # name -> longest side in pixels. Order matters to readers that want "the
 # biggest available": smallest first.
@@ -73,7 +73,18 @@ def process_image(raw: bytes) -> ProcessedImage:
 
     try:
         img = Image.open(io.BytesIO(raw))
-    except (UnidentifiedImageError, OSError, ValueError):
+    except Image.DecompressionBombError:
+        # Pillow refuses a declared canvas over twice its own pixel limit
+        # inside open(), before the size check below gets to run. It is a
+        # plain Exception, not an OSError, so it used to escape as a 500 -
+        # and, from a legacy base64 field, stop every media backfill pass.
+        raise ImageRejected("That image is too large to process.")
+    except MemoryError:
+        raise
+    except Exception:
+        # UnidentifiedImageError/OSError for most bad files, but format
+        # plugins also raise SyntaxError, ValueError, struct.error or
+        # IndexError on a malformed header. None of them is ours to crash on.
         raise ImageRejected("That file isn't an image we can read.")
 
     if img.format not in ALLOWED_FORMATS:
@@ -93,9 +104,22 @@ def process_image(raw: bytes) -> ProcessedImage:
             biggest = VARIANTS[-1][1]
             img.draft("RGB", (biggest, biggest))
         img.load()
+    except MemoryError:
+        raise
     except Exception:
         raise ImageRejected("That image is damaged or incomplete.")
 
+    try:
+        return _encode(img, hashlib.sha256(raw).hexdigest())
+    except MemoryError:
+        raise
+    except Exception:
+        # A decoded image can still carry a malformed EXIF block or an odd
+        # colour mode that fails orientation, conversion or encoding.
+        raise ImageRejected("That image is damaged or incomplete.")
+
+
+def _encode(img: Image.Image, sha256: str) -> ProcessedImage:
     icc_profile = img.info.get("icc_profile")
     img = ImageOps.exif_transpose(img)
 
@@ -104,11 +128,7 @@ def process_image(raw: bytes) -> ProcessedImage:
     )
     img = img.convert("RGBA" if has_alpha else "RGB")
 
-    out = ProcessedImage(
-        width=img.width,
-        height=img.height,
-        sha256=hashlib.sha256(raw).hexdigest(),
-    )
+    out = ProcessedImage(width=img.width, height=img.height, sha256=sha256)
     # Largest size first, each smaller one resized from the previous: one
     # decoded image in memory, never a full-size copy per size.
     current = img

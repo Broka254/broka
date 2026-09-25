@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
@@ -313,3 +313,34 @@ async def run_media_backfill(
     from api.domains.media.backfill import pending_counts, run_backfill_pass
     done = await run_backfill_pass(rows_per_kind=rows_per_kind, time_budget=60.0)
     return {"converted": done, "remaining": await pending_counts()}
+
+
+@router.get("/diagnostics/client-ip")
+async def client_ip_diagnostics(
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """What this deployment believes the caller's address is, and why.
+
+    Every per-IP rate limit depends on it (api/core/client_ip.py). Call it
+    from a phone on mobile data: `resolved` should be that phone's public
+    address, and `source` should not be "peer" behind a proxy - a peer
+    address there is the proxy, shared by every user."""
+    from api.core.client_ip import resolve
+    from api.core.config import settings
+
+    ip, source = resolve(request)
+    return {
+        "resolved": ip,
+        "source": source,
+        "peer": request.client.host if request.client else None,
+        "headers": {
+            name: request.headers.get(name)
+            for name in ("cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip")
+        },
+        "config": {
+            "client_ip_header": settings.client_ip_header or None,
+            "trusted_proxy_hops": settings.trusted_proxy_hops,
+            "storefront_key_set": bool(settings.storefront_api_key),
+        },
+    }

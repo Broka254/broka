@@ -18,7 +18,7 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text
 
 from api.database import Base
 
@@ -42,8 +42,32 @@ class MediaPurpose:
     UPLOADABLE = ALL - {AVATAR}
 
 
+class AttachState:
+    """Whether anything has ever used an asset - what decides if an
+    unused upload may be cleaned up (api/domains/media/cleanup.py).
+
+    pending   uploaded, not yet part of a listing, store or profile. An
+              abandoned sell or store-setup wizard leaves these behind;
+              after ABANDONED_AFTER they are deleted.
+    attached  used at least once. Kept for good, even if later replaced:
+              a listing's old photos can matter to a dispute.
+    legacy    written before this was tracked. Never cleaned up - nothing
+              says whether it was used.
+    deleting  being cleaned up; its files are removed, then -> purged.
+    purged    cleaned up. The row stays as a record; it serves nothing.
+    """
+    PENDING = "pending"
+    ATTACHED = "attached"
+    LEGACY = "legacy"
+    DELETING = "deleting"
+    PURGED = "purged"
+
+
 class MediaAsset(Base):
     __tablename__ = "media_assets"
+    __table_args__ = (
+        Index("ix_media_assets_attach_state_created", "attach_state", "created_at"),
+    )
 
     id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_id   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
@@ -59,6 +83,11 @@ class MediaAsset(Base):
     variants   = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     deleted_at = Column(DateTime, nullable=True)
+    # See AttachState. New rows start "pending"; rows that existed before
+    # the column did get the server default, "legacy".
+    attach_state = Column(
+        String(12), nullable=False, default=AttachState.PENDING, server_default=AttachState.LEGACY,
+    )
 
     def variant_map(self) -> dict:
         try:

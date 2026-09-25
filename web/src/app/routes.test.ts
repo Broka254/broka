@@ -4,6 +4,7 @@ import { GET as assetLinks } from './.well-known/assetlinks.json/route'
 import { GET as appleAssociation } from './.well-known/apple-app-site-association/route'
 import { POST as visit } from './api/stores/[id]/visit/route'
 import { GET as preview } from './og/[file]/route'
+import { visitorAddress } from '@/lib/forward'
 
 const params = <T,>(p: T) => ({ params: Promise.resolve(p) })
 const FINGERPRINT = Array.from({ length: 32 }, () => 'ab').join(':')
@@ -54,6 +55,38 @@ describe('storefront API routes', () => {
       referrer: 'https://x',
       visitor: 'abcdefgh1234',
     })
+  })
+  it("sends the visitor's address with the storefront key, and nothing without the key", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 202 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const req = () =>
+      new Request('https://broka.co.ke/api/stores/s1/visit', {
+        method: 'POST',
+        headers: { 'x-real-ip': '41.90.1.2', 'x-forwarded-for': '41.90.1.2, 76.76.21.9' },
+        body: '{}',
+      })
+    const sent = () => {
+      const [, init] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit]
+      return init.headers as Record<string, string>
+    }
+
+    vi.stubEnv('STOREFRONT_API_KEY', '')
+    await visit(req(), params({ id: 's1' }))
+    expect(sent()['X-Broka-Client-IP']).toBeUndefined()
+    expect(sent()['X-Broka-Storefront-Key']).toBeUndefined()
+
+    vi.stubEnv('STOREFRONT_API_KEY', 'k'.repeat(40))
+    await visit(req(), params({ id: 's1' }))
+    expect(sent()['X-Broka-Client-IP']).toBe('41.90.1.2')
+    expect(sent()['X-Broka-Storefront-Key']).toBe('k'.repeat(40))
+  })
+  it('reads the visitor address from the platform headers, and drops junk', () => {
+    const at = (headers: Record<string, string>) =>
+      visitorAddress(new Request('https://x', { headers }))
+    expect(at({ 'x-real-ip': '41.90.1.2' })).toBe('41.90.1.2')
+    expect(at({ 'x-forwarded-for': '2c0f:fe38::1, 76.76.21.9' })).toBe('2c0f:fe38::1')
+    expect(at({ 'x-real-ip': 'evil<script>', 'x-forwarded-for': 'also bad' })).toBeNull()
+    expect(at({})).toBeNull()
   })
   it('refuses bad ids, junk and oversized bodies without calling the API', async () => {
     const fetchMock = vi.fn()

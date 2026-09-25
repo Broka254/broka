@@ -20,6 +20,16 @@ _INSECURE_SECRETS = {
 }
 
 
+def _client_ip_header_default() -> str:
+    """CLIENT_IP_HEADER, lowercased; CF-Connecting-IP on Render when unset;
+    "" when switched off with "none"."""
+    raw = os.getenv("CLIENT_IP_HEADER")
+    if raw is None:
+        return "cf-connecting-ip" if os.getenv("RENDER", "").lower() == "true" else ""
+    raw = raw.strip().lower()
+    return "" if raw in ("", "none") else raw
+
+
 @dataclass(frozen=True)
 class Settings:
     # ── App ──────────────────────────────────────────────────────────────────
@@ -274,6 +284,31 @@ class Settings:
     # web storefront (STORES_PLAN.md, phase 3). Overridable for staging.
     store_link_base: str = field(default_factory=lambda: os.getenv(
         "STORE_LINK_BASE", "https://broka.co.ke/store").strip().rstrip("/"))
+
+    # ── Client addresses (api/core/client_ip.py) ──────────────────────────────
+    # Every per-IP rate limit (login, signup, OTP) and every audit IP depends
+    # on knowing who is really calling. Behind Render the TCP peer is one of
+    # Render's own proxies, shared by every user - Render sits behind
+    # Cloudflare, which puts the caller's address in CF-Connecting-IP.
+    #
+    # CLIENT_IP_HEADER: a header the edge proxy sets and callers can't
+    #   forge. Defaults to CF-Connecting-IP on Render (Render sets RENDER=true
+    #   in every service), otherwise unset. "none" turns it off.
+    # TRUSTED_PROXY_HOPS: for other hosts, how many proxies append to
+    #   X-Forwarded-For in front of this service; the caller is that many
+    #   entries from the right. 0 (default) = use the TCP peer.
+    # STOREFRONT_API_KEY: shared with the web storefront (web/, Vercel),
+    #   which forwards store visits and shares from its own servers. With
+    #   the key it may say which visitor it is acting for
+    #   (X-Broka-Client-IP); without the key that header is ignored. Set the
+    #   same random value (32+ characters) here and in the web project.
+    client_ip_header: str = field(default_factory=lambda: _client_ip_header_default())
+    trusted_proxy_hops: int = field(default_factory=lambda: max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "0") or 0)))
+    storefront_api_key: str = field(default_factory=lambda: os.getenv("STOREFRONT_API_KEY", "").strip())
+
+    # Largest request body accepted at all, in MB (api/core/body_limit.py).
+    # Above the biggest legitimate upload: 25 MB of audio for transcription.
+    max_request_body_mb: int = field(default_factory=lambda: max(1, int(os.getenv("MAX_REQUEST_BODY_MB", "32") or 32)))
 
     # ── Redis (for rate-limiting, pub/sub, and distributed workers) ───────────
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
@@ -567,6 +602,28 @@ def validate_startup() -> None:
         logger.warning(
             "[startup] ⚠  RESEND_API_KEY/RESEND_FROM not set — email "
             "verification is unavailable (requests return 503)."
+        )
+
+    if s.storefront_api_key and len(s.storefront_api_key) < 32:
+        # The key lets its holder choose the client address every per-IP
+        # limit sees. A short one is guessable, so it is refused outright.
+        msg = "STOREFRONT_API_KEY is shorter than 32 characters."
+        if s.is_production:
+            raise RuntimeError(f"FATAL: {msg}")
+        logger.warning("[startup] ⚠  %s", msg)
+    if s.is_production and not s.storefront_api_key:
+        logger.warning(
+            "[startup] ⚠  STOREFRONT_API_KEY not set — the web storefront's "
+            "visit and share counts are rate-limited by Vercel's addresses, "
+            "shared between all web visitors. Set the same value here and in "
+            "the web project."
+        )
+    if s.is_production and not s.client_ip_header and not s.trusted_proxy_hops:
+        logger.warning(
+            "[startup] ⚠  Neither CLIENT_IP_HEADER nor TRUSTED_PROXY_HOPS is "
+            "set: per-IP rate limits key on the TCP peer. Behind a proxy that "
+            "is the proxy, shared by every user. Check GET "
+            "/admin/diagnostics/client-ip."
         )
 
     if s.is_production and s.allowed_origins_raw in ("*", ""):

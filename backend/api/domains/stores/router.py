@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.client_ip import client_ip
 from api.core.rate_limit import (
     otp_request_limiter, otp_verify_limiter, store_counter_limiter, store_name_check_limiter,
 )
@@ -111,9 +112,12 @@ class ShareIn(BaseModel):
 
 
 def _client_key(request: Request, current_user: Optional[dict]) -> str:
+    """Who is really calling, for limits: the signed-in user, else the
+    caller's IP address (api/core/client_ip.py). Never anything taken from
+    the request body - a value the caller picks is no limit at all."""
     if current_user:
         return f"user:{current_user['id']}"
-    return f"ip:{request.client.host if request.client else 'unknown'}"
+    return f"ip:{client_ip(request)}"
 
 
 @router.post("", status_code=201)
@@ -272,13 +276,15 @@ async def record_visit(
     db: AsyncSession = Depends(get_db),
 ):
     """The app or the web storefront opened this store. Counted once per
-    visitor per half hour; the owner's own visits, and crawlers, aren't
-    counted."""
-    limiter_key = (
-        f"visitor:{body.visitor}" if body.visitor and not current_user
-        else _client_key(request, current_user)
-    )
-    await store_counter_limiter.check_and_record(limiter_key)
+    visitor per half hour, and at most stats.MAX_VISITORS_PER_CLIENT new
+    visitors per caller per store in that time; the owner's own visits,
+    and crawlers, aren't counted."""
+    # Limited by who is really calling. This used to be keyed on
+    # body.visitor for anonymous callers - a random string the caller
+    # chooses, so a new one per request was never limited, and every
+    # request was counted as a new visitor.
+    client = _client_key(request, current_user)
+    await store_counter_limiter.check_and_record(client)
     store = await StoreService(db).get_row(store_id)
     if current_user and current_user["id"] == store.owner_id:
         return {"counted": False}
@@ -290,13 +296,13 @@ async def record_visit(
     elif body.visitor:
         visitor = f"v:{body.visitor}"
     else:
-        visitor = store_stats.anonymous_visitor_key(
-            request.client.host if request.client else None, user_agent,
-        )
+        visitor = store_stats.anonymous_visitor_key(client_ip(request), user_agent)
     source = store_stats.visit_source(
         body.via, body.referrer if body.surface == "web" else None,
     )
-    counted = await store_stats.record_visit(db, store_id, body.surface, source, visitor)
+    counted = await store_stats.record_visit(
+        db, store_id, body.surface, source, visitor, client=client,
+    )
     return {"counted": counted}
 
 
@@ -308,13 +314,15 @@ async def record_share(
     current_user: Optional[dict] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ):
-    """A share button was tapped. Counted for the owner's stats."""
-    await store_counter_limiter.check_and_record(_client_key(request, current_user))
+    """A share button was tapped. Counted for the owner's stats, up to
+    stats.MAX_SHARES_PER_CLIENT per caller per store per half hour."""
+    client = _client_key(request, current_user)
+    await store_counter_limiter.check_and_record(client)
     await StoreService(db).get_row(store_id)
-    await store_stats.record_share(
-        db, store_id, body.surface, store_stats.share_channel(body.channel),
+    counted = await store_stats.record_share(
+        db, store_id, body.surface, store_stats.share_channel(body.channel), client=client,
     )
-    return {"counted": True}
+    return {"counted": counted}
 
 
 @router.get("/{store_id}/stats")

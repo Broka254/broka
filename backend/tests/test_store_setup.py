@@ -354,6 +354,30 @@ class TestBusinessEmail:
                                 headers=(await _register(client))[1])
         assert bad.status_code == 400
 
+    async def test_an_unverified_address_is_shown_only_to_the_owner(self, client):
+        """It may be a typo or someone else's address: public reads - the
+        store page, the directory - never show it."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, official_email="typo@clanix.co.ke")
+        assert store["business_email"] == "typo@clanix.co.ke"            # the owner's own response
+        mine = (await client.get("/stores/mine", headers=headers)).json()
+        assert mine["business_email"] == "typo@clanix.co.ke"
+        by_id = (await client.get(f"/stores/{store['id']}")).json()
+        by_slug = (await client.get(f"/stores/slug/{store['slug']}")).json()
+        listed = next(s for s in (await client.get("/stores", params={"limit": 100})).json()
+                      if s["id"] == store["id"])
+        for public in (by_id, by_slug, listed):
+            assert public["business_email"] is None
+            assert public["business_email_verified"] is False
+
+    async def test_a_verified_address_is_public(self, client):
+        _, headers = await _register(client)
+        token = await _email_token(client, headers, "hello@verified-shop.co.ke")
+        store = await _store(client, headers, business_email="hello@verified-shop.co.ke",
+                             business_email_token=token)
+        public = (await client.get(f"/stores/{store['id']}")).json()
+        assert public["business_email"] == "hello@verified-shop.co.ke"
+
 
 # ── Payload ──────────────────────────────────────────────────────────────────
 

@@ -54,6 +54,11 @@ class ImageStorage(ABC):
     @abstractmethod
     def public_url(self, key: str) -> str: ...
 
+    @abstractmethod
+    async def delete(self, key: str) -> None:
+        """Remove the object. Removing one that isn't there is not an error.
+        Raises StorageError when the store can't be reached."""
+
 
 class DatabaseStorage(ImageStorage):
     name = "db"
@@ -80,6 +85,18 @@ class DatabaseStorage(ImageStorage):
 
     def public_url(self, key: str) -> str:
         return f"{settings.public_api_base_url}/media/i/{key}"
+
+    async def delete(self, key: str) -> None:
+        from sqlalchemy import delete as sql_delete
+
+        from api.database import AsyncSessionLocal
+        from api.models.media import MediaBlob
+        try:
+            async with AsyncSessionLocal() as db:
+                await db.execute(sql_delete(MediaBlob).where(MediaBlob.key == key))
+                await db.commit()
+        except Exception as exc:
+            raise StorageError(f"database delete failed: {type(exc).__name__}") from exc
 
 
 class R2Storage(ImageStorage):
@@ -152,6 +169,16 @@ class R2Storage(ImageStorage):
 
     def public_url(self, key: str) -> str:
         return f"{self._public_base_url}/{key}"
+
+    async def delete(self, key: str) -> None:
+        # S3 semantics: deleting a missing key succeeds, so a retry after a
+        # partial clean-up is harmless.
+        client = self._get_client()
+        try:
+            await asyncio.to_thread(client.delete_object, Bucket=self._bucket, Key=key)
+        except Exception as exc:
+            logger.error("[media] R2 delete failed key=%s: %s", key, type(exc).__name__)
+            raise StorageError(f"R2 delete failed: {type(exc).__name__}") from exc
 
 
 # ── Selection ─────────────────────────────────────────────────────────────────

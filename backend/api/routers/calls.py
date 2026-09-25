@@ -35,6 +35,7 @@ from api.database import get_db, User, Listing, NegotiationMessage
 from api.security import get_current_user, create_call_token, decode_call_token
 import httpx
 
+from api.core.client_ip import client_ip as resolve_client_ip
 from api.core.config import settings
 from api.core import cloudflare_turn_client, call_state
 from api.core.cloudflare_turn_client import CloudflareTurnError
@@ -768,7 +769,7 @@ async def call_signaling(
     # IP-keyed, checked before token decode - see call_ws_preauth_limiter's
     # doc comment in rate_limit.py for why this can't wait until we have a
     # uid to key on.
-    client_ip = websocket.client.host if websocket.client else "unknown"
+    client_ip = resolve_client_ip(websocket)
     try:
         await call_ws_preauth_limiter.check_and_record(f"ip:{client_ip}")
     except HTTPException:

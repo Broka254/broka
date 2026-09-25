@@ -3,7 +3,7 @@
 // orders); this page is what a shared product link opens.
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { notFound, permanentRedirect } from 'next/navigation'
+import { notFound, permanentRedirect, redirect } from 'next/navigation'
 
 import { AppButton } from '@/components/AppButton'
 import { Gallery } from '@/components/Gallery'
@@ -15,7 +15,7 @@ import { VisitBeacon } from '@/components/VisitBeacon'
 import styles from '@/components/store.module.css'
 import { getListing, getStore } from '@/lib/api'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
-import { productPath, viaTag } from '@/lib/links'
+import { productPath, storePath, viaTag } from '@/lib/links'
 import {
   jsonLdScript,
   productJsonLd,
@@ -41,6 +41,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const found = await load(name, listingId)
   if (!found) return { title: 'Product not found', robots: { index: false } }
   const { store, listing } = found
+  if (!store.is_active) return { title: store.name, robots: { index: false } }
   const view = productView(listing, store.slug)
   const title = `${listing.name} · ${formatPrice(listing.price)}`
   const description = listing.description?.trim()
@@ -66,6 +67,10 @@ export default async function ProductPage({ params, searchParams }: Props) {
   if (name !== store.slug) {
     permanentRedirect(`${productPath(store.slug, listing.id)}${via ? `?via=${via}` : ''}`)
   }
+  // A paused store shows no products: its own page says it's paused, and a
+  // product link shared before the pause goes there too, rather than
+  // selling from a store its owner closed. Temporary: it may reopen.
+  if (!store.is_active) redirect(`${storePath(store.slug)}${via ? `?via=${via}` : ''}`)
 
   const shop = storeView(store)
   const view = productView(listing, store.slug)

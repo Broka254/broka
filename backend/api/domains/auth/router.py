@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db, OtpPurpose
+from api.core.client_ip import client_ip
 from api.security import get_current_user
 from api.core.rate_limit import (
     login_limiter, register_limiter, otp_request_limiter, otp_verify_limiter,
@@ -129,7 +130,7 @@ async def request_otp(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     await otp_request_limiter.check_and_record(_phone_key(body.phone))
     await otp_request_limiter.check_and_record(f"ip:{ip}")
     svc = AuthService(db)
@@ -156,7 +157,7 @@ async def request_email_otp(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     # Limited per address AND per IP, like the SMS route. Email costs less
     # than an SMS, but an unthrottled endpoint that emails an arbitrary
     # address on demand is a spam relay wearing our sending domain's
@@ -183,7 +184,7 @@ async def register(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     await register_limiter.check_and_record(ip)
     svc = AuthService(db)
     return await svc.register(
@@ -213,7 +214,7 @@ async def login(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     await login_limiter.check_and_record(ip)
     await login_limiter.check_and_record(_phone_key(body.phone))
     svc = AuthService(db)

@@ -559,7 +559,14 @@ class AuctionMeta(Base):
     winning_amount = Column(Float, nullable=True)
     # The Deal created for the winner. Second half of the idempotency
     # guarantee: one auction, at most one deal.
-    deal_id        = Column(String, ForeignKey("deals.id"), nullable=True)
+    #
+    # Deliberately NOT a foreign key. A deal-creation retry claims the id
+    # here BEFORE the Deal row exists (lifecycle.retry_winner_deal), so a
+    # crash between claim and creation is recoverable - a value pointing at
+    # no Deal is a meaningful state. SQLite doesn't enforce foreign keys,
+    # which hid it; on Postgres the constraint refused every claim, and a
+    # winner whose deal failed to create the first time never got one.
+    deal_id        = Column(String, nullable=True)
     payment_deadline = Column(DateTime, nullable=True)
     # ── Ending-soon reminder: a two-column outbox ────────────────────────
     # Set ONLY once the reminder has actually been emitted. While it is
@@ -1005,7 +1012,13 @@ class AuditLog(Base):
     """Immutable record of every significant action (escrow, disputes, admin, payments)."""
     __tablename__ = "audit_logs"
     id            = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    actor_id      = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # A user id, or "system" / "zeno" for what sweeps, payment callbacks and
+    # the AI do on their own - so NOT a foreign key to users. It used to be
+    # one: SQLite doesn't enforce foreign keys, but on Postgres every
+    # "system" audit row failed, and with it the transaction it was part
+    # of - an E-Confirm payment marking its deal paid, a payout completing,
+    # a timed dispute refund.
+    actor_id      = Column(String, nullable=False, index=True)
     action        = Column(String, nullable=False, index=True)
     resource_type = Column(String, nullable=False)
     resource_id   = Column(String, nullable=False, index=True)
@@ -1028,6 +1041,26 @@ class FraudEvent(Base):
 
 
 # ─── Init ────────────────────────────────────────────────────────────────────
+
+def _drop_foreign_key_sql(table: str, column: str) -> str:
+    """Postgres: drop whatever foreign key constraint `table.column` has,
+    by looking it up rather than guessing its name. A no-op when there is
+    none, so it is safe on every start. The table is resolved through the
+    search path, like every other statement here."""
+    return f"""
+DO $$
+DECLARE fk text;
+BEGIN
+  FOR fk IN
+    SELECT con.conname FROM pg_constraint con
+    JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+    WHERE con.contype = 'f' AND con.conrelid = CAST('{table}' AS regclass) AND att.attname = '{column}'
+  LOOP
+    EXECUTE format('ALTER TABLE {table} DROP CONSTRAINT %I', fk);
+  END LOOP;
+END $$
+"""
+
 
 async def _apply_optional_statements(conn, statements) -> None:
     """Run best-effort schema statements, each in its own SAVEPOINT.
@@ -1241,6 +1274,17 @@ async def init_db():
             # take an integer default for a boolean column.
             "ALTER TABLE stores ADD COLUMN category VARCHAR",
             "ALTER TABLE stores ADD COLUMN business_email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+            # Upload clean-up (api/domains/media/cleanup.py). Every asset
+            # that exists when the column is added becomes 'legacy' and is
+            # never cleaned up; only uploads made after it can be.
+            "ALTER TABLE media_assets ADD COLUMN attach_state VARCHAR(12) NOT NULL DEFAULT 'legacy'",
+            "CREATE INDEX IF NOT EXISTS ix_media_assets_attach_state_created "
+            "ON media_assets (attach_state, created_at)",
+            # Foreign keys that were wrong for what the columns hold (see
+            # AuditLog.actor_id and AuctionMeta.deal_id). Postgres only;
+            # SQLite never enforced them and skips these statements.
+            _drop_foreign_key_sql("audit_logs", "actor_id"),
+            _drop_foreign_key_sql("auction_meta", "deal_id"),
         ]
         # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
         # inside its own SAVEPOINT. Previously they shared this function's

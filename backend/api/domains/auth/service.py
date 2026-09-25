@@ -25,13 +25,12 @@ from api.security import (
     hash_password, verify_password, create_access_token,
     create_phone_verify_token, decode_phone_verify_token, create_email_verify_token,
     decode_email_verify_token,
-    create_refresh_token,
 )
 from api.core.events import publish, UserRegistered, UserLoggedIn
 from api.core.config import settings
 from api.core.sms import get_sms_provider
 from api.core.email import get_email_provider, build_otp_email
-from api.database import AccountType, OtpPurpose, RefreshToken, SellerMetrics, SellerTier
+from api.database import AccountType, OtpPurpose, SellerMetrics, SellerTier
 from .repository import UserRepository
 
 logger = logging.getLogger(__name__)
@@ -288,6 +287,13 @@ class AuthService:
         business_location: Optional[str] = None,
         business_description: Optional[str] = None,
     ) -> dict:
+        # The profile photo arrives as base64 (converted to an image asset
+        # by the media backfill). A link to an image elsewhere is refused:
+        # every buyer who opened the seller's listings would load it.
+        from api.domains.media.service import check_legacy_images
+        from api.models.media import MediaPurpose
+        await check_legacy_images(self.db, None, [profile_photo], MediaPurpose.AVATAR)
+
         # OTP is optional (Design request: skippable at signup, verify
         # later). A verified token always wins when present — even if a raw
         # `phone` was also sent, so a proven number can never be swapped
@@ -472,8 +478,8 @@ class AuthService:
         matching Flutter typo fix, and the new 401-retry on the call-polling
         path) - this alone does not fix the reported symptom without those.
         """
-        rt_token, expiry, jti = create_refresh_token(user_id)
-        self.db.add(RefreshToken(user_id=user_id, jti=jti, expires_at=expiry))
+        from api.domains.auth.refresh_router import issue_refresh_token_row
+        rt_token = issue_refresh_token_row(self.db, user_id)
         await self.db.commit()
         return rt_token
 
@@ -526,6 +532,9 @@ class AuthService:
         if nickname is not None:
             updates["nickname"] = nickname
         if profile_photo is not None:
+            from api.domains.media.service import check_legacy_images
+            from api.models.media import MediaPurpose
+            await check_legacy_images(self.db, user_id, [profile_photo], MediaPurpose.AVATAR)
             updates["profile_photo"] = profile_photo
             # Converted to an image asset again by the media backfill.
             updates["profile_photo_id"] = None

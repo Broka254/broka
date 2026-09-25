@@ -11,9 +11,16 @@ page's Referer header, and to "direct" when there's neither.
 A visit is counted once per visitor per store per VISIT_WINDOW: reopening
 the page, pulling to refresh or paging through products isn't a new
 visitor. Crawlers and link-preview fetchers (WhatsApp and Facebook fetch
-a shared link to draw its preview card) aren't visitors at all. The visitor is the signed-in user in the app, or a hash of IP and
-user agent on the web (never stored - it only names a short-lived cache
-key). The owner looking at their own store isn't a visit.
+a shared link to draw its preview card) aren't visitors at all. The
+visitor is the signed-in user in the app; on the web, the random id the
+storefront keeps in the browser, or a hash of IP and user agent (never
+stored - it only names a short-lived cache key). The owner looking at
+their own store isn't a visit.
+
+Because a browser id is whatever the browser sends, each client - the
+signed-in user, or the IP address the request really came from
+(api/core/client_ip.py) - brings at most MAX_VISITORS_PER_CLIENT new
+visitors, and MAX_SHARES_PER_CLIENT shares, to a store per window.
 
 A **share** is a tap on a share button, by the owner or a buyer, with the
 channel it went to.
@@ -75,6 +82,16 @@ _OWN_HOSTS = ("broka.co.ke",)
 
 VISIT_WINDOW_SECONDS = 30 * 60
 MAX_STATS_DAYS = 90
+
+# Per store, per client (a signed-in user, or an IP address) and per
+# VISIT_WINDOW: at most this many distinct visitors, and this many shares,
+# are counted. De-duplicating by visitor alone isn't enough - the web
+# visitor id is a random string the browser picks, so a script picking a
+# new one per request was a new visitor every time. Generous, because many
+# phones on Kenyan mobile networks share one public address (carrier NAT):
+# a store going round a WhatsApp group can see a crowd from one IP.
+MAX_VISITORS_PER_CLIENT = 20
+MAX_SHARES_PER_CLIENT = 30
 
 
 def today() -> date:
@@ -147,6 +164,7 @@ class _MemorySeen:
 
     def __init__(self, max_entries: int = 50_000):
         self._entries: OrderedDict[str, float] = OrderedDict()
+        self._counters: OrderedDict[str, tuple[int, float]] = OrderedDict()
         self._max = max_entries
         self._lock = asyncio.Lock()
 
@@ -162,8 +180,24 @@ class _MemorySeen:
                 self._entries.popitem(last=False)
             return True
 
+    async def incr(self, key: str, ttl: int) -> int:
+        """Adds one to a counter that starts when first touched and
+        resets `ttl` seconds later. Returns the new value."""
+        now = time.monotonic()
+        async with self._lock:
+            count, expires = self._counters.get(key, (0, 0.0))
+            if expires <= now:
+                count, expires = 0, now + ttl
+            count += 1
+            self._counters[key] = (count, expires)
+            self._counters.move_to_end(key)
+            while len(self._counters) > self._max:
+                self._counters.popitem(last=False)
+            return count
+
     def clear(self) -> None:
         self._entries.clear()
+        self._counters.clear()
 
 
 class _Seen:
@@ -172,22 +206,49 @@ class _Seen:
         self._client = None
         self._client_loop = None
 
-    async def first_time(self, key: str, ttl: int) -> bool:
+    def _redis(self):
+        """This event loop's Redis client, or None without Redis."""
         from api.core.config import settings
         if not settings.redis_enabled:
-            return await self._memory.first_time(key, ttl)
+            return None
+        loop = asyncio.get_running_loop()
+        if self._client is None or self._client_loop is not loop:
+            import redis.asyncio as aioredis
+            self._client = aioredis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2,
+            )
+            self._client_loop = loop
+        return self._client
+
+    async def first_time(self, key: str, ttl: int) -> bool:
         try:
-            loop = asyncio.get_running_loop()
-            if self._client is None or self._client_loop is not loop:
-                import redis.asyncio as aioredis
-                self._client = aioredis.from_url(
-                    settings.redis_url, decode_responses=True, socket_connect_timeout=2,
-                )
-                self._client_loop = loop
-            return bool(await self._client.set(f"broka:seen:{key}", "1", nx=True, ex=ttl))
+            client = self._redis()
+            if client is None:
+                return await self._memory.first_time(key, ttl)
+            return bool(await client.set(f"broka:seen:{key}", "1", nx=True, ex=ttl))
         except Exception as e:
             logger.warning("[store_stats] Redis unavailable, using memory: %s", e)
             return await self._memory.first_time(key, ttl)
+
+    async def incr(self, key: str, ttl: int) -> int:
+        """A counter for `key` that resets `ttl` seconds after it starts."""
+        try:
+            client = self._redis()
+            if client is None:
+                return await self._memory.incr(key, ttl)
+            rkey = f"broka:count:{key}"
+            pipe = client.pipeline(transaction=True)
+            # Create at 0 with the expiry only if absent, then add one: the
+            # window is fixed from the first event instead of sliding, and
+            # INCR keeps the TTL. (EXPIRE ... NX would do it in one step but
+            # needs Redis 7.)
+            pipe.set(rkey, 0, ex=ttl, nx=True)
+            pipe.incr(rkey)
+            _, count = await pipe.execute()
+            return int(count)
+        except Exception as e:
+            logger.warning("[store_stats] Redis unavailable, using memory: %s", e)
+            return await self._memory.incr(key, ttl)
 
     def clear(self) -> None:
         """Tests only: forget every visitor seen by this process."""
@@ -235,12 +296,19 @@ async def _increment(
 
 async def record_visit(
     db: AsyncSession, store_id: str, surface: str, source: str, visitor: str,
+    client: Optional[str] = None,
 ) -> bool:
-    """Count a visit unless this visitor was already counted recently.
-    Returns whether it was counted."""
+    """Count a visit unless this visitor was already counted recently, or
+    `client` (who is really calling: "user:<id>" or "ip:<address>") has
+    already brought MAX_VISITORS_PER_CLIENT new visitors to this store in
+    the window. Returns whether it was counted."""
     try:
         if not await seen.first_time(f"visit:{store_id}:{visitor}", VISIT_WINDOW_SECONDS):
             return False
+        if client is not None:
+            n = await seen.incr(f"visitors:{store_id}:{client}", VISIT_WINDOW_SECONDS)
+            if n > MAX_VISITORS_PER_CLIENT:
+                return False
         await _increment(db, store_id, "visit", surface, source)
         return True
     except Exception:
@@ -252,15 +320,26 @@ async def record_visit(
         return False
 
 
-async def record_share(db: AsyncSession, store_id: str, surface: str, channel: str) -> None:
+async def record_share(
+    db: AsyncSession, store_id: str, surface: str, channel: str,
+    client: Optional[str] = None,
+) -> bool:
+    """Count a share tap, up to MAX_SHARES_PER_CLIENT per client per store
+    per window. Returns whether it was counted."""
     try:
+        if client is not None:
+            n = await seen.incr(f"shares:{store_id}:{client}", VISIT_WINDOW_SECONDS)
+            if n > MAX_SHARES_PER_CLIENT:
+                return False
         await _increment(db, store_id, "share", surface, channel)
+        return True
     except Exception:
         logger.exception("[store_stats] could not record a share of %s", store_id)
         try:
             await db.rollback()
         except Exception:
             pass
+        return False
 
 
 # ── Reading ──────────────────────────────────────────────────────────────────

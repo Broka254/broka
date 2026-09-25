@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api.database import get_db
+from api.core.client_ip import client_ip_or_none
 from api.security import get_current_user
 from api.models.dispute import (
     DisputeCase, CaseBranch, CaseState,
@@ -158,7 +159,7 @@ async def open_case(
         # only a placeholder - open_case() derives the real buyer/seller
         # role itself from the deal record.
         actor_role=current_user.get("role", "buyer"),
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_ip_or_none(request),
         dispute_type=resolved_dtype,
     )
     return await svc.get_case_dict(case)

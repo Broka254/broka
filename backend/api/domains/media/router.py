@@ -48,8 +48,9 @@ async def upload_image(
             status_code=422,
             detail=f"purpose must be one of: {', '.join(sorted(MediaPurpose.UPLOADABLE))}",
         )
-    from api.core.rate_limit import image_upload_limiter
+    from api.core.rate_limit import image_upload_daily_limiter, image_upload_limiter
     await image_upload_limiter.check_and_record(current_user["id"])
+    await image_upload_daily_limiter.check_and_record(current_user["id"])
 
     # Bounded read: one byte past the limit is enough to know it's too big,
     # without buffering whatever size the client chose to send.

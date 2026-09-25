@@ -40,6 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.client_ip import client_ip
 from api.core.config import settings
 from api.database import get_db
 from . import stats as store_stats
@@ -272,11 +273,11 @@ async def store_public_page(
     listings = await svc.list_store_listings(store["id"], limit=24)
     user_agent = request.headers.get("user-agent")
     if request.method == "GET" and not store_stats.is_bot(user_agent):
+        ip = client_ip(request)
         await store_stats.record_visit(
             db, store["id"], "web",
             store_stats.visit_source(via, request.headers.get("referer")),
-            store_stats.anonymous_visitor_key(
-                request.client.host if request.client else None, user_agent,
-            ),
+            store_stats.anonymous_visitor_key(ip, user_agent),
+            client=f"ip:{ip}",
         )
     return HTMLResponse(content=render_store_page(store, listings))

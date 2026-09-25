@@ -197,6 +197,10 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
             await task_backfill_media()
         except Exception as exc:
             logger.error("[sweep] media backfill failed: %s", exc)
+        try:
+            await task_collect_abandoned_media()
+        except Exception as exc:
+            logger.error("[sweep] media clean-up failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -247,6 +251,14 @@ async def task_backfill_media(ctx: dict | None = None) -> None:
     sweep."""
     from api.domains.media.backfill import run_backfill_pass
     await run_backfill_pass()
+
+
+async def task_collect_abandoned_media(ctx: dict | None = None) -> None:
+    """Remove uploads no listing, store or profile ever used, a week
+    after they were made. See api/domains/media/cleanup.py. Safe to run on
+    every instance at once: each asset is claimed with a compare-and-swap."""
+    from api.domains.media.cleanup import collect_abandoned_uploads
+    await collect_abandoned_uploads()
 
 
 async def start_periodic_sweep(interval_seconds: int = 300) -> None:

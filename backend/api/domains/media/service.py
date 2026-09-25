@@ -17,16 +17,17 @@ import base64
 import binascii
 import json
 import logging
+import re
 import uuid
 from typing import Iterable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.image_processing import VARIANTS, process_image
 from api.core.media_storage import current_storage, storage_named
-from api.models.media import MediaAsset, MediaPurpose
+from api.models.media import AttachState, MediaAsset, MediaPurpose
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,16 @@ MAX_STORE_PHOTOS = 6
 # ── Create ────────────────────────────────────────────────────────────────────
 
 async def create_image_asset(
-    db: AsyncSession, owner_id: str, purpose: str, raw: bytes,
+    db: AsyncSession, owner_id: str, purpose: str, raw: bytes, attached: bool = False,
 ) -> MediaAsset:
     """Process `raw` and store every size. Adds the asset to `db`; the
     caller commits. Raises ImageRejected for an unusable image and
     StorageError if storing failed.
+
+    `attached`: the caller is putting it to use right away (the backfill
+    converting a row's own images). An upload is not attached until a
+    listing, store or profile references it (require_owned_assets); one
+    never attached is cleaned up (api/domains/media/cleanup.py).
 
     Deliberately no flush here: a flushed INSERT holds SQLite's write lock
     until commit, and the database storage driver writes each size through
@@ -66,6 +72,7 @@ async def create_image_asset(
         height=processed.height,
         sha256=processed.sha256,
         variants=json.dumps(variants),
+        attach_state=AttachState.ATTACHED if attached else AttachState.PENDING,
     )
     db.add(asset)
     return asset
@@ -159,6 +166,8 @@ async def link_preview(db: AsyncSession, asset: MediaAsset) -> Optional[tuple[st
 
 # ── Validate what a client sends ──────────────────────────────────────────────
 
+IMAGE_GONE = "An image wasn't found. Please upload it again."
+
 async def require_owned_assets(
     db: AsyncSession, owner_id: str, ids: list[str], purposes: set[str],
 ) -> list[str]:
@@ -173,12 +182,159 @@ async def require_owned_assets(
     for i in ordered:
         asset = found.get(i)
         if asset is None:
-            raise HTTPException(status_code=400, detail="An image wasn't found. Please upload it again.")
+            raise HTTPException(status_code=400, detail=IMAGE_GONE)
         if asset.owner_id != owner_id:
             raise HTTPException(status_code=403, detail="You can only use images you uploaded.")
         if asset.purpose not in purposes:
             raise HTTPException(status_code=400, detail="That image was uploaded for something else.")
+    if not await _mark_attached(db, [found[i] for i in ordered]):
+        raise HTTPException(status_code=400, detail=IMAGE_GONE)
     return ordered
+
+
+async def _mark_attached(db: AsyncSession, assets: list[MediaAsset]) -> bool:
+    """Record that these assets are in use, so the clean-up never removes
+    them. Written in the caller's transaction: if the listing or store it
+    was for is then refused and rolled back, so is this.
+
+    A compare-and-swap from "pending": the clean-up claims an asset the
+    same way, so an upload can't be attached and cleaned up at once. The
+    loser is told to upload again - which in practice means an upload left
+    unused for a week was used at the very moment it was being removed."""
+    pending = [a.id for a in assets if a.attach_state == AttachState.PENDING]
+    if not pending:
+        return True
+    result = await db.execute(
+        update(MediaAsset)
+        .where(MediaAsset.id.in_(pending), MediaAsset.attach_state == AttachState.PENDING)
+        .values(attach_state=AttachState.ATTACHED)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != len(pending):
+        return False
+    for asset in assets:
+        if asset.id in pending:
+            asset.attach_state = AttachState.ATTACHED
+    return True
+
+
+# ── BROKA's own image URLs ────────────────────────────────────────────────────
+
+# Purposes an existing asset may be re-used under, keyed by the purpose of
+# the field it is being put in. Mirrors what the upload paths accept: a
+# store cover may be any store photo, a showcase may be a listing photo.
+COMPATIBLE_PURPOSES: dict[str, frozenset[str]] = {
+    MediaPurpose.STORE_LOGO:       frozenset({MediaPurpose.STORE_LOGO}),
+    MediaPurpose.STORE_COVER:      frozenset({MediaPurpose.STORE_COVER, MediaPurpose.STORE_PHOTO}),
+    MediaPurpose.STORE_PHOTO:      frozenset({MediaPurpose.STORE_PHOTO, MediaPurpose.STORE_COVER}),
+    MediaPurpose.LISTING_PHOTO:    frozenset({MediaPurpose.LISTING_PHOTO}),
+    MediaPurpose.LISTING_SHOWCASE: frozenset({MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO}),
+    MediaPurpose.AVATAR:           frozenset({MediaPurpose.AVATAR}),
+}
+
+_OWN_KEY_RE = re.compile(
+    r"img/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(?:thumb|medium|large)\.webp"
+)
+
+
+def _own_url_prefixes() -> list[str]:
+    """Where BROKA's image URLs start: what each storage driver's
+    public_url() produces for a key."""
+    from api.core.config import settings
+    prefixes = ["/media/i/"]
+    if settings.public_api_base_url:
+        prefixes.append(f"{settings.public_api_base_url}/media/i/")
+    if settings.media_public_base_url:
+        prefixes.append(f"{settings.media_public_base_url}/")
+    return prefixes
+
+
+def own_asset_id(value: Optional[str]) -> Optional[str]:
+    """The asset id in one of BROKA's own image URLs, or None for anything
+    else - including a URL on another host that copies the same path."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    for prefix in _own_url_prefixes():
+        if v.startswith(prefix):
+            match = _OWN_KEY_RE.fullmatch(v[len(prefix):])
+            if match:
+                return match.group(1)
+    return None
+
+
+async def resolve_own_asset(
+    db: AsyncSession, owner_id: str, value: Optional[str], purpose: str,
+) -> Optional[str]:
+    """The id of the live asset `value` points at, when it is one of
+    BROKA's own URLs, `owner_id` uploaded it, and its purpose fits `purpose`.
+    App builds that predate assets show the URL they were given and send it
+    back unchanged when the owner saves; this turns that back into the id."""
+    asset_id = own_asset_id(value)
+    if asset_id is None:
+        return None
+    asset = (await load_assets(db, [asset_id])).get(asset_id)
+    if asset is None or asset.owner_id != owner_id:
+        return None
+    if asset.purpose not in COMPATIBLE_PURPOSES.get(purpose, frozenset({purpose})):
+        return None
+    if not await _mark_attached(db, [asset]):
+        return None
+    return asset.id
+
+
+def is_inline_image(value: Optional[str]) -> bool:
+    """True for what the legacy image fields were made for: a base64 data
+    URI of an image, or bare base64. Whether the bytes really are an image
+    is decided later, by process_image."""
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v:
+        return False
+    if v.startswith("data:"):
+        header, sep, _ = v.partition(",")
+        return bool(sep) and header.lower().startswith("data:image/") and header.lower().endswith(";base64")
+    # Bare base64. Nothing in base64 can make it a link: a scheme needs ':'
+    # and a host needs '.', neither of which is a base64 character, and a
+    # scheme-relative "//host" is refused outright (no image's base64 starts
+    # that way). Plain substring checks, not a regex over the whole value:
+    # these are megabytes long and read on every list page.
+    return ":" not in v and "." not in v and not v.startswith("//")
+
+LEGACY_IMAGE_REFUSED = (
+    "Add pictures by uploading them. Links to images on other sites aren't accepted."
+)
+
+
+def is_acceptable_legacy_image(value: Optional[str]) -> bool:
+    """What a legacy image field may hold: an inline image, or one of
+    BROKA's own image URLs. Anything else - a link to another site - would
+    be shown to buyers as if BROKA had checked it, and a third-party image
+    on a store page tells that site who is looking."""
+    return is_inline_image(value) or own_asset_id(value) is not None
+
+
+def legacy_image_or_none(value: Optional[str]) -> Optional[str]:
+    """`value` when it is acceptable (see above), else None. For reading
+    rows saved before these fields were checked."""
+    return value if is_acceptable_legacy_image(value) else None
+
+
+async def check_legacy_images(
+    db: AsyncSession, owner_id: Optional[str], values: Iterable[Optional[str]], purpose: str,
+) -> None:
+    """Refuses (400/403) any value an older app build sent in a legacy
+    image field that isn't an inline image or an image `owner_id` uploaded.
+    Empty values are fine: they clear the field."""
+    for value in values:
+        if not isinstance(value, str) or not value.strip() or is_inline_image(value):
+            continue
+        if own_asset_id(value) is not None:
+            if owner_id and await resolve_own_asset(db, owner_id, value, purpose):
+                continue
+            raise HTTPException(status_code=403, detail="You can only use images you uploaded.")
+        raise HTTPException(status_code=400, detail=LEGACY_IMAGE_REFUSED)
 
 
 # ── Id lists as stored in Text columns ────────────────────────────────────────

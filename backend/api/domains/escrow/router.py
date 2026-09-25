@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
+from api.core.client_ip import client_ip_or_none
 from api.security import get_current_user
 from api.core.idempotency import idempotency_guard, IdempotencyResult
 from .service import EscrowService
@@ -72,7 +73,7 @@ async def finalize_deal(
         buyer_id=body.buyer_id,
         agreed_price=body.agreed_price,
         current_user_id=current_user["id"],
-        request_ip=request.client.host if request.client else None,
+        request_ip=client_ip_or_none(request),
     )
 
 
@@ -116,7 +117,7 @@ async def fund_deal_escrow(
         deal_id=deal_id,
         buyer_id=current_user["id"],
         payer_phone=body.payer_phone,
-        request_ip=request.client.host if request.client else None,
+        request_ip=client_ip_or_none(request),
     )
     await idempotency_result.store(result)
     return result
@@ -149,7 +150,7 @@ async def confirm_delivery(
     return await svc.confirm_delivery(
         deal_id=deal_id,
         buyer_id=current_user["id"],
-        request_ip=request.client.host if request.client else None,
+        request_ip=client_ip_or_none(request),
     )
 
 

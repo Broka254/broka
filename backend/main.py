@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.database import init_db
+from api.core.body_limit import BodySizeLimitMiddleware
 from api.core.config import settings, validate_startup
 from api.core.workers import worker
 from api.security import validate_secret_key
@@ -159,6 +160,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Request body size ─────────────────────────────────────────────────────────
+# Added last, so it runs first: an oversized body is refused before any
+# other middleware or route reads it. See api/core/body_limit.py.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_body_mb * 1024 * 1024)
 
 
 # ── Global exception handler ──────────────────────────────────────────────────
