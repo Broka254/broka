@@ -385,6 +385,16 @@ class Listing(Base):
     # owner/negotiation counterparty regardless of store_id.
     store_id      = Column(String, ForeignKey("stores.id"), nullable=True, index=True)
     created_at    = Column(DateTime, default=datetime.utcnow, index=True)
+    # The X-Idempotency-Key of the request that created it (the app sends
+    # one per draft). Unique per seller, so a create that is sent again -
+    # the response was lost on a slow connection and the seller tapped
+    # Activate again - gets back the listing the first attempt made instead
+    # of posting the item twice. NULL for listings made without a key.
+    client_ref    = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("uq_listings_seller_client_ref", "seller_id", "client_ref", unique=True),
+    )
 
     seller = relationship("User", back_populates="listings", foreign_keys=[seller_id])
     bids   = relationship("Bid", back_populates="listing")
@@ -1285,6 +1295,33 @@ async def init_db():
             # SQLite never enforced them and skips these statements.
             _drop_foreign_key_sql("audit_logs", "actor_id"),
             _drop_foreign_key_sql("auction_meta", "deal_id"),
+            # Retry-safe listing creation (Listing.client_ref). Its unique
+            # index is in index_patches below, after this has run.
+            "ALTER TABLE listings ADD COLUMN client_ref VARCHAR(64)",
+            # Data repair, not schema. Listings used to accept NaN and
+            # Infinity (api/domains/listings/validation.py); PostgreSQL
+            # stores them and every response containing such a row fails,
+            # so one of them in the active set takes the Home feed down.
+            # Nobody ever saw one work - its own creation response failed
+            # too - so it is taken off sale rather than guessed at. The
+            # literals are floats to PostgreSQL and text to SQLite, which
+            # can't store NaN anyway: there this matches nothing.
+            "UPDATE listings SET status = 'cancelled' "
+            "WHERE status = 'active' AND ("
+            "price IN ('NaN', 'Infinity', '-Infinity') "
+            "OR lat IN ('NaN', 'Infinity', '-Infinity') "
+            "OR lng IN ('NaN', 'Infinity', '-Infinity'))",
+            # Data repair: listings were saved at the seller's phone position
+            # to 7 decimal places and returned by the public listing API.
+            # New ones are saved at their county's point, or rounded (see
+            # api/domains/listings/location.py); this rounds the ones already
+            # saved to the same ~1 km. NUMERIC because PostgreSQL has no
+            # two-argument ROUND for double precision. Matches nothing once
+            # done, so repeating it costs one scan.
+            "UPDATE listings SET "
+            "lat = ROUND(CAST(lat AS NUMERIC), 2), lng = ROUND(CAST(lng AS NUMERIC), 2) "
+            "WHERE lat <> ROUND(CAST(lat AS NUMERIC), 2) "
+            "OR lng <> ROUND(CAST(lng AS NUMERIC), 2)",
         ]
         # FIX (buying-agent bug-hunt, 2026-09-17): each statement now runs
         # inside its own SAVEPOINT. Previously they shared this function's
@@ -1381,6 +1418,10 @@ async def init_db():
             # IS NULL" on every pass; ending-soon queries the same column.
             "CREATE INDEX IF NOT EXISTS ix_auction_meta_ends_at ON auction_meta(ends_at)",
             "CREATE INDEX IF NOT EXISTS ix_auction_meta_starts_at ON auction_meta(starts_at)",
+            # One listing per (seller, creation key). NULLs don't collide on
+            # either database, so listings made without a key are unaffected.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_listings_seller_client_ref "
+            "ON listings (seller_id, client_ref)",
         ]
         for stmt in index_patches:
             # Same SAVEPOINT scoping as the two blocks above - CREATE INDEX

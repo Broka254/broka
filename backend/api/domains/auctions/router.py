@@ -102,6 +102,7 @@ async def update_auction_terms(
             starts_at=starts_at,
             ends_at=ends_at,
             reserve_price=reserve,
+            now=datetime.utcnow(),
         )
     except AuctionError as e:
         raise HTTPException(

@@ -172,6 +172,8 @@ if _settings.is_test:
     image_upload_daily_limiter = _make_limiter("image_upload_day", limit=100000, window_seconds=86400)
     store_name_check_limiter = _make_limiter("store_name_check", limit=1000, window_seconds=60)
     store_counter_limiter    = _make_limiter("store_counter",    limit=1000, window_seconds=60)
+    listing_create_limiter       = _make_limiter("listing_create",     limit=1000, window_seconds=3600)
+    listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100000, window_seconds=86400)
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
@@ -213,6 +215,13 @@ else:
     # 60: many phones on Kenyan mobile networks share one public address,
     # and every one of them opening a store page is a call.
     store_counter_limiter    = _make_limiter("store_counter",    limit=120, window_seconds=60)
+    # POST /listings, keyed by user. Nothing limited it: photos are capped
+    # by the upload limits above, but a listing needs none through the API,
+    # so a script could fill the Home feed. Through the app each listing is
+    # a seven-step wizard with camera photos - 30 in an hour, or 100 in a
+    # day, is far past what a person posts.
+    listing_create_limiter       = _make_limiter("listing_create",     limit=30,  window_seconds=3600)
+    listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100, window_seconds=86400)
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)

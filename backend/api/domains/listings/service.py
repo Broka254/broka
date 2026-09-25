@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, case
 
@@ -13,6 +14,8 @@ from api.database import Listing, ListingStatus, ListingType, User, Interest, De
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
+from .location import canonical_county, listing_point, tidy_place
+from .validation import load_attributes
 
 
 def _haversine_km(lat1, lng1, lat2, lng2) -> float:
@@ -138,6 +141,7 @@ def resolve_auction_terms(data: dict, price, auction_date, now: Optional[datetim
         starts_at=starts_at,
         ends_at=ends_at,
         reserve_price=reserve,
+        now=now,
     )
 
     return {
@@ -183,15 +187,41 @@ class ListingService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create_listing(self, seller_id: str, data: dict) -> dict:
+    async def create_listing(
+        self, seller_id: str, data: dict, client_ref: Optional[str] = None,
+    ) -> dict:
+        """Create a listing and return the owner's view of it.
+
+        `client_ref` is the request's X-Idempotency-Key. Sent again - the
+        response to the first attempt never reached the phone, and the
+        seller tapped Activate again - it returns the listing that attempt
+        created instead of a second copy of it.
+        """
         # Check trust score — block high-risk users
         r = await self.db.execute(select(User).where(User.id == seller_id))
         seller = r.scalar_one_or_none()
-        if seller and (seller.trust_score or 100) < 20:
+        if seller is None:
+            # A token outliving its account. Carrying on wrote a listing
+            # for a seller who doesn't exist (a foreign-key 500 on
+            # PostgreSQL) and skipped the trust check below.
+            raise HTTPException(status_code=401, detail="Account not found. Please sign in again.")
+        # `is not None`, not `or 100`: the lowest score there is, 0, read as
+        # a perfect 100, so the most distrusted accounts were the ones this
+        # never stopped. Same rule as api/core/permissions.py.
+        if seller.trust_score is not None and seller.trust_score < 20:
             raise HTTPException(
                 status_code=403,
                 detail="Your account has been restricted due to trust score. Contact support.",
             )
+
+        # A repeat of a create that already happened. Before the rate limit,
+        # so the retry of a listing that exists is never refused for it.
+        if client_ref:
+            replay = await self._created_with_ref(seller_id, client_ref)
+            if replay is not None:
+                return replay
+
+        await self._check_create_rate(seller_id)
 
         # AI Showcase/Cover Image, set at creation time (2026-08-29). The
         # wizard's Showcase step runs before the listing exists (see
@@ -237,6 +267,17 @@ class ListingService:
                 {MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO},
             )
 
+        # subcategory_id is a foreign key. An id that isn't a category (a
+        # draft saved before the taxonomy changed, say) used to reach the
+        # INSERT: a 500 on PostgreSQL, and on SQLite, which doesn't enforce
+        # the key, a listing filed under nothing.
+        subcategory_id = data.get("subcategory_id") or None
+        if subcategory_id and await self.db.get(Category, subcategory_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="That category is no longer available. Go back and choose it again.",
+            )
+
         # Store association (optional - spec §5/§11: "[No Store] / [My
         # Store]" at creation time). Ownership is checked server-side
         # against the AUTHENTICATED seller_id, never trusted from the
@@ -252,9 +293,7 @@ class ListingService:
                 raise HTTPException(status_code=403, detail="You do not own this store")
 
         # Auction terms are validated BEFORE the listing row exists, so a
-        # rejected auction leaves no orphan listing behind. The Listing is
-        # committed below and _create_auction_meta runs after that commit,
-        # so validating in there would persist the listing and then 422.
+        # rejected auction leaves no orphan listing behind.
         # str from the HTTP layer (ListingIn.listing_type is a str), a
         # ListingType from a direct service call in a test - accept both.
         _requested_type = data.get("listing_type", "direct")
@@ -265,23 +304,28 @@ class ListingService:
                 data, data.get("price"), data.get("auction_date"),
             )
 
+        # The county as officially spelt, so "nairobi" and "Nairobi County"
+        # are one place to the location filter; the point it's shown at is
+        # the county's, not the seller's phone (see location.py).
+        county = canonical_county(data.get("location_county")) or tidy_place(data.get("location_county"))
+        subcounty = tidy_place(data.get("location_subcounty"))
+        lat, lng = listing_point(county, data["lat"], data["lng"])
+
         listing = Listing(
             seller_id=seller_id,
             store_id=store.id if store else None,
             name=data["name"],
             description=data.get("description"),
             category=data["category"],
-            subcategory_id=data.get("subcategory_id"),
+            subcategory_id=subcategory_id,
             condition=data.get("condition"),
             attributes=json.dumps(data["attributes"]) if data.get("attributes") else None,
             price=data["price"],
-            lat=data["lat"],
-            lng=data["lng"],
-            location_name=_derive_location_name(
-                data.get("location_county"), data.get("location_subcounty"), data.get("location_name"),
-            ),
-            location_county=data.get("location_county"),
-            location_subcounty=data.get("location_subcounty"),
+            lat=lat,
+            lng=lng,
+            location_name=_derive_location_name(county, subcounty, data.get("location_name")),
+            location_county=county,
+            location_subcounty=subcounty,
             listing_type=data.get("listing_type", "direct"),
             verified_photos=data.get("verified_photos"),
             verified_video=data.get("verified_video"),
@@ -302,19 +346,34 @@ class ListingService:
             showcase_image_source=showcase_source,
             photo_ids=photo_ids_json,
             showcase_id=showcase_id,
+            client_ref=client_ref or None,
         )
         self.db.add(listing)
-        await self.db.commit()
+        try:
+            # Flushed for its id, then committed together with its auction
+            # record. They used to be two commits, so a failure between
+            # them left an auction with no window to open or close by.
+            await self.db.flush()
+            # An auction listing gets its lifecycle record here, at
+            # creation, rather than being conjured by whatever places the
+            # first bid. Creating it lazily was how auctions ended up with
+            # no window at all: the row was invented with status="live" and
+            # nothing else, so there was no start to enforce and no end to
+            # close at. See domains/auctions/lifecycle.py.
+            if auction_terms is not None:
+                self._add_auction_meta(listing, auction_terms)
+            await self.db.commit()
+        except IntegrityError:
+            # Two sends of the same create at once (a double tap on a slow
+            # connection): both missed the check above, the unique index on
+            # (seller_id, client_ref) let one in. The other returns it.
+            await self.db.rollback()
+            if client_ref:
+                replay = await self._created_with_ref(seller_id, client_ref)
+                if replay is not None:
+                    return replay
+            raise
         await self.db.refresh(listing)
-
-        # An auction listing gets its lifecycle record here, at creation,
-        # rather than being conjured by whatever places the first bid.
-        # Creating it lazily was how auctions ended up with no window at
-        # all: the row was invented with status="live" and nothing else, so
-        # there was no start to enforce and no end to close at. See
-        # domains/auctions/lifecycle.py.
-        if listing.listing_type == ListingType.auction:
-            await self._create_auction_meta(listing, auction_terms)
 
         await publish(ListingCreated(
             listing_id=listing.id,
@@ -328,7 +387,46 @@ class ListingService:
         assets = await load_listing_media(self.db, [listing], [seller])
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
 
-    async def _create_auction_meta(self, listing: Listing, terms: dict) -> None:
+    async def _created_with_ref(self, seller_id: str, client_ref: str) -> Optional[dict]:
+        """The owner view of the listing `seller_id` created with this
+        X-Idempotency-Key, or None. Read fresh - it's also called after a
+        rollback, when nothing loaded earlier may be touched."""
+        listing = (await self.db.execute(
+            select(Listing)
+            .where(Listing.seller_id == seller_id, Listing.client_ref == client_ref)
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if listing is None:
+            return None
+        seller = (await self.db.execute(
+            select(User).where(User.id == seller_id).execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        store = await self.db.get(Store, listing.store_id) if listing.store_id else None
+        assets = await load_listing_media(self.db, [listing], [seller])
+        return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
+
+    @staticmethod
+    async def _check_create_rate(seller_id: str) -> None:
+        """Per-seller posting limits (api/core/rate_limit.py), in words a
+        seller can act on rather than the limiter's own."""
+        from api.core import rate_limit
+        for limiter, span in (
+            (rate_limit.listing_create_limiter, "hour"),
+            (rate_limit.listing_create_daily_limiter, "day"),
+        ):
+            try:
+                await limiter.check_and_record(seller_id)
+            except HTTPException as exc:
+                if exc.status_code != 429:
+                    raise
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"You've posted as many listings as we allow in a {span}. "
+                           f"Please try again later.",
+                    headers=exc.headers,
+                )
+
+    def _add_auction_meta(self, listing: Listing, terms: dict) -> None:
         """Write the auction's authoritative window from validated terms.
 
         `terms` comes from resolve_auction_terms, which has already applied
@@ -340,6 +438,9 @@ class ListingService:
         Every auction gets a closing time, always: an auction that can
         never close can never take a bid (see lifecycle.place_bid), so
         listing.auction_date is kept in step with the resolved end.
+
+        Adds to the session only: create_listing commits the listing and
+        this together.
         """
         from api.database import AuctionMeta
 
@@ -362,8 +463,6 @@ class ListingService:
         from api.domains.auctions import lifecycle as _lifecycle
         meta.status = _lifecycle.effective_status(meta, now)
         self.db.add(meta)
-        await self.db.commit()
-        await self.db.refresh(listing)
 
     async def get_listing(self, listing_id: str) -> dict:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))
@@ -604,11 +703,8 @@ class ListingService:
 
     @staticmethod
     def _matches_attributes(listing: Listing, wanted: dict) -> bool:
-        if not listing.attributes:
-            return False
-        try:
-            stored = json.loads(listing.attributes)
-        except (TypeError, ValueError):
+        stored = load_attributes(listing.attributes)
+        if stored is None:
             return False
         for field_name, wanted_value in wanted.items():
             if wanted_value in (None, ""):
@@ -930,7 +1026,9 @@ class ListingService:
             "category": listing.category,
             "subcategory_id": listing.subcategory_id,
             "condition": listing.condition,
-            "attributes": json.loads(listing.attributes) if listing.attributes else None,
+            # load_attributes, not json.loads: one corrupt or NaN-holding
+            # row used to fail every page it appeared on.
+            "attributes": load_attributes(listing.attributes),
             "price": listing.price,
             "lat": listing.lat,
             "lng": listing.lng,

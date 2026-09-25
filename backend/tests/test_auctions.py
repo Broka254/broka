@@ -113,7 +113,7 @@ class TestAuctions:
         listing_id = create.json()["id"]
 
         # auction_meta IS now created at listing-creation time (see
-        # ListingService._create_auction_meta), with a default closing time
+        # ListingService._add_auction_meta), with a default closing time
         # when the seller gives none - this test used to document the
         # opposite, that nothing created one and the first bid had to. The
         # lazy path still exists in lifecycle.ensure_meta for listings that

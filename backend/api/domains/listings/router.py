@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,23 +15,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Every seller price edit and photo update through that endpoint has been
 # failing. Found by an auction terms-lock test that expected a 409 and got a
 # 500; no existing test covered this endpoint at all.
-from api.database import get_db, Listing
+from api.database import get_db, DealStatus, Listing
 from api.domains.auctions.lifecycle import AuctionError
 from api.security import get_current_user
+from . import validation as rules
 from .service import ListingService
 
 router = APIRouter()
 
 
 class ListingIn(BaseModel):
+    # NaN and Infinity refused in every float field - see validation.py for
+    # what one of them in a stored listing did to the Home feed.
+    model_config = ConfigDict(allow_inf_nan=False)
+
     name: str
     category: str
     subcategory_id: Optional[str] = None
     condition: Optional[str] = None  # "new" | "used" | "refurbished"
     attributes: Optional[Dict[str, Any]] = None  # dynamic category fields, e.g. {"make": "Toyota"}
     price: float
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
     description: Optional[str] = None
     location_name: Optional[str] = None
     # Structured location (2026-08-29). location_county/location_subcounty
@@ -44,7 +49,8 @@ class ListingIn(BaseModel):
     # buy_agent matching...) keep seeing a normal display string either way.
     location_county: Optional[str] = None
     location_subcounty: Optional[str] = None
-    listing_type: str = "direct"
+    # A value outside the enum used to reach the Enum column and 500.
+    listing_type: Literal["direct", "auction"] = "direct"
     # Image assets from POST /media/images (purpose "listing_photo"), first
     # photo first. What current app builds send; verified_photos (base64)
     # is still accepted from older builds, and converted by the media
@@ -53,13 +59,13 @@ class ListingIn(BaseModel):
     verified_photos: Optional[str] = None
     verified_video: Optional[str] = None
     advert_video: Optional[str] = None
-    target_bidders: Optional[int] = None
+    target_bidders: Optional[int] = Field(default=None, ge=2, le=500)
     auction_date: Optional[str] = None
     reserve_price: Optional[float] = None
     # Auction lifecycle (0021). The window bidding is open for. Both
     # optional: omitted, bidding opens now and closes at auction_date,
     # which is what the sell wizard already collects. See
-    # ListingService._create_auction_meta.
+    # ListingService._add_auction_meta.
     auction_starts_at: Optional[str] = None
     auction_ends_at: Optional[str] = None
     # Minimum raise between bids. Defaults to AUCTION_DEFAULT_MIN_INCREMENT.
@@ -80,9 +86,56 @@ class ListingIn(BaseModel):
     # (ownership verified server-side in ListingService.create_listing).
     store_id: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v):
+        return rules.clean_name(v)
+
+    @field_validator("category")
+    @classmethod
+    def _category(cls, v):
+        return rules.clean_category(v)
+
+    @field_validator("condition")
+    @classmethod
+    def _condition(cls, v):
+        return rules.clean_condition(v)
+
+    @field_validator("attributes")
+    @classmethod
+    def _attributes(cls, v):
+        return rules.clean_attributes(v)
+
+    @field_validator("price")
+    @classmethod
+    def _price(cls, v):
+        return rules.check_price(v)
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, v):
+        return rules.bounded_text(v, rules.MAX_DESCRIPTION_LEN, "description")
+
+    @field_validator("location_name")
+    @classmethod
+    def _location_name(cls, v):
+        return rules.bounded_text(v, rules.MAX_LOCATION_NAME_LEN, "location")
+
+    @field_validator("location_county", "location_subcounty")
+    @classmethod
+    def _place(cls, v):
+        return rules.bounded_text(v, rules.MAX_PLACE_LEN, "county and area names")
+
 
 class InterestIn(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     offer_price: Optional[float] = None
+
+    @field_validator("offer_price")
+    @classmethod
+    def _offer(cls, v):
+        return None if v is None else rules.check_price(v, "An offer")
 
 
 class ListingStoreIn(BaseModel):
@@ -158,13 +211,25 @@ async def create_listing(
     body: ListingIn,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(
+        None, alias="X-Idempotency-Key", max_length=64,
+    ),
 ):
     """Create a listing. Auction terms are validated server-side here by
     the same lifecycle.validate_terms the terms PATCH uses, so a window
-    that cannot be edited into existence cannot be created either."""
+    that cannot be edited into existence cannot be created either.
+
+    X-Idempotency-Key (optional; the app sends one per draft) makes the
+    request safe to send again: a repeat returns the listing the first one
+    created. It is kept on the listing (Listing.client_ref) rather than in
+    Redis like the money endpoints' keys, so it holds without Redis and for
+    as long as the listing exists.
+    """
     svc = ListingService(db)
     try:
-        return await svc.create_listing(current_user["id"], body.model_dump())
+        return await svc.create_listing(
+            current_user["id"], body.model_dump(), client_ref=idempotency_key or None,
+        )
     except AuctionError as e:
         # Same structured shape the auction endpoints return, so the client
         # reacts to the code instead of parsing English out of `detail`.
@@ -176,8 +241,8 @@ async def create_listing(
 
 # ── Seller edits ────────────────────────────────────────────────────────────
 #
-# Sellers can change price and photos. Photos are unrestricted; price is not,
-# and the asymmetry is deliberate.
+# Sellers can change price and photos. Photos are unrestricted until a buyer
+# pays (below); price is not, and the asymmetry is deliberate.
 #
 # A price that moves while someone is negotiating breaks the negotiation:
 # a buyer who agreed KES 3,000 yesterday and opens the thread to find 3,800
@@ -188,6 +253,19 @@ async def create_listing(
 #
 # So: two rules, and both of them explain themselves when they fire, because
 # a limit a seller does not understand feels like a bug.
+#
+# Above both: while a buyer's money is held for the listing, nothing about
+# it changes. The listing is what they paid for, and its photos are what a
+# "not as described" dispute is decided against - editable after payment,
+# a seller could swap them for pictures of the damage the buyer is about to
+# report.
+
+# Deal states in which the buyer's money is held and not yet settled.
+_MONEY_HELD = (
+    DealStatus.paid, DealStatus.disputed, DealStatus.awaiting_condition_check,
+    DealStatus.awaiting_resolution, DealStatus.awaiting_replacement,
+    DealStatus.goods_not_arrived,
+)
 
 # Changes allowed in a rolling week. Two is enough to correct a mistake and
 # then respond to the market once; a third within seven days is oscillation.
@@ -200,6 +278,10 @@ MIN_HOURS_BETWEEN_PRICE_CHANGES = 12
 
 
 class ListingEdit(BaseModel):
+    # A NaN price used to pass the handler's old "<= 0" check (NaN fails
+    # every comparison) and be saved - see validation.py.
+    model_config = ConfigDict(allow_inf_nan=False)
+
     price: Optional[float] = None
     # Replaces the photos, in this order (image asset ids).
     photo_ids: Optional[List[str]] = Field(default=None, min_length=1, max_length=6)
@@ -207,6 +289,11 @@ class ListingEdit(BaseModel):
     # Replaces the showcase with this image asset; "" removes it.
     showcase_id: Optional[str] = None
     showcase_image_url: Optional[str] = None
+
+    @field_validator("price")
+    @classmethod
+    def _price(cls, v):
+        return None if v is None else rules.check_price(v)
 
 
 @router.patch("/{listing_id}")
@@ -223,20 +310,39 @@ async def update_listing(
     rather than rejecting them after.
     """
     from datetime import datetime, timedelta
-    from api.database import Deal, DealStatus, ListingPriceChange
+    from api.database import Deal, ListingPriceChange
     from sqlalchemy import func
     import uuid as _uuid
 
-    listing = await db.get(Listing, listing_id)
+    # Row-locked (PostgreSQL; SQLite serialises writers anyway) and read
+    # fresh: the weekly price allowance below is counted then spent, and two
+    # edits sent together could otherwise both see one change left.
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == listing_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found.")
     if listing.seller_id != current_user["id"]:
         raise HTTPException(status_code=403,
                             detail="You can only edit your own listings.")
 
+    # ── Buyer's money held: no changes (see _MONEY_HELD) ────────────────
+    held = (await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.listing_id == listing_id, Deal.status.in_(_MONEY_HELD),
+        )
+    )).scalar() or 0
+    if held:
+        raise HTTPException(
+            status_code=409,
+            detail="A buyer has paid for this listing and the money is held in escrow. "
+                   "It can't be changed until that deal is settled.")
+
     changed: Dict[str, Any] = {}
 
-    # ── Photos: unrestricted ────────────────────────────────────────────
+    # ── Photos: unrestricted until a buyer pays ─────────────────────────
     from api.domains.media.service import (
         check_legacy_images, dump_id_list, require_owned_assets, split_legacy_photos,
     )
@@ -294,8 +400,7 @@ async def update_listing(
     recent = recent_r.scalars().all()
 
     if body.price is not None and float(body.price) != float(listing.price or 0):
-        if body.price <= 0:
-            raise HTTPException(status_code=400, detail="Price must be above zero.")
+        # (Above zero and within the escrow ceiling: ListingEdit checked.)
         # On an auction, `price` IS the starting price (auction_meta mirrors
         # it), so this generic edit path is a back door into an auction's
         # terms - it predates auctions having terms at all. Once bidding has

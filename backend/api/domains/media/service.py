@@ -167,6 +167,12 @@ async def link_preview(db: AsyncSession, asset: MediaAsset) -> Optional[tuple[st
 # ── Validate what a client sends ──────────────────────────────────────────────
 
 IMAGE_GONE = "An image wasn't found. Please upload it again."
+# Sent with IMAGE_GONE as the X-Error-Code header, so a client can tell this
+# refusal from the others without matching the wording. The app uses it to
+# upload a restored draft's photos again: an upload no listing used is
+# cleaned up after a week (cleanup.py), and a week-old draft still holds
+# the ids it was given. `detail` stays a plain string for older builds.
+IMAGE_GONE_HEADERS = {"X-Error-Code": "IMAGE_GONE"}
 
 async def require_owned_assets(
     db: AsyncSession, owner_id: str, ids: list[str], purposes: set[str],
@@ -182,13 +188,13 @@ async def require_owned_assets(
     for i in ordered:
         asset = found.get(i)
         if asset is None:
-            raise HTTPException(status_code=400, detail=IMAGE_GONE)
+            raise HTTPException(status_code=400, detail=IMAGE_GONE, headers=IMAGE_GONE_HEADERS)
         if asset.owner_id != owner_id:
             raise HTTPException(status_code=403, detail="You can only use images you uploaded.")
         if asset.purpose not in purposes:
             raise HTTPException(status_code=400, detail="That image was uploaded for something else.")
     if not await _mark_attached(db, [found[i] for i in ordered]):
-        raise HTTPException(status_code=400, detail=IMAGE_GONE)
+        raise HTTPException(status_code=400, detail=IMAGE_GONE, headers=IMAGE_GONE_HEADERS)
     return ordered
 
 

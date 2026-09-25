@@ -7,9 +7,12 @@ Backward-compatible: legacy routers kept alongside new domain routers.
 
 import inspect
 import logging
+import math
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -165,6 +168,32 @@ app.add_middleware(
 # Added last, so it runs first: an oversized body is refused before any
 # other middleware or route reads it. See api/core/body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_body_mb * 1024 * 1024)
+
+
+# ── Validation errors ─────────────────────────────────────────────────────────
+
+def _json_safe(value):
+    """`value` with NaN and ±Infinity replaced by their names. JSON has no
+    such numbers, and the response encoder refuses them."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """FastAPI's own 422, made safe to send. Its body echoes the rejected
+    input, and Python's json parser accepts the bare literals NaN and
+    Infinity - so a request refused for sending `"price": NaN` failed again
+    while the refusal was written, and went out as a 500."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _json_safe(jsonable_encoder(exc.errors()))},
+    )
 
 
 # ── Global exception handler ──────────────────────────────────────────────────

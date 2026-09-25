@@ -218,13 +218,22 @@ def validate_terms(
     starts_at: Optional[datetime],
     ends_at: Optional[datetime],
     reserve_price: Optional[float],
+    now: Optional[datetime] = None,
 ) -> None:
     """The rules an auction window has to satisfy to be one.
 
     Enforced here rather than only in the client because the client is not
     the authority on any of it - a request that skips the app entirely has
     to hit the same wall.
+
+    `now`, when given, also refuses a window that has already closed. An
+    auction created or rescheduled that way was ended before anyone could
+    bid - the sell wizard's date picker offers yesterday, and a draft
+    restored a few days later still holds the closing time it was given.
     """
+    if now is not None and ends_at is not None and ends_at <= now:
+        raise AuctionError(422, "WINDOW_IN_PAST",
+                            "The closing time has already passed. Choose a later one.")
     if starting_price is not None and starting_price <= 0:
         raise AuctionError(422, "INVALID_STARTING_PRICE",
                             "The starting price must be above zero.")
