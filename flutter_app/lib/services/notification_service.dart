@@ -228,8 +228,7 @@ class NotificationService {
   void _onTap(NotificationResponse response) =>
       handleResponse(actionId: response.actionId, payload: response.payload);
 
-  /// A tap on a notification or on one of its buttons. Accept and a tap on
-  /// the body are the same thing - navigateFromPayload already answers.
+  /// A tap on a notification or on one of its buttons.
   Future<void> handleResponse({String? actionId, String? payload}) async {
     final data = decodePayload(payload);
     if (data == null) return;
@@ -237,7 +236,10 @@ class NotificationService {
       await declineFromPayload(data);
       return;
     }
-    await navigateFromPayload(data);
+    await navigateFromPayload({
+      ...data,
+      'answer': actionId == callAcceptActionId,
+    });
   }
 
   /// The app was started by the user acting on one of our notifications
@@ -254,7 +256,10 @@ class NotificationService {
       if (details?.didNotificationLaunchApp != true || response == null) return null;
       if (response.actionId == callDeclineActionId) return null;
       final data = decodePayload(response.payload);
-      return data?['type'] == 'incoming_call' ? data : null;
+      if (data?['type'] != 'incoming_call') return null;
+      // Also how a locked phone's fullScreenIntent launches the app - only
+      // Accept answers; see navigateFromPayload.
+      return {...data!, 'answer': response.actionId == callAcceptActionId};
     } catch (e) {
       debugPrint('[Notifications] launch details unavailable: $e');
       return null;
@@ -344,6 +349,8 @@ class NotificationService {
   /// Shared navigation logic for local-notification taps AND real FCM
   /// message taps (onMessageOpenedApp / getInitialMessage in main.dart) -
   /// same payload shape, same destinations, one call-routing mechanism.
+  /// An incoming call is answered only when `data['answer']` is true: the
+  /// user pressed Accept (here or in CallKit).
   Future<void> navigateFromPayload(Map<String, dynamic> data) async {
     final nav = navigatorKey?.currentState;
     if (nav == null) return;
@@ -389,13 +396,14 @@ class NotificationService {
         'buyerId':     buyerId,
         'callerRole':  iAmBuyer ? 'seller' : 'buyer',
         'callType':    callInfo['call_type'] as String? ?? 'audio',
-        // Tapping an incoming-call notification IS answering the call - the
-        // user has already made that decision. Without this the VoIP screen
-        // opened on its own Accept/Decline prompt, so answering took two
-        // taps, and because the notification had already stopped ringing by
-        // then, the second screen sat silent while the user wondered why
-        // nothing was happening.
-        'autoAccept':  true,
+        // Only the Accept button answers. A tap on the notification body
+        // arrives here looking exactly like the notification's
+        // fullScreenIntent, which Android fires by itself when a call
+        // comes in on a locked phone - so answering on "tapped" answered
+        // every such call with the microphone live before anyone touched
+        // the phone. Otherwise the call screen opens ringing, with its own
+        // Accept and Decline.
+        'autoAccept':  data['answer'] == true,
       });
       return;
     }

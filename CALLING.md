@@ -483,8 +483,14 @@ from the shade or the lock screen at all. It now carries **Decline** and
 **Accept** (Android actions; an iOS notification category for the local
 notification — CallKit still owns ringing on iOS).
 
-- **Accept** opens the app and goes through `navigateFromPayload`, exactly
-  like a tap on the notification, which already answers (`autoAccept`).
+- **Accept** opens the app and answers (`navigateFromPayload` with
+  `answer: true` -> `autoAccept`). **Only Accept answers.** A tap on the
+  notification body now opens the call screen *ringing*, with its own
+  Accept/Decline. It used to answer, and that was a live bug: the plugin
+  gives the notification's `fullScreenIntent` the very same intent as a body
+  tap, and Android fires the full-screen intent **by itself** when a call
+  arrives on a locked phone. So with the app running, every call to a locked
+  phone was answered, microphone live, with nobody touching it.
 - **Decline** records `declined` through `POST /calls/log-result`, the same
   request the call screen's Decline makes, which also hangs up the caller.
   Android runs actions that don't open the app in a **separate background

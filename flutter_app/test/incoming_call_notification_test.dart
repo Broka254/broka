@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/notification_service.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -141,6 +142,58 @@ void main() {
         () => mock,
       );
       expect(logResultBodies(), isEmpty);
+    });
+  });
+
+  group('opening the call', () {
+    // navigateFromPayload asks the server whether the call is still ringing.
+    final mock = MockClient((req) async => _json({
+      'has_call': true,
+      'room_id': 'room-1',
+      'call_token': 'ct',
+      'caller_name': 'Buyer',
+      'call_type': 'audio',
+    }, 200));
+
+    Future<Map?> open(WidgetTester tester, {String? actionId}) async {
+      Map? args;
+      final key = GlobalKey<NavigatorState>();
+      NotificationService.instance.navigatorKey = key;
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: key,
+        home: const SizedBox(),
+        onGenerateRoute: (settings) {
+          if (settings.name == '/voip-call') args = settings.arguments as Map?;
+          return MaterialPageRoute(builder: (_) => const SizedBox());
+        },
+      ));
+      await tester.runAsync(() => http.runWithClient(
+        () => NotificationService.instance.handleResponse(
+          actionId: actionId,
+          payload: jsonEncode({
+            'type': 'incoming_call', 'roomId': 'room-1',
+            'listingId': 'listing-1', 'buyerId': 'buyer-1',
+          }),
+        ),
+        () => mock,
+      ));
+      await tester.pump();
+      return args;
+    }
+
+    // A tap on the body reaches the app exactly as the fullScreenIntent
+    // does - and Android fires that one by itself when a call arrives on a
+    // locked phone. Answering on it picked up calls nobody had touched.
+    testWidgets('a tap on the notification opens it ringing', (tester) async {
+      final args = await open(tester);
+      expect(args, isNotNull);
+      expect(args!['roomId'], 'room-1');
+      expect(args['autoAccept'], isFalse);
+    });
+
+    testWidgets('Accept answers it', (tester) async {
+      final args = await open(tester, actionId: NotificationService.callAcceptActionId);
+      expect(args!['autoAccept'], isTrue);
     });
   });
 

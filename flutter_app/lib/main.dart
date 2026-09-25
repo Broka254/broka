@@ -186,6 +186,7 @@ void main() async {
     await NotificationService.instance.navigateFromPayload({
       'type': 'incoming_call',
       ...payload,
+      'answer': true, // answered in the native call UI
     });
   };
   await CallKitService.instance.initialize();
