@@ -18,6 +18,21 @@ class CategoriesRepository {
     }
   }
 
+  /// Every category with its subcategories in one request - the sell
+  /// wizard's category step searches all of them at once.
+  Future<Result<List<CategoryNode>>> getTree() async {
+    try {
+      final res = await _client.get('/categories/tree');
+      return Success((res as List)
+          .map((e) => CategoryNode.fromJson(e as Map<String, dynamic>))
+          .toList());
+    } on ApiException catch (e) {
+      return Failure(e.message, statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(e.toString());
+    }
+  }
+
   Future<Result<List<Category>>> getSubcategories(String categoryId) async {
     try {
       final res = await _client.get('/categories/$categoryId/subcategories');

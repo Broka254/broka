@@ -40,10 +40,12 @@ void setFakeRoute(FakeRoute? route) => _activeRoute = route;
 /// The canonical taxonomy, as the backend's /categories endpoint returns it.
 /// Ids are the names themselves so a test can assert on them readably.
 const List<String> fakeTopLevelCategories = [
-  'Vehicles', 'Property', 'Electronics', 'Gaming', 'Home & Furniture',
-  'Fashion', 'Agriculture', 'Construction', 'Beauty & Personal Care',
+  'Automobiles', 'Property', 'Land', 'Electronics', 'Fashion', 'Agriculture',
+  'Home & Furniture', 'Food & Beverages', 'Construction',
+  'Beauty & Personal Care', 'Health & Medical', 'Baby & Kids', 'Gaming',
   'Sports & Fitness', 'Books & Education', 'Music & Instruments',
-  'Business & Industrial', 'Pets & Animals', 'Services', 'Other',
+  'Arts & Crafts', 'Business & Industrial', 'Pets & Animals', 'Services',
+  'Other',
 ];
 
 Map<String, dynamic> fakeListingJson(int i,

@@ -21,6 +21,7 @@ import '../../../main.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
+import '../domain/category_search.dart';
 import '../domain/category_visual.dart';
 import '../../../core/utils/result.dart';
 import '../../listings/data/repositories/listings_repository.dart';
@@ -429,11 +430,16 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
           _chip('All', _subcategoryId == null,
               () => setState(() { _subcategoryId = null; _resultCount = null; }),
               zoneColors),
+          // Subcategories arrive in the backend's curated order, so the
+          // ones sellers use most lead - Mtumba first in Fashion - and a
+          // highlighted one (SubcategoryHighlights) carries its emoji and a
+          // glow even when it isn't selected.
           ..._subcategories.map((sub) => _chip(
                 sub.name,
                 _subcategoryId == sub.id,
                 () => setState(() { _subcategoryId = sub.id; _resultCount = null; }),
                 zoneColors,
+                highlight: SubcategoryHighlights.of(sub.name),
               )),
         ],
       ),
@@ -441,7 +447,7 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
   }
 
   Widget _chip(String label, bool selected, VoidCallback onTap,
-          List<Color> zoneColors) =>
+          List<Color> zoneColors, {({String emoji, String label})? highlight}) =>
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: GestureDetector(
@@ -454,15 +460,17 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
               color: selected ? null : BrokaColors.bgCard.withOpacity(0.86),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                  color: selected ? Colors.transparent : BrokaColors.border),
-              boxShadow: selected
+                  color: selected
+                      ? Colors.transparent
+                      : (highlight != null ? zoneColors.first.withOpacity(0.8) : BrokaColors.border)),
+              boxShadow: selected || highlight != null
                   ? [BoxShadow(
-                      color: zoneColors.first.withOpacity(0.38), blurRadius: 12)]
+                      color: zoneColors.first.withOpacity(selected ? 0.38 : 0.22), blurRadius: 12)]
                   : null,
             ),
             child: Center(
               widthFactor: 1,
-              child: Text(label,
+              child: Text(highlight == null ? label : '${highlight.emoji} $label',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

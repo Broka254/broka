@@ -90,9 +90,13 @@ class DynamicAttributeField extends StatelessWidget {
               const SizedBox(height: 8),
               TextFormField(
                 initialValue: value,
-                keyboardType: const TextInputType.numberWithOptions(decimal: false),
+                // Decimals allowed: an engine is 1.5 litres and a plot 0.5
+                // acres, and "e.g. 2018" was the hint on every number,
+                // mileage and acreage included.
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 style: const TextStyle(color: BrokaColors.textHigh),
-                decoration: const InputDecoration(hintText: 'e.g. 2018'),
+                decoration: InputDecoration(
+                    hintText: field.fieldName == 'year' ? 'e.g. 2018' : 'Enter a number'),
                 onChanged: onChanged,
               ),
             ],

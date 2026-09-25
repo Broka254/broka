@@ -47,6 +47,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # Already in the lockfile through image_picker; direct so a test can
+  # stand in for the platform and hand back a "lost" pick after a kill.
+  image_picker_platform_interface: ^2.10.1
 
 flutter:
   uses-material-design: true

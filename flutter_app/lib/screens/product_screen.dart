@@ -10,6 +10,8 @@ import '../models/listing.dart';
 import '../services/api_service.dart';
 import '../services/broka_tts.dart';
 import '../services/last_screen_tracker.dart';
+import '../utils/land_size.dart';
+import '../utils/price_unit.dart';
 import '../utils/auth_gate.dart';
 import '../widgets/broka_image.dart';
 
@@ -380,7 +382,7 @@ class _ProductScreenState extends State<ProductScreen> {
             shaderCallback: (b) => const LinearGradient(
                 colors: [BrokaColors.gold, BrokaColors.neonBlue])
                 .createShader(b),
-            child: Text(l.formattedPrice, style: const TextStyle(
+            child: Text(PriceUnits.priceLabel(l.formattedPrice, l.priceUnit), style: const TextStyle(
                 color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
           ),
         ])),
@@ -404,6 +406,23 @@ class _ProductScreenState extends State<ProductScreen> {
       const SizedBox(height: 12),
       Wrap(spacing: 8, runSpacing: 8, children: [
         _chip(l.category, Icons.category_rounded, BrokaColors.neonBlue),
+        // Selling terms (2026-09-25).
+        if (LandSize.describe(l.attributes) != null)
+          _chip(LandSize.describe(l.attributes)!, Icons.straighten_rounded, BrokaColors.neonGreen),
+        if (l.quantity != null && l.quantity! > 1)
+          _chip('${PriceUnits.quantity(l.quantity!, l.priceUnit)} available',
+              Icons.inventory_2_outlined, BrokaColors.neonCyan),
+        l.priceNegotiable
+            ? _chip('Open to offers', Icons.handshake_outlined, BrokaColors.neonGreen)
+            : _chip('Fixed price', Icons.lock_outline_rounded, BrokaColors.neonPink),
+        if (l.deliveryAvailable == true)
+          _chip(l.deliveryNote == null || l.deliveryNote!.isEmpty
+                  ? 'Seller can deliver'
+                  // Chips don't wrap their text: a long note is cut here.
+                  : 'Delivers: ${l.deliveryNote!.length > 34 ? '${l.deliveryNote!.substring(0, 33)}…' : l.deliveryNote}',
+              Icons.local_shipping_outlined, BrokaColors.neonBlue)
+        else if (l.deliveryAvailable == false)
+          _chip('Buyer collects', Icons.storefront_outlined, BrokaColors.textMid),
         if (l.locationName != null)
           _chip(l.locationName!, Icons.location_on_rounded, BrokaColors.gold),
         if (_distanceKm != null)
@@ -764,10 +783,16 @@ class _ProductScreenState extends State<ProductScreen> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: BrokaColors.border),
         ),
-        child: const Text(
-          'Tap "Start Negotiation" below to contact the seller and get a detailed description. '
-          'The AI broker will mediate a fair deal for both parties.',
-          style: TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.6),
+        // The seller's own words. This used to be a fixed placeholder - the
+        // description came back from the API and was never shown.
+        child: Text(
+          (l.description ?? '').trim().isNotEmpty
+              ? l.description!.trim()
+              : 'Tap "Start Negotiation" below to contact the seller and get a detailed description. '
+                'The AI broker will mediate a fair deal for both parties.',
+          style: TextStyle(
+              color: (l.description ?? '').trim().isNotEmpty ? BrokaColors.textHigh : BrokaColors.textMid,
+              fontSize: 13, height: 1.6),
         ),
       ),
     ]),
@@ -836,7 +861,7 @@ class _ProductScreenState extends State<ProductScreen> {
       // electronics/vehicles/branded durable goods - yes; produce, livestock,
       // generic commodities - no, since "pros and cons" doesn't make sense
       // for a sack of maize.
-      final featuresLikelyRelevant = category == 'Electronics' || category == 'Vehicles';
+      final featuresLikelyRelevant = category == 'Electronics' || category == 'Automobiles' || category == 'Vehicles';
 
       final prompt = '''You are Zeno, BROKA's AI assistant for East African markets.
 Respond ONLY in $lang language.

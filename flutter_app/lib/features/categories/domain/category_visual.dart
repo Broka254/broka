@@ -7,7 +7,7 @@
 // (27 entries), and four near-identical four-case switches in
 // product_card.dart, models/listing.dart, boost_screen.dart and
 // inbox_screen.dart. The four switches only knew Vehicles, Property,
-// Electronics and Livestock, so eleven of the backend's sixteen top-level
+// Electronics and Livestock, so eleven of the backend's then sixteen top-level
 // categories rendered as a generic 📦 everywhere except Home - the exact
 // drift the category brief describes. Adding a seventeenth category to
 // backend/api/domains/categories/seed.py meant finding and editing six
@@ -26,8 +26,8 @@
 // fails if the two ever diverge, so this mirror cannot rot silently.
 //
 // [assetPath] is deliberately null on every entry today: flutter_app/assets/
-// contains only the BROKA and Zeno marks, and referencing sixteen category
-// PNGs that do not exist would be sixteen broken asset references. When real
+// contains only the BROKA and Zeno marks, and referencing a category PNG per
+// entry that does not exist would be that many broken asset references. When real
 // artwork arrives, filling in assetPath on an entry is the only change
 // needed - every call site already asks the resolver, so nothing else moves.
 import 'package:flutter/material.dart';
@@ -75,10 +75,12 @@ class CategoryVisual {
 class CategoryVisuals {
   const CategoryVisuals._();
 
-  /// The sixteen top-level categories, in the backend's own seed order.
+  /// The twenty-one top-level categories, in the backend's own seed order
+  /// (which is also the order GET /categories returns them in).
   static const List<CategoryVisual> canonical = <CategoryVisual>[
+    // Was "Vehicles" until the 2026-09-25 listing overhaul (see _aliases).
     CategoryVisual(
-      categoryName: 'Vehicles',
+      categoryName: 'Automobiles',
       emoji: '🚗',
       icon: Icons.directions_car_rounded,
       gradient: [BrokaColors.zoneOrange, BrokaColors.neonPurple],
@@ -90,26 +92,16 @@ class CategoryVisuals {
       gradient: [BrokaColors.neonBlue, BrokaColors.neonGreen],
     ),
     CategoryVisual(
+      categoryName: 'Land',
+      emoji: '🏞️',
+      icon: Icons.landscape_rounded,
+      gradient: [BrokaColors.zoneAmber, BrokaColors.neonGreen],
+    ),
+    CategoryVisual(
       categoryName: 'Electronics',
       emoji: '📱',
       icon: Icons.smartphone_rounded,
       gradient: [BrokaColors.neonCyan, BrokaColors.neonBlue],
-    ),
-    // Top-level Gaming is NOT the same thing as Electronics -> Gaming, and
-    // the backend defines both on purpose. Nothing here collapses them: this
-    // table only ever describes top-level names, and a subcategory is
-    // identified by its own id and parent_id everywhere it is used.
-    CategoryVisual(
-      categoryName: 'Gaming',
-      emoji: '🎮',
-      icon: Icons.sports_esports_rounded,
-      gradient: [BrokaColors.neonPurple, BrokaColors.neonPink],
-    ),
-    CategoryVisual(
-      categoryName: 'Home & Furniture',
-      emoji: '🛋️',
-      icon: Icons.chair_rounded,
-      gradient: [BrokaColors.zoneAmber, BrokaColors.gold],
     ),
     CategoryVisual(
       categoryName: 'Fashion',
@@ -124,6 +116,18 @@ class CategoryVisuals {
       gradient: [BrokaColors.neonGreen, BrokaColors.zoneAmber],
     ),
     CategoryVisual(
+      categoryName: 'Home & Furniture',
+      emoji: '🛋️',
+      icon: Icons.chair_rounded,
+      gradient: [BrokaColors.zoneAmber, BrokaColors.gold],
+    ),
+    CategoryVisual(
+      categoryName: 'Food & Beverages',
+      emoji: '🍽️',
+      icon: Icons.restaurant_rounded,
+      gradient: [BrokaColors.zoneOrange, BrokaColors.zoneAmber],
+    ),
+    CategoryVisual(
       categoryName: 'Construction',
       emoji: '🏗️',
       icon: Icons.construction_rounded,
@@ -134,6 +138,28 @@ class CategoryVisuals {
       emoji: '💄',
       icon: Icons.spa_rounded,
       gradient: [BrokaColors.neonPink, BrokaColors.zoneAmber],
+    ),
+    CategoryVisual(
+      categoryName: 'Health & Medical',
+      emoji: '🏥',
+      icon: Icons.medical_services_rounded,
+      gradient: [BrokaColors.neonCyan, BrokaColors.neonGreen],
+    ),
+    CategoryVisual(
+      categoryName: 'Baby & Kids',
+      emoji: '🧸',
+      icon: Icons.child_friendly_rounded,
+      gradient: [BrokaColors.neonPink, BrokaColors.neonCyan],
+    ),
+    // Top-level Gaming is NOT the same thing as Electronics -> Gaming, and
+    // the backend defines both on purpose. Nothing here collapses them: this
+    // table only ever describes top-level names, and a subcategory is
+    // identified by its own id and parent_id everywhere it is used.
+    CategoryVisual(
+      categoryName: 'Gaming',
+      emoji: '🎮',
+      icon: Icons.sports_esports_rounded,
+      gradient: [BrokaColors.neonPurple, BrokaColors.neonPink],
     ),
     CategoryVisual(
       categoryName: 'Sports & Fitness',
@@ -152,6 +178,12 @@ class CategoryVisuals {
       emoji: '🎸',
       icon: Icons.music_note_rounded,
       gradient: [BrokaColors.neonPink, BrokaColors.neonPurple],
+    ),
+    CategoryVisual(
+      categoryName: 'Arts & Crafts',
+      emoji: '🎨',
+      icon: Icons.palette_rounded,
+      gradient: [BrokaColors.neonPurple, BrokaColors.zoneAmber],
     ),
     CategoryVisual(
       categoryName: 'Business & Industrial',
@@ -186,27 +218,34 @@ class CategoryVisuals {
   /// Free-text category values that predate the canonical taxonomy.
   ///
   /// Listings created before the taxonomy migration still carry strings like
-  /// "Automobiles" or "Livestock" in their `category` column, and
+  /// "Livestock" or "Vehicles" in their `category` column, and
   /// lib/models/listing.dart hands those straight to this resolver. Mapping
   /// them onto their canonical successor keeps an old listing showing a real
   /// icon instead of the catch-all. migrate_categories_from_freetext.py is
   /// what eventually retires these; until every deployment has run it, they
   /// are live data.
   static const Map<String, String> _aliases = <String, String>{
-    'automobiles': 'Vehicles',
+    // Renamed in place on 2026-09-25; drafts and older listings still say it.
+    'vehicles': 'Automobiles',
+    'cars': 'Automobiles',
     'phones': 'Electronics',
     'computers': 'Electronics',
     'laptops': 'Electronics',
     'home appliances': 'Home & Furniture',
     'furniture': 'Home & Furniture',
     'clothing': 'Fashion',
+    'mtumba': 'Fashion',
     'livestock': 'Agriculture',
     'farm equipment': 'Agriculture',
+    'food': 'Food & Beverages',
     'beauty': 'Beauty & Personal Care',
+    'health': 'Health & Medical',
+    'baby': 'Baby & Kids',
     'sports': 'Sports & Fitness',
     'books': 'Books & Education',
     'musical instruments': 'Music & Instruments',
     'music': 'Music & Instruments',
+    'art': 'Arts & Crafts',
   };
 
   static final Map<String, CategoryVisual> _byKey = <String, CategoryVisual>{

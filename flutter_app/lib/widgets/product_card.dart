@@ -28,7 +28,9 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../features/listings/domain/models/listing.dart' show BrokaListing;
 import '../utils/backend_time.dart';
+import '../utils/land_size.dart';
 import '../utils/price_format.dart';
+import '../utils/price_unit.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../models/listing_photo.dart';
 import 'broka_image.dart';
@@ -75,7 +77,7 @@ class ProductCard extends StatelessWidget {
     }
   }
 
-  String get _priceText {
+  String get _basePriceText {
     if (item is BrokaListing) return (item as BrokaListing).priceFormatted;
     try {
       final formatted = item.formattedPrice as String?;
@@ -86,6 +88,33 @@ class ProductCard extends StatelessWidget {
     } catch (_) {
       return '';
     }
+  }
+
+  // "KES 3,500 / bag" when the price is per unit (2026-09-25): a per-bag
+  // price shown bare read as the price of the whole lot.
+  String get _priceText => PriceUnits.priceLabel(_basePriceText, _priceUnit);
+
+  String? get _priceUnit {
+    try {
+      return item.priceUnit as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The one fact a buyer scanning the grid needs that the photo can't
+  /// show: a plot's size ("⅛ acre"), or how many there are ("100 bags").
+  String? get _factBadge {
+    Map<String, dynamic>? attributes;
+    int? quantity;
+    try {
+      attributes = item.attributes as Map<String, dynamic>?;
+      quantity = item.quantity as int?;
+    } catch (_) {}
+    final land = LandSize.describe(attributes);
+    if (land != null) return '📐 $land';
+    if (quantity != null && quantity > 1) return PriceUnits.quantity(quantity, _priceUnit);
+    return null;
   }
 
   // location_name is free text the seller typed when listing (e.g.
@@ -546,6 +575,27 @@ class ProductCard extends StatelessWidget {
                         ),
                         child: Text(_conditionLabel, style: const TextStyle(
                             color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  // Plot size / quantity, top-right - the corner the
+                  // favourite button would use, which no caller wires yet
+                  // (see below); it gives way if one ever does.
+                  if (_factBadge != null && onWishlistTap == null)
+                    Positioned(
+                      top: 8, right: 8,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 120),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.62),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: BrokaColors.gold.withOpacity(0.55)),
+                          ),
+                          child: Text(_factBadge!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white, fontSize: 10,
+                                  fontWeight: FontWeight.w700)),
+                        ),
                       ),
                     ),
                   // Home-redesign brief round 2 (2026-08-17): only render

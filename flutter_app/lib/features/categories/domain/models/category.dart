@@ -24,3 +24,17 @@ class CategoryFilterField {
         options: (json['options'] as List?)?.map((e) => e.toString()).toList(),
       );
 }
+
+/// A top-level category with its subcategories, as GET /categories/tree
+/// returns them (display order).
+class CategoryNode {
+  final Category category;
+  final List<Category> subcategories;
+  CategoryNode({required this.category, required this.subcategories});
+  factory CategoryNode.fromJson(Map<String, dynamic> json) => CategoryNode(
+        category: Category.fromJson(json),
+        subcategories: ((json['subcategories'] as List?) ?? const [])
+            .map((e) => Category.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}

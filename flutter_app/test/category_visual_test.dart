@@ -101,7 +101,7 @@ void main() {
 
     test('legacy free-text categories map onto their canonical successor', () {
       // Listings predating the taxonomy migration still carry these strings.
-      expect(CategoryVisuals.resolve('Automobiles').categoryName, 'Vehicles');
+      expect(CategoryVisuals.resolve('Vehicles').categoryName, 'Automobiles');
       expect(CategoryVisuals.resolve('Livestock').categoryName, 'Agriculture');
       expect(CategoryVisuals.resolve('Phones').categoryName, 'Electronics');
       expect(CategoryVisuals.resolve('Clothing').categoryName, 'Fashion');

@@ -1,4 +1,4 @@
-// BROKA - Sell Wizard Step 5: Location
+// BROKA - Sell Wizard Step 7: Location
 //
 // County and area are picked from Kenya's 47 counties and their
 // constituencies (KenyaLocations, the list store setup uses), with typing
@@ -13,7 +13,7 @@ import '../features/stores/domain/kenya_locations.dart';
 import '../services/sell_wizard_data.dart';
 import '../widgets/list_picker.dart';
 import '../widgets/sell_step_scaffold.dart';
-import 'sell_showcase_screen.dart';
+import 'sell_flow.dart';
 
 class SellLocationScreen extends StatefulWidget {
   final SellWizardData data;
@@ -106,16 +106,15 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
     }
     _store();
     setState(() => _error = null);
-    unawaited(widget.data.persist());
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => SellShowcaseScreen(data: widget.data),
-    ));
+    SellFlow.next(context, widget.data, from: SellFlow.location);
   }
 
   @override
   Widget build(BuildContext context) {
     return SellStepScaffold(
-      step: 5, totalSteps: 7, title: 'Location',
+      step: SellFlow.location, totalSteps: SellFlow.total, title: SellFlow.title(SellFlow.location),
+      subtitle: 'Where the item is. Buyers see the area, never your address.',
+      data: widget.data,
       error: _error,
       nextLabel: 'NEXT',
       onNext: _next,

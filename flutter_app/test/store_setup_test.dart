@@ -167,8 +167,11 @@ void main() {
 
   group('Store categories', () {
     test('signup business categories map onto BROKA categories', () {
-      expect(StoreCategories.all, hasLength(16));
+      expect(StoreCategories.all, hasLength(21));
       expect(StoreCategories.fromAny('electronics'), 'Electronics');
+      expect(StoreCategories.fromAny('Automotive'), 'Automobiles');
+      expect(StoreCategories.fromAny('Vehicles'), 'Automobiles');
+      expect(StoreCategories.fromAny('Food & Beverages'), 'Food & Beverages');
       expect(StoreCategories.fromAny('Clothing & Fashion'), 'Fashion');
       expect(StoreCategories.fromAny('Wholesale'), 'Business & Industrial');
       expect(StoreCategories.fromAny('Supermarket'), 'Other');

@@ -36,6 +36,10 @@ final Map<String, RangeValues> _numberRangeBounds = {
   'bedrooms':            const RangeValues(0, 10),
   'bathrooms':           const RangeValues(0, 10),
   'acreage':             const RangeValues(0, 100),         // acres
+  // The Land zone's size filter (2026-09-25): the server derives acres
+  // from whatever unit the seller used. Plots run from ⅛ acre; 50 covers
+  // all but ranches, which sit at the top of the range.
+  'land_size_acres':     const RangeValues(0, 50),
   'screen_size':         const RangeValues(0, 100),         // inches (phones through TVs)
   'seating_capacity':    const RangeValues(1, 30),           // covers matatus/buses, not just cars
   'square_footage':      const RangeValues(0, 10000),

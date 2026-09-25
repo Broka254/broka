@@ -1,11 +1,21 @@
-// BROKA - Sell Wizard Step 4: Price
+// BROKA - Sell Wizard Step 5: Price
+//
+// The amount, what it is for, and whether it's negotiable (2026-09-25):
+//   * "per bag" - a farmer with 100 bags of maize used to have one number
+//     and no way to say what it bought. The price stays a number (escrow
+//     and sorting need one); the unit is chosen alongside it, from units
+//     that fit the category, or typed (PriceUnits).
+//   * fixed or open to offers - Zeno is told which (Listing.price_negotiable)
+//     and says so to buyers, instead of inviting offers on a fixed price.
+// An auction has neither: it sells the lot, and bidding is its negotiation.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/sell_wizard_data.dart';
 import '../utils/price_format.dart';
+import '../utils/price_unit.dart';
 import '../widgets/sell_step_scaffold.dart';
-import 'sell_location_screen.dart';
+import 'sell_flow.dart';
 
 class SellPriceScreen extends StatefulWidget {
   final SellWizardData data;
@@ -18,8 +28,15 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
   late final TextEditingController _priceCtrl;
   late final TextEditingController _reserveCtrl;
   late final TextEditingController _incrementCtrl;
+  late final TextEditingController _unitCtrl;
+  // True while the seller types a unit the suggestions don't have.
+  late bool _customUnit;
   Timer? _debounce;
   String? _error;
+
+  SellWizardData get _data => widget.data;
+  List<String> get _suggestions =>
+      PriceUnits.suggestionsFor(_data.category, _data.subcategoryName);
 
   // Defaults the seller can accept without thinking about them. An auction
   // needs a window and an increment to exist at all, and before this the
@@ -36,6 +53,9 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
         text: widget.data.minBidIncrement.isNotEmpty
             ? _grouped(widget.data.minBidIncrement)
             : formatKesAmount(_defaultIncrement));
+    final unit = widget.data.priceUnit;
+    _customUnit = unit != null && !_suggestions.contains(unit);
+    _unitCtrl = TextEditingController(text: _customUnit ? unit : '');
     // Pre-fill a sensible window rather than making the seller pick two
     // datetimes before they can continue. A restored draft's window may
     // already be over - an auction that closed before it opened - so that
@@ -78,6 +98,7 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
     _priceCtrl.dispose();
     _reserveCtrl.dispose();
     _incrementCtrl.dispose();
+    _unitCtrl.dispose();
     super.dispose();
   }
 
@@ -178,34 +199,175 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
       }
     }
 
+    if (!_data.isAuction) {
+      if (_customUnit) {
+        final problem = PriceUnits.problem(_unitCtrl.text);
+        if (problem != null) {
+          setState(() => _error = problem);
+          return;
+        }
+        _data.priceUnit = PriceUnits.clean(_unitCtrl.text);
+      }
+      if (_data.priceNegotiable == null) {
+        setState(() => _error = 'Say whether the price is fixed or open to offers.');
+        return;
+      }
+    } else {
+      // An auction sells the lot, and bidding is its negotiation.
+      _data.priceUnit = null;
+      _data.priceNegotiable = true;
+    }
+
     widget.data.price = _digits(_priceCtrl);
     widget.data.reserve = _digits(_reserveCtrl);
     widget.data.minBidIncrement = _digits(_incrementCtrl);
     setState(() => _error = null);
-    unawaited(widget.data.persist());
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => SellLocationScreen(data: widget.data),
-    ));
+    SellFlow.next(context, _data, from: SellFlow.price);
   }
+
+  void _setUnit(String? unit, {bool custom = false}) {
+    setState(() {
+      _customUnit = custom;
+      _data.priceUnit = custom ? PriceUnits.clean(_unitCtrl.text) : unit;
+      _error = null;
+    });
+    _scheduleSave();
+  }
+
+  Widget _unitChip(String label, bool selected, VoidCallback onTap, {Key? key}) => ChoiceChip(
+        key: key,
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        selectedColor: BrokaColors.gold,
+        backgroundColor: BrokaColors.bgCard,
+        side: BorderSide(color: selected ? BrokaColors.gold : BrokaColors.border),
+        labelStyle: TextStyle(
+            color: selected ? Colors.white : BrokaColors.textMid,
+            fontWeight: FontWeight.w700, fontSize: 12.5),
+        showCheckmark: false,
+      );
+
+  Widget _priceUnitSection() {
+    final amount = parseKesInput(_priceCtrl.text);
+    final preview = amount == null || amount <= 0
+        ? null
+        : PriceUnits.priceLabel(formatKes(amount), _data.priceUnit);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      sellStepLabel('THE PRICE IS FOR'),
+      const SizedBox(height: 10),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        _unitChip('The whole item', !_customUnit && _data.priceUnit == null,
+            () => _setUnit(null), key: const Key('sell-unit-whole')),
+        for (final unit in _suggestions)
+          _unitChip('Per $unit', !_customUnit && _data.priceUnit == unit,
+              () => _setUnit(unit), key: Key('sell-unit-$unit')),
+        _unitChip('Other…', _customUnit, () => _setUnit(null, custom: true),
+            key: const Key('sell-unit-other')),
+      ]),
+      if (_customUnit) ...[
+        const SizedBox(height: 10),
+        TextField(
+          key: const Key('sell-unit-field'),
+          controller: _unitCtrl,
+          autofocus: true,
+          maxLength: PriceUnits.maxLength,
+          style: const TextStyle(color: BrokaColors.textHigh),
+          decoration: const InputDecoration(
+              prefixText: 'per  ', hintText: 'e.g. crate, dozen, trip'),
+          onChanged: (_) => _setUnit(null, custom: true),
+        ),
+      ],
+      if (preview != null) ...[
+        const SizedBox(height: 10),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: SellCard(
+            key: ValueKey(preview),
+            highlight: true,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              const Icon(Icons.visibility_rounded, color: BrokaColors.gold, size: 18),
+              const SizedBox(width: 10),
+              const Text('Buyers see  ', style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+              Expanded(child: Text(preview, style: const TextStyle(
+                  color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800))),
+            ]),
+          ),
+        ),
+      ],
+    ]);
+  }
+
+  Widget _negotiableSection() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        sellStepLabel('IS THE PRICE NEGOTIABLE?'),
+        const SizedBox(height: 10),
+        SellChoiceCard(
+          key: const Key('sell-negotiable-yes'),
+          emoji: '🤝',
+          title: 'Open to offers',
+          subtitle: 'Buyers can make offers - Zeno brings you each one to accept or counter.',
+          selected: _data.priceNegotiable == true,
+          accent: BrokaColors.neonGreen,
+          onTap: () {
+            setState(() {
+              _data.priceNegotiable = true;
+              _error = null;
+            });
+            _scheduleSave();
+          },
+        ),
+        const SizedBox(height: 10),
+        SellChoiceCard(
+          key: const Key('sell-negotiable-no'),
+          emoji: '🔒',
+          title: 'Fixed price',
+          subtitle: 'Zeno tells buyers the price is final - no haggling.',
+          selected: _data.priceNegotiable == false,
+          accent: BrokaColors.neonBlue,
+          onTap: () {
+            setState(() {
+              _data.priceNegotiable = false;
+              _error = null;
+            });
+            _scheduleSave();
+          },
+        ),
+      ]);
 
   @override
   Widget build(BuildContext context) {
     final isAuction = widget.data.type == 'auction';
     return SellStepScaffold(
-      step: 4, totalSteps: 7, title: 'Price',
+      step: SellFlow.price, totalSteps: SellFlow.total, title: SellFlow.title(SellFlow.price),
+      subtitle: isAuction
+          ? 'Where bidding starts, and the rules of your auction.'
+          : 'What you want for it - and what that price buys.',
+      data: _data,
       error: _error,
       onNext: _next,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        sellStepLabel('ASKING PRICE (KES)'),
+        sellStepLabel(isAuction ? 'STARTING PRICE (KES)' : 'ASKING PRICE (KES)'),
         const SizedBox(height: 8),
         TextFormField(
+          key: const Key('sell-price-field'),
           controller: _priceCtrl,
           keyboardType: TextInputType.number,
           inputFormatters: const [KesInputFormatter()],
-          style: const TextStyle(color: BrokaColors.gold, fontWeight: FontWeight.w800),
-          decoration: const InputDecoration(hintText: 'e.g. 2,500,000'),
-          onChanged: (_) => _onEdited(),
+          style: const TextStyle(color: BrokaColors.gold, fontWeight: FontWeight.w800, fontSize: 22),
+          decoration: const InputDecoration(prefixText: 'KES  ', hintText: 'e.g. 3,500'),
+          onChanged: (_) {
+            _onEdited();
+            setState(() {});
+          },
         ),
+
+        if (!isAuction) ...[
+          const SizedBox(height: 20),
+          _priceUnitSection(),
+          const SizedBox(height: 22),
+          _negotiableSection(),
+        ],
 
         if (isAuction) ...[
           const SizedBox(height: 20),

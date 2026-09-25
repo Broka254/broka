@@ -12,11 +12,13 @@
 //     failed with "upload it again", and there was no way to: the app
 //     thought they were uploaded. They're now uploaded again from the files
 //     on the phone, and the listing sent once more.
-//   * The showcase, which lives only in memory, was uploaded again on every
-//     retry. Its id is kept now.
+//   * The showcase, which lived only in memory, was uploaded again on every
+//     retry. Its id is kept now - and an AI cover (2026-09-25) is already
+//     the seller's stored image, so it isn't uploaded at all.
+import 'dart:io';
+
 import '../core/network/api_client.dart';
 import '../utils/price_format.dart';
-import '../widgets/broka_image.dart';
 import 'image_upload_service.dart';
 import 'sell_wizard_data.dart';
 
@@ -58,21 +60,26 @@ class ListingPublisher {
       } on ApiException catch (e) {
         if (e.code != imageGone || attempt > 0) rethrow;
         data.photoUploads.forget(data.verifiedPhotos);
-        data.showcaseAssetId = null;
+        // A gallery cover can be uploaded again from its file; an AI cover
+        // exists only on the server, so one that's gone is dropped rather
+        // than blocking the listing - the first photo becomes the cover.
+        if (data.showcaseLocalPath != null) {
+          data.showcaseAssetId = null;
+        } else if (data.showcaseImageSource == 'ai') {
+          data.clearShowcase();
+        }
       }
     }
   }
 
   Future<String?> _showcaseId(SellWizardData data) async {
-    final showcase = data.showcaseImageDataUri;
-    if (showcase == null) return null;
     if (data.showcaseAssetId != null) return data.showcaseAssetId;
-    final bytes = BrokaImage.inlineBytes(showcase);
-    if (bytes == null) return null;
-    final uploaded = await _images.uploadBytes(
-      bytes, purpose: ImagePurpose.listingShowcase, filename: 'showcase.jpg',
-    );
-    return data.showcaseAssetId = uploaded.id;
+    final path = data.showcaseLocalPath;
+    if (path == null) return null;
+    final uploaded = await _images.uploadFile(File(path), purpose: ImagePurpose.listingShowcase);
+    data.showcaseAssetId = uploaded.id;
+    await data.persist();
+    return uploaded.id;
   }
 
   /// The POST /listings body for [data].
@@ -86,10 +93,12 @@ class ListingPublisher {
     final isAuction = data.type == 'auction';
     final reserve = parseKesInput(data.reserve);
     final increment = parseKesInput(data.minBidIncrement);
+    final quantity = int.tryParse(data.quantity);
     return {
       'name': data.name.trim(),
       'category': data.category,
-      'subcategory_id': data.subcategoryId,
+      // A category with no subcategories ("Other") is filed under itself.
+      'subcategory_id': data.subcategoryId ?? data.categoryId,
       'condition': data.condition,
       if (data.attributes.isNotEmpty) 'attributes': data.attributes,
       'price': parseKesInput(data.price),
@@ -100,6 +109,15 @@ class ListingPublisher {
       'listing_type': data.type,
       'description': data.description.trim(),
       'photo_ids': photoIds,
+      // Selling terms (2026-09-25). An auction sells the lot: no unit, one
+      // of it, and bidding is its negotiation.
+      if (!isAuction && data.priceUnit != null) 'price_unit': data.priceUnit,
+      if (!isAuction && quantity != null && quantity > 0) 'quantity': quantity,
+      'price_negotiable': isAuction || data.priceNegotiable != false,
+      if (data.deliveryAvailable != null) 'delivery_available': data.deliveryAvailable,
+      if (data.deliveryAvailable == true && data.deliveryNote.trim().isNotEmpty)
+        'delivery_note': data.deliveryNote.trim(),
+      'sms_alerts': data.smsAlerts != false,
       // Auction terms. Omitted entirely for a direct listing; for an
       // auction these are what configure the backend lifecycle, and
       // without them the backend had to invent a window and an increment

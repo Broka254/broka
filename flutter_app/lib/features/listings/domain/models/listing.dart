@@ -10,7 +10,17 @@ class BrokaListing {
   final String category;
   final String? subcategoryId;
   final String? condition;   // "new" | "used" | "refurbished"
+  // Category details ({"make": "Toyota"}; a Land listing's land_size and
+  // land_size_unit). Null when the listing has none.
+  final Map<String, dynamic>? attributes;
   final double price;
+  // Selling terms (2026-09-25) - see the backend Listing model. priceUnit
+  // null = the price is for the whole item; quantity null = not said.
+  final String? priceUnit;
+  final int? quantity;
+  final bool priceNegotiable;
+  final bool? deliveryAvailable;
+  final String? deliveryNote;
   final double lat;
   final double lng;
   final String? locationName;
@@ -67,7 +77,13 @@ class BrokaListing {
     required this.category,
     this.subcategoryId,
     this.condition,
+    this.attributes,
     required this.price,
+    this.priceUnit,
+    this.quantity,
+    this.priceNegotiable = true,
+    this.deliveryAvailable,
+    this.deliveryNote,
     required this.lat,
     required this.lng,
     this.locationName,
@@ -106,7 +122,14 @@ class BrokaListing {
       category:       json['category']       as String,
       subcategoryId:  json['subcategory_id'] as String?,
       condition:      json['condition']      as String?,
+      attributes:     json['attributes'] is Map
+          ? Map<String, dynamic>.from(json['attributes'] as Map) : null,
       price:          (json['price']         as num).toDouble(),
+      priceUnit:      json['price_unit']     as String?,
+      quantity:       (json['quantity']      as num?)?.toInt(),
+      priceNegotiable: json['price_negotiable'] as bool? ?? true,
+      deliveryAvailable: json['delivery_available'] as bool?,
+      deliveryNote:   json['delivery_note']  as String?,
       lat:            (json['lat']           as num).toDouble(),
       lng:            (json['lng']           as num).toDouble(),
       locationName:   json['location_name']  as String?,

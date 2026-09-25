@@ -168,7 +168,7 @@ void main() {
 
     testWidgets('the header is transparent at rest and opaque once scrolled',
         (tester) async {
-      await tester.pumpWidget(zone('Vehicles'));
+      await tester.pumpWidget(zone('Automobiles'));
       await _settle(tester);
       expect(_headerBackdropOpacity(tester), 0.0);
       await _scroll(tester, -20);

@@ -8,6 +8,17 @@ class Listing {
   final String  name;
   final String  category;
   final double  price;
+  // Returned by the listing endpoints all along, but never read here - so
+  // the product screen showed a placeholder where the description belongs.
+  final String? description;
+  final String? condition;
+  final Map<String, dynamic>? attributes;
+  // Selling terms (2026-09-25), as on BrokaListing.
+  final String? priceUnit;
+  final int?    quantity;
+  final bool    priceNegotiable;
+  final bool?   deliveryAvailable;
+  final String? deliveryNote;
   final String? locationName;
   final double? lat;
   final double? lng;
@@ -55,6 +66,14 @@ class Listing {
     required this.name,
     required this.category,
     required this.price,
+    this.description,
+    this.condition,
+    this.attributes,
+    this.priceUnit,
+    this.quantity,
+    this.priceNegotiable = true,
+    this.deliveryAvailable,
+    this.deliveryNote,
     this.locationName,
     this.lat,
     this.lng,
@@ -89,6 +108,15 @@ class Listing {
         name:                 j['name']          as String,
         category:             j['category']      as String,
         price:                (j['price']        as num).toDouble(),
+        description:          j['description']   as String?,
+        condition:            j['condition']     as String?,
+        attributes:           j['attributes'] is Map
+            ? Map<String, dynamic>.from(j['attributes'] as Map) : null,
+        priceUnit:            j['price_unit']    as String?,
+        quantity:             (j['quantity']     as num?)?.toInt(),
+        priceNegotiable:      j['price_negotiable'] as bool? ?? true,
+        deliveryAvailable:    j['delivery_available'] as bool?,
+        deliveryNote:         j['delivery_note'] as String?,
         locationName:         j['location_name'] as String?,
         lat:                  (j['lat']          as num?)?.toDouble(),
         lng:                  (j['lng']          as num?)?.toDouble(),

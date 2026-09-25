@@ -16,10 +16,11 @@ class StoreCategories {
     'clothing & fashion': 'Fashion',
     'furniture': 'Home & Furniture',
     'appliances': 'Home & Furniture',
-    'automotive': 'Vehicles',
+    'automotive': 'Automobiles',
+    // Renamed 2026-09-25 (see CategoryVisuals._aliases).
+    'vehicles': 'Automobiles',
     'building materials': 'Construction',
     'phones & accessories': 'Electronics',
-    'food & beverages': 'Other',
     'general merchandise': 'Other',
     'supermarket': 'Other',
   };
