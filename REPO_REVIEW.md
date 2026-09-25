@@ -1,89 +1,16 @@
 # BROKA — Repository Review
 
-**Date:** 2026-09-23
-**Commit reviewed:** `939eafd` ("Zeno voice: bound every startup stage…")
-**Previous review:** 2026-09-17 at `1d80ddd` (in git history of this file)
-**Branch:** `claude/respiratory-review-clsvba`
+**Date:** 2026-09-25
+**Commit reviewed:** `1d41018` ("CI checks the web storefront and can sign with the release key; docs")
+**Previous review:** 2026-09-23 at `939eafd` (in git history of this file)
+**Branch:** `claude/respiratory-review-9bsdjg`
 
-This review does two things: it rechecks every finding from the 2026-09-17
-review, and it reviews the 18 commits since then (~27k lines: auction
-lifecycle, email OTP and seller signup, buying-agent conversation, calling
-fixes, Home/Categories redesign, Zeno voice). Every finding marked
-**Reproduced** was confirmed by running code against the real service layer,
-not by reading comments.
-
----
-
-## 0. Status after the fix pass (2026-09-23)
-
-Every finding below has been fixed, with one exception: CORS
-(`ALLOWED_ORIGINS`, from the previous review), which needs your real origin
-list. Each fix has a regression test that was run
-against the OLD code and failed there, then passed on the new code.
-
-| Check after the fixes | Result |
-|---|---|
-| Backend, CI configuration (real Redis, `pytest.ini` gate) | **835 passed**, 0 skipped, coverage **57%** (gate 50%) |
-| Backend, no Redis | 828 passed, 7 skipped (the real-Redis tests) |
-| Flutter `analyze` (CI flags) | exit 0 — **0 errors, 0 warnings**, 21 infos |
-| Flutter `test` | **164 passed** |
-
-**Fixed findings from this review**
-
-| Finding | Fix | Test file |
-|---|---|---|
-| §3 Auction lapse cancels a deal mid-payment | Lapse checks the escrow and legacy M-Pesa attempts first. It lapses only on a provider-confirmed "not funded" after a settle window (`AUCTION_FUNDING_SETTLE_MINUTES`, default 30), re-checks under the deal and escrow row locks, and raises a reconciliation alert when money moved but the deal didn't follow. The Pay path now claims its attempt under the same deal lock, so a Pay tap and a lapse can't both win. | `test_payment_races.py` |
-| §4 Admin via unverified email | Bootstrap requires `email_verified`. The quarantined `/admin/bootstrap` route is closed the same way. | `test_auth_hardening.py` |
-| §2 #3 Call token = account token | `decode_access_token()` requires `type == "access"`. It's used by the HTTP auth and all three WebSockets (deal, auction, media), which previously accepted refresh and verify tokens too. The media socket no longer logs token payloads. | `test_auth_hardening.py` |
-| §2 #4 Unbounded public dispute query | Process-local memo in front of Redis, single-flight compute, failure backoff, and a 3-column query with a row cap. ARQ can now call the task (it lacked `ctx`). | `test_dispute_summary.py` |
-| §2 #5 Idempotency check-then-act | Atomic `SET NX` reservation, 409 while in flight, and a yield-dependency that releases the key however the request ends, including a body that fails validation. | `test_idempotency.py` (real Redis) |
-| §2 #6 Coverage floors disagree | 50% in both `pytest.ini` and CI (measured 57%). `.coveragerc` omits the three genuinely unreferenced routers. | CI |
-| §2 #7 Dead `TOKEN_EXPIRE_MINUTES` | Renamed to `ACCESS_TOKEN_EXPIRE_MINUTES` in `render.yaml`. | — |
-| §2 #8 Rate limiter records rejections | Add-then-count in one MULTI, rejected entries removed, unique members, and in-process fallback instead of fail-open. Phone/email limiter keys normalised. | `test_redis_rate_limit.py`, `test_auth_hardening.py` |
-| §2 #9 Lints inert | `analysis_options.yaml` added. All 24 analyzer warnings fixed; `dart fix` applied (127 mechanical fixes); 4 `BuildContext`-across-async-gap bugs and 2 deprecated geolocator calls fixed. 0 errors, 0 warnings. | `flutter analyze` |
-| §5.1 STT unmetered | Per-user limiters on both token endpoints (shared budget) and `/stt/transcribe`; bounded upload read. | `test_cost_bounds.py` |
-| §5.2 Terms PATCH 500s | One `to_naive_utc` helper (convert, then drop the zone) for the terms endpoint and the listing parsers. | `test_timestamps.py` |
-| §5.3 OTP codes logged in production | Console SMS/email refuse in production (send fails → 503), never logging the body. | `test_auth_hardening.py` |
-| §5.4 Unbounded chat history | History entries clipped where every LLM prompt is built. The buying agent keeps the newest 40 turns instead of 422-ing the 21st exchange (the app never trims). | `test_cost_bounds.py` |
-| §6 Voice card stuck on error | Tapping the mic after an error retries in place, keeping the transcript. | `zeno_voice_test.dart` |
-
-**Found and fixed during the fix pass** (pre-existing; not in the review
-below):
-
-| Bug | Impact | Test file |
-|---|---|---|
-| Timed dispute auto-refund paid the buyer **twice** (a direct B2C call, then `execute_fund_action` paying again) | Double refund on every timed auto-refund | `test_settlement_sweeps.py` |
-| `lock_deal_if_status` returned the session's **stale** copy of the deal (identity map + `expire_on_commit=False`) | The "second poller sees paid and stands down" guarantee never held; a waiting poller re-applied FUNDED (double ledger entry) | `test_payment_races.py` |
-| Deal-timer auto refund/release and chat "all good"/"refund" settled **E-Confirm** deals as if BROKA held the money | Buyer refunded from BROKA's pocket while funds stayed at E-Confirm; seller told "released" with no payout requested | `test_settlement_sweeps.py`, `test_chat_settlement_econfirm.py` |
-| Automatic and chat settlements published no `EscrowReleased`/`EscrowRefunded` | Missing ledger entries; open deal screens never updated | same |
-| Auto-release gave the seller +0.05 rating | A review nobody wrote | `test_settlement_sweeps.py` |
-| `/mpesa/query` set `paid` from any status, skipped `EscrowFunded`, and was open to any user | Could revive cancelled deals; a query beating the callback lost the ledger entry | `test_payment_races.py` |
-| `_call_groq`/`_call_openrouter` referenced an undefined `image_base64` | NameError on every call: those fallbacks never worked | `test_negotiate_fallback_providers.py` |
-| Degraded-mode AI cache keyed on `hash(message)` | A personalised reply (with the user's name) served to another user; key unstable across workers | `test_cost_bounds.py` |
-
-**Still needs a decision (not changed)**
-
-1. **Legacy refunds pay 97% of the price out of BROKA's account.** In the
-   legacy flow BROKA holds only the 3% commission (goods settle
-   off-platform, per `ESCROW_AUDIT.md`), yet `execute_fund_action`, the deal
-   timers and the chat refund all B2C 97% of `agreed_price` to the buyer.
-   Refund policy is a business decision, so the amount was left as it is.
-2. **E-Confirm deals in the dispute/condition-check flows** now fail closed:
-   no money moves, an audit row is written (`econfirm_*_blocked`), and the
-   reply is honest. Automated release/refund for them still has to be
-   built against E-Confirm's API.
-3. ~~Nothing subscribes to reconciliation alerts.~~ **Done:** every
-   reconciliation alert now raises a Sentry event via
-   `api/core/reconciliation.py` (one issue per kind and deal, tagged
-   `alert:reconciliation`, re-sent at most hourly while a deal stays stuck;
-   `error` = a person must act, `warning` = should self-heal). ARQ workers initialise Sentry too. What remains is on the
-   Sentry side: set `SENTRY_DSN` in production and add an alert rule on
-   `alert:reconciliation` (new issues, level error), routed to whoever
-   handles payments.
-4. **`ALLOWED_ORIGINS: "*"`** in `render.yaml`: safe today (credentials are
-   off with a wildcard), but set real origins once a browser client exists.
-5. **Seller dashboard:** nine unreferenced private UI helpers remain (lint
-   infos). The file keeps at least one on purpose, so removal is your call.
+This review does two things. It rechecks what the 2026-09-23 review left
+open, and it reviews the 21 commits since then (~30k lines): the fix pass,
+image storage on R2, online stores phase 2 (backend and app), the Next.js
+web storefront, and session renewal in the app. Every finding marked
+**Reproduced** was confirmed by running code against the real service
+layer; each repro was a throwaway test, not committed.
 
 ---
 
@@ -91,259 +18,285 @@ below):
 
 | Check | Result |
 |---|---|
-| Backend test suite | **731 passed**, 0 failed (~2 min) |
-| Measured backend coverage | 50% (was 45%) |
-| Flutter `analyze` | 0 errors, 24 warnings (see §6) |
-| Flutter `test` | **162 passed**, 0 failed |
-| Backend Python | ~52,900 lines (was 43,200) |
-| Flutter Dart (`lib/`) | ~52,000 lines (was 43,800) |
-| Flutter test files | 8 (was 0) |
+| Backend tests, CI configuration (real Redis, fresh) | **975 passed**, 1 skipped (`alembic` CLI not on PATH locally), coverage **60%** (gate 50%) |
+| Backend tests, second run against the same Redis | **1 failed**: `test_escrow.py::…::test_pending_blocks_fund_regardless_of_idempotency_key` (see §6) |
+| Web (`web/`): typecheck, lint, test, build | all pass; **46 tests** |
+| Flutter `analyze` (CI flags) | exit 0: **0 errors, 0 warnings**, 21 infos (unchanged) |
+| Flutter `test` | **223 passed**, 12 files (was 164 in 8) |
 
-Run the backend suite with:
-
-```
-cd backend && ENV=test SECRET_KEY=<32+ chars> \
-  DATABASE_URL="sqlite+aiosqlite:///:memory:" \
-  python -m pytest tests/ -q -o addopts="" --cov=api
-```
-
-(`-o addopts=""` is needed because of §2 #6. Use `python -m pytest` so the
-interpreter with the project's dependencies runs it.)
+Code size: backend 41.9k lines (+16.5k of tests), Flutter `lib/` 57.4k,
+web 2.7k.
 
 ---
 
-## 2. Status of the 2026-09-17 findings
+## 2. Status of the 2026-09-23 open items
 
-| # | Finding | Status |
+Everything that review found was fixed in its own fix pass, with
+regression tests, and those tests still pass. What it left for a decision:
+
+| # | Item | Status |
 |---|---|---|
-| 2 | Production container crash-loops on `alembic upgrade head` | **Fixed** in `8d790b9`. Both Dockerfiles run uvicorn only, the duplicate `Docker` file is gone, and `test_deployment_config.py` guards it. |
-| 3 | Call tokens authenticate every HTTP route | **Open.** Reproduced again: `get_current_user(create_call_token(...))` → `{'id': 'user-123'}`. `security.py` gained an email-verify token this week but `decode_token_strict()` still rejects only `type == "refresh"`. |
-| 4 | Unauthenticated `/disputes/v2/stats/summary` runs an unbounded query per request when Redis is absent | **Open.** File unchanged. |
-| 5 | Idempotency guard is check-then-act (no `SET NX`) | **Open.** File unchanged. |
-| 6 | `pytest.ini` requires 60% coverage; CI enforces 35%; measured is 50% | **Open.** The documented local command still exits 1 with every test green. |
-| 7 | `TOKEN_EXPIRE_MINUTES` in `render.yaml` is read by nothing | **Open.** |
-| 8 | Redis rate limiter records rejected requests (`zadd` before the count check) | **Open.** File unchanged. |
-| 9 | No `analysis_options.yaml`; no Flutter tests | **Partly fixed.** 8 widget/unit test files now exist. `analysis_options.yaml` is still missing, so `flutter_lints` is still inert. |
+| 1 | Legacy refunds pay 97% of the price out of BROKA's account | **Unchanged.** Still a business decision. |
+| 2 | E-Confirm deals in the dispute/condition-check flows fail closed | **Unchanged.** Automated release/refund against E-Confirm's API isn't built yet. |
+| 3 | Reconciliation alerts | **Done** in code (Sentry, `alert:reconciliation`). `SENTRY_DSN` and the Sentry alert rule can't be checked from the repo. |
+| 4 | `ALLOWED_ORIGINS: "*"` | **Unchanged, still safe.** The web storefront is now a browser client, but its browser code only calls its own `/api/...` routes, which call the API server to server. No origin needs allowing. |
+| 5 | Nine unused private helpers in the seller dashboard | **Unchanged** (9 of the 21 analyzer infos). |
 
-The deploy fix is the one that mattered most, and it was done properly, with
-a regression test. Everything else from the last review is still open.
+The three commits after that review's write-up are sound:
 
----
-
-## 3. High — an auction payment lapse can cancel a deal the buyer is paying for
-
-**Reproduced.** `lifecycle.lapse_unpaid_win()` cancels the winner's deal
-whenever `deal.status` is still `agreed` at the deadline. But `agreed` is
-also the deal's status while an M-Pesa STK push is outstanding. Funding moves
-the escrow row (`ExternalEscrow.funding_initiated_at` set, status `PENDING`
-or `UNKNOWN`), and the deal only becomes `paid` once E-Confirm reports
-`FUNDED`. The lapse never looks at the escrow.
-
-Sequence, run against the real service layer:
-
-1. Auction closes, winner gets a deal (`agreed`), 24-hour deadline set.
-2. Winner taps Pay at hour 23:59. STK push sent, PIN not yet entered.
-3. The sweep runs at 24:00. `lapse_unpaid_win` → `unpaid`. Deal
-   `cancelled`, listing back to `active`.
-4. Winner enters their PIN. `reconcile_econfirm_escrow` sees `FUNDED`, tries
-   `lock_deal_if_status(..., (agreed,))`, gets `None`, and takes the
-   `else: commit()  # someone else already moved it — not an error` branch.
-
-Final state:
-
-```
-deal.status: cancelled | escrow.status: funded | listing.status: active
-```
-
-The buyer's money is held by E-Confirm against a cancelled deal. No event,
-audit row or reconciliation alert is raised. The item is back on sale and
-can be sold to someone else. The same happens for an escrow in `UNKNOWN`,
-the state that exists specifically because the payment may have succeeded.
-
-**Fix.** In `lapse_unpaid_win`, load the deal's `ExternalEscrow`. If
-`funding_initiated_at` is set and the status is not a confirmed failure,
-don't lapse: reconcile first, or extend the deadline and let a later pass
-decide. Separately, in `reconcile_econfirm_escrow`, a `FUNDED` result for a
-deal that is not `agreed` should publish `EConfirmReconciliationRequired`
-rather than being treated as benign. That branch was written for a
-concurrent poller, not a cancelled deal.
+- `b071d05`: `populate_existing` on the escrow repository's single-row
+  reads. I checked the claim in its comment that unflushed edits are safe:
+  sessions keep autoflush on (the `sessionmaker` default), so pending
+  edits are written before the re-read.
+- `e418dcb`: `/negotiate/chat` now requires sign-in, is rate-limited, and
+  has size caps.
+- `380503f`: `ApiClient` renews an expired session on a 401 and retries
+  once. The renewal is single-flight.
 
 ---
 
-## 4. High — admin is granted on an unverified email
+## 3. Medium — the app stores the user's password in plain text, and Android backs it up
 
-**Reproduced.** `AuthService.register` sets:
+**Pre-existing; not flagged by earlier reviews.** `ApiService._saveSession`
+(`flutter_app/lib/services/api_service.dart:98`) and
+`AuthRepository` (`features/auth/data/repositories/auth_repository.dart:81`)
+write the account password to SharedPreferences under `user_password`.
+It is kept only as the last fallback in `_tryRefreshOrRelogin`, used when
+the refresh token is rejected.
 
-```python
-is_admin = bool(settings.admin_bootstrap_email) and email == settings.admin_bootstrap_email
-```
+- SharedPreferences is a plain XML file on Android and a plist on iOS.
+- `AndroidManifest.xml` sets no `android:allowBackup`, so Android's default
+  applies: auto-backup is on, and the file, with the password, access token
+  and refresh token, goes into the user's Google Drive backup. iOS device
+  backups include the plist too.
+- The password is more than a login. `POST /mpesa/stk-push` uses it as its
+  "second-factor authorization" (`backend/api/routers/mpesa.py:125`), so a
+  copy on disk defeats that check as well.
 
-`email` here can be a raw, typed, unverified address. Registering with the
-bootstrap address and no `email_verify_token` produced:
+Now that refresh tokens work (fixed 2026-08-13), the fallback is rarely
+needed. When the refresh token is rejected, sending the user to sign-in is
+the right answer.
 
-```
-is_admin: True  email_verified: False
-```
-
-Anyone who knows or guesses `ADMIN_BOOTSTRAP_EMAIL`, typically the founder's
-public address, and registers before its owner does gets full admin,
-including `POST /admin/users/{id}/promote-admin`. The window is from the
-moment the variable is set until the real admin registers.
-
-This predates this week's work, but the email-OTP flow added this week is
-what makes it cheap to fix.
-
-**Fix.** `is_admin = email_verified and email == settings.admin_bootstrap_email`.
-The real admin then verifies their address during signup, which needs
-`RESEND_API_KEY` set (see §5.3).
-
----
-
-## 5. Medium / Low — new since the last review
-
-### 5.1 Medium — speech-to-text endpoints have no rate limit
-
-`POST /stt/deepgram-token`, `/stt/assemblyai-token` and `/stt/transcribe`
-spend real money per call. The first two mint streaming credentials billed to
-BROKA's accounts, and the third makes a paid Whisper call on up to 25 MB of
-audio. None of them calls a limiter. Every comparable endpoint does:
-`/calls/turn-credential` is limited explicitly because each call costs a
-Cloudflare request, and the buy-agent LLM endpoints gained `ai_chat_limiter`
-this week for the same reason.
-
-The Deepgram token also keeps working after its 300 s TTL once the socket is
-open (per the code's own comment), so one mint can stream for as long as the
-client keeps the connection. Combined with §2 #3, a leaked call token is
-enough to mint these.
-
-**Fix.** Add a per-user `stt_token_limiter` (e.g. 10/min) to the two token
-endpoints and put `ai_chat_limiter` or similar on `/transcribe`.
-
-### 5.2 Medium — `PATCH /auctions/{id}/terms` returns 500 for any timezone-suffixed time
-
-**Reproduced.** The body's `starts_at` / `ends_at` are pydantic `datetime`s,
-so `"2026-09-24T10:00:00Z"` parses as timezone-aware. The stored columns and
-`datetime.utcnow()` are naive. Both requests below fail with
-`TypeError: can't compare offset-naive and offset-aware datetimes`:
-
-```
-PATCH terms {"ends_at": "...Z"}                  → 500
-PATCH terms {"starts_at": "...Z", "ends_at": "...Z"} → 500
-```
-
-The Flutter app sends exactly this format (`toUtc().toIso8601String()`) to
-`POST /listings`, whose parser strips the zone. No screen calls the terms
-endpoint yet, so users can't hit this today, but the first one that does
-will.
-
-Related: `listings/service.py`'s `_coerce_dt` / `_strict_dt` use
-`.replace(tzinfo=None)` without converting to UTC first. A `+03:00` time is
-silently stored three hours off. The app always sends UTC, so this is latent.
-
-**Fix.** One helper, `aware.astimezone(timezone.utc).replace(tzinfo=None)`,
-used by both the terms endpoint and the listings parsers.
-
-### 5.3 Low — production without Resend logs email OTP codes
-
-With `RESEND_API_KEY` unset, `get_email_provider()` returns `ConsoleEmail`
-in production too. It writes the full email body, code included, to the log
-at WARNING and returns `True`. The API then tells the user the code was sent.
-Startup warns about it, but the code still reaches log storage and Sentry
-breadcrumbs, and the user never gets it.
-
-Once §4 is fixed, this matters more: whoever can read logs can verify any
-address.
-
-**Fix.** In production, return 503 from `/auth/email/otp/request` when no
-provider is configured, as the phone path does when an SMS send fails.
-
-### 5.4 Low — buy-agent `history` entries are unbounded
-
-`ConverseTurnIn.history` caps the list at 40 entries but not the size of each
-entry. The last 12 are pasted into the LLM prompt verbatim
-(`ai_broker/service.py`, `history[-12:]`). `message` is capped at 1000
-characters for exactly this reason (its comment says so), and the cap doesn't
-extend to the transcript sent alongside it. At 20 calls/min per user this is
-cost exposure, not an outage.
-
-**Fix.** Validate `history` as `list[HistoryTurn]` with `content:
-str = Field(max_length=1000)`, or truncate each entry where the prompt is
-built.
+**Fix.**
+1. Stop writing `user_password`, and delete it on the next app start.
+2. Drop Attempt 2 of `_tryRefreshOrRelogin`, and route to sign-in when
+   renewal fails.
+3. Set `android:allowBackup="false"`, or exclude shared prefs with
+   `dataExtractionRules` / `fullBackupContent`.
+4. Consider `flutter_secure_storage` (Keystore/Keychain) for the refresh
+   token.
 
 ---
 
-## 6. Flutter
+## 4. Medium — an oversized image header gets past `ImageRejected`, returns a 500, and stops the media backfill
 
-Flutter was not available for the previous review. This time Flutter 3.24.5
-(the version CI pins) was installed and run:
+**Reproduced.** `process_image` (`backend/api/core/image_processing.py:75`)
+catches `UnidentifiedImageError, OSError, ValueError` around `Image.open`.
+Pillow raises `DecompressionBombError`, a plain `Exception` subclass,
+*inside* `Image.open` when the declared canvas is over 2 × its default
+limit (178,956,970 pixels). That happens before the module's own
+`MAX_PIXELS` check, which would have turned it into a friendly message.
 
-| Check | Result |
-|---|---|
-| `flutter analyze` (CI flags) | **0 errors**. 24 warnings, 21 infos |
-| `flutter test` | **162 passed**, 0 failed, across 8 files |
+A 50-byte PNG whose header declares 20000 × 10000:
 
-The warnings are housekeeping: 10 `unused_field`, 6 `unused_import`, 3
-`unused_local_variable`, 5 redundant null checks. None is a type error. The
-test suite is new since the last review and covers the right things: signup
-wizard, OTP autofill, Home scroll, category zones, and the Deepgram →
-AssemblyAI failover state machine.
+```
+process_image(raw)          -> PIL.Image.DecompressionBombError (not ImageRejected)
+POST /media/images          -> 500 "Internal server error. Our team has been notified."
+```
 
-Structural notes from reading the new code:
+The same file sent as a legacy base64 field breaks the backfill. Old app
+builds still send those fields, and so can any client: `logo_url` and
+`photos` on stores, `verified_photos` and `showcase_image_url` on listings.
+`backfill._convert` catches only `ImageRejected`, so the error escapes
+`run_backfill_pass`. The sweep logs it and tries again five minutes later,
+on the same row. One store with the bad logo and one with a good logo:
 
-- The Zeno voice stack is well separated. `ZenoVoiceController` knows
-  nothing about vendors, `RealtimeSttManager` owns failover, and both vendor
-  services take injectable connectors, which is what makes
-  `zeno_voice_test.dart` and `stt_fallback_test.dart` possible. Permanent STT
-  keys stay on the server, and the client only ever holds short-lived tokens.
-- After an error, `ZenoVoiceController.open()` returns early because `_open`
-  is still true. The only way back is closing the card with X and reopening
-  it. If that's intended, the error card should say so. If not, reset `_open`
-  in `_failWith`.
+```
+pending before: store_logos 2
+pass 0: raised DecompressionBombError
+pass 1: raised DecompressionBombError
+pass 2: raised DecompressionBombError
+pending after:  store_logos 2        <- the good logo is never converted either
+```
 
----
+The whole pass sits in one `try`, and listing photos are converted first.
+So one such listing photo would stop every kind: listing photos, showcases,
+store logos, store photos and avatars, for every user, on every pass.
+(This last part is from reading the code; the store-logo case above was
+run.) Any seller can create that row with one request.
 
-## 7. What was done well this week
-
-- **Auction lifecycle.** Compare-and-swap bids and closes that hold on
-  SQLite as well as Postgres, a reserve that is evaluated only at close and
-  never exposed publicly (the old public serializer leaked it; that is fixed
-  and documented), idempotent close with a crash-recoverable deal-retry
-  claim, and an at-least-once ending-soon reminder with a bounded retry
-  budget. 2,300 lines of tests back it.
-- **OTP SMS Retriever hash** is validated against its exact format before
-  being put into an SMS, which closes an easy phishing relay.
-- **Money quantization** (`core/money.py`) is a sound interim answer to Float
-  columns, and its docstring is honest about what a real Numeric migration
-  still needs.
-- **Calling.** The room-ownership check (`_owns_room`) fixes a real
-  reconnect race, and call pushes now carry a TTL so a stale ring doesn't
-  arrive minutes later.
+**Fix.**
+1. In `process_image`, catch `Image.DecompressionBombError` (or
+   `Exception`) around `Image.open` and raise `ImageRejected`.
+2. In the backfill, catch any per-row exception other than `StorageError`,
+   mark that row unconvertible (`"[]"` / `""`, as it already does for
+   `ImageRejected`), and carry on. A single row must never stop the pass.
 
 ---
 
-## 8. Suggested order of work
+## 5. Low — the store visit counter's rate limit is keyed on an id the caller chooses
 
-1. §3: don't lapse an auction deal with a funding attempt in flight, and
-   alert on `FUNDED` against a non-`agreed` deal. Real money.
-2. §4: require `email_verified` for the admin bootstrap. One line.
-3. §2 #3: require `type == "access"` in `decode_token_strict()`. One line,
-   still open from last week.
-4. §5.1: rate-limit the STT endpoints.
-5. §5.2: normalize timezone-aware datetimes to naive UTC in one helper.
-6. Still open from last week: the Redis-independent dispute-summary gate,
-   `SET NX` idempotency, `pytest.ini` coverage floor (set it to 50),
-   `TOKEN_EXPIRE_MINUTES`, rate limiter `zadd` order, `analysis_options.yaml`.
-7. §5.3, §5.4.
+**Reproduced.** `POST /stores/{id}/visit` is public. For an anonymous
+caller the limiter key is `visitor:{body.visitor}`, a random string the
+web storefront keeps in `localStorage`, and the same value is the
+de-duplication key. Nothing ties it to the caller, so a new value on every
+request is a new, unlimited visitor. With the production 60/min limit
+simulated at 5/min:
+
+```
+same visitor id, 8 requests:    [202, 202, 202, 202, 202, 429, 429, 429]
+fresh id per request, 40 reqs:  all 202, 40 counted
+owner's stats visits.total:     41
+```
+
+So anyone can inflate a store's visit count, and write a database row
+update per request, without limit. `/share` counts every call with no
+de-duplication.
+
+Separately, calls forwarded by the web storefront (`web/src/lib/forward.ts`)
+reach the API from Vercel's servers and carry no client IP. Every anonymous
+web share, and every web visit without a `visitor` id (storage blocked),
+falls into an `ip:<vercel address>` bucket shared with every other web
+visitor to every store.
+
+**Fix.** Key the limiter on the network address, not the body. Have the
+storefront pass the visitor's IP (Vercel's `x-forwarded-for`) in a header
+the API trusts only from the storefront, for example with a shared
+secret, and limit on that. Keep `visitor` for de-duplication only.
+Consider de-duplicating shares per visitor as well.
+
+---
+
+## 6. Low (latent) — idempotency keys are global, not per user or request
+
+`reserve_idempotency_key` stores `broka:idempotency:<header value>`, with
+no user id, method or path in the key. A request that reuses a key within
+24 hours gets the *earlier request's* stored response, whoever sent it and
+whichever deal it was for, and the handler never runs.
+
+That is exactly why the test suite fails on a second run against the same
+Redis. `test_pending_blocks_fund_regardless_of_idempotency_key` sends
+`X-Idempotency-Key: key-A` to fund a new deal, gets the previous run's
+cached response for a different deal, and no STK push is made. CI passes
+only because its Redis starts empty each time.
+
+```
+dirty Redis:  1 failed
+FLUSHALL:     1 passed
+run again:    1 failed
+```
+
+The app sends no `X-Idempotency-Key` today (`grep` over `flutter_app/lib`
+finds none), so nothing is exposed now. But the first client that starts
+sending keys would inherit cross-user response replay, and a reused key
+would silently skip a payment.
+
+**Fix.** Build the Redis key from the user id, method and path plus the
+header value (`idempotency_guard` can take `request` and
+`get_current_user`). In the test, use a unique key, or flush Redis in the
+fixture.
+
+---
+
+## 7. Needs checking — do IP-keyed rate limits see real client IPs on Render?
+
+Login (5/min), register (3 per 5 min), and the phone and email OTP
+requests (3 per 5 min) are all limited per `request.client.host`. The
+container runs `uvicorn main:app` with no `--forwarded-allow-ips`.
+Uvicorn only trusts `X-Forwarded-For` from `127.0.0.1` unless told
+otherwise. If Render's proxy connects from any other address,
+`client.host` is the proxy's, and each of those limits is shared by
+**every user** reaching the API through that proxy. That would mean three
+signups per five minutes across the whole platform.
+
+The repo can't show which case holds. Log `request.client.host` once in
+production. If it's a private or proxy address, add
+`--forwarded-allow-ips='*'`, or set `FORWARDED_ALLOW_IPS` to Render's
+proxy range, to the start command, since only Render's proxy can reach
+the container.
+
+---
+
+## 8. Low — smaller items
+
+- **Legacy image fields accept any string.** **Reproduced:** a store
+  created with `"logo_url": "https://tracker.example/p.gif"` keeps it
+  after the backfill (it isn't base64, so it's marked unconvertible), and
+  `GET /stores/slug/{slug}` serves it as `logo_url`. The web storefront's
+  `resolveImage` passes any `https://` URL through, so the page on
+  broka.co.ke loads a third-party image: a tracking pixel, or content
+  BROKA never checked. The same applies to a store's legacy `photos` and a
+  listing's `verified_photos`. Accept only `data:image/…` or bare base64
+  in those fields.
+- **Unverified business emails are public.** The store payload returns
+  `business_email` whether or not it's verified. The web page shows only
+  verified ones, but the public API returns what old app builds saved
+  unverified, which could be a typo or someone else's address. Return it
+  only when `business_email_verified`.
+- **A paused store's product pages stay up.** The store page shows an
+  empty catalogue, but `/store/<name>/p/<id>` still renders its products
+  with "Buy in app". Decide which is intended; if pausing should hide
+  products, check `store.is_active` in the product page's `load()`.
+- **Uploads are never cleaned up.** An upload that's never attached to a
+  listing or store (an abandoned wizard, a replaced photo, an asset from a
+  lost backfill race) is kept forever. At 30 uploads a minute per user
+  that's unbounded storage, in Postgres when R2 isn't configured. Add a
+  sweep that deletes assets unreferenced after a day or so.
+
+---
+
+## 9. What was done well
+
+- **Image pipeline.** Uploads are decoded from the bytes, not trusted by
+  extension. EXIF and GPS are stripped while the colour profile is kept.
+  JPEGs use draft-mode decoding and there's a pixel budget. Keys are
+  immutable, so every response is cacheable forever. Each asset records
+  the driver it was written with, so turning R2 on strands nothing. The
+  backfill's compare-and-swap writes keep a seller's concurrent edit.
+  §4 is the one gap.
+- **Store link names.** Strict rules, a reserved list that covers
+  impersonation ("support", "official", "mpesa"), case-insensitive
+  lookup, and a link that is fixed once chosen. The one-store-per-owner
+  check is serialised with a row lock instead of a schema constraint, so
+  multi-store stays possible.
+- **Web storefront.** It's small and careful:
+  - every path and query value is validated before it reaches the API;
+  - JSON-LD is escaped for `<script>`;
+  - API reads are cached so a busy WhatsApp group costs one request a minute;
+  - JPEG link previews exist because WhatsApp ignores WebP;
+  - App Links verification is driven by an env var;
+  - security headers are set, and CI gates typecheck, lint, tests and build.
+- **Deep links** (`deep_link_service.dart`) accept only the two BROKA
+  hosts and strict slug/id patterns. A link that arrives during the splash
+  screen waits for it.
+- **Session renewal** in `ApiClient` retries only token-carrying requests,
+  shares one renewal among concurrent 401s, and rebuilds a multipart
+  request for its retry.
+
+---
+
+## 10. Suggested order of work
+
+1. §4: catch the decompression-bomb error, and make the backfill skip a
+   bad row instead of stopping. It's small, and today any seller can stop
+   the migration for everyone.
+2. §3: stop storing the password and turn off Android backup of prefs.
+3. §7: one production log line decides whether this is a non-issue or the
+   most urgent item here.
+4. §6: scope idempotency keys, and fix the order-dependent test.
+5. §5, then §8.
 
 ---
 
 ## Overall
 
-The codebase kept its character this week. New code is carefully reasoned,
-its comments name the failure each guard prevents, and the auction work in
-particular is stronger than most production auction code. The pattern from
-last week holds, in a narrower form: the most serious problems sit at the
-seams between two carefully built systems. The auction sweep reasons only
-about auction state and the escrow reconciler only about escrow state, and
-the money falls between them. The admin bootstrap was written before email
-could be verified and was never revisited once it could.
+The new work is in the same careful style as the rest of the codebase.
+The stores backend, image pipeline and web storefront are well layered.
+Their comments explain each guard, and the tests are real: 975 backend,
+223 Flutter and 46 web tests, all green in CI's configuration.
+
+This week's problems sit at trust boundaries: what a guard lets through
+rather than what it checks. `process_image` handles every rejection it
+names but not one Pillow raises itself. The visit limiter limits a value
+the caller picks. The idempotency cache trusts a header across users. The
+app keeps a secret where backups can reach it. Each fix is small.
