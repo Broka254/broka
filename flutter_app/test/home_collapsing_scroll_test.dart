@@ -263,14 +263,15 @@ void main() {
       // Steps 2-6: everything the brief wants visible at scroll position 0.
       expect(find.text('BROKA'), findsOneWidget);
       expect(find.textContaining('Good '), findsOneWidget);          // greeting
-      expect(find.textContaining('Search for products'), findsOneWidget);
+      expect(find.textContaining('Search listings'), findsOneWidget);
       expect(find.text(_firstCategory), findsOneWidget);              // rail
       expect(find.text('Fresh on Broka'), findsOneWidget);
       expect(find.byType(ProductCard), findsWidgets);
       // Step 19 + brief §11: the nav is outside the scroll view.
       expect(find.text('Inbox'), findsOneWidget);
       expect(find.text('Sell'), findsOneWidget);
-      expect(find.text('Profile'), findsOneWidget);
+      // The fifth tab is the Menu now (menu_screen.dart).
+      expect(find.text('Menu'), findsOneWidget);
 
       // Step 29 + brief §3: ONE vertical scroll owner. The discovery rail is
       // horizontal and doesn't count; a second vertical one would mean the
@@ -490,16 +491,16 @@ void main() {
               '${(firstCardTop / viewport.height * 100).round()}% of the screen');
     });
 
-    testWidgets('brief §13: tapping the search bar opens the search delegate',
+    testWidgets('brief §13: tapping the search bar opens listing search',
         (tester) async {
       await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
       await _settle(tester);
 
       await tester.tap(find.byIcon(Icons.search_rounded));
       await _settle(tester);
-      // Empty history state of _ListingSearchDelegate.
-      expect(find.text('Search for listings, traders, or locations'),
-          findsOneWidget);
+      // Empty-history state of ListingSearchScreen (listing_search_test.dart
+      // covers the search itself).
+      expect(find.text('Find something to buy'), findsOneWidget);
     });
 
     testWidgets('the filter panel still opens from the collapsed header',
@@ -515,6 +516,95 @@ void main() {
       expect(find.text('Max Price'), findsOneWidget);
       expect(find.text('Condition'), findsOneWidget);
       expect(find.text('Sort'), findsOneWidget);
+    });
+  });
+
+  // ── Home feed bugs (2026-09-25 search pass) ─────────────────────────────────
+
+  group('Home feed', () {
+    tearDown(() => setFakeRoute(null));
+
+    testWidgets('an untouched price filter is no filter at all', (tester) async {
+      final requested = <Uri>[];
+      setFakeRoute((uri) {
+        if (uri.path.startsWith('/listings')) requested.add(uri);
+        return null;
+      });
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+      expect(requested, isNotEmpty);
+      // max_price=5000000 went out on every request, hiding every car, plot
+      // and house above five million from Home.
+      expect(requested.first.queryParameters.containsKey('max_price'), isFalse);
+    });
+
+    testWidgets('a feed that fails to load offers a retry, not an empty market',
+        (tester) async {
+      setFakeRoute((uri) =>
+          uri.path.startsWith('/listings') ? const FakeResponse.error() : null);
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+      expect(find.text("Couldn't load listings"), findsOneWidget);
+      expect(find.text('No listings yet'), findsNothing);
+    });
+
+    testWidgets('a price sort is not reordered by featured pins', (tester) async {
+      setFakeRoute((uri) {
+        if (!uri.path.startsWith('/listings')) return null;
+        if (uri.queryParameters['sort'] != 'price_low') return null;
+        if (uri.queryParameters['offset'] != '0') return <Object?>[];
+        return [
+          fakeListingJson(1, price: 1000),
+          fakeListingJson(2, price: 90000)
+            ..['is_featured'] = true
+            ..['featured_until'] = '2030-01-01T00:00:00',
+        ];
+      });
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+      await tester.tap(find.byIcon(Icons.tune_rounded));
+      await _settle(tester);
+      await tester.tap(find.byType(DropdownButton<String?>));
+      await _settle(tester);
+      await tester.tap(find.text('Price: low to high').last);
+      await _settle(tester);
+      // Close the panel so the grid is back on screen. `.first`: the panel's
+      // own Condition row uses the same icon.
+      await tester.tap(find.byIcon(Icons.tune_rounded).first);
+      await _settle(tester);
+
+      final first = find.byType(ProductCard).first;
+      expect(find.descendant(of: first, matching: find.text('KES 1,000')), findsOneWidget,
+          reason: 'low to high must open on the cheapest listing');
+    });
+
+    testWidgets('the location filter has no stray Seller Dashboard button',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+      await tester.tap(find.byIcon(Icons.tune_rounded));
+      await _settle(tester);
+      await tester.tap(find.text('All locations'));
+      await _settle(tester);
+      expect(find.text('Filter by Location'), findsOneWidget);
+      expect(find.byTooltip('Seller Dashboard'), findsNothing);
+    });
+
+    testWidgets('an active filter still shows once the panel is closed',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+      await _settle(tester);
+      expect(find.byKey(const Key('home-filters-active-dot')), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.tune_rounded));
+      await _settle(tester);
+      await tester.tap(find.text('New'));
+      await _settle(tester);
+      // `.first`: the panel's own Condition row uses the same icon.
+      await tester.tap(find.byIcon(Icons.tune_rounded).first);
+      await _settle(tester);
+      expect(find.text('Max Price'), findsNothing);
+      expect(find.byKey(const Key('home-filters-active-dot')), findsOneWidget);
     });
   });
 }

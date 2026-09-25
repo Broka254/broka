@@ -7,10 +7,20 @@ class TradersRepository {
   final ApiClient _client;
   TradersRepository({ApiClient? client}) : _client = client ?? apiClient;
 
-  Future<Result<List<Trader>>> list({String? categoryId, double? lat, double? lng}) async {
+  Future<Result<List<Trader>>> list({
+    String? categoryId,
+    String? search,
+    double? lat,
+    double? lng,
+  }) async {
     try {
+      final q = search?.trim() ?? '';
       final params = <String, String>{
         if (categoryId != null) 'category_id': categoryId,
+        // The Traders screen's search box - matched against the trader's
+        // business and display name on the server (GET /traders?search=).
+        // The backend caps it at 100 characters.
+        if (q.isNotEmpty) 'search': q.length > 100 ? q.substring(0, 100) : q,
         // Added (redesign-guide audit): lets TradersService compute a real
         // distance_km per trader (only when that trader has also left
         // their own location visible - server-side privacy check either

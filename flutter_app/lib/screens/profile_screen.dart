@@ -1,608 +1,298 @@
 // BROKA - Profile Screen
-// Updated: shows profile selfie, allows retake, shows nickname
-import 'dart:convert';
+//
+// Who you are on BROKA: photo (tap the camera to retake the selfie), name,
+// verification, the numbers other people see, and the account's details.
+//
+// It used to be the whole fifth tab - seller dashboard, store, language,
+// location privacy, help and sign-out stacked under the profile. Those moved
+// to the Menu (menu_screen.dart) and Settings (settings_screen.dart); this is
+// the Menu's first entry now. Also fixed on the way:
+//  * "Listings" and "Traded" read listing_count and volume_traded from
+//    /auth/me, which has never sent either, so both always said 0. Listings
+//    is the real active count now; Traded is gone until something computes
+//    it.
+//  * The photo went through Image.memory(base64Decode(...)), which throws on
+//    a BROKA image URL - a valid profile photo - and took the screen down.
+//  * A rating of 5.0 showed for accounts with no finished deals: that is the
+//    column's default, not a score anyone gave. It reads "New" until a deal
+//    is rated.
 import 'package:flutter/material.dart';
+
 import '../core/utils/result.dart';
-import '../features/stores/data/repositories/stores_repository.dart';
-import '../features/stores/presentation/store_entry.dart';
+import '../features/account/data/repositories/account_repository.dart';
+import '../features/account/domain/models/my_account.dart';
 import '../main.dart';
-import '../widgets/gradient_button.dart';
 import '../services/api_service.dart';
-import '../services/global_poller_service.dart';
+import '../widgets/broka_image.dart';
+import '../widgets/collapsing_screen_header.dart';
+import '../widgets/constellation_background.dart';
+import '../widgets/menu_tiles.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  const ProfileScreen({super.key, this.repository, this.animateBackground = true});
+
+  final AccountRepository? repository;
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
+
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  bool _notificationsEnabled = true;
-  final bool _darkMode             = true;
-  bool _locationVisible      = true;
-  bool _loadingStats         = true;
+  static const _gradient = [BrokaColors.neonPurple, BrokaColors.neonPink];
 
-  int    _listingCount  = 0;
-  int    _dealsCount    = 0;
-  double _rating        = 5.0;
-  double _volumeTraded  = 0;
-  // For the store entry: whether this account already has a store, and
-  // its seller tier ("long_term" sellers can open one straight away).
-  bool _hasStore = false;
-  String? _sellerTier;
-  bool   _isVerified    = false;
+  AccountRepository get _repo => widget.repository ?? accountRepository;
 
-  String get _name     => ApiService.currentUserName  ?? 'BROKA User';
-  String get _nickname => ApiService.currentUserNickname ?? '';
-  String? get _email   => ApiService.currentUserEmail;   // optional — no fake placeholder
-  String get _phone    => ApiService.currentUserPhone ?? '';
-  String? get _photo   => ApiService.currentUserPhoto;
-
-  String get _initials {
-    final parts = _name.trim().split(' ');
-    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    return _name.isNotEmpty ? _name[0].toUpperCase() : 'B';
-  }
+  MyAccount? _account;
+  String? _error;
+  bool _loading = true;
+  int? _listingCount;
+  bool _savingPhoto = false;
 
   @override
   void initState() {
     super.initState();
-    _loadProfile();
+    _load();
   }
 
-
-
-  Future<void> _loadProfile() async {
-    setState(() => _loadingStats = true);
-    try {
-      final data = await ApiService.getMe();
-      if (mounted) {
-        // Refresh local photo/nickname from backend
-        final photo    = data['profile_photo'] as String?;
-        final nickname = data['nickname']      as String?;
-        final accountType = data['account_type'] as String?;
-        if (photo    != null) ApiService.currentUserPhoto    = photo;
-        if (nickname != null) ApiService.currentUserNickname = nickname;
-        if (accountType != null) ApiService.currentUserAccountType = accountType;
-        final sellerTier = data['seller_tier'] as String?;
-        setState(() {
-          _sellerTier = sellerTier;
-          _listingCount = (data['listing_count']   as num?)?.toInt()    ?? 0;
-          _dealsCount   = (data['completed_deals'] as num?)?.toInt()    ?? 0;
-          _rating       = (data['rating']          as num?)?.toDouble() ?? 5.0;
-          _volumeTraded = (data['volume_traded']   as num?)?.toDouble() ?? 0;
-          _isVerified   = data['is_verified']      as bool?             ?? false;
-          _loadingStats = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loadingStats = false);
-    }
-    final mine = await storesRepository.getMyStore();
+  Future<void> _load() async {
+    setState(() {
+      _loading = _account == null;
+      _error = null;
+    });
+    final result = await _repo.getMe();
     if (!mounted) return;
-    final hasStore = mine.fold(onSuccess: (s) => s != null, onFailure: (_, __) => _hasStore);
-    setState(() => _hasStore = hasStore);
+    switch (result) {
+      case Failure(:final message):
+        setState(() {
+          _error = message;
+          _loading = false;
+        });
+      case Success(:final data):
+        setState(() {
+          _account = data;
+          _loading = false;
+        });
+        final count = await _repo.activeListingCount(data.id);
+        if (!mounted) return;
+        if (count case Success(:final data)) setState(() => _listingCount = data);
+    }
   }
 
   Future<void> _updateSelfie() async {
     final result = await Navigator.pushNamed(context, '/selfie');
-    if (result is String && result.isNotEmpty && mounted) {
+    if (result is! String || result.isEmpty || !mounted) return;
+    setState(() => _savingPhoto = true);
+    try {
       await ApiService.updateProfile(profilePhoto: result);
-      setState(() {});
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Couldn't save your new photo. Try again."),
+          backgroundColor: BrokaColors.bgCard,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _savingPhoto = false);
     }
-  }
-
-  String _formatVolume(double v) {
-    if (v >= 1000000) return 'KES ${(v / 1000000).toStringAsFixed(1)}M';
-    if (v >= 1000)    return 'KES ${(v / 1000).toStringAsFixed(0)}K';
-    if (v == 0)       return 'KES 0';
-    return 'KES ${v.toStringAsFixed(0)}';
   }
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     return Scaffold(
       backgroundColor: BrokaColors.bg,
-      appBar: AppBar(
-        backgroundColor: BrokaColors.bgMid,
-        title: const Text('Profile',
-            style: TextStyle(color: BrokaColors.textHigh,
-                fontWeight: FontWeight.w800)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_rounded,
-                color: BrokaColors.textMid, size: 20),
-            tooltip: 'Sign out',
-            onPressed: _confirmSignOut,
+      body: ConstellationBackground(
+        animate: widget.animateBackground,
+        child: SafeArea(
+          bottom: false,
+          child: RefreshIndicator(
+            color: BrokaColors.gold,
+            backgroundColor: BrokaColors.bgCard,
+            displacement: 72,
+            onRefresh: _load,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: CollapsingScreenHeader(
+                    title: 'Profile',
+                    emoji: '👤',
+                    gradient: _gradient,
+                    onBack: () => Navigator.maybePop(context),
+                    narrow: media.size.width < 360,
+                    textScale: media.textScaler.scale(1.0).clamp(1.0, 1.35).toDouble(),
+                  ),
+                ),
+                ..._body(media),
+              ],
+            ),
           ),
-          const SizedBox(width: 4),
-        ],
-      ),
-      body: RefreshIndicator(
-        color: BrokaColors.gold,
-        backgroundColor: BrokaColors.bgCard,
-        onRefresh: _loadProfile,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _buildAvatar(),
-            const SizedBox(height: 24),
-            _buildStatsRow(),
-            const SizedBox(height: 16),
-            _buildSellerDashboardTile(),
-            // Anyone can open a store: sellers who haven't given their
-            // business details (and buyers) add them in the setup wizard.
-            if (_hasStore || ApiService.currentUserAccountType == 'buyer_seller') ...[
-              const SizedBox(height: 10),
-              _buildNavTile(Icons.storefront_outlined,
-                  _hasStore
-                      ? 'My Store'
-                      : (_sellerTier == 'long_term'
-                          ? 'Open your online store'
-                          : 'Open an online store'),
-                  () => StoreEntry.open(context).then((_) {
-                    if (mounted) _loadProfile();
-                  })),
-            ],
-            const SizedBox(height: 24),
-            _buildSectionLabel('Account'),
-            _buildInfoTile(Icons.person_outline_rounded, 'Name', _name),
-            if (_nickname.isNotEmpty)
-              _buildInfoTile(Icons.badge_outlined, 'Preferred Name', _nickname),
-            _buildInfoTile(Icons.phone_iphone_rounded, 'Phone', _phone),
-            if (_email != null && _email!.isNotEmpty)
-              _buildInfoTile(Icons.email_outlined, 'Email', _email!),
-            const SizedBox(height: 20),
-            _buildSectionLabel('Preferences'),
-            _buildToggleTile(
-              icon: Icons.notifications_outlined,
-              label: 'Push notifications',
-              value: _notificationsEnabled,
-              onChanged: (v) => setState(() => _notificationsEnabled = v),
-            ),
-            _buildToggleTile(
-              icon: Icons.dark_mode_outlined,
-              label: 'Dark mode',
-              subtitle: 'Light mode coming soon',
-              value: _darkMode,
-              onChanged: (_) {},
-            ),
-            _buildLanguagePicker(),
-            _buildToggleTile(
-              icon: Icons.location_on_outlined,
-              label: 'Show my location',
-              subtitle: 'Allow others to see your approximate location',
-              value: _locationVisible,
-              onChanged: (v) async {
-                setState(() => _locationVisible = v);
-                await ApiService.setLocationVisible(v);
-              },
-            ),
-            const SizedBox(height: 20),
-            _buildSectionLabel('Support'),
-            _buildNavTile(Icons.help_outline_rounded, 'Help & FAQ',
-                () => _showComingSoon('Help & FAQ')),
-            _buildNavTile(Icons.shield_outlined, 'Privacy policy',
-                () => _showComingSoon('Privacy policy')),
-            _buildNavTile(Icons.star_outline_rounded, 'Rate BROKA',
-                () => _showComingSoon('Rate BROKA')),
-            const SizedBox(height: 28),
-            _buildSignOutButton(),
-            const SizedBox(height: 32),
-            const Center(child: Text('BROKA v2.3.0',
-                style: TextStyle(color: BrokaColors.textLow, fontSize: 11))),
-            const SizedBox(height: 16),
-          ],
         ),
       ),
     );
   }
 
-  // ── Avatar with selfie ────────────────────────────────────────────────────
-
-  Widget _buildAvatar() => Center(
-    child: Column(children: [
-      Stack(alignment: Alignment.bottomRight, children: [
-        Container(
-          width: 96, height: 96,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: BrokaColors.headerGradColors,
-              begin: Alignment.topLeft, end: Alignment.bottomRight,
-            ),
-            boxShadow: const [BrokaColors.glowGold],
-            border: Border.all(
-                color: BrokaColors.gold.withOpacity(0.5), width: 2),
-          ),
-          child: ClipOval(
-            child: _photo != null && _photo!.isNotEmpty
-                ? Image.memory(base64Decode(_photo!), fit: BoxFit.cover)
-                : Center(child: Text(_initials,
-                    style: const TextStyle(color: Colors.white,
-                        fontSize: 30, fontWeight: FontWeight.w800))),
+  List<Widget> _body(MediaQueryData media) {
+    final account = _account;
+    if (account == null) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: _loading
+                ? const CircularProgressIndicator(color: BrokaColors.gold)
+                : BrokaEmptyState(
+                    emoji: '📡',
+                    gradient: _gradient,
+                    headline: "Couldn't load your profile",
+                    body: _error ?? 'Check your connection and try again.',
+                    action: OutlinedButton(onPressed: _load, child: const Text('Retry')),
+                  ),
           ),
         ),
-        // Camera badge
-        GestureDetector(
-          onTap: _updateSelfie,
-          child: Container(
-            width: 30, height: 30,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const LinearGradient(
-                  colors: [BrokaColors.gold, BrokaColors.goldDim]),
-              border: Border.all(color: BrokaColors.bg, width: 2),
-              boxShadow: const [BrokaColors.glowGold],
+      ];
+    }
+    return [
+      SliverPadding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + media.padding.bottom),
+        sliver: SliverList(
+          delegate: SliverChildListDelegate([
+            _header(account),
+            const SizedBox(height: 20),
+            _stats(account),
+            if (!account.isVerified) ...[
+              const SizedBox(height: 12),
+              MenuGroup(children: [
+                MenuTile(
+                  icon: Icons.verified_outlined,
+                  tint: BrokaColors.success,
+                  title: 'Get verified',
+                  subtitle: 'A verified badge makes buyers and sellers more willing to deal',
+                  onTap: () => Navigator.pushNamed(context, '/verify').then((_) {
+                    if (mounted) _load();
+                  }),
+                ),
+              ]),
+            ],
+            const MenuSectionLabel('Account details'),
+            MenuGroup(children: [
+              _detail(Icons.person_outline_rounded, 'Name', account.name.isEmpty ? '—' : account.name),
+              if ((account.nickname ?? '').isNotEmpty)
+                _detail(Icons.badge_outlined, 'Preferred name', account.nickname!),
+              if ((account.phone ?? '').isNotEmpty)
+                _detail(Icons.phone_iphone_rounded, 'Phone', account.phone!),
+              if ((account.email ?? '').isNotEmpty)
+                _detail(Icons.email_outlined, 'Email', account.email!,
+                    badge: account.emailVerified
+                        ? const MenuPill('Verified', color: BrokaColors.success)
+                        : null),
+              _detail(Icons.storefront_outlined, 'Account',
+                  account.isSeller ? 'Buyer & seller' : 'Buyer'),
+              if (account.memberSince != null)
+                _detail(Icons.calendar_month_outlined, 'Member since', account.memberSince!),
+            ]),
+          ]),
+        ),
+      ),
+    ];
+  }
+
+  Widget _header(MyAccount account) {
+    final photo = account.photo;
+    final initials = Center(
+      child: Text(account.initials,
+          style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w800)),
+    );
+    return Column(children: [
+      Stack(alignment: Alignment.bottomRight, children: [
+        Container(
+          width: 108,
+          height: 108,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+            boxShadow: const [BrokaColors.glowGold],
+            border: Border.all(color: BrokaColors.gold.withOpacity(0.55), width: 2),
+          ),
+          child: ClipOval(
+            child: _savingPhoto
+                ? const Center(
+                    child: SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)))
+                : photo != null && photo.isNotEmpty
+                    ? BrokaImage(photo, fit: BoxFit.cover, placeholder: initials)
+                    : initials,
+          ),
+        ),
+        Tooltip(
+          message: 'Retake your photo',
+          child: GestureDetector(
+            onTap: _savingPhoto ? null : _updateSelfie,
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim]),
+                border: Border.all(color: BrokaColors.bg, width: 2),
+                boxShadow: const [BrokaColors.glowGold],
+              ),
+              child: const Icon(Icons.camera_front_rounded, color: Colors.white, size: 16),
             ),
-            child: const Icon(Icons.camera_front_rounded,
-                color: Colors.white, size: 14),
           ),
         ),
       ]),
       const SizedBox(height: 14),
-      Text(_nickname.isNotEmpty ? _nickname : _name,
-          style: const TextStyle(color: BrokaColors.textHigh,
-              fontSize: 20, fontWeight: FontWeight.w800)),
-      if (_nickname.isNotEmpty) ...[
+      Text(account.displayName,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 21, fontWeight: FontWeight.w800)),
+      if ((account.nickname ?? '').isNotEmpty && account.name.isNotEmpty) ...[
         const SizedBox(height: 2),
-        Text(_name,
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+        Text(account.name, style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5)),
       ],
-      const SizedBox(height: 4),
-      Text(_phone.isNotEmpty ? _phone : (_email ?? ''), style: const TextStyle(
-          color: BrokaColors.textMid, fontSize: 13)),
       const SizedBox(height: 10),
-      if (_isVerified)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: BrokaColors.neonGreen.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-                color: BrokaColors.neonGreen.withOpacity(0.4)),
-          ),
-          child: const Text('✓ Verified Seller',
-              style: TextStyle(color: BrokaColors.neonGreen,
-                  fontSize: 11, fontWeight: FontWeight.w700)),
-        )
-      else
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: BrokaColors.textLow.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: BrokaColors.border),
-          ),
-          child: const Text('Unverified',
-              style: TextStyle(color: BrokaColors.textLow,
-                  fontSize: 11, fontWeight: FontWeight.w700)),
-        ),
-    ]),
-  );
+      account.isVerified
+          ? const MenuPill('Verified', color: BrokaColors.success, icon: Icons.verified_rounded)
+          : const MenuPill('Unverified', color: BrokaColors.textMid),
+    ]);
+  }
 
-  Widget _buildStatsRow() {
-    if (_loadingStats) {
-      return Container(
-        padding: const EdgeInsets.symmetric(vertical: 20),
+  Widget _stats(MyAccount account) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: BrokaColors.cardGradColors),
+          color: BrokaColors.bgCard.withOpacity(0.9),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: BrokaColors.border),
         ),
-        child: const Center(child: SizedBox(width: 20, height: 20,
-          child: CircularProgressIndicator(
-              strokeWidth: 1.5, color: BrokaColors.gold))),
+        child: Row(children: [
+          _stat(_listingCount == null ? '—' : '$_listingCount', 'Active listings'),
+          Container(width: 1, height: 32, color: BrokaColors.border),
+          _stat('${account.completedDeals}', 'Deals'),
+          Container(width: 1, height: 32, color: BrokaColors.border),
+          _stat(account.ratingLabel, 'Rating'),
+        ]),
       );
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-            colors: BrokaColors.cardGradColors,
-            begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrokaColors.border),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _buildStat('$_listingCount', 'Listings'),
-          _buildDivider(),
-          _buildStat('$_dealsCount', 'Deals'),
-          _buildDivider(),
-          _buildStat('${_rating.toStringAsFixed(1)}★', 'Rating'),
-          _buildDivider(),
-          _buildStat(_formatVolume(_volumeTraded), 'Traded'),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildStat(String value, String label) => Column(children: [
-    Text(value, style: const TextStyle(color: BrokaColors.textHigh,
-        fontSize: 16, fontWeight: FontWeight.w800)),
-    const SizedBox(height: 2),
-    Text(label, style: const TextStyle(
-        color: BrokaColors.textMid, fontSize: 11)),
-  ]);
-
-  Widget _buildDivider() =>
-      Container(width: 1, height: 32, color: BrokaColors.border);
-
-  Widget _buildSectionLabel(String label) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Text(label.toUpperCase(),
-        style: const TextStyle(color: BrokaColors.textLow, fontSize: 10,
-            fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-  );
-
-  Widget _buildInfoTile(IconData icon, String label, String value) =>
-    Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
-            begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BrokaColors.border),
-      ),
-      child: Row(children: [
-        Icon(icon, color: BrokaColors.gold, size: 18),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(
-                color: BrokaColors.textLow, fontSize: 11)),
-            const SizedBox(height: 2),
-            Text(value, style: const TextStyle(color: BrokaColors.textHigh,
-                fontSize: 14, fontWeight: FontWeight.w600)),
-          ])),
-      ]),
-    );
-
-  Widget _buildToggleTile({
-    required IconData icon,
-    required String label,
-    String? subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-  }) => Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
-          begin: Alignment.topLeft, end: Alignment.bottomRight),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: BrokaColors.border),
-    ),
-    child: Row(children: [
-      Icon(icon, color: BrokaColors.gold, size: 18),
-      const SizedBox(width: 12),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(color: BrokaColors.textHigh,
-              fontSize: 14, fontWeight: FontWeight.w600)),
-          if (subtitle != null)
-            Text(subtitle, style: const TextStyle(
-                color: BrokaColors.textLow, fontSize: 11)),
-        ])),
-      Switch(
-        value: value, onChanged: onChanged,
-        activeColor: BrokaColors.gold,
-        trackColor: WidgetStateProperty.resolveWith((s) =>
-          s.contains(WidgetState.selected)
-              ? BrokaColors.gold.withOpacity(0.3)
-              : BrokaColors.border),
-        thumbColor: WidgetStateProperty.resolveWith((s) =>
-          s.contains(WidgetState.selected)
-              ? BrokaColors.gold : BrokaColors.textLow),
-      ),
-    ]),
-  );
-
-
-
-  Widget _buildLanguagePicker() {
-    const langs = [
-      ('english', 'English',   '🇬🇧'),
-      ('swahili', 'Kiswahili', '🇰🇪'),
-      ('luo',     'Dholuo',    '🟡'),
-      ('kikuyu',  'Kikuyu',    '🟤'),
-      ('luganda', 'Luganda',   '🇺🇬'),
-      ('sheng',   'Sheng',     '🔥'),
-    ];
-    final current = ApiService.currentUserLanguage;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
-            begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BrokaColors.border),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
-          Icon(Icons.language_rounded,
-              color: BrokaColors.gold, size: 18),
-          SizedBox(width: 12),
-          Text('Language', style: TextStyle(
-              color: BrokaColors.textHigh, fontSize: 14,
-              fontWeight: FontWeight.w600)),
-          Spacer(),
-          Text('AI + Voice', style: TextStyle(
-              color: BrokaColors.textLow, fontSize: 11)),
+  Widget _stat(String value, String label) => Expanded(
+        child: Column(children: [
+          Text(value,
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 2),
+          Text(label, style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
         ]),
-        const SizedBox(height: 12),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          for (final (key, name, flag) in langs)
-            GestureDetector(
-              onTap: () async {
-                await ApiService.setLanguage(key);
-                if (mounted) setState(() {});
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: current == key
-                      ? BrokaColors.gold.withOpacity(0.2)
-                      : BrokaColors.bgCard,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: current == key
-                        ? BrokaColors.gold : BrokaColors.border,
-                    width: current == key ? 1.5 : 1,
-                  ),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(flag, style: const TextStyle(fontSize: 13)),
-                  const SizedBox(width: 5),
-                  Text(name, style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: current == key
-                          ? FontWeight.w700 : FontWeight.w500,
-                      color: current == key
-                          ? Colors.white : BrokaColors.textMid)),
-                ]),
-              ),
-            ),
-        ]),
-      ]),
-    );
-  }
+      );
 
-  Widget _buildNavTile(IconData icon, String label, VoidCallback onTap) =>
-    Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
-            begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BrokaColors.border),
-      ),
-      child: ListTile(
-        onTap: onTap,
-        leading: Icon(icon, color: BrokaColors.gold, size: 18),
-        title: Text(label, style: const TextStyle(color: BrokaColors.textHigh,
-            fontSize: 14, fontWeight: FontWeight.w600)),
-        trailing: const Icon(Icons.chevron_right_rounded,
-            color: BrokaColors.textLow, size: 20),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12)),
-      ),
-    );
-
-  Widget _buildSellerDashboardTile() {
-    final isSeller = ApiService.currentUserAccountType == 'buyer_seller';
-    return GestureDetector(
-    onTap: () => Navigator.pushNamed(
-      context,
-      isSeller ? '/seller-dashboard' : '/become-seller',
-    ).then((_) { if (mounted) _loadProfile(); }),
-    child: Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [
-          BrokaColors.gold.withOpacity(0.12),
-          BrokaColors.neonBlue.withOpacity(0.08),
-        ], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-            color: BrokaColors.gold.withOpacity(0.45), width: 1.5),
-        boxShadow: [BoxShadow(
-            color: BrokaColors.gold.withOpacity(0.10), blurRadius: 16)],
-      ),
-      child: Row(children: [
-        Container(
-          width: 44, height: 44,
-          decoration: BoxDecoration(
-            color: BrokaColors.gold.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(isSeller ? Icons.dashboard_rounded : Icons.storefront_rounded,
-              color: BrokaColors.gold, size: 22),
-        ),
-        const SizedBox(width: 14),
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(isSeller ? 'Seller Dashboard' : 'Become a Seller', style: const TextStyle(
-              color: BrokaColors.textHigh,
-              fontSize: 15, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 3),
-          Text(
-            isSeller
-                ? 'Analytics, Zeno tips, scores & boost'
-                : 'List and sell your own products on BROKA',
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
-          ),
-        ])),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(isSeller ? 'Open' : 'Start',
-              style: const TextStyle(color: Colors.white,
-                  fontSize: 11, fontWeight: FontWeight.w800)),
-        ),
-      ]),
-    ),
-  );
-  }
-
-  Widget _buildSignOutButton() => GradientButton(
-    colors: const [BrokaColors.danger, Color(0xFF8B0000)],
-    onPressed: _confirmSignOut,
-    child: const Text('Sign Out', style: TextStyle(
-        fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
-  );
-
-  void _showComingSoon(String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('$feature coming soon!'),
-      backgroundColor: BrokaColors.bgCard,
-    ));
-  }
-
-  void _confirmSignOut() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: BrokaColors.bgCard,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Sign Out?', style: TextStyle(
-            color: BrokaColors.textHigh, fontWeight: FontWeight.w800)),
-        content: const Text('You will need to log in again.',
-            style: TextStyle(color: BrokaColors.textMid)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(color: BrokaColors.textMid)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              GlobalPollerService.instance.stop();
-              await ApiService.clearSession();
-              if (mounted) {
-                Navigator.pushNamedAndRemoveUntil(
-                    context, '/auth', (_) => false);
-              }
-            },
-            child: const Text('Sign Out',
-                style: TextStyle(color: BrokaColors.danger,
-                    fontWeight: FontWeight.w800)),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _detail(IconData icon, String label, String value, {Widget? badge}) => MenuTile(
+        icon: icon,
+        title: value,
+        subtitle: label,
+        trailing: badge,
+      );
 }

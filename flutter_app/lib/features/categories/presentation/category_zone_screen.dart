@@ -18,6 +18,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../main.dart';
+import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
@@ -40,8 +41,13 @@ class CategoryZoneScreen extends StatefulWidget {
 }
 
 class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
+  // 'newest' is the backend's ranking (seller trust, completion rate,
+  // freshness), not a date order - it was labelled "Most Recent", so the one
+  // order that sounded chronological wasn't. 'recent' is strictly newest
+  // first. The default stays the ranking, under an honest name.
   static const _sortOptions = {
-    'newest': 'Most Recent',
+    'newest': 'Top ranked',
+    'recent': 'Most Recent',
     'price_low': 'Price: Low to High',
     'price_high': 'Price: High to Low',
   };
@@ -133,9 +139,14 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
 
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 450), () {
-      if (mounted) setState(() { _search = value.trim(); _resultCount = null; });
-    });
+    _searchDebounce = Timer(const Duration(milliseconds: 450), () => _applySearch(value));
+  }
+
+  /// Pressing search, or clearing the field, shouldn't wait out the debounce.
+  void _applySearch(String value) {
+    _searchDebounce?.cancel();
+    if (!mounted || value.trim() == _search) return;
+    setState(() { _search = value.trim(); _resultCount = null; });
   }
 
   /// FilterBottomSheet stores everything (condition, price, and every
@@ -157,7 +168,14 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
     return out;
   }
 
+  /// Everything the feed depends on. The grid is keyed on it, and a page only
+  /// updates the result count if it is still the feed on screen - otherwise a
+  /// slow answer for "sam" could label the results for "samsung".
+  String get _feedKey =>
+      '${widget.categoryId}|$_subcategoryId|$_search|$_sort|${_appliedFilters['condition']}|${_appliedFilters['minPrice']}|${_appliedFilters['maxPrice']}|${_categoryAttributes.toString()}';
+
   Future<List<dynamic>> _fetchPage(int page) async {
+    final feed = _feedKey;
     final result = await listingsRepository.getListingsPage(
       categoryId: widget.categoryId,
       subcategoryId: _subcategoryId,
@@ -170,15 +188,19 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
       limit: 20,
       offset: page * 20,
     );
-    return result.fold<List<BrokaListing>>(
-      onSuccess: (data) {
-        if (mounted && _resultCount != data.total) {
+    // A failure is thrown, not turned into an empty page: as an empty page a
+    // dropped connection read "No Electronics listings yet - try adjusting
+    // your filters", and ended pagination for good. ProductGridView shows a
+    // thrown error with a Retry button.
+    switch (result) {
+      case Success(:final data):
+        if (mounted && feed == _feedKey && _resultCount != data.total) {
           setState(() => _resultCount = data.total);
         }
         return data.items;
-      },
-      onFailure: (_, __) => <BrokaListing>[],
-    );
+      case Failure(:final message):
+        throw ZoneFeedFailure(message);
+    }
   }
 
   @override
@@ -252,8 +274,7 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                     // ProductGridView loads once in initState with no public
                     // reload method, so re-key on everything that should
                     // trigger a refetch (same approach as home_screen.dart).
-                    key: ValueKey(
-                        '${widget.categoryId}|$_subcategoryId|$_search|$_sort|${_appliedFilters['condition']}|${_appliedFilters['minPrice']}|${_appliedFilters['maxPrice']}|${_categoryAttributes.toString()}'),
+                    key: ValueKey(_feedKey),
                     sliver: true,
                     controller: _gridController,
                     // The same 16px page gutter as the header, search, rail
@@ -289,60 +310,20 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
     );
   }
 
-  /// Home's search control, with the Zone's own placeholder. The previous
-  /// version used BrokaColors.textLow for the hint on a bgCard field, which
-  /// is roughly 1.4:1 - the placeholder was the one piece of text telling the
-  /// user what the field searched, and it was invisible.
-  Widget _buildSearchBar() {
-    final narrow = _narrow;
-    final height = narrow ? 42.0 : 44.0;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
-      child: Container(
-        height: height,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.86),
-          borderRadius: BorderRadius.circular(height / 2),
-          border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
+  /// The Zone's search box. BrokaSearchField rather than a copy of Home's
+  /// header pill: at 42px with 13px text the pill was too small to read back
+  /// what had been typed. The placeholder still names the category the user
+  /// is in.
+  Widget _buildSearchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+        child: BrokaSearchField(
+          controller: _searchCtrl,
+          hintText: 'Search in ${widget.categoryName ?? 'this category'}...',
+          onChanged: _onSearchChanged,
+          onSubmitted: _applySearch,
+          onCleared: () => _applySearch(''),
         ),
-        child: Row(children: [
-          const Icon(Icons.search_rounded, size: 18, color: BrokaColors.textMid),
-          const SizedBox(width: 9),
-          Expanded(
-            child: TextField(
-              controller: _searchCtrl,
-              style: TextStyle(
-                  color: BrokaColors.textHigh, fontSize: narrow ? 12.5 : 13),
-              onChanged: _onSearchChanged,
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Search in ${widget.categoryName ?? 'this category'}...',
-                hintStyle: TextStyle(
-                    color: BrokaColors.textMid, fontSize: narrow ? 12 : 12.5),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-          if (_searchCtrl.text.isNotEmpty)
-            GestureDetector(
-              onTap: () {
-                _searchCtrl.clear();
-                _onSearchChanged('');
-                setState(() {});
-              },
-              behavior: HitTestBehavior.opaque,
-              child: const Padding(
-                padding: EdgeInsets.only(left: 6),
-                child: Icon(Icons.close_rounded,
-                    color: BrokaColors.textMid, size: 17),
-              ),
-            ),
-        ]),
-      ),
-    );
-  }
+      );
 
   /// Readable but secondary (brief §9). Was textLow on both halves, which put
   /// the result count - the one number telling you whether your filters found
@@ -484,3 +465,11 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
       );
 }
 
+/// A Zone feed page that failed to load, thrown so ProductGridView shows its
+/// retry state rather than the empty state.
+class ZoneFeedFailure implements Exception {
+  ZoneFeedFailure(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}

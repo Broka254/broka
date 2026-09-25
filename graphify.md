@@ -217,7 +217,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
 | GET | `/traders` | public | `list_traders` (backend/api/domains/traders/router.py:15) |
-| GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:28) |
+| GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:33) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
 | POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:47) |
 | GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:133) |
@@ -380,6 +380,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 - `secrets_crypto.py` — BROKA — At-Rest Secret Encryption
 - `sms.py` — BROKA v6.2 - SMS Provider (phone OTP delivery)
 - `stats_cache.py` — BROKA - Generic Stats Cache
+- `text_search.py` — What a typed search box means to a query.
 - `timeutil.py` — One rule for timestamps that come from outside: store them as naive UTC.
 - `tracing.py` — BROKA Platform - Distributed Tracing ════════════════════════════════════════════════════════════════════════════════ OpenTelemetry-based d…
 - `trader_specialization_subscribers.py` — Increments user_specializations on every new listing, so a seller's specializations are derived from what they actually sell (Ch.5), not se…
@@ -481,14 +482,14 @@ of a change.
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, ledger, workers; database, security
 - **escrow** — core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, reconciliation, secrets_crypto; database, security
-- **listings** — domains: auctions, categories, escrow, media, trust; core: config, events, rate_limit, timeutil; database, security
+- **listings** — domains: auctions, categories, escrow, media, trust; core: config, events, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — nothing outside itself
 - **reviews** — core: audit, events; database, security
 - **showcase** — domains: media; core: config, fal_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit; database, security
-- **traders** — database
+- **traders** — core: text_search; database
 - **trending** — domains: listings; database
 - **trust** — domains: listings; database
 - **users** — nothing outside itself
@@ -529,7 +530,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-69 files in `backend/tests/`.
+70 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -585,6 +586,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_repo_map.py` — scripts/graphify.py - the repository map CI keeps up to date (graphify.md).
 - `test_response_time.py` — Response-time measurement (domains/trust/response_time).
 - `test_route_ordering.py` — POST /negotiate/chat must be served by the legacy negotiate.free_chat.
+- `test_search.py` — BROKA - Search Tests (listings and traders) Run: pytest backend/tests/test_search.py -v
 - `test_seller_advice.py` — Seller advice cards (domains/trust/seller_advice).
 - `test_seller_rating.py` — Overall Rating (Design Journal Vol.8 §3.2/§3.3, Part XVI).
 - `test_seller_signup.py` — Signup-time seller categorisation.
@@ -623,16 +625,17 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/inbox` | `InboxScreen` |
 | `/listing-insights` | `ListingAnalyticsScreen` |
 | `/listing-map` | `ListingMapScreen` |
+| `/menu` | `MenuScreen` |
 | `/mpesa-confirm` | `MpesaConfirmationScreen` |
 | `/negotiate` | `NegotiateScreen` |
 | `/product` | `ProductScreen` |
 | `/profile` | `ProfileScreen` |
 | `/receipt-history` | `ReceiptHistoryScreen` |
 | `/review` | `ReviewScreen` |
-| `/search` | `SearchScreen` |
 | `/selfie` | `SelfieCameraScreen` |
 | `/sell` | `SellPhotosScreen` |
 | `/seller-dashboard` | `SellerDashboardScreen` |
+| `/settings` | `SettingsScreen` |
 | `/splash` | `SplashScreen` |
 | `/store-explainer` | `StoreExplainerScreen` |
 | `/store-manage` | `MyStoreScreen` |
@@ -643,6 +646,11 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/voip-call` | `VoipCallScreen` |
 | `/zeno` | `ZenoScreen` |
 | `/zeno-insights` | `ZenoInsightsScreen` |
+
+### `flutter_app/lib/features/account/`
+
+- `data/repositories/account_repository.dart` — The signed-in account: reading it and changing its settings.
+- `domain/models/my_account.dart` — The signed-in account, as GET /auth/me returns it - what the Menu, Profile and Settings screens show.
 
 ### `flutter_app/lib/features/ai_broker/`
 
@@ -713,6 +721,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_launched_screen.dart` — "Your store is live" - the end of store setup: the link, its QR code, one-tap sharing, and the next thing to do (add products).
 - `presentation/store_list_screen.dart` — BROKA — Store discovery (spec §12/§21, Phase 4) 1-column list, modeled directly on trader_list_screen.dart - same reasoning applies: Produc…
 - `presentation/store_media_image.dart` — BROKA — Store media image (Phase 6 hardening)
+- `presentation/widgets/menu_store_section.dart` — The Menu's "Online store" section.
 - `presentation/widgets/store_share_card.dart` — The store's link, its QR code and one-tap sharing - on the "your store is live" screen and at the top of My Store.
 
 ### `flutter_app/lib/features/traders/`
@@ -755,6 +764,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `realtime_stt.dart` — lib/services/realtime_stt.dart
 - `realtime_stt_manager.dart` — lib/services/realtime_stt_manager.dart
 - `ringtone_service.dart` — BROKA - Ringtone Service
+- `search_history.dart` — Home's recent listing searches, kept on the phone.
 - `sell_draft_store.dart` — BROKA - Sell Draft Store
 - `sell_photo_store.dart` — Where the sell wizard keeps its photos until the listing is published.
 - `sell_wizard_data.dart` — BROKA - Sell Wizard Data
@@ -782,6 +792,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/widgets/`
 
 - `broka_image.dart` — One widget for every image the backend sends, whatever shape it is in.
+- `broka_search_field.dart` — The search box inside a screen: the Category Zones ("Electronics Zone"), Traders and Stores.
 - `chat_ambient_background.dart` — BROKA — Ambient constellation background for conversation screens
 - `collapsing_screen_header.dart` — lib/widgets/collapsing_screen_header.dart
 - `constellation_background.dart` — BROKA — Constellation Background
@@ -792,6 +803,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `gradient_button.dart` — BROKA — Gradient Button Shared primary-action button used across auth, sell, profile, and inbox screens.
 - `lighting_coach.dart` — BROKA — Lighting coach for the selfie scan.
 - `list_picker.dart` — A searchable list in a bottom sheet, and the form field that opens one.
+- `menu_tiles.dart` — The building blocks of the Menu and Settings screens: a section label, a card that groups rows, and the row itself.
 - `message_receipt.dart` — BROKA - Message receipt indicator
 - `motion_widgets.dart` — BROKA — motion primitives
 - `otp_code_field.dart` — BROKA — 6-digit OTP entry.
@@ -815,9 +827,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `seller_insights.dart` — BROKA — seller insights
 
-### `flutter_app/lib/screens/` (44 files)
+### `flutter_app/lib/screens/` (46 files)
 
-`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `become_seller_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `buyer_tips_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `search_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `splash_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
+`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `become_seller_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `buyer_tips_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
 
 ### Tests (`flutter_app/test/`)
 
@@ -828,6 +840,8 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
 - `incoming_call_notification_test.dart` — The incoming-call notification's Accept and Decline.
 - `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
+- `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
+- `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
@@ -901,7 +915,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Hardening after the 2026-09-25 review; Postgres in CI; repository map (2026-09-25)
+- `CHANGES.md` — Home search is listings only; Trader search; the Menu (2026-09-25)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

@@ -1,3 +1,93 @@
+# Home search is listings only; Trader search; the Menu (2026-09-25)
+
+Every bug fix has a regression test that failed on the old code (the
+search and feed tests were run against the old Home in a separate
+worktree; each failed for the bug it names).
+
+## Home search: listings only
+
+Home's search box used a `SearchDelegate` that searched listings and
+traders together. It is now `ListingSearchScreen`
+(`flutter_app/lib/screens/listing_search_screen.dart`), listings only, on
+the constellation background. Bugs in the old search:
+
+- **The keyboard closed mid-word.** Every live search ended in
+  `showResults()`, which unfocuses the field; tapping the field to carry on
+  searched again and closed it again.
+- **Old answers replaced new ones.** A slow response for "ip" overwrote the
+  results for "iphone". Each query is now its own grid.
+- **Half-typed words filled the history** ("iph", "ipho"...). Only a
+  submitted search, or one whose result was opened, is remembered
+  (`services/search_history.dart`), and duplicates differing only by case
+  are merged.
+- **"Clear" didn't clear** the recent searches on screen.
+- **A failed request read "No listings for ..."**; it now offers a retry.
+- **Every keystroke called `/auth/search`**, which returns whole user
+  records - email and phone included.
+- Results are paginated, counted, and sortable (best match, newest, price).
+
+Server side (`api/core/text_search.py`): every word of a search must match,
+in any order, in the title, category or description ("samsung a54" finds
+"Galaxy A54 (Samsung)"); title matches come first in the default order;
+`%` and `_` are no longer wildcards (a search for "_" matched every
+listing). The location filter escapes them too.
+
+## Trader search
+
+On the Traders screen, through `GET /traders?search=` (business or display
+name, never email or phone; at most 100 characters). The unreachable
+`/search` "Find Traders" screen, which used `/auth/search`, is removed.
+
+## Home feed
+
+- The untouched price slider sent `max_price=5000000`, hiding every car,
+  plot and house above KES 5M. Its top end now means "any price".
+- A failed page showed "No listings yet - be the first to post!" and ended
+  pagination; it now shows a retry. Same in the Category Zones.
+- Featured listings were pinned above a price sort; only the default order
+  pins them now.
+- "Newest" sent the ranked order. Relabelled "Top ranked", and "Newest" is
+  the real newest-first order (the Zones' "Most Recent" had the same bug).
+- A stray Seller Dashboard button sat inside the location filter dialog.
+- The filter button shows a dot while any filter applies; the panel has
+  "Reset filters".
+
+## Category Zones, Traders, Stores: a search box you can read
+
+`widgets/broka_search_field.dart`: 50-54px tall with 16px text (was 42-44px
+and 13px). A Zone's result count can no longer be set by a previous
+search's slower answer.
+
+## The Menu (was the Profile tab)
+
+`screens/menu_screen.dart`: a profile card (active listings, deals,
+rating), Selling (Seller Dashboard or Become a seller), Online store
+(`features/stores/presentation/widgets/menu_store_section.dart`: status,
+link, products, 7-day visits and shares, Manage / Preview / Share; or what
+a store is and how to open one - shown to buyers too, as the setup wizard
+takes them), Account (Settings, payment receipts, help) and Sign out.
+
+- **Profile** (`screens/profile_screen.dart`) is just the profile now. Its
+  "Listings" and "Traded" figures read fields `/auth/me` never sent - always
+  0; Listings is the real active count and Traded is gone. A profile photo
+  stored as a BROKA image URL crashed the screen (`base64Decode` of a URL).
+  A rating shows "New" until a deal is rated.
+- **Settings** (`screens/settings_screen.dart`): language, location
+  visibility (it always opened as ON, whatever the account said; a failed
+  change is now undone and explained), notifications (opens the phone's
+  settings - the old switch did nothing), startup sound, and **sign out of
+  all devices** (`POST /auth/token/revoke-all`). The "Dark mode" and "coming
+  soon" rows are gone.
+- **Sign-out revokes the refresh token on the server** - it used to only
+  forget it on the phone.
+
+## Found, not fixed
+
+- `GET /auth/search` and `GET /auth/user/{id}` return any user's email,
+  phone number, trust score and flags to any signed-in user. The app no
+  longer calls `/auth/search`, but the endpoints still answer; they should
+  return only public fields to anyone but the account itself.
+
 # Hardening after the 2026-09-25 review; Postgres in CI; repository map (2026-09-25)
 
 Every item has a regression test that failed on the old code. The full

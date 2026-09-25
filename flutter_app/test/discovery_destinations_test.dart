@@ -319,6 +319,62 @@ void main() {
     });
   });
 
+  group('Trader search', () {
+    testWidgets('reaches /traders and reports no matches', (tester) async {
+      final requested = <Uri>[];
+      setFakeRoute((uri) {
+        if (uri.path.startsWith('/traders')) {
+          requested.add(uri);
+          if (uri.queryParameters['search'] == 'nobody') return <Object?>[];
+        }
+        return null;
+      });
+
+      await tester.pumpWidget(host(const TraderListScreen()));
+      await _settle(tester);
+      expect(find.text('Trader 0'), findsOneWidget);
+      expect(find.text('Search traders by name'), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('trader-search-field')), 'nobody');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await _settle(tester);
+
+      expect(requested.last.queryParameters['search'], 'nobody');
+      expect(find.text('No traders match "nobody"'), findsOneWidget);
+      // Never the user directory, which returns email and phone.
+      expect(requested.where((u) => u.path.contains('/auth/search')), isEmpty);
+    });
+
+    testWidgets('types live, and an older answer cannot replace a newer one',
+        (tester) async {
+      setFakeRoute((uri) {
+        if (!uri.path.startsWith('/traders')) return null;
+        final q = uri.queryParameters['search'];
+        if (q == 'gr') {
+          return FakeResponse([fakeTraderJson(1)..['business_name'] = 'Slow Greta'],
+              delay: const Duration(seconds: 2));
+        }
+        if (q == 'grace') return [fakeTraderJson(2)..['business_name'] = 'Grace Stores'];
+        return null;
+      });
+      await tester.pumpWidget(host(const TraderListScreen()));
+      await _settle(tester);
+
+      final field = find.byKey(const Key('trader-search-field'));
+      await tester.enterText(field, 'gr');
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.enterText(field, 'grace');
+      await tester.pump(const Duration(milliseconds: 500));
+      await _settle(tester);
+      expect(find.text('Grace Stores'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 3));
+      await _settle(tester);
+      expect(find.text('Grace Stores'), findsOneWidget);
+      expect(find.text('Slow Greta'), findsNothing);
+    });
+  });
+
   group('Stores', () {
     testWidgets('search reaches the backend and reports no matches',
         (tester) async {

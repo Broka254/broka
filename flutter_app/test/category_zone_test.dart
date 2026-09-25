@@ -287,6 +287,35 @@ void main() {
       expect(find.byType(BottomSheet), findsOneWidget);
     });
 
+    testWidgets('the search field is big enough to read back what was typed',
+        (tester) async {
+      await tester.pumpWidget(zone('Electronics'));
+      await _settle(tester);
+
+      final field = find
+          .ancestor(of: find.byIcon(Icons.search_rounded), matching: find.byType(Container))
+          .first;
+      // Was a 44px pill with 13px text - reported as too small to see what
+      // had been typed.
+      expect(tester.getSize(field).height, greaterThanOrEqualTo(50));
+      final style = tester.widget<TextField>(find.byType(TextField)).style!;
+      expect(style.fontSize, greaterThanOrEqualTo(15));
+
+      await tester.enterText(find.byType(TextField), 'samsung');
+      await tester.pump();
+      expect(find.text('samsung'), findsOneWidget);
+    });
+
+    testWidgets('a feed that fails to load offers a retry, not an empty zone',
+        (tester) async {
+      setFakeRoute((uri) =>
+          uri.path.startsWith('/listings') ? const FakeResponse.error() : null);
+      await tester.pumpWidget(zone('Electronics'));
+      await _settle(tester);
+      expect(find.text("Couldn't load listings"), findsOneWidget);
+      expect(find.textContaining('No Electronics listings'), findsNothing);
+    });
+
     testWidgets('search reaches the backend as a search param', (tester) async {
       final requested = <Uri>[];
       setFakeRoute((uri) {

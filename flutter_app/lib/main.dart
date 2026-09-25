@@ -13,6 +13,8 @@ import 'screens/sell_photos_screen.dart';
 import 'screens/broker_screen.dart';
 import 'screens/auction_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/menu_screen.dart';
+import 'screens/settings_screen.dart';
 import 'screens/inbox_screen.dart';
 import 'screens/negotiation_screen.dart';
 import 'screens/negotiate_screen.dart';
@@ -27,7 +29,6 @@ import 'screens/zeno_insights_screen.dart';
 import 'screens/listing_map_screen.dart';
 import 'screens/selfie_camera_screen.dart';
 import 'screens/user_profile_screen.dart';
-import 'screens/search_screen.dart';
 import 'screens/seller_dashboard_screen.dart';
 import 'screens/become_seller_screen.dart';
 import 'screens/mpesa_confirmation_screen.dart';
@@ -533,7 +534,10 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/auction':          (ctx) => AuctionScreen(
               listingId: ModalRoute.of(ctx)?.settings.arguments as String?,
             ),
+        // The bottom nav's fifth tab. Profile and Settings open from it.
+        '/menu':             (_) => const MenuScreen(),
         '/profile':          (_) => const ProfileScreen(),
+        '/settings':         (_) => const SettingsScreen(),
         '/inbox':            (_) => const InboxScreen(),
         '/negotiate':        (_) => const NegotiateScreen(),
         '/direct-chat':      (_) => const NegotiationScreen(),
@@ -548,7 +552,6 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/store-explainer':  (_) => const StoreExplainerScreen(),
         '/selfie':           (_) => const SelfieCameraScreen(),
         '/user-profile':     (_) => const UserProfileScreen(),
-        '/search':           (_) => const SearchScreen(),
         '/seller-dashboard': (_) => const SellerDashboardScreen(),
         '/become-seller':    (_) => const BecomeSellerScreen(),
         '/mpesa-confirm':    (_) => const MpesaConfirmationScreen(),

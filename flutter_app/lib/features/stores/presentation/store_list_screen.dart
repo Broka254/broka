@@ -18,6 +18,7 @@
 import 'package:flutter/material.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
+import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../discovery/domain/destination_visual.dart';
@@ -61,8 +62,6 @@ class _StoreListScreenState extends State<StoreListScreen> {
   static const _visual = DestinationVisuals.stores;
 
   final _scrollController = ScrollController();
-
-  bool get _narrow => MediaQuery.sizeOf(context).width < 360;
 
   @override
   Widget build(BuildContext context) {
@@ -119,61 +118,19 @@ class _StoreListScreenState extends State<StoreListScreen> {
     );
   }
 
-  /// Home's search pill. The previous field used BrokaColors.textLow for its
-  /// hint on a bgCard fill - about 1.4:1, so "Search stores" was the one
-  /// piece of text explaining the control and it could not be read.
-  Widget _searchBar() {
-    final narrow = _narrow;
-    final height = narrow ? 42.0 : 44.0;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
-      child: Container(
-        height: height,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.86),
-          borderRadius: BorderRadius.circular(height / 2),
-          border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
+  /// The same search field as the Category Zones and Traders (see
+  /// widgets/broka_search_field.dart) - the old 44px pill with 13px text was
+  /// too small to read back what had been typed.
+  Widget _searchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+        child: BrokaSearchField(
+          controller: _searchCtrl,
+          hintText: 'Search stores',
+          onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => _load(),
+          onCleared: _load,
         ),
-        child: Row(children: [
-          const Icon(Icons.search_rounded, size: 18, color: BrokaColors.textMid),
-          const SizedBox(width: 9),
-          Expanded(
-            child: TextField(
-              controller: _searchCtrl,
-              style: TextStyle(
-                  color: BrokaColors.textHigh, fontSize: narrow ? 12.5 : 13),
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _load(),
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Search stores',
-                hintStyle: TextStyle(
-                    color: BrokaColors.textMid, fontSize: narrow ? 12 : 12.5),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-          if (_searchCtrl.text.isNotEmpty)
-            GestureDetector(
-              onTap: () {
-                _searchCtrl.clear();
-                _load();
-                setState(() {});
-              },
-              behavior: HitTestBehavior.opaque,
-              child: const Padding(
-                padding: EdgeInsets.only(left: 6),
-                child: Icon(Icons.close_rounded,
-                    color: BrokaColors.textMid, size: 17),
-              ),
-            ),
-        ]),
-      ),
-    );
-  }
+      );
 
   List<Widget> _bodySlivers() {
     if (_loading) {

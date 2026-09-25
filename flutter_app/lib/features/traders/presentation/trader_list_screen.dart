@@ -14,11 +14,21 @@
 // registry's own blue identity instead of a flat AppBar that shared nothing
 // with the rail pill that opens it. `embedded` still returns a bare body with
 // no Scaffold, unchanged, for a caller that wants to host the list itself.
-import 'package:flutter/material.dart';
+//
+// Trader search lives here (2026-09-25). Home's search box used to search
+// listings and traders together, through /auth/search - an endpoint that
+// returns whole user records, email and phone included. Home searches
+// listings only now; finding a trader is this screen's job, through
+// GET /traders?search=, which matches names and returns only what a trader
+// card shows.
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/material.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
 import '../../../services/api_service.dart';
+import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../discovery/domain/destination_visual.dart';
@@ -44,23 +54,47 @@ class _TraderListScreenState extends State<TraderListScreen> {
   bool _loading = true;
   String? _error;
 
+  final _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+
+  /// The search the list below is for (the field's text once it settles).
+  String _search = '';
+
+  /// Bumped on every load, so only the newest request may fill the list - a
+  /// slow answer for "gr" must not replace the one for "grace".
+  int _generation = 0;
+
   @override
   void initState() {
     super.initState();
     _load();
   }
 
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () => _applySearch(value));
+  }
+
+  void _applySearch(String value) {
+    _searchDebounce?.cancel();
+    if (!mounted || value.trim() == _search) return;
+    _search = value.trim();
+    _load();
+  }
+
   Future<void> _load() async {
+    final generation = ++_generation;
     setState(() {
       _loading = true;
       _error = null;
     });
     final result = await tradersRepository.list(
       categoryId: widget.categoryId,
+      search: _search,
       lat: ApiService.currentUserLat,
       lng: ApiService.currentUserLng,
     );
-    if (!mounted) return;
+    if (!mounted || generation != _generation) return;
     result.fold(
       onSuccess: (data) => setState(() {
         _traders
@@ -81,6 +115,8 @@ class _TraderListScreenState extends State<TraderListScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _searchCtrl.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -114,6 +150,7 @@ class _TraderListScreenState extends State<TraderListScreen> {
               child: CustomScrollView(
                 controller: _scrollController,
                 physics: const AlwaysScrollableScrollPhysics(),
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                 slivers: [
                   SliverPersistentHeader(
                     pinned: true,
@@ -129,6 +166,7 @@ class _TraderListScreenState extends State<TraderListScreen> {
                           .toDouble(),
                     ),
                   ),
+                  SliverToBoxAdapter(child: _searchBar()),
                   ..._bodySlivers(),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
                 ],
@@ -139,6 +177,18 @@ class _TraderListScreenState extends State<TraderListScreen> {
       ),
     );
   }
+
+  Widget _searchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+        child: BrokaSearchField(
+          fieldKey: const Key('trader-search-field'),
+          controller: _searchCtrl,
+          hintText: 'Search traders by name',
+          onChanged: _onSearchChanged,
+          onSubmitted: _applySearch,
+          onCleared: () => _applySearch(''),
+        ),
+      );
 
   /// The pre-existing embedded mode: just the list, for a caller that brings
   /// its own Scaffold and scroll view. Kept working exactly as before.
@@ -195,20 +245,32 @@ class _TraderListScreenState extends State<TraderListScreen> {
     ];
   }
 
-  Widget _stateCard() => _error != null
-      ? BrokaEmptyState(
-          emoji: '📡',
-          gradient: _visual.gradient,
-          headline: "Couldn't load traders",
-          body: _error!,
-          action: OutlinedButton(onPressed: _load, child: const Text('Retry')),
-        )
-      : BrokaEmptyState(
-          emoji: _visual.emoji,
-          gradient: _visual.gradient,
-          headline: _visual.emptyHeadline,
-          body: _visual.emptyBody,
-        );
+  Widget _stateCard() {
+    if (_error != null) {
+      return BrokaEmptyState(
+        emoji: '📡',
+        gradient: _visual.gradient,
+        headline: "Couldn't load traders",
+        body: _error!,
+        action: OutlinedButton(onPressed: _load, child: const Text('Retry')),
+      );
+    }
+    if (_search.isNotEmpty) {
+      return BrokaEmptyState(
+        emoji: _visual.emoji,
+        gradient: _visual.gradient,
+        headline: 'No traders match "$_search"',
+        body: 'Try part of the name, or check the spelling. Traders appear '
+            'here once they have completed a deal on BROKA.',
+      );
+    }
+    return BrokaEmptyState(
+      emoji: _visual.emoji,
+      gradient: _visual.gradient,
+      headline: _visual.emptyHeadline,
+      body: _visual.emptyBody,
+    );
+  }
 
   Widget _card(int i) => _TraderCard(
         trader: _traders[i],

@@ -30,7 +30,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../core/utils/result.dart';
 import '../utils/backend_time.dart';
 import '../main.dart';
@@ -41,7 +40,6 @@ import '../utils/price_format.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/product_grid_view.dart';
 import '../widgets/zeno_avatar.dart';
-import '../widgets/product_card.dart';
 import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/models/category.dart';
 import '../features/categories/domain/category_visual.dart';
@@ -53,6 +51,7 @@ import 'zeno_screen.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/domain/models/buy_agent_request.dart';
 import 'ai_assistant_screen.dart';
+import 'listing_search_screen.dart';
 import '../features/traders/presentation/trader_list_screen.dart';
 import '../features/stores/presentation/store_list_screen.dart';
 import '../features/listings/domain/models/listing.dart' show BrokaListing;
@@ -84,13 +83,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // and await it.
   final ProductGridController _feedController = ProductGridController();
 
-  // Search history
-  List<String> _searchHistory = [];
-
   // Filters. _priceFilter drives the slider UI live; _committedPriceFilter
   // is what the grid actually fetches against, updated only when the user
   // releases the slider so dragging doesn't refetch on every frame (matches
   // the old _loadListings-on-onChangeEnd behaviour).
+  //
+  // The slider's top end means "no limit", not "KES 5,000,000": it used to be
+  // sent as max_price on every request, so with no filter touched Home hid
+  // every car, plot and house priced above five million.
   final double _maxPrice = 5000000;
   double _priceFilter = 5000000;
   double _committedPriceFilter = 5000000;
@@ -136,7 +136,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     {'icon': Icons.inbox_outlined,         'label': 'Inbox'},
     {'icon': Icons.add_circle_outline,     'label': 'Sell'},
     {'icon': Icons.auto_awesome_rounded,   'label': 'Zeno'},
-    {'icon': Icons.person_outline_rounded, 'label': 'Profile'},
+    {'icon': Icons.menu_rounded,           'label': 'Menu'},
   ];
 
   String get _greeting {
@@ -174,7 +174,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // longer triggers detection on its own. It should be wired to an
     // explicit call site (e.g. an opt-in "near me" filter) if and when
     // Home grows a feature that genuinely needs it.
-    _loadSearchHistory();
     _loadTopCategories();
     // _loadTrending()/_loadLiveAuctions() removed (home-redesign brief
     // round 2, 2026-08-17): Home no longer renders a Trending grid or a
@@ -221,31 +220,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   final ScrollController _railScrollController = ScrollController();
-
-  // ── Search History ────────────────────────────────────────────────────────
-
-  Future<void> _loadSearchHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList('search_history') ?? [];
-    if (mounted) setState(() => _searchHistory = list);
-  }
-
-  Future<void> _addSearchHistory(String query) async {
-    if (query.trim().isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList('search_history') ?? [];
-    list.remove(query);
-    list.insert(0, query);
-    if (list.length > 10) list.removeRange(10, list.length);
-    await prefs.setStringList('search_history', list);
-    if (mounted) setState(() => _searchHistory = list);
-  }
-
-  Future<void> _clearSearchHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('search_history');
-    if (mounted) setState(() => _searchHistory = []);
-  }
 
   // ── Category carousel ─────────────────────────────────────────────────────
 
@@ -377,7 +351,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // explicitly NOT a new Home section or grid. This is the entire
       // "minimum Store entry point" the spec asks for on Home; the fuller
       // entry point is a listing's own store badge (ProductCard) or
-      // Profile once you own a store.
+      // the Menu's Online store section once you own a store.
       _RailItem(
         emoji: DestinationVisuals.stores.emoji,
         label: DestinationVisuals.stores.label,
@@ -621,14 +595,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final result = await listingsRepository.getListings(
       limit: 20,
       offset: page * 20,
-      maxPrice: _committedPriceFilter,
+      maxPrice: _priceLimited ? _committedPriceFilter : null,
       condition: _conditionFilter,
       sort: _sortFilter,
       location: _locationFilter,
       lat: ApiService.currentUserLat,
       lng: ApiService.currentUserLng,
     );
-    final data = result.fold(onSuccess: (items) => items, onFailure: (_, __) => <BrokaListing>[]);
+    // A failure is thrown, not turned into an empty page. As an empty page it
+    // showed "No listings yet - be the first to post!" to anyone offline, and
+    // an empty page 2 also told the grid there was nothing more to load, so a
+    // dropped request ended the feed for good. ProductGridView shows a
+    // thrown error with a Retry button.
+    final data = switch (result) {
+      Success(:final data) => data,
+      Failure(:final message) => throw HomeFeedFailure(message),
+    };
+    // Every order but the default is one the buyer picked - price, newest -
+    // and pinning featured listings above it broke that order on every page
+    // ("low to high" opened on a boosted KES 80,000 phone).
+    if (_sortFilter != null) return data;
     // Pin featured listings to the top of each fetched page
     final now = DateTime.now().toUtc();
     final sorted = List<BrokaListing>.from(data)..sort((a, b) {
@@ -793,7 +779,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   static const List<String> _navReasons = [
     '', 'to see your messages', 'to sell something', 'to chat with Zeno',
-    'to view your profile',
+    'to open your menu',
   ];
 
   Future<void> _onNav(int i) async {
@@ -801,29 +787,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       setState(() => _navIndex = 0);
       return;
     }
-    // v6.1: guests can browse Home freely, but Inbox/Sell/Zeno/Profile all
+    // v6.1: guests can browse Home freely, but Inbox/Sell/Zeno/Menu all
     // require an account. requireAuth resumes straight into the tapped
     // destination on success instead of dropping back to Home.
     final authed = await requireAuth(context, reason: _navReasons[i]);
     if (!authed) return;
     if (!mounted) return;
     setState(() => _navIndex = i);
-    final routes = ['', '/inbox', '/sell', '/zeno', '/profile'];
+    final routes = ['', '/inbox', '/sell', '/zeno', '/menu'];
     Navigator.pushNamed(context, routes[i]).then((_) {
       if (mounted) setState(() { _navIndex = 0; _feedRefreshNonce++; });
     });
   }
 
+  // Listings only. Finding a trader is the Traders screen's search - see
+  // listing_search_screen.dart's header for what the old search did wrong.
   void _openSearch() {
-    showSearch(
-      context: context,
-      delegate: _ListingSearchDelegate(
-        history: _searchHistory,
-        onSearch: (q) => _addSearchHistory(q),
-        onClearHistory: _clearSearchHistory,
-      ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ListingSearchScreen()),
     );
   }
+
+  /// Whether the price slider is below its top end - the only time it is a
+  /// filter at all (see _maxPrice).
+  bool get _priceLimited => _committedPriceFilter < _maxPrice;
+
+  /// Any filter narrowing the feed, so the header can say so while the panel
+  /// is closed. Without it, a condition picked yesterday silently hid most of
+  /// the marketplace with nothing on screen to explain why.
+  bool get _filtersActive =>
+      _priceLimited ||
+      _locationFilter != null ||
+      _conditionFilter != null ||
+      _sortFilter != null;
+
+  void _resetFilters() => setState(() {
+        _priceFilter = _maxPrice;
+        _committedPriceFilter = _maxPrice;
+        _locationFilter = null;
+        _conditionFilter = null;
+        _sortFilter = null;
+      });
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
@@ -875,6 +880,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   delegate: _HomeHeaderDelegate(
                     greeting: _greetingText,
                     filtersOpen: _showFilters,
+                    filtersActive: _filtersActive,
                     onToggleFilters: _toggleFilters,
                     onOpenSearch: _openSearch,
                     narrow: narrow,
@@ -1033,8 +1039,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         const Text('Max Price', style: TextStyle(
             color: BrokaColors.textMid, fontSize: 12, fontWeight: FontWeight.w600)),
         const Spacer(),
-        Text(_formatPrice(_priceFilter), style: const TextStyle(
-            color: BrokaColors.neonGreen, fontSize: 12, fontWeight: FontWeight.w700)),
+        Text(_priceFilter >= _maxPrice ? 'Any price' : _formatPrice(_priceFilter),
+            style: const TextStyle(
+                color: BrokaColors.neonGreen, fontSize: 12, fontWeight: FontWeight.w700)),
       ]),
       SliderTheme(
         data: SliderThemeData(
@@ -1054,10 +1061,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
       ),
       Row(children: [
-        const Text('KES 0', style: TextStyle(color: BrokaColors.textLow, fontSize: 10)),
+        const Text('KES 0', style: TextStyle(color: BrokaColors.textMid, fontSize: 10)),
         const Spacer(),
-        Text(_formatPrice(_maxPrice),
-            style: const TextStyle(color: BrokaColors.textLow, fontSize: 10)),
+        Text('${_formatPrice(_maxPrice)}+',
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
       ]),
       const SizedBox(height: 8),
       Row(children: [
@@ -1131,14 +1138,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           dropdownColor: BrokaColors.bgCard,
           underline: const SizedBox.shrink(),
           style: const TextStyle(color: BrokaColors.neonBlue, fontSize: 12, fontWeight: FontWeight.w600),
+          // null is the backend's ranking (seller trust, completion rate,
+          // freshness - listings/service.py), which this used to label
+          // "Newest". Picking "Newest" therefore changed nothing; 'recent'
+          // is the backend's strictly-newest order.
           items: const [
-            DropdownMenuItem(value: null, child: Text('Newest')),
+            DropdownMenuItem(value: null, child: Text('Top ranked')),
+            DropdownMenuItem(value: 'recent', child: Text('Newest')),
             DropdownMenuItem(value: 'price_low', child: Text('Price: low to high')),
             DropdownMenuItem(value: 'price_high', child: Text('Price: high to low')),
           ],
           onChanged: (v) => setState(() => _sortFilter = v),
         ),
       ]),
+      if (_filtersActive)
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _resetFilters,
+            icon: const Icon(Icons.restart_alt_rounded, size: 16, color: BrokaColors.gold),
+            label: const Text('Reset filters',
+                style: TextStyle(color: BrokaColors.gold, fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ),
     ]),
   );
 
@@ -1197,17 +1219,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
         child: Row(children: [
           Text('🔥 ', style: TextStyle(fontSize: _narrow(context) ? 14 : 15)),
-          Text('Fresh on Broka',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  color: BrokaColors.textHigh,
-                  // Brief §5: 16-18px on a normal phone, stepped down rather
-                  // than ellipsised on a small one.
-                  fontSize: _narrow(context) ? 15.5 : 17,
-                  height: 1.1,
-                  letterSpacing: -0.2,
-                  fontWeight: FontWeight.w800)),
+          // Flexible, or the ellipsis below can never engage: a bare Text in
+          // a Row overflowed on a 320dp phone at a large text size.
+          Flexible(
+            child: Text('Fresh on Broka',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: BrokaColors.textHigh,
+                    // Brief §5: 16-18px on a normal phone, stepped down rather
+                    // than ellipsised on a small one.
+                    fontSize: _narrow(context) ? 15.5 : 17,
+                    height: 1.1,
+                    letterSpacing: -0.2,
+                    fontWeight: FontWeight.w800)),
+          ),
         ]),
       );
 
@@ -1302,7 +1328,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           final tint = selected ? BrokaColors.gold : BrokaColors.textMid;
           // Expanded, not spaceAround with intrinsically-sized children: five
           // items whose widths are set by their own labels add up to more
-          // than a 320dp row ("Profile" is the one that tips it over), and a
+          // than a 320dp row ("Profile", as it was, tipped it over), and a
           // Row has no way to give back the difference - it just overflows.
           // An even fifth each also means the whole column below an icon is
           // the tap target, not just the glyph.
@@ -1342,6 +1368,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
     )),
   );
+}
+
+/// A feed page that failed to load, thrown so ProductGridView shows its retry
+/// state instead of an empty marketplace.
+class HomeFeedFailure implements Exception {
+  HomeFeedFailure(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }
 
 // ── Location Filter Dialog ────────────────────────────────────────────────────
@@ -1385,11 +1420,6 @@ class _LocationFilterDialogState extends State<_LocationFilterDialog> {
         onSubmitted: (v) { widget.onSet(v.isEmpty ? null : v); Navigator.pop(context); },
       ),
       actions: [
-            IconButton(
-              tooltip: 'Seller Dashboard',
-              icon: const Icon(Icons.dashboard_rounded, color: BrokaColors.gold),
-              onPressed: () => Navigator.pushNamed(context, '/seller-dashboard'),
-            ),
         TextButton(
           onPressed: () { widget.onSet(null); Navigator.pop(context); },
           child: const Text('Clear', style: TextStyle(color: BrokaColors.textMid)),
@@ -1404,313 +1434,6 @@ class _LocationFilterDialogState extends State<_LocationFilterDialog> {
           child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.w700)),
         ),
       ],
-    );
-  }
-}
-
-// ── Search Delegate with History ──────────────────────────────────────────────
-// Heuristic-only, deliberately conservative: a plain product name ("iPhone
-// 13") should never get swept into this, only text that reads like a
-// buyer describing a specific need in their own words (Design v2 §4:
-// "Natural buying request -> Zeno intent extraction"). Length plus an
-// intent/budget signal word, or a 4+ digit number (a KES price mentioned
-// inline, e.g. "under 30000") is enough to *offer* the handoff - it never
-// blocks or replaces plain listing search, which still runs regardless.
-bool _looksLikeBuyingRequest(String q) {
-  final words = q.trim().split(RegExp(r'\s+'));
-  if (words.length < 5) return false;
-  final lower = q.toLowerCase();
-  const signals = [
-    'under', 'below', 'less than', 'around', 'budget', 'looking for',
-    'need a', 'need an', 'want a', 'want an', 'find me', 'within', 'near me',
-  ];
-  return signals.any((s) => lower.contains(s)) || RegExp(r'\d{4,}').hasMatch(q);
-}
-
-enum _SearchMode { listings, traders }
-
-class _ListingSearchDelegate extends SearchDelegate<String> {
-  final List<String> history;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onClearHistory;
-  // FIX (redesign-guide audit): this delegate is named/labelled as
-  // listing search ("Search listings, traders, locations...") but
-  // previously only ever called ApiService.searchUsers - product search
-  // from Home's search icon did not exist at all, despite both design
-  // docs calling out Home search as one of the most important elements
-  // and giving product-search examples explicitly. Now searches listings
-  // by default (the marketplace's actual primary content) with trader
-  // search kept one tap away via the mode toggle below, rather than
-  // removed.
-  _SearchMode _mode = _SearchMode.listings;
-  List<BrokaListing> _listingResults = [];
-  List<Map<String, dynamic>> _traderResults = [];
-  bool _loading = false;
-  Timer? _debounce;
-
-  _ListingSearchDelegate({
-    required this.history,
-    required this.onSearch,
-    required this.onClearHistory,
-  });
-
-  @override
-  String get searchFieldLabel => 'Search listings, traders, locations...';
-
-  @override
-  ThemeData appBarTheme(BuildContext context) => Theme.of(context).copyWith(
-    appBarTheme: const AppBarTheme(backgroundColor: BrokaColors.bgCard),
-    inputDecorationTheme: const InputDecorationTheme(
-        hintStyle: TextStyle(color: BrokaColors.textLow), border: InputBorder.none),
-    textTheme: const TextTheme(
-        titleLarge: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
-  );
-
-  @override
-  List<Widget> buildActions(BuildContext context) => [
-    if (query.isNotEmpty)
-      IconButton(icon: const Icon(Icons.clear, color: BrokaColors.textMid),
-          onPressed: () { query = ''; showSuggestions(context); }),
-  ];
-
-  @override
-  Widget buildLeading(BuildContext context) => IconButton(
-    icon: const Icon(Icons.arrow_back_ios_new_rounded,
-        color: BrokaColors.textMid, size: 18),
-    onPressed: () => close(context, ''));
-
-  @override
-  Widget buildResults(BuildContext context) {
-    onSearch(query);
-    return _buildBody(context);
-  }
-
-  @override
-  Widget buildSuggestions(BuildContext context) {
-    if (query.isEmpty) return _buildHistory(context);
-    _debounce?.cancel();
-    _loading = true;
-    _debounce = Timer(const Duration(milliseconds: 400), () async {
-      final q = query.trim();
-      try {
-        final results = await Future.wait([
-          listingsRepository.getListings(search: q, limit: 24),
-          ApiService.searchUsers(q),
-        ]);
-        final listingsResult = results[0] as Result<List<BrokaListing>>;
-        _listingResults = listingsResult.fold(
-          onSuccess: (items) => items, onFailure: (_, __) => <BrokaListing>[],
-        );
-        _traderResults = (results[1] as List).cast<Map<String, dynamic>>();
-      } catch (_) {
-        _listingResults = [];
-        _traderResults = [];
-      }
-      _loading = false;
-      // The search page can be closed while the requests are in flight;
-      // showResults on a dead context throws.
-      if (context.mounted) showResults(context);
-    });
-    return _buildBody(context);
-  }
-
-  Widget _buildHistory(BuildContext context) {
-    if (history.isEmpty) {
-      return Container(color: BrokaColors.bg,
-        child: const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.search_rounded, size: 48, color: BrokaColors.textLow),
-          SizedBox(height: 12),
-          Text('Search for listings, traders, or locations',
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 14),
-              textAlign: TextAlign.center),
-        ])));
-    }
-    return Container(color: BrokaColors.bg,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Row(children: [
-          const Text('RECENT SEARCHES', style: TextStyle(
-              color: BrokaColors.textLow, fontSize: 10,
-              fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-          const Spacer(),
-          GestureDetector(
-            onTap: () { onClearHistory(); showSuggestions(context); },
-            child: const Text('Clear', style: TextStyle(
-                color: BrokaColors.gold, fontSize: 12)),
-          ),
-        ]),
-      ),
-      Expanded(child: ListView.builder(
-        itemCount: history.length,
-        itemBuilder: (_, i) => ListTile(
-          leading: const Icon(Icons.history_rounded,
-              color: BrokaColors.textLow, size: 18),
-          title: Text(history[i], style: const TextStyle(
-              color: BrokaColors.textHigh, fontSize: 14)),
-          trailing: const Icon(Icons.north_west_rounded,
-              color: BrokaColors.textLow, size: 14),
-          onTap: () { query = history[i]; showResults(context); },
-        ),
-      )),
-    ]));
-  }
-
-  Widget _modeChip(BuildContext context, String label, _SearchMode mode, int count) {
-    final selected = _mode == mode;
-    return GestureDetector(
-      onTap: () { _mode = mode; showResults(context); },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected ? BrokaColors.neonBlue.withOpacity(0.18) : BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? BrokaColors.neonBlue : BrokaColors.border),
-        ),
-        child: Text(
-          count > 0 ? '$label ($count)' : label,
-          style: TextStyle(
-            color: selected ? BrokaColors.neonBlue : BrokaColors.textMid,
-            fontSize: 12.5, fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBody(BuildContext context) {
-    final trimmed = query.trim();
-    final showZenoBanner = trimmed.isNotEmpty && _looksLikeBuyingRequest(trimmed) && _mode == _SearchMode.listings;
-    return Container(
-      color: BrokaColors.bg,
-      child: Column(children: [
-        if (trimmed.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-            child: Row(children: [
-              _modeChip(context, 'Listings', _SearchMode.listings, _listingResults.length),
-              const SizedBox(width: 8),
-              _modeChip(context, 'Traders', _SearchMode.traders, _traderResults.length),
-            ]),
-          ),
-        if (showZenoBanner)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [
-                  BrokaColors.neonPurple.withOpacity(0.20),
-                  BrokaColors.neonBlue.withOpacity(0.12),
-                ]),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
-              ),
-              child: Row(children: [
-                const ZenoAvatar(size: 30, glow: true),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text('This sounds like a specific request — want Zeno to find and negotiate it for you?',
-                      style: TextStyle(color: BrokaColors.textHigh, fontSize: 12)),
-                ),
-                const SizedBox(width: 6),
-                TextButton(
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
-                  onPressed: () {
-                    close(context, '');
-                    Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => ZenoScreen(
-                        mode: ZenoMode.buyingAgent, initialQuery: trimmed),
-                    ));
-                  },
-                  child: const Text('Ask Zeno', style: TextStyle(
-                      color: BrokaColors.neonBlue, fontWeight: FontWeight.bold, fontSize: 12.5)),
-                ),
-              ]),
-            ),
-          ),
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.neonBlue))
-              : _mode == _SearchMode.listings
-                  ? _buildListingResults(context)
-                  : _buildTraderResults(context),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildListingResults(BuildContext context) {
-    if (_listingResults.isEmpty && query.isNotEmpty) {
-      return Center(child: Text('No listings for "$query"',
-          style: const TextStyle(color: BrokaColors.textMid)));
-    }
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: 0.68,
-      ),
-      itemCount: _listingResults.length,
-      itemBuilder: (_, i) {
-        final item = _listingResults[i];
-        return ProductCard(
-          item: item,
-          onTap: () {
-            close(context, item.id);
-            Navigator.pushNamed(context, '/product', arguments: {'listingId': item.id});
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildTraderResults(BuildContext context) {
-    if (_traderResults.isEmpty && query.isNotEmpty) {
-      return Center(child: Text('No traders for "$query"',
-          style: const TextStyle(color: BrokaColors.textMid)));
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _traderResults.length,
-      itemBuilder: (_, i) {
-        final u = _traderResults[i];
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
-            color: BrokaColors.bgCard,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: BrokaColors.border),
-          ),
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            leading: CircleAvatar(
-              backgroundColor: BrokaColors.gold.withOpacity(0.3),
-              backgroundImage: (u['profile_photo'] as String?)?.isNotEmpty == true
-                  ? MemoryImage(base64Decode(u['profile_photo'] as String))
-                  : null,
-              child: (u['profile_photo'] as String?)?.isNotEmpty == true
-                  ? null
-                  : Text((u['name'] as String? ?? '?')[0].toUpperCase(),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
-            title: Text(u['name'] ?? '', style: const TextStyle(
-                color: BrokaColors.textHigh, fontWeight: FontWeight.w700)),
-            subtitle: Row(children: [
-              const Icon(Icons.star_rounded, size: 12, color: BrokaColors.gold),
-              const SizedBox(width: 3),
-              Text('${(u['rating'] as num?)?.toStringAsFixed(1) ?? '5.0'}  · ${u['completed_deals'] ?? 0} deals',
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
-            ]),
-            trailing: u['is_verified'] == true
-                ? const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 18)
-                : null,
-            onTap: () {
-              close(context, u['id']?.toString() ?? '');
-              Navigator.pushNamed(context, '/user-profile',
-                  arguments: u['id']?.toString());
-            },
-          ),
-        );
-      },
     );
   }
 }
@@ -1809,6 +1532,7 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
   _HomeHeaderDelegate({
     required this.greeting,
     required this.filtersOpen,
+    this.filtersActive = false,
     required this.onToggleFilters,
     required this.onOpenSearch,
     required this.narrow,
@@ -1817,6 +1541,10 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   final String greeting;
   final bool filtersOpen;
+
+  /// A filter is narrowing the feed - shown as a dot on the filter button
+  /// even while the panel is closed.
+  final bool filtersActive;
   final VoidCallback onToggleFilters;
   final VoidCallback onOpenSearch;
 
@@ -2010,10 +1738,9 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
     );
   }
 
-  /// The sticky control. Tapping the field opens the same `showSearch`
-  /// delegate the old header's search button opened (history, listing/trader
-  /// modes, the Zeno handoff - all unchanged); the button beside it is the
-  /// same filter toggle, in the same active/inactive states it always had.
+  /// The sticky control. Tapping the field opens ListingSearchScreen -
+  /// listings only; traders are searched on the Traders screen. The button
+  /// beside it is the filter toggle, with a dot while any filter applies.
   Widget _searchRow(BuildContext context, double t) {
     final h = _lerp(_fieldHeight, _fieldHeight - 6, t);
     return Padding(
@@ -2037,9 +1764,7 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
-                    narrow
-                        ? 'Search products, sellers…'
-                        : 'Search for products, sellers or categories…',
+                    narrow ? 'Search listings…' : 'Search listings - phones, cars, land…',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -2065,8 +1790,27 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
               border: Border.all(
                   color: filtersOpen ? BrokaColors.gold : BrokaColors.border),
             ),
-            child: Icon(Icons.tune_rounded,
-                color: filtersOpen ? BrokaColors.gold : BrokaColors.textMid, size: 18),
+            child: Stack(clipBehavior: Clip.none, children: [
+              Center(
+                child: Icon(Icons.tune_rounded,
+                    color: filtersOpen || filtersActive
+                        ? BrokaColors.gold
+                        : BrokaColors.textMid,
+                    size: 18),
+              ),
+              if (filtersActive)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: Container(
+                    key: const Key('home-filters-active-dot'),
+                    width: 7,
+                    height: 7,
+                    decoration: const BoxDecoration(
+                        color: BrokaColors.gold, shape: BoxShape.circle),
+                  ),
+                ),
+            ]),
           ),
         ),
       ]),
@@ -2077,6 +1821,7 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(covariant _HomeHeaderDelegate old) =>
       old.greeting != greeting ||
       old.filtersOpen != filtersOpen ||
+      old.filtersActive != filtersActive ||
       old.narrow != narrow ||
       old.textScale != textScale ||
       old.onOpenSearch != onOpenSearch ||

@@ -7,6 +7,7 @@ import math
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.text_search import matches_all_terms, search_terms
 from api.database import User, UserSpecialization, Listing, Category
 
 
@@ -29,12 +30,19 @@ class TradersService:
         limit: int = 20,
         viewer_lat: float | None = None,
         viewer_lng: float | None = None,
+        search: str | None = None,
     ) -> list[dict]:
         query = select(User).where(User.completed_deals > 0)
         if category_id:
             query = query.join(UserSpecialization, UserSpecialization.user_id == User.id).where(
                 UserSpecialization.category_id == category_id
             )
+        terms = search_terms(search)
+        if terms:
+            # Every word in the name the card shows (business name, else the
+            # person's name) - the same word-by-word, wildcard-escaped match
+            # listing search uses.
+            query = query.where(matches_all_terms(terms, (User.business_name, User.name)))
         query = query.order_by(User.rating.desc()).limit(limit)
         users = (await self.db.execute(query)).scalars().all()
         if not users:

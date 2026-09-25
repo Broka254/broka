@@ -16,8 +16,24 @@ import 'dart:convert';
 import 'dart:io';
 
 /// Routes a request to a JSON body. Return null to fall through to the
-/// defaults in [defaultRoute].
+/// defaults in [defaultRoute], or a [FakeResponse] for a status other than
+/// 200 or an answer that takes time to arrive.
 typedef FakeRoute = Object? Function(Uri uri);
+
+/// A response with a chosen status and/or delay. [delay] runs on the test's
+/// clock, so `tester.pump(duration)` is what lets it arrive - which is how a
+/// test makes an older request answer after a newer one.
+class FakeResponse {
+  const FakeResponse(this.body, {this.statusCode = 200, this.delay = Duration.zero});
+
+  /// A server error with FastAPI's error shape.
+  const FakeResponse.error({this.statusCode = 500, this.delay = Duration.zero})
+      : body = const {'detail': 'Internal Server Error'};
+
+  final Object? body;
+  final int statusCode;
+  final Duration delay;
+}
 
 /// The handler consulted at REQUEST time, not at client-construction time.
 ///
@@ -162,9 +178,14 @@ class _FakeHttpOverrides extends HttpOverrides {
   HttpClient createHttpClient(SecurityContext? context) => _FakeHttpClient();
 }
 
-List<int> _encode(Uri uri) {
-  final body = _activeRoute?.call(uri) ?? defaultRoute(uri);
-  return utf8.encode(jsonEncode(body));
+Future<_FakeHttpClientResponse> _respond(Uri uri) async {
+  final routed = _activeRoute?.call(uri) ?? defaultRoute(uri);
+  if (routed is FakeResponse) {
+    if (routed.delay > Duration.zero) await Future<void>.delayed(routed.delay);
+    return _FakeHttpClientResponse(utf8.encode(jsonEncode(routed.body)),
+        statusCode: routed.statusCode);
+  }
+  return _FakeHttpClientResponse(utf8.encode(jsonEncode(routed)));
 }
 
 class _FakeHttpClient implements HttpClient {
@@ -222,8 +243,7 @@ class _FakeHttpClientRequest implements HttpClientRequest {
   }
 
   @override
-  Future<HttpClientResponse> close() async =>
-      _FakeHttpClientResponse(_encode(uri));
+  Future<HttpClientResponse> close() => _respond(uri);
 
   @override
   Future<HttpClientResponse> get done => close();
@@ -234,14 +254,14 @@ class _FakeHttpClientRequest implements HttpClientRequest {
 
 class _FakeHttpClientResponse extends Stream<List<int>>
     implements HttpClientResponse {
-  _FakeHttpClientResponse(this.body);
+  _FakeHttpClientResponse(this.body, {this.statusCode = 200});
 
   final List<int> body;
 
   @override
-  int get statusCode => 200;
+  final int statusCode;
   @override
-  String get reasonPhrase => 'OK';
+  String get reasonPhrase => statusCode == 200 ? 'OK' : 'Error';
   @override
   int get contentLength => body.length;
   @override

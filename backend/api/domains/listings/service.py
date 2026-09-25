@@ -15,6 +15,7 @@ from api.database import Listing, ListingStatus, ListingType, User, Interest, De
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
+from api.core.text_search import matches_all_terms, search_terms, term_matches
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
 from .validation import load_attributes
@@ -598,14 +599,21 @@ class ListingService:
             q = q.where(Listing.price >= min_price)
         if max_price is not None:
             q = q.where(Listing.price <= max_price)
-        if search:
-            q = q.where(Listing.name.ilike(f"%{search.strip()}%"))
-        if location:
+        # Every typed word must appear in the title, the category or the
+        # description - in any order (api/core/text_search.py). This was one
+        # ILIKE of the whole phrase against the title alone, so "samsung
+        # a54" never found "Galaxy A54 (Samsung)", a word only in the
+        # description found nothing, and "_" or "%" matched every listing.
+        terms = search_terms(search)
+        if terms:
+            q = q.where(matches_all_terms(
+                terms, (Listing.name, Listing.category, Listing.description)))
+        if location and location.strip():
             # Home's "All locations" filter (§2) - was wired to trigger a
             # refetch but never actually sent anywhere, so picking a
-            # location changed nothing. free-text match against
-            # location_name, same portable .ilike() as search above.
-            q = q.where(Listing.location_name.ilike(f"%{location.strip()}%"))
+            # location changed nothing. Free-text match against
+            # location_name, wildcards escaped like search above.
+            q = q.where(term_matches(location.strip().lower(), (Listing.location_name,)))
 
         if sort == "recent":
             q = q.order_by(desc(Listing.created_at))
@@ -656,7 +664,18 @@ class ListingService:
                 func.coalesce(SellerMetrics.rank_score, DEFAULT_RANK_SCORE_FOR_NEW_SELLER)
                 + (W_FRESHNESS * freshness_score)
             )
-            q = q.order_by(desc(Listing.is_featured), desc(combined_rank), desc(Listing.created_at))
+            order = [desc(Listing.is_featured), desc(combined_rank), desc(Listing.created_at)]
+            if terms:
+                # A search puts listings whose TITLE has every word first -
+                # "iphone 13" should lead with iPhone 13s, not with a charger
+                # whose description mentions one - and the usual ranking
+                # (featured, seller rank, freshness) orders within each half.
+                # Only for the default order: a price sort is what the buyer
+                # asked for and stays exactly that.
+                title_match = case(
+                    (matches_all_terms(terms, (Listing.name,)), 1), else_=0)
+                order.insert(0, desc(title_match))
+            q = q.order_by(*order)
 
         needs_post_filter = bool(attributes) or (max_km is not None and viewer_lat is not None and viewer_lng is not None)
 

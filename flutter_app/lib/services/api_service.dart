@@ -146,6 +146,36 @@ class ApiService {
     await SellDraftStore.clear();
   }
 
+  /// Signs this phone out: revokes its refresh token on the server, then
+  /// forgets the session here.
+  ///
+  /// Sign-out used to be clearSession() alone. The refresh token stayed valid
+  /// on the server for the rest of its life, so a copy lifted from the phone
+  /// (a backup, a rooted device) went on minting access tokens after the user
+  /// had signed out. Revoking is best effort - a phone with no signal still
+  /// signs out locally.
+  static Future<void> signOut() async {
+    final refreshToken = _refreshToken;
+    if (refreshToken != null) {
+      try {
+        await apiClient.post('/auth/token/revoke', {'refresh_token': refreshToken},
+            timeout: const Duration(seconds: 8));
+      } catch (_) {}
+    }
+    await clearSession();
+  }
+
+  /// Revokes every refresh token this account holds - every phone it is
+  /// signed in on - and then signs this one out. Unlike [signOut] this is not
+  /// best effort: if the server didn't confirm, nothing is cleared and the
+  /// error is rethrown, because "signed out everywhere" must not be claimed
+  /// for sessions that are still alive.
+  static Future<void> signOutEverywhere() async {
+    await apiClient.post('/auth/token/revoke-all', const <String, dynamic>{},
+        timeout: const Duration(seconds: 15));
+    await clearSession();
+  }
+
   static Future<void> setLanguage(String language) async {
     currentUserLanguage = language;
     final prefs = await SharedPreferences.getInstance();
