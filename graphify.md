@@ -811,6 +811,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `home_collapsing_scroll_test.dart` — Covers the Home collapsing-scroll architecture (2026-09-18 brief).
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
+- `incoming_call_notification_test.dart` — The incoming-call notification's Accept and Decline.
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
