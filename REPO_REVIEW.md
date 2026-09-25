@@ -14,6 +14,63 @@ layer; each repro was a throwaway test, not committed.
 
 ---
 
+## 0. Status after the fix pass (2026-09-25)
+
+Every finding below is fixed. Each fix has a regression test, and each
+test was run against the old code and failed there.
+
+| Check after the fixes | Result |
+|---|---|
+| Backend, SQLite + real Redis (CI configuration) | **1056 passed**, coverage **60.5%** (gate 50%); a second run against the same Redis passes too (§6) |
+| Backend, **PostgreSQL 16** (new CI job) | **1057 passed** |
+| Web | typecheck, lint, **51 tests**, build: all pass |
+| Flutter `analyze` / `test` | 0 errors, 0 warnings (21 infos, unchanged) / **228 passed** |
+
+**Fixed findings from this review**
+
+| Finding | Fix | Test file |
+|---|---|---|
+| §3 Password stored on the phone, backed up | Never written; any old copy deleted on start. Renewal uses the refresh token only; a refused token signs the user out to `/auth` with a message, while a network error keeps the session. `allowBackup="false"` plus Android 12+ data-extraction rules. | `session_renewal_test.dart` |
+| §4 Decompression-bomb header, backfill jam | Every Pillow failure becomes `ImageRejected` (422). The backfill skips a bad value, marks a failing row unconvertible and moves on; only a storage outage stops a pass. | `test_media_hardening.py` |
+| §5 Visit limit keyed on a caller-chosen id | Limited by user or real IP. At most 20 new visitors and 30 shares per caller per store per half hour. The web storefront forwards each visitor's address, authenticated by `STOREFRONT_API_KEY`. | `test_client_ip.py`, `routes.test.ts` |
+| §6 Global idempotency keys | Redis key = hash of user, method, path and client key. Keys over 200 characters are refused. | `test_idempotency.py` |
+| §7 IP limits behind Render | **Confirmed**: Render's `X-Forwarded-For` is `client, Cloudflare, Render proxy`, so the peer is Render's proxy. `api/core/client_ip.py` now resolves the address everywhere it is used (auth limits, audit IPs, calls, stores), from `CF-Connecting-IP` (default on Render), `TRUSTED_PROXY_HOPS`, or the storefront's authenticated header. `GET /admin/diagnostics/client-ip` shows the result. | `test_client_ip.py` |
+| §8 Legacy fields take any URL | Only inline images or the requester's own BROKA image URLs (400/403 otherwise), on stores, listings and profile photos. Old rows are filtered on the way out. The backfill turns the owner's own URLs back into their asset. | `test_media_hardening.py` |
+| §8 Unverified business email public | Returned only to the owner (create, update, status, `/stores/mine`). | `test_store_setup.py` |
+| §8 Paused store's product pages | Redirect to the store page, which shows the pause. | `page.test.tsx` |
+| §8 Uploads never cleaned up | Assets track whether anything ever used them. Uploads never attached are deleted after 7 days (compare-and-swap claim, retried on storage failure). Assets that existed before this are `legacy` and never touched. 300 uploads per user per day. | `test_media_cleanup.py` |
+
+**Found and fixed during the fix pass**
+
+| Bug | Impact | Test file |
+|---|---|---|
+| **Refresh-token row written with a timezone-aware expiry** | On PostgreSQL, which production runs, **every signup and login returned 500**. SQLite accepts it, so no test caught it. | `test_session_lifetime.py` |
+| **`audit_logs.actor_id` was a foreign key to users**, but sweeps and callbacks write `"system"` | On PostgreSQL every such row failed, and with it the transaction it belonged to: E-Confirm reconciliation couldn't mark a deal paid, payouts weren't recorded, timed dispute refunds failed. | 18 existing tests, now run on Postgres in CI |
+| **`auction_meta.deal_id` was a foreign key**, but a deal-creation retry claims the id before the deal exists | On PostgreSQL an auction winner whose deal failed to create the first time never got one. | `test_auction_lifecycle.py` on Postgres |
+| The whole backend suite only ever ran on SQLite | The three bugs above were invisible. | New CI job, `tests/postgres_plugin.py` |
+| Signup dropped the refresh token the server returned | New accounts could only be renewed with the stored password; without it they'd be signed out after 15 minutes. | `session_renewal_test.dart` |
+| Refresh tokens expired a fixed 30 days after sign-in | Hidden by the password re-login. Now sliding: a token older than 7 days is exchanged (the old one keeps working for 10 minutes, in case the response is lost). | `test_session_lifetime.py` |
+| A lost compare-and-swap in the backfill rolled the session back, and the next row's ORM access failed (`MissingGreenlet`) | One owner's edit during a pass stopped the pass. Rows are now read as plain columns. | `test_media_hardening.py` |
+| No request body limit anywhere | Any caller could make the API buffer a body of any size, including on public signup. Capped at `MAX_REQUEST_BODY_MB` (32), for both declared and chunked bodies. | `test_body_limit.py` |
+
+**For people and coding agents:** `AGENTS.md` (how to build, test and
+change things here, and the rules the code depends on), `CLAUDE.md` and
+`GEMINI.md` (which import it), and `graphify.md`, a repository map that
+`scripts/graphify.py` generates from the source and CI commits back to
+`main` when it changes.
+
+**Needs doing outside the code**
+
+1. Set `STOREFRONT_API_KEY` to the same 32+ character random value on Render
+   and in the Vercel project. Until then, web visit counts are limited by
+   Vercel's addresses (they work, but share buckets).
+2. After deploying, call `GET /admin/diagnostics/client-ip` from a phone on
+   mobile data. `source` should be `header` and `resolved` the phone's address.
+3. Still open from before: the 97% legacy refund policy, and E-Confirm
+   automation in the dispute flows.
+
+---
+
 ## 1. Baseline
 
 | Check | Result |

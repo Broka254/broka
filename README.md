@@ -17,7 +17,44 @@ Design notes live next to this file: `ARCHITECTURE.md`, `AUCTIONS.md`,
 `DISPUTE_AUDIT.md`, `AI_AUDIT.md`, `COMMUNICATIONS_AUDIT.md`,
 `REPO_REVIEW.md`).
 
+Working on the code: start with `AGENTS.md` (how to build, test and change
+things safely) and `graphify.md`, a map of the repository generated from
+the source - every endpoint with its auth and handler, every table, module
+summaries, app and web routes. CI regenerates it on every push to `main`.
+
 ---
+
+## Recent changes (2026-09-25)
+
+A hardening pass after the repository review (`REPO_REVIEW.md` has the
+details and the tests behind each item):
+
+- **Signup and login work on PostgreSQL.** The refresh-token row was
+  written with a timezone-aware expiry, which Postgres refuses: every
+  signup and login returned 500 there. Two foreign keys that couldn't hold
+  what their columns store are gone too: `"system"` audit rows (which took
+  E-Confirm payment updates down with them) and the auction deal claim.
+  CI now runs the whole backend suite on PostgreSQL as well as SQLite.
+- **Real client addresses behind Render.** Per-IP limits (login, signup,
+  OTP) keyed on Render's proxy, one bucket for every user. They now read
+  `CF-Connecting-IP` (`CLIENT_IP_HEADER`); the web storefront passes on its
+  visitors' addresses with `STOREFRONT_API_KEY`. Check it with
+  `GET /admin/diagnostics/client-ip`.
+- **The app no longer stores the account password**, and app data is
+  excluded from Android backups. Sessions renew with the refresh token only,
+  which now slides (renewed after a week of use); a refused one returns
+  the user to sign-in. Signup keeps its refresh token (it was dropped).
+- **Images:** an oversized image header is a 422, not a 500, and can no
+  longer stop the media backfill; legacy image fields accept only inline
+  images, never links elsewhere; uploads nothing used are removed after a
+  week; uploads are capped per day.
+- **Store counts** are limited by who is really calling, not a visitor id
+  the caller chooses; a paused store's product links go to the store page;
+  an unverified business email is shown only to the owner.
+- **Idempotency keys** are scoped to user and route; **request bodies**
+  are capped (32 MB).
+- **For coding agents:** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` and the
+  generated `graphify.md`.
 
 ## Recent changes (2026-09-24)
 
@@ -260,6 +297,17 @@ ENV=test SECRET_KEY=ci-test-secret-key-long-enough-for-testing-purposes \
 
 Leave out `REDIS_URL` to skip the handful of tests that need a real Redis.
 
+The same suite on PostgreSQL, as CI also runs it (production is Postgres,
+and SQLite neither enforces foreign keys nor refuses timezone-aware
+datetimes; each test module gets a fresh schema):
+
+```bash
+cd backend
+ENV=test SECRET_KEY=ci-test-secret-key-long-enough-for-testing-purposes \
+  POSTGRES_TEST_URL=postgresql+asyncpg://user:pass@localhost:5432/broka_test \
+  python -m pytest tests/ -o addopts="" -p tests.postgres_plugin
+```
+
 Flutter:
 
 ```bash
@@ -293,6 +341,8 @@ npm run typecheck && npm run lint && npm test && npm run build
 | `PUBLIC_API_BASE_URL` | Optional | This API's own URL, for absolute links to database-stored images |
 | `STORE_LINK_BASE` | Default `https://broka.co.ke/store` | Base of every store's shareable link, served by the web storefront. The API's own store page redirects there |
 | `REDIS_URL` | Strongly recommended | Rate limits and idempotency across instances, call state, the ARQ queue |
+| `CLIENT_IP_HEADER` | Default `CF-Connecting-IP` on Render | Where the caller's real address is, for per-IP rate limits. `TRUSTED_PROXY_HOPS` for hosts without such a header |
+| `STOREFRONT_API_KEY` | Production | 32+ random characters, the same value in the API and the web project: lets the storefront pass on its visitors' addresses |
 | `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |
 | `AT_*` or `MOBITECH_*` | For SMS | Phone OTP codes and SMS reminders |
@@ -379,7 +429,10 @@ Vercel project with Root Directory `web` and the domain `broka.co.ke`
 2. `ENV=production` and the required secrets in the table above. Startup
    checks them and refuses to run without them.
 3. Redis (Upstash's free tier is enough to start).
-4. An ARQ worker whenever `REDIS_URL` is set:
+4. `STOREFRONT_API_KEY`: the same random value on Render and in the Vercel
+   project. Then call `GET /admin/diagnostics/client-ip` from a phone on
+   mobile data: `resolved` should be that phone's address.
+5. An ARQ worker whenever `REDIS_URL` is set:
    `arq api.core.workers.WorkerSettings`. `render.yaml` doesn't define one
    yet, and without it queued trust-score jobs wait in Redis unprocessed.
 
@@ -390,8 +443,9 @@ Vercel project with Root Directory `web` and the domain `broka.co.ke`
 - CI (`.github/workflows/build.yml`) runs on every push to `main`: backend
   tests against Redis with the 50% coverage gate, then `flutter analyze`
   (errors only) and `flutter test`, then an APK build that replaces the `latest-release`
-  GitHub release. Alongside, a separate job typechecks, lints, tests and
-  builds `web/`. The APK is signed with the release key when the
+  GitHub release. Alongside, separate jobs run the backend suite on
+  PostgreSQL, typecheck, lint, test and build `web/`, and regenerate
+  `graphify.md` (committed back to `main` when it changed). The APK is signed with the release key when the
   `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`
   and `ANDROID_KEY_PASSWORD` secrets are set, and with the debug key
   otherwise. Store links only open the app directly (App Links) with the
