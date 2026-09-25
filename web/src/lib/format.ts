@@ -7,6 +7,13 @@ export function formatPrice(price: number): string {
   return `KES ${kes.format(Math.round(price))}`
 }
 
+/** "KES 3,500 / bag" when the price is for one unit (a listing's
+ *  price_unit), else the price alone - a per-bag price shown bare reads as
+ *  the price of the whole lot. */
+export function formatUnitPrice(price: number, unit: string | null | undefined): string {
+  return unit ? `${formatPrice(price)} / ${unit}` : formatPrice(price)
+}
+
 /** "Starehe, Nairobi" from whichever parts exist, or null. */
 export function placeLine(...parts: Array<string | null | undefined>): string | null {
   const seen = new Set<string>()

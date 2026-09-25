@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { filtersQuery, readFilters, toProductCard } from './catalogue'
 import { CATEGORIES, canonicalCategory, categoryVisual } from './categories'
 import { buildConstellation, MESH_COUNT, STAR_COUNT, seededRandom } from './constellation'
-import { clip, conditionLabel, formatPrice, placeLine, plural, yearOf } from './format'
+import { clip, conditionLabel, formatPrice, formatUnitPrice, placeLine, plural, yearOf } from './format'
 import { resolveImage, resolveSizes, srcSet } from './images'
 import { androidAppLink, previewImageUrl, productPath, storePath, viaTag } from './links'
 import type { Listing } from './types'
@@ -19,6 +19,8 @@ describe('format', () => {
   it('formats prices in shillings', () => {
     expect(formatPrice(18000)).toBe('KES 18,000')
     expect(formatPrice(1234567.6)).toBe('KES 1,234,568')
+    expect(formatUnitPrice(3500, 'bag')).toBe('KES 3,500 / bag')
+    expect(formatUnitPrice(3500, null)).toBe('KES 3,500')
   })
   it('joins places without blanks or repeats', () => {
     expect(placeLine('Starehe', null, 'Nairobi')).toBe('Starehe, Nairobi')
@@ -61,6 +63,10 @@ describe('categories', () => {
     expect(canonicalCategory('Gadgets')).toBeNull()
     expect(categoryVisual('GAMING').emoji).toBe('🎮')
     expect(categoryVisual('unknown').name).toBe('Other')
+  })
+  it('read the old name "Vehicles" as Automobiles', () => {
+    expect(canonicalCategory('Vehicles')).toBe('Automobiles')
+    expect(categoryVisual('vehicles').emoji).toBe('🚗')
   })
 })
 

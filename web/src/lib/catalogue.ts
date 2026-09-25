@@ -1,7 +1,7 @@
 // What the storefront's catalogue shows: filters read from the URL, and the
 // data a product card needs.
 import { canonicalCategory, categoryVisual } from './categories'
-import { formatPrice, placeLine } from './format'
+import { formatUnitPrice, placeLine } from './format'
 import { resolveImage, resolveSizes, srcSet } from './images'
 import { productPath } from './links'
 import type { Listing, SortKey } from './types'
@@ -61,7 +61,7 @@ export function toProductCard(listing: Listing, storeSlug: string, apiUrl: strin
   return {
     id: listing.id,
     name: listing.name,
-    priceLabel: formatPrice(listing.price),
+    priceLabel: formatUnitPrice(listing.price, listing.price_unit),
     href: productPath(storeSlug, listing.id),
     image: cover?.medium ?? resolveImage(legacy, apiUrl),
     imageSrcSet: cover ? srcSet(cover) : null,

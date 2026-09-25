@@ -3,7 +3,7 @@
 import 'server-only'
 
 import { categoryVisual } from './categories'
-import { clip, formatPrice, placeLine, plural } from './format'
+import { clip, formatUnitPrice, placeLine, plural } from './format'
 import { type ResolvedSizes, resolveImage, resolveSizes, srcSet } from './images'
 import { DEFAULT_PREVIEW_IMAGE, absoluteUrl, previewImageUrl, productPath, storePath } from './links'
 import { API_URL } from './server-config'
@@ -117,7 +117,7 @@ export function productView(listing: Listing, storeSlug: string): ProductView {
     path,
     url: absoluteUrl(path),
     available: listing.status === 'active',
-    priceLabel: formatPrice(listing.price),
+    priceLabel: formatUnitPrice(listing.price, listing.price_unit),
     images,
     emoji: categoryVisual(listing.category).emoji,
     place: placeLine(listing.location_subcounty, listing.location_county) ?? listing.location_name,

@@ -53,6 +53,8 @@ export interface Listing {
   name: string
   category: string
   price: number
+  /** What one unit of `price` is ("bag"); null when it's for the whole item. */
+  price_unit?: string | null
   status: string
   listing_type: string
   condition: string | null
