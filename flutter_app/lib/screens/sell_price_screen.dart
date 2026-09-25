@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/sell_wizard_data.dart';
+import '../utils/price_format.dart';
 import '../widgets/sell_step_scaffold.dart';
 import 'sell_location_screen.dart';
 
@@ -29,16 +30,46 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
   @override
   void initState() {
     super.initState();
-    _priceCtrl = TextEditingController(text: widget.data.price);
-    _reserveCtrl = TextEditingController(text: widget.data.reserve);
+    _priceCtrl = TextEditingController(text: _grouped(widget.data.price));
+    _reserveCtrl = TextEditingController(text: _grouped(widget.data.reserve));
     _incrementCtrl = TextEditingController(
         text: widget.data.minBidIncrement.isNotEmpty
-            ? widget.data.minBidIncrement
-            : _defaultIncrement.toStringAsFixed(0));
+            ? _grouped(widget.data.minBidIncrement)
+            : formatKesAmount(_defaultIncrement));
     // Pre-fill a sensible window rather than making the seller pick two
-    // datetimes before they can continue.
-    widget.data.auctionStartsAt ??= DateTime.now();
-    widget.data.auctionEndsAt ??= DateTime.now().add(_defaultDuration);
+    // datetimes before they can continue. A restored draft's window may
+    // already be over - an auction that closed before it opened - so that
+    // one is replaced too, and a start in the past just means "now".
+    final now = DateTime.now();
+    final endsAt = widget.data.auctionEndsAt;
+    if (endsAt == null || !endsAt.isAfter(now)) {
+      widget.data.auctionStartsAt = now;
+      widget.data.auctionEndsAt = now.add(_defaultDuration);
+    } else if (widget.data.auctionStartsAt == null ||
+        widget.data.auctionStartsAt!.isBefore(now)) {
+      widget.data.auctionStartsAt = now;
+    }
+  }
+
+  /// A stored amount ("2500000") as the field shows it ("2,500,000").
+  static String _grouped(String amount) {
+    final value = parseKesInput(amount);
+    return value == null ? '' : formatKesAmount(value);
+  }
+
+  /// A field's text as the wizard stores it: plain digits.
+  static String _digits(TextEditingController c) =>
+      c.text.replaceAll(RegExp(r'[^0-9]'), '');
+
+  /// Keeps the draft current as the seller types. The debounced save used
+  /// to run before anything was copied into the draft - only Next did
+  /// that - so a price typed and then lost to the app being closed was
+  /// never saved at all.
+  void _onEdited() {
+    widget.data.price = _digits(_priceCtrl);
+    widget.data.reserve = _digits(_reserveCtrl);
+    widget.data.minBidIncrement = _digits(_incrementCtrl);
+    _scheduleSave();
   }
 
   @override
@@ -54,11 +85,14 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
     final current = isStart
         ? (widget.data.auctionStartsAt ?? DateTime.now())
         : (widget.data.auctionEndsAt ?? DateTime.now().add(_defaultDuration));
+    // From today: yesterday used to be offered, and an auction set to
+    // close then was over before it began.
+    final today = DateUtils.dateOnly(DateTime.now());
     final date = await showDatePicker(
       context: context,
-      initialDate: current,
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: current.isBefore(today) ? today : current,
+      firstDate: today,
+      lastDate: today.add(const Duration(days: 365)),
     );
     if (date == null || !mounted) return;
     final time = await showTimePicker(
@@ -94,9 +128,14 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
   }
 
   void _next() {
-    final price = double.tryParse(_priceCtrl.text.trim());
+    final price = parseKesInput(_priceCtrl.text);
     if (price == null || price <= 0) {
       setState(() => _error = 'Enter a valid asking price.');
+      return;
+    }
+    if (price > maxListingPriceKes) {
+      setState(() => _error = "The price can't be more than "
+          '${formatKes(maxListingPriceKes)} - the most BROKA can hold in escrow for one deal.');
       return;
     }
 
@@ -105,14 +144,14 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
     // now rather than after tapping Activate, not because the client is
     // trusted with it.
     if (widget.data.type == 'auction') {
-      final increment = double.tryParse(_incrementCtrl.text.trim());
+      final increment = parseKesInput(_incrementCtrl.text);
       if (increment == null || increment <= 0) {
         setState(() => _error = 'Enter a minimum bid increment above zero.');
         return;
       }
       final reserveText = _reserveCtrl.text.trim();
       if (reserveText.isNotEmpty) {
-        final reserve = double.tryParse(reserveText);
+        final reserve = parseKesInput(reserveText);
         if (reserve == null || reserve <= 0) {
           setState(() => _error = 'A reserve price must be above zero, or left empty.');
           return;
@@ -133,11 +172,15 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
         setState(() => _error = 'The auction must close after it opens.');
         return;
       }
-      widget.data.minBidIncrement = _incrementCtrl.text.trim();
+      if (!endsAt.isAfter(DateTime.now())) {
+        setState(() => _error = 'That closing time has already passed. Choose a later one.');
+        return;
+      }
     }
 
-    widget.data.price = _priceCtrl.text;
-    widget.data.reserve = _reserveCtrl.text;
+    widget.data.price = _digits(_priceCtrl);
+    widget.data.reserve = _digits(_reserveCtrl);
+    widget.data.minBidIncrement = _digits(_incrementCtrl);
     setState(() => _error = null);
     unawaited(widget.data.persist());
     Navigator.push(context, MaterialPageRoute(
@@ -158,9 +201,10 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
         TextFormField(
           controller: _priceCtrl,
           keyboardType: TextInputType.number,
+          inputFormatters: const [KesInputFormatter()],
           style: const TextStyle(color: BrokaColors.gold, fontWeight: FontWeight.w800),
-          decoration: const InputDecoration(hintText: 'e.g. 2500000'),
-          onChanged: (_) => _scheduleSave(),
+          decoration: const InputDecoration(hintText: 'e.g. 2,500,000'),
+          onChanged: (_) => _onEdited(),
         ),
 
         if (isAuction) ...[
@@ -170,10 +214,11 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
           TextFormField(
             controller: _incrementCtrl,
             keyboardType: TextInputType.number,
+            inputFormatters: const [KesInputFormatter()],
             style: const TextStyle(color: BrokaColors.textHigh),
             decoration: const InputDecoration(
                 hintText: 'How much each bid must raise it by'),
-            onChanged: (_) => _scheduleSave(),
+            onChanged: (_) => _onEdited(),
           ),
 
           const SizedBox(height: 20),
@@ -182,10 +227,11 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
           TextFormField(
             controller: _reserveCtrl,
             keyboardType: TextInputType.number,
+            inputFormatters: const [KesInputFormatter()],
             style: const TextStyle(color: BrokaColors.textHigh),
             decoration: const InputDecoration(
                 hintText: 'Lowest price you would accept'),
-            onChanged: (_) => _scheduleSave(),
+            onChanged: (_) => _onEdited(),
           ),
           const SizedBox(height: 6),
           const Text(

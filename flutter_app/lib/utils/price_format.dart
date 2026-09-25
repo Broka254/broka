@@ -12,6 +12,8 @@
 // down (see ProductCard's FittedBox) instead of shortening the number.
 library;
 
+import 'package:flutter/services.dart';
+
 /// Groups [v] with commas and no decimals: 1500000 -> "1,500,000".
 ///
 /// Fractional cents are rounded away deliberately - no listing in this app
@@ -30,3 +32,38 @@ String formatKesAmount(num v) {
 
 /// The same number with the currency prefix: 15000 -> "KES 15,000".
 String formatKes(num v) => 'KES ${formatKesAmount(v)}';
+
+/// The highest price a listing may have: what BROKA can hold in escrow for
+/// one deal. The server refuses more (MAX_PRICE_KES in
+/// backend/api/domains/listings/validation.py); the sell wizard says so
+/// before the seller gets that far.
+const maxListingPriceKes = 20000000;
+
+/// What a seller typed into an amount field, as a number: "2,500,000" ->
+/// 2500000. Null for empty or unreadable text - and for "NaN" and
+/// "Infinity", which double.tryParse accepts and JSON can't carry.
+double? parseKesInput(String text) {
+  final value = double.tryParse(text.replaceAll(RegExp(r'[,\s]'), ''));
+  return value != null && value.isFinite ? value : null;
+}
+
+/// Whole shillings, grouped as they're typed: "2500000" shows as
+/// "2,500,000". Digits only, so there's nothing to mistype - a price used
+/// to accept "2,500,000" nowhere and "NaN" everywhere.
+class KesInputFormatter extends TextInputFormatter {
+  const KesInputFormatter({this.maxDigits = 9});
+
+  final int maxDigits;
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    var digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length > maxDigits) return oldValue;
+    digits = digits.replaceFirst(RegExp(r'^0+(?=[0-9])'), '');
+    final text = digits.isEmpty ? '' : formatKesAmount(int.parse(digits));
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+}

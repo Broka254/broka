@@ -61,10 +61,16 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
           controller: _descCtrl,
           maxLines: 8,
           minLines: 5,
+          maxLength: SellWizardData.maxDescriptionLength,
+          textCapitalization: TextCapitalization.sentences,
           style: const TextStyle(color: BrokaColors.textHigh),
           decoration: const InputDecoration(
               hintText: 'Condition, features, reason for selling...'),
-          onChanged: (_) => _scheduleSave(),
+          // Into the draft as typed - see SellBasicsScreen's name field.
+          onChanged: (v) {
+            widget.data.description = v.trim();
+            _scheduleSave();
+          },
         ),
       ]),
     );

@@ -175,9 +175,16 @@ class _SellBasicsScreenState extends State<SellBasicsScreen> {
         const SizedBox(height: 8),
         TextFormField(
           controller: _nameCtrl,
+          maxLength: SellWizardData.maxNameLength,
+          textCapitalization: TextCapitalization.sentences,
           style: const TextStyle(color: BrokaColors.textHigh),
           decoration: const InputDecoration(hintText: 'e.g. Toyota Land Cruiser 2018'),
-          onChanged: (_) => _scheduleSave(),
+          // Into the draft as typed, not only on Next: the debounced save
+          // used to write a draft that didn't have the name in it yet.
+          onChanged: (v) {
+            widget.data.name = v.trim();
+            _scheduleSave();
+          },
         ),
         const SizedBox(height: 20),
 

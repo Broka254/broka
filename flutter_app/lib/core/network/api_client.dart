@@ -11,7 +11,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ApiException implements Exception {
   final int statusCode;
   final String message;
-  const ApiException(this.statusCode, this.message);
+
+  /// Why, in a form code can compare, when the server says: its
+  /// X-Error-Code header, or the `code` of a structured `detail`
+  /// ({"code": "AUCTION_TERMS_LOCKED", "message": ...}).
+  final String? code;
+
+  const ApiException(this.statusCode, this.message, {this.code});
   @override
   String toString() => 'ApiException($statusCode): $message';
 }
@@ -100,15 +106,18 @@ class ApiClient {
     return _handleResponse(response);
   }
 
+  /// [headers] are sent as well as the auth headers - an
+  /// X-Idempotency-Key, say.
   Future<dynamic> post(
     String path,
     dynamic body, {
     Duration timeout = const Duration(seconds: 60),
+    Map<String, String>? headers,
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
     final response = await _send(
       () => _http
-          .post(uri, headers: _headers, body: jsonEncode(body))
+          .post(uri, headers: {..._headers, ...?headers}, body: jsonEncode(body))
           .timeout(timeout),
     );
     return _handleResponse(response);
@@ -200,14 +209,41 @@ class ApiClient {
     }
 
     String message = 'Request failed';
+    String? code = response.headers['x-error-code'];
     try {
       final decoded = jsonDecode(response.body);
-      message = decoded['detail'] ?? decoded['message'] ?? message;
+      final detail = decoded is Map ? (decoded['detail'] ?? decoded['message']) : null;
+      // `detail` comes in three shapes, and only the first used to be
+      // read: the other two landed in the catch below, and the user was
+      // shown the raw JSON of the response.
+      if (detail is String) {
+        message = detail;
+      } else if (detail is Map) {
+        message = detail['message'] as String? ?? message;
+        code ??= detail['code'] as String?;
+      } else if (detail is List && detail.isNotEmpty) {
+        message = validationMessage(detail.first);
+      }
     } catch (_) {
       message = response.body.isNotEmpty ? response.body : message;
     }
 
-    throw ApiException(response.statusCode, message);
+    throw ApiException(response.statusCode, message, code: code);
+  }
+
+  /// One of FastAPI's 422 errors ({"loc": ["body", "price"], "msg": ...})
+  /// as a line to show. BROKA's own messages are sentences written for the
+  /// user and shown as they are; the framework's generic ones ("Input
+  /// should be greater than 0") are prefixed with the field they're about.
+  static String validationMessage(dynamic error) {
+    if (error is! Map) return 'Request failed';
+    final msg = error['msg'] as String? ?? 'Invalid value';
+    if (msg.endsWith('.')) return msg;
+    final loc = error['loc'];
+    final field = loc is List && loc.isNotEmpty ? loc.last.toString() : '';
+    if (field.isEmpty || field == 'body') return msg;
+    final label = field.replaceAll('_', ' ');
+    return '${label[0].toUpperCase()}${label.substring(1)}: $msg';
   }
 
   String get baseUrl => _baseUrl;

@@ -22,6 +22,7 @@ import 'package:image_picker/image_picker.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/sell_wizard_data.dart';
+import '../utils/price_format.dart';
 import '../widgets/sell_step_scaffold.dart';
 import '../widgets/gradient_button.dart';
 import 'sell_review_screen.dart';
@@ -69,7 +70,12 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> {
   Future<void> _pickFromGallery() async {
     setState(() { _pickingGallery = true; _error = null; });
     try {
-      final xfile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+      // Bounded like every other picked image: a full-size gallery photo
+      // can pass the server's 10 MB upload limit and fail only at Activate,
+      // and nothing larger than 1600 px is ever stored.
+      final xfile = await _picker.pickImage(
+        source: ImageSource.gallery, imageQuality: 85, maxWidth: 2048, maxHeight: 2048,
+      );
       if (xfile == null) return; // user cancelled
       final dataUri = await _fileToDataUri(File(xfile.path));
       if (dataUri == null) {
@@ -77,8 +83,7 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> {
         return;
       }
       setState(() {
-        widget.data.showcaseImageDataUri = dataUri;
-        widget.data.showcaseImageSource = 'gallery';
+        widget.data.setShowcase(dataUri, 'gallery');
         _previewDataUri = null;
       });
     } finally {
@@ -95,12 +100,13 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> {
         setState(() => _error = "Couldn't read your product photo - please try again.");
         return;
       }
+      final price = parseKesInput(widget.data.price);
       final result = await ApiService.generateShowcasePreview({
         'photo_data_uri': photoDataUri,
         'name': widget.data.name,
         'category': widget.data.category,
         if (widget.data.condition != null) 'condition': widget.data.condition,
-        if (double.tryParse(widget.data.price) != null) 'price': double.parse(widget.data.price),
+        if (price != null) 'price': price,
         if (_descriptionCtrl.text.trim().isNotEmpty) 'description': _descriptionCtrl.text.trim(),
       });
       final uri = result['image_data_uri'] as String?;
@@ -120,8 +126,7 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> {
 
   void _useThisImage() {
     setState(() {
-      widget.data.showcaseImageDataUri = _previewDataUri;
-      widget.data.showcaseImageSource = 'ai';
+      widget.data.setShowcase(_previewDataUri, 'ai');
       _previewDataUri = null;
     });
   }
@@ -132,8 +137,7 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> {
 
   void _removeShowcase() {
     setState(() {
-      widget.data.showcaseImageDataUri = null;
-      widget.data.showcaseImageSource = null;
+      widget.data.setShowcase(null, null);
       _previewDataUri = null;
     });
   }

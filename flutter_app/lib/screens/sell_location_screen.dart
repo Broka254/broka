@@ -1,8 +1,17 @@
 // BROKA - Sell Wizard Step 5: Location
+//
+// County and area are picked from Kenya's 47 counties and their
+// constituencies (KenyaLocations, the list store setup uses), with typing
+// kept for an area the list doesn't have. Both used to be free text: a
+// listing in "Nairobii" or "Nbi" was never found by the location filter,
+// and the server now places a listing on the map at its county (see
+// backend/api/domains/listings/location.py), which needs a county it knows.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart';
+import '../features/stores/domain/kenya_locations.dart';
 import '../services/sell_wizard_data.dart';
+import '../widgets/list_picker.dart';
 import '../widgets/sell_step_scaffold.dart';
 import 'sell_showcase_screen.dart';
 
@@ -14,26 +23,35 @@ class SellLocationScreen extends StatefulWidget {
 }
 
 class _SellLocationScreenState extends State<SellLocationScreen> {
+  static const _areaNotListed = "My area isn't listed";
+  static const _maxAreaLength = 80; // the server's limit for place names
+
   // Country is fixed to Kenya for now (not yet user-editable - see
-  // SellWizardData's comment), so it has no controller: nothing to type,
+  // SellWizardData's comment), so it has no state: nothing to pick,
   // nothing to persist from this screen.
-  late final TextEditingController _countyCtrl;
-  late final TextEditingController _subcountyCtrl;
+  String? _county;
+  late final TextEditingController _areaCtrl;
+  // True when the seller is typing an area the list doesn't have.
+  late bool _typingArea;
   Timer? _debounce;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _countyCtrl = TextEditingController(text: widget.data.county);
-    _subcountyCtrl = TextEditingController(text: widget.data.subcounty);
+    // A draft typed before the pickers existed keeps its county only if
+    // it is one; otherwise the seller picks it.
+    _county = KenyaLocations.canonicalCounty(widget.data.county);
+    final area = widget.data.subcounty.trim();
+    final listed = KenyaLocations.canonicalSubcounty(_county, area);
+    _typingArea = area.isNotEmpty && listed == null;
+    _areaCtrl = TextEditingController(text: listed ?? area);
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
-    _countyCtrl.dispose();
-    _subcountyCtrl.dispose();
+    _areaCtrl.dispose();
     super.dispose();
   }
 
@@ -42,15 +60,51 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
     _debounce = Timer(const Duration(milliseconds: 600), () => widget.data.persist());
   }
 
+  void _store() {
+    widget.data.county = _county ?? '';
+    widget.data.subcounty = _areaCtrl.text.trim();
+    _scheduleSave();
+  }
+
+  Future<void> _pickCounty() async {
+    final picked = await pickFromList(context,
+        title: 'Where is the item?', options: KenyaLocations.counties, selected: _county);
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (picked != _county) {
+        _areaCtrl.clear();
+        _typingArea = false;
+      }
+      _county = picked;
+      _error = null;
+    });
+    _store();
+  }
+
+  Future<void> _pickArea() async {
+    final picked = await pickFromList(context,
+        title: 'Choose the area',
+        options: [...KenyaLocations.subcountiesOf(_county), _areaNotListed],
+        selected: _typingArea ? null : _areaCtrl.text);
+    if (picked == null || !mounted) return;
+    setState(() {
+      _typingArea = picked == _areaNotListed;
+      _areaCtrl.text = _typingArea ? '' : picked;
+      _error = null;
+    });
+    _store();
+  }
+
   void _next() {
-    final county = _countyCtrl.text.trim();
-    final subcounty = _subcountyCtrl.text.trim();
-    if (county.isEmpty || subcounty.isEmpty) {
-      setState(() => _error = 'Please fill in both county and subcounty.');
+    if (_county == null) {
+      setState(() => _error = 'Choose the county the item is in.');
       return;
     }
-    widget.data.county = county;
-    widget.data.subcounty = subcounty;
+    if (_areaCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'Choose or type the area within $_county.');
+      return;
+    }
+    _store();
     setState(() => _error = null);
     unawaited(widget.data.persist());
     Navigator.push(context, MaterialPageRoute(
@@ -80,21 +134,49 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
 
         sellStepLabel('COUNTY'),
         const SizedBox(height: 8),
-        TextFormField(
-          controller: _countyCtrl,
-          style: const TextStyle(color: BrokaColors.textHigh),
-          decoration: const InputDecoration(hintText: 'e.g. Nairobi'),
-          onChanged: (_) => _scheduleSave(),
+        PickerField(
+          key: const Key('sell-county-picker'),
+          label: 'County',
+          value: _county,
+          icon: Icons.map_outlined,
+          onTap: _pickCounty,
         ),
         const SizedBox(height: 20),
 
-        sellStepLabel('SUBCOUNTY'),
+        sellStepLabel('AREA / SUBCOUNTY'),
         const SizedBox(height: 8),
-        TextFormField(
-          controller: _subcountyCtrl,
-          style: const TextStyle(color: BrokaColors.textHigh),
-          decoration: const InputDecoration(hintText: 'e.g. Westlands'),
-          onChanged: (_) => _scheduleSave(),
+        if (_typingArea)
+          TextFormField(
+            key: const Key('sell-area-field'),
+            controller: _areaCtrl,
+            autofocus: true,
+            maxLength: _maxAreaLength,
+            textCapitalization: TextCapitalization.words,
+            style: const TextStyle(color: BrokaColors.textHigh),
+            decoration: InputDecoration(
+              hintText: 'e.g. Kilimani',
+              suffixIcon: IconButton(
+                tooltip: 'Choose from the list',
+                icon: const Icon(Icons.list_rounded, color: BrokaColors.textMid),
+                onPressed: _pickArea,
+              ),
+            ),
+            onChanged: (_) => _store(),
+          )
+        else
+          PickerField(
+            key: const Key('sell-area-picker'),
+            label: 'Area / subcounty',
+            value: _areaCtrl.text.isEmpty ? null : _areaCtrl.text,
+            icon: Icons.place_outlined,
+            enabled: _county != null,
+            onTap: _pickArea,
+          ),
+        const SizedBox(height: 8),
+        const Text(
+          'Buyers see the area and county. Your exact address is never shown - '
+          'agree where to meet once you have a deal.',
+          style: TextStyle(color: BrokaColors.textLow, fontSize: 11.5, height: 1.4),
         ),
       ]),
     );

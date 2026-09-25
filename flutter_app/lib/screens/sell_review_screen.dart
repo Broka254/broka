@@ -1,9 +1,9 @@
 // BROKA - Sell Wizard Step 7: Review & Activate
 //
 // Final step - read-only summary of everything entered on the previous
-// six screens, plus the actual submission (base64-encode photos, call
-// ApiService.createListing, clear the draft on success). This is where
-// _submit() from the old single-screen sell_screen.dart now lives.
+// six screens, plus the actual submission (ListingPublisher: photo ids,
+// showcase, POST /listings; the draft is cleared on success). This is
+// where _submit() from the old single-screen sell_screen.dart now lives.
 //
 // No verification-video handling here - that capture step has been
 // removed from the wizard entirely, not just hidden. verified_video is
@@ -13,13 +13,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../main.dart';
+import '../core/network/api_client.dart';
 import '../core/utils/result.dart';
 import '../services/api_service.dart';
-import '../services/image_upload_service.dart';
+import '../services/listing_publisher.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
 import '../services/sell_wizard_data.dart';
-import '../widgets/broka_image.dart';
+import '../utils/price_format.dart';
 import '../widgets/sell_step_scaffold.dart';
 import '../features/stores/data/repositories/stores_repository.dart';
 import '../features/stores/domain/models/store.dart';
@@ -58,14 +59,17 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
   }
 
   Future<void> _activate() async {
+    // One press at a time. The button shows a spinner while this runs, but
+    // a second tap can land before that frame is drawn.
+    if (_loading) return;
     final data = widget.data;
 
     if (data.verifiedPhotos.isEmpty) {
       setState(() => _error = 'Please go back and take at least one verified photo.');
       return;
     }
-    final price = double.tryParse(data.price);
-    if (price == null || price <= 0) {
+    final price = parseKesInput(data.price);
+    if (price == null || price <= 0 || price > maxListingPriceKes) {
       setState(() => _error = 'Please go back and enter a valid asking price.');
       return;
     }
@@ -73,61 +77,23 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
       setState(() => _error = 'Please go back and enter a location.');
       return;
     }
+    // A draft picked up days later can hold a closing time that has
+    // passed; the server would refuse it, but the fix is on the Price step.
+    final endsAt = data.auctionEndsAt;
+    if (data.type == 'auction' && endsAt != null && !endsAt.isAfter(DateTime.now())) {
+      setState(() => _error =
+          "The auction's closing time has passed. Go back to Price and choose a later one.");
+      return;
+    }
 
     setState(() { _loading = true; _error = null; });
 
     try {
-      // The photos have been uploading since they were taken; this waits
-      // for any still in flight and retries a failed one once.
-      final photoIds = await data.photoUploads.idsFor(data.verifiedPhotos);
-      // The showcase (a gallery pick or an AI result) is only in memory,
-      // so it uploads here.
-      String? showcaseId;
-      final showcase = data.showcaseImageDataUri;
-      if (showcase != null) {
-        final bytes = BrokaImage.inlineBytes(showcase);
-        if (bytes != null) {
-          showcaseId = (await imageUploadService.uploadBytes(
-            bytes, purpose: ImagePurpose.listingShowcase, filename: 'showcase.jpg',
-          )).id;
-        }
-      }
-
-      await ApiService.createListing({
-        'name':            data.name.trim(),
-        'category':        data.category,
-        'subcategory_id':  data.subcategoryId,
-        'condition':       data.condition,
-        if (data.attributes.isNotEmpty) 'attributes': data.attributes,
-        'price':           price,
-        'lat':             ApiService.currentUserLat ?? -1.286389,
-        'lng':             ApiService.currentUserLng ?? 36.817223,
-        'location_county':    data.county.trim(),
-        'location_subcounty': data.subcounty.trim(),
-        'listing_type':    data.type,
-        'description':     data.description.trim(),
-        'photo_ids':       photoIds,
-        if (data.type == 'auction' && data.reserve.isNotEmpty)
-          'reserve_price': double.parse(data.reserve),
-        // Auction terms. Omitted entirely for a direct listing; for an
-        // auction these are what configure the backend lifecycle, and
-        // without them the backend had to invent a window and an increment
-        // on the seller's behalf.
-        if (data.type == 'auction' && data.minBidIncrement.isNotEmpty)
-          'min_bid_increment': double.parse(data.minBidIncrement),
-        if (data.type == 'auction' && data.auctionStartsAt != null)
-          'auction_starts_at': data.auctionStartsAt!.toUtc().toIso8601String(),
-        if (data.type == 'auction' && data.auctionEndsAt != null)
-          'auction_ends_at': data.auctionEndsAt!.toUtc().toIso8601String(),
-        // AI Showcase/Cover Image (2026-08-29) - only sent if the wizard's
-        // Showcase step actually produced one; both null just means the
-        // seller skipped it, which the backend already treats as valid
-        // (create_listing requires the two fields together or not at all).
-        if (showcaseId != null) 'showcase_id': showcaseId,
-        if (showcaseId != null && data.showcaseImageSource != null)
-          'showcase_image_source': data.showcaseImageSource,
-        if (data.storeId != null) 'store_id': data.storeId,
-      });
+      await ListingPublisher().publish(
+        data,
+        lat: ApiService.currentUserLat ?? -1.286389,
+        lng: ApiService.currentUserLng ?? 36.817223,
+      );
 
       if (!mounted) return;
       unawaited(SellDraftStore.clear());
@@ -139,15 +105,23 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
       // matter how the flow was entered.
       Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
     } on PhotoUploadIncomplete catch (e) {
-      setState(() => _error = '$e. Check your connection and try again.');
+      _showError('$e. Check your connection and try again.');
+    } on ApiException catch (e) {
+      _showError(e.message);
     } on TimeoutException {
-      setState(() => _error =
-          'Request timed out - your connection may be slow. Please try again.');
-    } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      // The listing may have been created anyway. Pressing Activate again
+      // is safe: the draft's key makes the server return it, not a copy.
+      _showError('No answer from BROKA - your connection may be slow. Tap Activate '
+          "again: your listing won't be posted twice.");
+    } catch (_) {
+      _showError("Couldn't reach BROKA. Check your connection and try again.");
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _showError(String message) {
+    if (mounted) setState(() => _error = message);
   }
 
   @override
@@ -217,9 +191,9 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
                   e.key[0].toUpperCase() + e.key.substring(1).replaceAll('_', ' '),
                   e.value)),
           _row('Type', isAuction ? 'Auction' : 'Direct Sale'),
-          _row('Price', 'KES ${data.price}'),
+          _row('Price', _kes(data.price)),
           if (isAuction && data.reserve.isNotEmpty)
-            _row('Reserve price', 'KES ${data.reserve}'),
+            _row('Reserve price', _kes(data.reserve)),
           _row('Location', data.location),
           _row('Description', data.description.isEmpty ? '—' : data.description),
         ]),
@@ -241,6 +215,11 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
         ),
       ]),
     );
+  }
+
+  static String _kes(String amount) {
+    final value = parseKesInput(amount);
+    return value == null ? amount : formatKes(value);
   }
 
   Widget _summaryCard(List<Widget> rows) => Container(

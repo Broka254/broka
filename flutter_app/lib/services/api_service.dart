@@ -762,39 +762,10 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  static Future<Map<String, dynamic>> createListing(
-      Map<String, dynamic> payload) async {
-    final client = http.Client();
-    try {
-      var response = await client.post(
-        Uri.parse('$baseUrl/listings/'),
-        headers: _headers,
-        body: jsonEncode(payload),
-      ).timeout(const Duration(seconds: 120));
-      if (response.statusCode == 401) {
-        final relogged = await _tryRelogin();
-        if (relogged) {
-          response = await client.post(
-            Uri.parse('$baseUrl/listings/'),
-            headers: _headers,
-            body: jsonEncode(payload),
-          ).timeout(const Duration(seconds: 120));
-        }
-      }
-      if (response.statusCode != 201) {
-        throw Exception(
-            'Failed to create listing: ${response.statusCode} ${response.body}');
-      }
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } finally {
-      client.close();
-    }
-  }
-
   /// AI Showcase/Cover Image - pre-creation preview (2026-08-29). Called
   /// from the listing wizard's Showcase step, before the listing exists -
   /// see api/domains/showcase/service.py's generate_showcase_preview_
-  /// standalone docstring. 120s timeout, same as createListing above:
+  /// standalone docstring. 120s timeout, same as creating the listing:
   /// image generation is the slowest call in this app by a wide margin
   /// (fal.ai's own poll budget server-side is 90s), so it gets the same
   /// generous headroom rather than the shorter default used elsewhere.

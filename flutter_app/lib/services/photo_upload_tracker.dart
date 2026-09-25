@@ -78,6 +78,17 @@ class PhotoUploadTracker extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Drops the ids of [files] that finished uploading, so [idsFor] uploads
+  /// them again. For when the server no longer has them: an upload no
+  /// listing used is cleaned up after a week, and a draft restored later
+  /// still holds its ids.
+  void forget(Iterable<File> files) {
+    for (final file in files) {
+      if (_states[file.path]?.status == PhotoUploadStatus.done) _states.remove(file.path);
+    }
+    notifyListeners();
+  }
+
   Future<String?> _run(File file) async {
     _states[file.path] = const PhotoUploadState.uploading(0);
     notifyListeners();

@@ -14,10 +14,31 @@
 // verification video capture has been removed from the sell flow
 // entirely, not just hidden.
 import 'dart:io';
+import 'dart:math';
 import 'sell_draft_store.dart';
 import 'photo_upload_tracker.dart';
 
 class SellWizardData {
+  SellWizardData({PhotoUploadTracker? photoUploads})
+      : photoUploads = photoUploads ?? PhotoUploadTracker();
+
+  // Limits the server enforces (backend/api/domains/listings/validation.py),
+  // applied as the seller types instead of refused at the end.
+  static const maxNameLength = 120;
+  static const maxDescriptionLength = 2000;
+
+  /// Sent as X-Idempotency-Key when this listing is published, and saved
+  /// with the draft. If the response to Activate is lost - a slow
+  /// connection, the app killed mid-request - pressing it again returns the
+  /// listing that was created instead of posting the item a second time.
+  /// A new draft gets a new key.
+  String draftKey = newDraftKey();
+
+  static String newDraftKey() {
+    final random = Random.secure();
+    return List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
   String name = '';
   String category = 'Vehicles';
   // Backend Category row ids for the picks above/below (Phase 2:
@@ -51,7 +72,7 @@ class SellWizardData {
   final List<File> verifiedPhotos = [];
   // Each photo uploads in the background as soon as it's taken (Online
   // Stores phase 1); Publish sends the resulting ids, not the photos.
-  final PhotoUploadTracker photoUploads = PhotoUploadTracker();
+  final PhotoUploadTracker photoUploads;
   // AI Showcase/Cover Image (2026-08-29) - optional, chosen on the wizard's
   // Showcase step (gallery pick or an approved AI preview), submitted
   // alongside everything else in the single POST /listings call at
@@ -65,6 +86,17 @@ class SellWizardData {
   // re-generating or re-picking it, not re-doing the whole listing.
   String? showcaseImageDataUri;
   String? showcaseImageSource; // "gallery" | "ai"
+  // The showcase's image id once it has been uploaded, so a second press
+  // of Activate (after a failure) doesn't upload it again. Cleared whenever
+  // the showcase changes - see setShowcase.
+  String? showcaseAssetId;
+
+  /// Sets (or, with nulls, removes) the showcase image.
+  void setShowcase(String? dataUri, String? source) {
+    showcaseImageDataUri = dataUri;
+    showcaseImageSource = dataUri == null ? null : source;
+    showcaseAssetId = null;
+  }
   // Store feature (spec §11): null = personal listing (default, unchanged
   // behavior) - set only when the seller has a store AND picked "My
   // Store" on the Review step. Cheap to persist (unlike the showcase
@@ -89,6 +121,7 @@ class SellWizardData {
       name.isNotEmpty || price.isNotEmpty || verifiedPhotos.isNotEmpty;
 
   Map<String, dynamic> toDraftJson() => {
+    'draftKey': draftKey,
     'name': name,
     'price': price,
     'county': county,
@@ -130,6 +163,8 @@ class SellWizardData {
     final restoredPhotos = photoPaths.map((p) => File(p)).where((f) => f.existsSync()).toList();
 
     final data = SellWizardData()
+      // A draft saved before keys existed gets a new one.
+      ..draftKey    = draft['draftKey']    as String? ?? SellWizardData.newDraftKey()
       ..name        = draft['name']        as String? ?? ''
       ..price       = draft['price']       as String? ?? ''
       ..county      = draft['county']      as String? ?? ''
