@@ -550,30 +550,47 @@ class AuthService:
     async def search_users(
         self,
         q: str,
+        viewer_id: Optional[str] = None,
         viewer_lat: Optional[float] = None,
         viewer_lng: Optional[float] = None,
     ) -> list[dict]:
-        users = await self.repo.search(q)
+        # Other people, so the public view (_public_user_dict). This returned
+        # _user_dict - email, phone, trust score, fraud flag, admin bit - for
+        # up to 20 matches of any text, to any signed-in account.
+        users = await self.repo.search(q, exclude_id=viewer_id)
         results = []
         for u in users:
-            d = self._user_dict(u)
-            if viewer_lat is not None and viewer_lng is not None and u.lat and u.lng and u.location_visible:
-                d["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, u.lat, u.lng), 1)
+            d = self._public_user_dict(u)
+            distance = self._public_distance_km(u, viewer_lat, viewer_lng)
+            if distance is not None:
+                d["distance_km"] = distance
             results.append(d)
         return results
 
     async def get_user_profile(
         self,
         user_id: str,
+        viewer_id: Optional[str] = None,
         viewer_lat: Optional[float] = None,
         viewer_lng: Optional[float] = None,
     ) -> dict:
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        d = self._user_dict(user)
-        if viewer_lat is not None and viewer_lng is not None and user.lat and user.lng and user.location_visible:
-            d["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, user.lat, user.lng), 1)
+        # The account itself gets everything (the seller dashboard reads its
+        # own trust and DCR here); anyone else gets the public view - the chat
+        # header, the product page's seller block and the profile screen need
+        # nothing more.
+        own = viewer_id is not None and viewer_id == user.id
+        if own:
+            d = self._user_dict(user)
+            if viewer_lat is not None and viewer_lng is not None and user.lat and user.lng:
+                d["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, user.lat, user.lng), 1)
+        else:
+            d = self._public_user_dict(user)
+            distance = self._public_distance_km(user, viewer_lat, viewer_lng)
+            if distance is not None:
+                d["distance_km"] = distance
         # Social proof at the point of decision (Volume 2 §2.4). Only queried
         # for accounts that have actually sold something - avoids a pointless
         # extra query on every pure-buyer profile view. Kept out of
@@ -589,11 +606,73 @@ class AuthService:
         # brand-new sellers with zero deals yet, and §3.5's cold-start
         # fairness point is exactly that they should see their neutral 80%
         # starting score, not have it hidden until their first sale.
-        metrics = await self.db.get(SellerMetrics, user_id)
+        # The owner's own - the ranking inputs are not a public figure.
+        metrics = await self.db.get(SellerMetrics, user_id) if own else None
         if metrics:
             d["dcr_score"]  = metrics.dcr_score
             d["rank_score"] = metrics.rank_score
         return d
+
+    # Where another user is, to two decimal places: about a kilometre. The
+    # "Show my location" setting promises an approximate location, and the
+    # stored value is the phone's GPS fix.
+    _PUBLIC_COORD_DECIMALS = 2
+
+    @classmethod
+    def _approx_point(cls, user) -> tuple[float, float] | None:
+        if not user.location_visible or user.lat is None or user.lng is None:
+            return None
+        return (round(user.lat, cls._PUBLIC_COORD_DECIMALS),
+                round(user.lng, cls._PUBLIC_COORD_DECIMALS))
+
+    @classmethod
+    def _public_distance_km(
+        cls, user, viewer_lat: Optional[float], viewer_lng: Optional[float],
+    ) -> float | None:
+        """Distance to [user]'s approximate point, not their exact one. The
+        viewer's coordinates are whatever the caller sends, so a distance from
+        the exact fix, asked for from three made-up places, would pinpoint the
+        user to within about 100 m."""
+        point = cls._approx_point(user)
+        if point is None or viewer_lat is None or viewer_lng is None:
+            return None
+        return round(_haversine_km(viewer_lat, viewer_lng, point[0], point[1]), 1)
+
+    @classmethod
+    def _public_user_dict(cls, user) -> dict:
+        """What one user may see of another.
+
+        Everything a public surface shows - the chat header, a product's
+        seller block, a profile - and nothing else: no email or phone, no
+        trust score or fraud flag, no admin bit, no language or security
+        settings. [_user_dict] is for the account itself (/auth/me, and
+        /auth/user/{id} on your own id).
+        """
+        from api.core.presence import online_status
+        is_online, last_seen_label = online_status(user.last_seen)
+        point = cls._approx_point(user)
+        return {
+            "id": user.id,
+            "name": user.name,
+            "nickname": user.nickname,
+            "account_type": user.account_type.value if user.account_type else "buyer",
+            "business_name": user.business_name,
+            "business_display_name": user.business_display_name,
+            "business_category": user.business_category,
+            "business_description": user.business_description,
+            # A place, like the coordinates: shown only with the user's leave.
+            "business_location": user.business_location if user.location_visible else None,
+            "lat": point[0] if point else None,
+            "lng": point[1] if point else None,
+            "rating": user.rating,
+            "completed_deals": user.completed_deals,
+            "is_verified": user.is_verified,
+            "profile_photo": user.profile_photo,
+            "last_seen": user.last_seen.isoformat() if user.last_seen else None,
+            "is_online": is_online,
+            "last_seen_label": last_seen_label,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
 
     @staticmethod
     def _user_dict(user) -> dict:

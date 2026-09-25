@@ -23,9 +23,9 @@
 //  * A failed request looked like "No listings for ...". Failures now reach
 //    ProductGridView as errors, which it shows with a retry.
 //
-// It also asked /auth/search on every keystroke for the Traders tab. That
-// endpoint returns whole user records, email and phone included - not
-// something a marketplace search box should fetch for strangers.
+// It also asked /auth/search on every keystroke for the Traders tab, which
+// at the time returned whole user records, email and phone included (it
+// returns only public fields now - see AuthService._public_user_dict).
 import 'dart:async';
 
 import 'package:flutter/material.dart';

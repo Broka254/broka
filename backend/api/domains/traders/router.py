@@ -15,8 +15,7 @@ router = APIRouter()
 async def list_traders(
     category_id: Optional[str] = None,
     # The Traders screen's search box. Matches the trader's business and
-    # display name only - never email or phone, which is what made
-    # /auth/search unfit to back a public search box.
+    # display name only - never email or phone.
     search: Optional[str] = Query(None, max_length=100),
     lat: Optional[float] = None,
     lng: Optional[float] = None,

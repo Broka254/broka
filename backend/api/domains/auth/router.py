@@ -5,7 +5,7 @@ Wraps AuthService, adds rate limiting."""
 from __future__ import annotations
 
 from typing import Optional
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -354,14 +354,16 @@ async def update_fcm_token(
 
 @router.get("/search")
 async def search_users(
-    q: str,
+    q: str = Query(..., min_length=1, max_length=100),
     lat: Optional[float] = None,
     lng: Optional[float] = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Other users' public view only - see AuthService._public_user_dict.
     svc = AuthService(db)
-    return await svc.search_users(q, viewer_lat=lat, viewer_lng=lng)
+    return await svc.search_users(
+        q, viewer_id=current_user["id"], viewer_lat=lat, viewer_lng=lng)
 
 
 @router.get("/user/{user_id}")
@@ -373,4 +375,5 @@ async def get_user_profile(
     db: AsyncSession = Depends(get_db),
 ):
     svc = AuthService(db)
-    return await svc.get_user_profile(user_id, viewer_lat=lat, viewer_lng=lng)
+    return await svc.get_user_profile(
+        user_id, viewer_id=current_user["id"], viewer_lat=lat, viewer_lng=lng)

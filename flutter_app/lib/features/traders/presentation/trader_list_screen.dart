@@ -17,7 +17,7 @@
 //
 // Trader search lives here (2026-09-25). Home's search box used to search
 // listings and traders together, through /auth/search - an endpoint that
-// returns whole user records, email and phone included. Home searches
+// then returned whole user records, email and phone included. Home searches
 // listings only now; finding a trader is this screen's job, through
 // GET /traders?search=, which matches names and returns only what a trader
 // card shows.

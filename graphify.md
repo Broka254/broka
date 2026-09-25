@@ -102,7 +102,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:129) |
 | POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:147) |
 | POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:225) |
-| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:368) |
+| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:370) |
 | POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:233) |
 | POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:200) |
 | POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:166) |
@@ -217,7 +217,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
 | GET | `/traders` | public | `list_traders` (backend/api/domains/traders/router.py:15) |
-| GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:33) |
+| GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:32) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
 | POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:47) |
 | GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:133) |
@@ -475,7 +475,7 @@ of a change.
 - **ai_broker** — domains: categories, listings; core: circuit_breaker, config, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
-- **auth** — domains: media; core: client_ip, config, email, events, fraud, nudge_templates, presence, rate_limit, sms; database, security
+- **auth** — domains: media; core: client_ip, config, email, events, fraud, nudge_templates, presence, rate_limit, sms, text_search; database, security
 - **buy_agent** — domains: ai_broker, categories, listings; core: config, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
@@ -530,7 +530,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-70 files in `backend/tests/`.
+71 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -601,6 +601,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_timestamps.py` — Client timestamps are stored as naive UTC - converted, never just stripped.
 - `test_traders.py` — BROKA - Traders Endpoint Tests Run: pytest backend/tests/test_traders.py -v
 - `test_trending.py` — BROKA - Trending Endpoint Tests Run: pytest backend/tests/test_trending.py -v
+- `test_user_privacy.py` — BROKA - What one user can see of another Run: pytest backend/tests/test_user_privacy.py -v
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
 
 ## Flutter app

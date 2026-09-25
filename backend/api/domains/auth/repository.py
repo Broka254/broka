@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from api.core.text_search import matches_all_terms, search_terms
 from api.database import User, PhoneOtp, EmailOtp, OtpPurpose
 
 
@@ -83,12 +84,22 @@ class UserRepository:
         otp.consumed = True
         await self.db.commit()
 
-    async def search(self, q: str, limit: int = 20) -> list[User]:
-        pattern = f"%{q}%"
+    async def search(
+        self, q: str, limit: int = 20, exclude_id: Optional[str] = None,
+    ) -> list[User]:
+        """Users whose name, preferred name or business name has every word
+        of [q]. Never matched on email: searching "@gmail" and reading back
+        who matched was a way to learn which addresses have accounts."""
+        terms = search_terms(q)
+        if not terms:
+            return []
+        query = select(User).where(
+            matches_all_terms(terms, (User.name, User.nickname, User.business_name))
+        )
+        if exclude_id:
+            query = query.where(User.id != exclude_id)
         r = await self.db.execute(
-            select(User).where(
-                (User.name.ilike(pattern)) | (User.email.ilike(pattern))
-            ).limit(limit)
+            query.order_by(User.completed_deals.desc(), User.name).limit(limit)
         )
         return r.scalars().all()
 

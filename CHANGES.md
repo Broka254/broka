@@ -81,12 +81,37 @@ takes them), Account (Settings, payment receipts, help) and Sign out.
 - **Sign-out revokes the refresh token on the server** - it used to only
   forget it on the phone.
 
-## Found, not fixed
+## Other people's accounts are no longer readable
 
-- `GET /auth/search` and `GET /auth/user/{id}` return any user's email,
-  phone number, trust score and flags to any signed-in user. The app no
-  longer calls `/auth/search`, but the endpoints still answer; they should
-  return only public fields to anyone but the account itself.
+`GET /auth/search` and `GET /auth/user/{id}` returned the full account
+record for anyone, to any signed-in user: email, phone, trust score, fraud
+flag, admin bit, language and security settings. Search also matched on
+email, so "@gmail" listed who had an account with which address.
+
+- Other people get `AuthService._public_user_dict`: name, preferred and
+  business names, rating, deals, verification, photo, presence, member
+  since - what the chat header, product page and profile screen read. Your
+  own id still returns everything (the Seller Dashboard reads its trust
+  score and DCR there); DCR and rank are owner-only.
+- Search matches name, preferred name and business name, word by word, and
+  never lists the caller; the query is capped at 100 characters.
+- Coordinates are rounded to two decimals (about 1 km), as "Show my
+  location" promises an approximate location, and the business location is
+  hidden with it. `distance_km` is measured to that approximate point: the
+  caller chooses the viewer coordinates, so a distance from the exact GPS
+  fix, asked from three made-up places, pinpointed the user.
+- Tests: `backend/tests/test_user_privacy.py` (8 of its 10 failed on the old
+  code; the other 2 pin what must not change).
+
+## Noticed, not changed
+
+- `GET /traders` computes `distance_km` from the trader's exact position
+  with caller-chosen viewer coordinates, the same pinpointing risk as above.
+- Another user's profile screen (`user_profile_screen.dart`) draws
+  "Reliability", "Trust Score" and "Response Rate" bars from fields no
+  endpoint sends, so they show the rating or a default of 85%. "Trust Score"
+  used the owner-only trust score and read 10/10 for nearly everyone; it
+  now falls back to the rating like the others.
 
 # Hardening after the 2026-09-25 review; Postgres in CI; repository map (2026-09-25)
 

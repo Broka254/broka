@@ -56,7 +56,7 @@ void main() {
     final listingSearches =
         requested.where((u) => u.path.startsWith('/listings') && u.queryParameters['search'] == 'iphone');
     expect(listingSearches, isNotEmpty);
-    // /auth/search returns whole user records - email and phone included.
+    // Home finds things to buy; people are found on the Traders screen.
     expect(requested.where((u) => u.path.startsWith('/auth/search')), isEmpty);
   });
 
