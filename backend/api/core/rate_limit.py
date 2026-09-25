@@ -174,6 +174,8 @@ if _settings.is_test:
     store_counter_limiter    = _make_limiter("store_counter",    limit=1000, window_seconds=60)
     listing_create_limiter       = _make_limiter("listing_create",     limit=1000, window_seconds=3600)
     listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100000, window_seconds=86400)
+    showcase_generate_limiter       = _make_limiter("showcase_generate",     limit=1000, window_seconds=3600)
+    showcase_generate_daily_limiter = _make_limiter("showcase_generate_day", limit=100000, window_seconds=86400)
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
@@ -222,6 +224,13 @@ else:
     # day, is far past what a person posts.
     listing_create_limiter       = _make_limiter("listing_create",     limit=30,  window_seconds=3600)
     listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100, window_seconds=86400)
+    # AI cover images (POST /showcase/preview, /listings/{id}/showcase/
+    # generate). Every generation is a paid fal.ai call, and nothing else
+    # bounded them: one signed-in script could spend the month's budget in
+    # an afternoon. A seller trying looks - six themes, a few regenerations -
+    # stays well inside 12 an hour; 40 a day covers a busy shop.
+    showcase_generate_limiter       = _make_limiter("showcase_generate",     limit=12, window_seconds=3600)
+    showcase_generate_daily_limiter = _make_limiter("showcase_generate_day", limit=40, window_seconds=86400)
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)

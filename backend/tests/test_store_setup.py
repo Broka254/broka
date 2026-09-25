@@ -85,7 +85,7 @@ async def _store(client, headers, **fields) -> dict:
 
 
 async def _listing(client, headers, store_id, name, category="Electronics", price=1000):
-    r = await client.post("/listings/", json={
+    r = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
         "name": name, "category": category, "price": price, "lat": -1.0, "lng": 36.0,
         "store_id": store_id,
     }, headers=headers)

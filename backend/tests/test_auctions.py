@@ -87,7 +87,7 @@ class TestAuctions:
         async def _capture(event: BidPlaced):
             received.append(event)
 
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Vintage Watch", "category": "collectibles", "price": 10000,
             "lat": -1.286, "lng": 36.817, "listing_type": "auction",
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -106,7 +106,7 @@ class TestAuctions:
 
     @pytest.mark.asyncio
     async def test_bid_lazily_creates_auction_meta_and_updates_it(self, client, seller_token, bidder_token):
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Antique Clock", "category": "collectibles", "price": 5000,
             "lat": -1.286, "lng": 36.817, "listing_type": "auction",
         }, headers={"Authorization": f"Bearer {seller_token}"})

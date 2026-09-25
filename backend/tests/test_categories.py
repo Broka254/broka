@@ -105,7 +105,7 @@ class TestCategories:
         # A listing tagged at the child subcategory should still surface
         # when filtering by the parent category_id (Ch.24 — Listing.subcategory_id
         # may point at a top-level Category or a leaf one).
-        create_resp = await client.post("/listings/", json={
+        create_resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Toyota Prado", "category": "vehicles", "price": 3200000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -135,28 +135,29 @@ class TestSeedCategories:
         # No migrate script, no manual step - just the fresh db setup_db()
         # already built.
         names = [c["name"] for c in (await client.get("/categories")).json()]
-        for expected in ("Vehicles", "Electronics", "Agriculture", "Other"):
+        for expected in ("Automobiles", "Land", "Electronics", "Agriculture", "Other"):
             assert expected in names
 
     @pytest.mark.asyncio
     async def test_canonical_subcategories_and_filters_present(self, client):
-        # "Vehicles", deliberately, not "Electronics": TestCategories above
-        # seeds its own top-level row NAMED "Electronics" (id="cat-electronics",
-        # with no subcategories of its own) - a bare name-keyed dict built
-        # from the full /categories list can't tell that row apart from the
-        # canonical one, and picking "Vehicles" (no same-named fixture
-        # anywhere in this module) sidesteps the ambiguity entirely rather
-        # than relying on dict-ordering luck.
+        # "Land", deliberately, not "Electronics" or "Automobiles":
+        # TestCategories above seeds its own top-level rows NAMED
+        # "Electronics" (id="cat-electronics") and "Automobiles"
+        # (id="cat-autos"), with subcategories of their own - a bare
+        # name-keyed dict built from the full /categories list can't tell
+        # those apart from the canonical ones, and picking "Land" (no
+        # same-named fixture anywhere in this module) sidesteps the
+        # ambiguity entirely rather than relying on dict-ordering luck.
         top = {c["name"]: c["id"] for c in (await client.get("/categories")).json()}
-        vehicles_id = top["Vehicles"]
+        land_id = top["Land"]
 
         subs = {c["name"]: c["id"] for c in
-                (await client.get(f"/categories/{vehicles_id}/subcategories")).json()}
-        assert "Cars" in subs
+                (await client.get(f"/categories/{land_id}/subcategories")).json()}
+        assert "Residential Plots" in subs
 
         filters = [f["field_name"] for f in
-                   (await client.get(f"/categories/{subs['Cars']}/filters")).json()]
-        assert "make" in filters
+                   (await client.get(f"/categories/{subs['Residential Plots']}/filters")).json()]
+        assert {"land_size", "land_size_unit"} <= set(filters)
 
     @pytest.mark.asyncio
     async def test_seed_categories_is_idempotent(self, client):
@@ -184,6 +185,9 @@ class TestSeedCategories:
             "subcategories_created": 0,
             "filters_created": 0,
             "subcategory_filters_created": 0,
+            "categories_renamed": 0,
+            "subcategories_moved": 0,
+            "filters_retired": 0,
         }
         assert before == after
 

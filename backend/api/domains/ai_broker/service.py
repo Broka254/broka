@@ -147,6 +147,15 @@ async def _cache_set(key: str, value: str) -> None:
         pass
 
 
+def _current_category(name):
+    """A category name as it is called now. The model, or a conversation
+    carried over from before the rename, may still say "Vehicles"; dropping
+    it as unknown would silently widen a car search to every category."""
+    if not isinstance(name, str):
+        return name
+    from api.domains.categories.seed import canonical_category_name
+    return canonical_category_name(name)
+
 class AIBrokerService:
     def __init__(self):
         self.gemini_key     = settings.gemini_api_key
@@ -298,7 +307,7 @@ class AIBrokerService:
             start = raw.index("{")
             end = raw.rindex("}") + 1
             parsed = json.loads(raw[start:end])
-            category = parsed.get("category")
+            category = _current_category(parsed.get("category"))
             if category not in valid_categories:
                 category = None
             max_price = parsed.get("max_price")
@@ -388,7 +397,7 @@ class AIBrokerService:
             end = raw.rindex("}") + 1
             parsed = json.loads(raw[start:end])
 
-            category = parsed.get("category")
+            category = _current_category(parsed.get("category"))
             if category not in valid_categories:
                 category = None
             subcategory = parsed.get("subcategory")
@@ -547,9 +556,9 @@ class AIBrokerService:
         # back: "don't worry about the price" has to be able to actually
         # clear the budget, which is precisely the turn this flow exists
         # to handle.
-        category = raw_slots.get("category")
+        category = _current_category(raw_slots.get("category"))
         if category not in valid_categories:
-            category = (slots or {}).get("category")
+            category = _current_category((slots or {}).get("category"))
             if category not in valid_categories:
                 category = None
         subcategory = raw_slots.get("subcategory")

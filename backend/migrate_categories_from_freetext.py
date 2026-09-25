@@ -36,7 +36,7 @@ from api.domains.categories.seed import seed_categories
 # Electronics/Livestock/General) since real listings.category values were
 # written from that screen, not from the canonical taxonomy.
 RENAME_MAP: dict[str, str] = {
-    "automobiles": "Vehicles", "vehicles": "Vehicles",
+    "automobiles": "Automobiles", "vehicles": "Automobiles",
     "property": "Property",
     "electronics": "Electronics",
     "gaming": "Gaming",

@@ -96,7 +96,7 @@ async def tokens(client):
 
 @pytest_asyncio.fixture(scope="module")
 async def listing_id(client, tokens):
-    resp = await client.post("/listings/", json={
+    resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
         "name": "MacBook Pro M3",
         "category": "electronics",
         "price": 220000,
@@ -159,7 +159,7 @@ class TestDealFlow:
         A second listing is used so this doesn't collide with
         TestDealFlow's own listing_id/deal (duplicate-deal short-circuit
         above)."""
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "iPhone 15", "category": "electronics",
             "price": 120000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -312,7 +312,7 @@ async def econfirm_listing_id(client, tokens):
     from TestDealFlow's — both agreed_price and the buyer/seller pairing
     need to stay stable across this class's tests, which run in order and
     build on each other's state (same pattern TestDealFlow above uses)."""
-    resp = await client.post("/listings/", json={
+    resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
         "name": "Sony A7 IV Camera", "category": "electronics",
         "price": 300000, "lat": -1.3, "lng": 36.8,
     }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -436,7 +436,7 @@ class TestEConfirmEscrow:
     async def test_payout_failed_keeps_deal_paid_not_released(self, client, tokens, fake_provider, econfirm_listing_id):
         """Separate deal: this one's release call reports payout_failed,
         which must NOT mark Deal.released (Phase 10/20)."""
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "PS5 Console", "category": "electronics",
             "price": 60000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -474,7 +474,7 @@ class TestEConfirmEscrow:
         release_escrow() a second time. Fixed by re-checking
         escrow.status fresh, under the lock, before the provider call —
         see EscrowService._confirm_delivery_econfirm's docstring."""
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "MacBook Air M3", "category": "electronics",
             "price": 150000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -512,7 +512,7 @@ class TestEConfirmEscrow:
         self, client, tokens, fake_provider, econfirm_listing_id,
     ):
         """Finalization pass, Section 15/20 test 19."""
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Dell XPS 13", "category": "electronics",
             "price": 90000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -553,7 +553,7 @@ class TestEConfirmEscrow:
         ambiguously (network timeout — E-Confirm may or may not have
         actually received the STK request) must not be retried
         automatically by a follow-up /fund call."""
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "iPad Pro", "category": "electronics",
             "price": 80000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -589,7 +589,7 @@ class TestEConfirmEscrow:
         fund_deal_escrow's CREATING branch) but isn't re-verified here
         with a real 20-second sleep in the test suite — this covers the
         more common real-world case (an impatient near-immediate retry)."""
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Nikon Z6", "category": "electronics",
             "price": 200000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})
@@ -634,7 +634,7 @@ class TestEConfirmEscrow:
         holds even when request-level idempotency caching contributes
         nothing at all.
         """
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Canon R6", "category": "electronics",
             "price": 250000, "lat": -1.3, "lng": 36.8,
         }, headers={"Authorization": f"Bearer {tokens['seller_token']}"})

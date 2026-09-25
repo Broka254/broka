@@ -120,7 +120,7 @@ class TestListingsCRUD:
 
     @pytest.mark.asyncio
     async def test_create_listing_requires_auth(self, client):
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Unauth Listing",
             "category": "other",
             "price": 1000,
@@ -136,7 +136,7 @@ class TestInterest:
     @pytest.mark.asyncio
     async def test_express_interest(self, client, seller_token, buyer_token):
         # Create listing first
-        create_resp = await client.post("/listings/", json={
+        create_resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Samsung Galaxy S24",
             "category": "electronics",
             "price": 85000,

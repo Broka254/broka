@@ -148,7 +148,7 @@ class TestConversationalBuyingAgent:
         iPhone 14 on Broka is 8GB. The old search hard-filtered attributes,
         so this was "0 results found" and the buyer never learned why.
         """
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "iPhone 14 128GB", "category": "Electronics", "price": 78000,
             "lat": -1.286, "lng": 36.817,
             "attributes": {"brand": "Apple", "ram": "8GB", "storage": "128GB"},
@@ -184,7 +184,7 @@ class TestConversationalBuyingAgent:
 
     @pytest.mark.asyncio
     async def test_exact_match_is_called_a_match(self, client, buyer_token, seller_token, monkeypatch):
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Samsung Galaxy S23", "category": "Electronics", "price": 62000,
             "lat": -1.286, "lng": 36.817,
             "attributes": {"brand": "Samsung", "ram": "12GB"},
@@ -212,11 +212,11 @@ class TestConversationalBuyingAgent:
         """A buyer who says "under 50k" and is shown nothing has no idea
         whether 55k would have got them one. Over-budget results come back,
         ranked below and labelled."""
-        await client.post("/listings/", json={
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Hisense TV 43 inch", "category": "Electronics", "price": 47000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
-        await client.post("/listings/", json={
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Hisense TV 55 inch", "category": "Electronics", "price": 58000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -239,7 +239,7 @@ class TestConversationalBuyingAgent:
     async def test_buyers_own_listing_is_never_offered_back_to_them(
         self, client, buyer_token, monkeypatch
     ):
-        await client.post("/listings/", json={
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "My Own Nikon Camera", "category": "Electronics", "price": 30000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {buyer_token}"})

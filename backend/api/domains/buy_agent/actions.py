@@ -316,8 +316,12 @@ async def _resolve_category(db: AsyncSession, category: str, subcategory: Option
     the real Category rows, or raise the ZenoActionError the Hub renders.
     Shared by _search_products and _create_buying_request, which had two
     copies of this that could drift apart."""
+    from api.domains.categories.seed import canonical_category_name
     cat = (await db.execute(
-        select(Category).where(Category.parent_id.is_(None), Category.name.ilike(category.strip()))
+        select(Category).where(
+            Category.parent_id.is_(None),
+            Category.name.ilike(canonical_category_name(category).strip()),
+        )
     )).scalar_one_or_none()
     if not cat:
         raise ZenoActionError("INVALID_CATEGORY", f"'{category}' is not a recognized category.")

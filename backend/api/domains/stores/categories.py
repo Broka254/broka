@@ -12,7 +12,7 @@ from typing import Optional
 
 from sqlalchemy import select, update
 
-from api.domains.categories.seed import CANONICAL_CATEGORIES
+from api.domains.categories.seed import CANONICAL_CATEGORIES, canonical_category_name
 
 _CANONICAL_BY_LOWER = {c.lower(): c for c in CANONICAL_CATEGORIES}
 
@@ -23,10 +23,9 @@ _LEGACY = {
     "clothing & fashion": "Fashion",
     "furniture": "Home & Furniture",
     "appliances": "Home & Furniture",
-    "automotive": "Vehicles",
+    "automotive": "Automobiles",
     "building materials": "Construction",
     "phones & accessories": "Electronics",
-    "food & beverages": "Other",
     "general merchandise": "Other",
     "supermarket": "Other",
 }
@@ -37,7 +36,8 @@ def canonical(value: Optional[str]) -> Optional[str]:
     None. For validating what a client sends."""
     if not value:
         return None
-    return _CANONICAL_BY_LOWER.get(value.strip().lower())
+    # A renamed category's old name ("Vehicles") still means that category.
+    return _CANONICAL_BY_LOWER.get(canonical_category_name(value).strip().lower())
 
 
 def from_legacy(value: Optional[str]) -> Optional[str]:
@@ -47,7 +47,7 @@ def from_legacy(value: Optional[str]) -> Optional[str]:
     if not value or not value.strip():
         return None
     key = value.strip().lower()
-    return _CANONICAL_BY_LOWER.get(key) or _LEGACY.get(key) or "Other"
+    return canonical(value) or _LEGACY.get(key) or "Other"
 
 
 def for_listing(value: Optional[str]) -> str:

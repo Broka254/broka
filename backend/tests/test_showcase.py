@@ -39,6 +39,15 @@ async def setup_db():
     await init_db()
 
 
+def _jpeg_data_uri() -> str:
+    import base64
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 48), (200, 30, 30)).save(buf, format="JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 _phone_seq = itertools.count()  # see test_completion_rate.py for why a counter, not a timestamp
 
 
@@ -269,8 +278,10 @@ async def test_standalone_generate_works_without_any_listing():
                     return_value="https://cdn.fal.ai/fake2.png"), \
              patch("api.domains.showcase.service.fal_client.download_generated_image",
                     return_value=(b"RAWBYTES", "image/jpeg")):
+            # A real photo: anything else is refused before reaching fal.ai
+            # (test_listing_overhaul.py covers that).
             result = await showcase_service.generate_showcase_preview_standalone(
-                db, seller.id, "data:image/jpeg;base64,cGhvdG8=",
+                db, seller.id, _jpeg_data_uri(),
                 "iPhone 12", "Electronics", "used", 45000.0, "clean studio background",
             )
 

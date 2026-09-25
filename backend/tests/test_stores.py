@@ -275,7 +275,7 @@ class TestListingStoreIntegration:
     @pytest.mark.asyncio
     async def test_personal_listing_without_store_still_works(self, client, owner):
         _, owner_token = owner
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Personal Sofa",
             "category": "furniture",
             "price": 15000,
@@ -293,7 +293,7 @@ class TestListingStoreIntegration:
         store = await client.post("/stores", json={"name": "Listing Test Store"}, headers=_auth(owner_token))
         store_id = store.json()["id"]
 
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "LG 55-inch TV",
             "category": "electronics",
             "price": 65000,
@@ -322,7 +322,7 @@ class TestListingStoreIntegration:
         store = await client.post("/stores", json={"name": "Not Yours Store"}, headers=_auth(owner_token))
         store_id = store.json()["id"]
 
-        resp = await client.post("/listings/", json={
+        resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Sneaky Listing",
             "category": "electronics",
             "price": 1000,
@@ -344,7 +344,7 @@ class TestListingStoreIntegration:
             ("A-Item-2", store_a["id"], owner_token),
             ("B-Item-1", store_b["id"], other_token),
         ):
-            r = await client.post("/listings/", json={
+            r = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
                 "name": name, "category": "electronics", "price": 1000,
                 "lat": -1.0, "lng": 36.0, "store_id": sid,
             }, headers=_auth(token))
@@ -358,7 +358,7 @@ class TestListingStoreIntegration:
     @pytest.mark.asyncio
     async def test_set_and_remove_listing_store(self, client, owner):
         _, owner_token = owner
-        listing = await client.post("/listings/", json={
+        listing = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Reassignable Listing", "category": "electronics",
             "price": 2000, "lat": -1.0, "lng": 36.0,
         }, headers=_auth(owner_token))
@@ -385,7 +385,7 @@ class TestListingStoreIntegration:
         _, owner_token = owner
         other_id, other_token = other_user
 
-        their_listing = await client.post("/listings/", json={
+        their_listing = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Other Person's Listing", "category": "electronics",
             "price": 3000, "lat": -1.0, "lng": 36.0,
         }, headers=_auth(other_token))
@@ -404,7 +404,7 @@ class TestListingStoreIntegration:
         _, owner_token = owner
         store = await client.post("/stores", json={"name": "Pausing Store"}, headers=_auth(owner_token))
         store_id = store.json()["id"]
-        await client.post("/listings/", json={
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Paused Item", "category": "electronics",
             "price": 4000, "lat": -1.0, "lng": 36.0, "store_id": store_id,
         }, headers=_auth(owner_token))
@@ -498,10 +498,10 @@ class TestHardeningPass:
 
         store_a = (await client.post("/stores", json={"name": "Matrix Store A"}, headers=_auth(a_token))).json()
         store_b = (await client.post("/stores", json={"name": "Matrix Store B"}, headers=_auth(b_token))).json()
-        listing_a = (await client.post("/listings/", json={
+        listing_a = (await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Matrix Listing A", "category": "electronics", "price": 1000, "lat": -1.0, "lng": 36.0,
         }, headers=_auth(a_token))).json()
-        listing_b = (await client.post("/listings/", json={
+        listing_b = (await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Matrix Listing B", "category": "electronics", "price": 1000, "lat": -1.0, "lng": 36.0,
         }, headers=_auth(b_token))).json()
 
@@ -532,7 +532,7 @@ class TestHardeningPass:
         _, token = owner
         store = (await client.post("/stores", json={"name": "Count Query Store"}, headers=_auth(token))).json()
         for i in range(3):
-            r = await client.post("/listings/", json={
+            r = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
                 "name": f"Count Item {i}", "category": "electronics", "price": 500,
                 "lat": -1.0, "lng": 36.0, "store_id": store["id"],
             }, headers=_auth(token))

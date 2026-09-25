@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import HTTPException
+from pydantic_core import PydanticCustomError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, case
@@ -14,6 +15,7 @@ from api.database import Listing, ListingStatus, ListingType, User, Interest, De
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
+from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
 from .validation import load_attributes
 
@@ -272,11 +274,32 @@ class ListingService:
         # INSERT: a 500 on PostgreSQL, and on SQLite, which doesn't enforce
         # the key, a listing filed under nothing.
         subcategory_id = data.get("subcategory_id") or None
-        if subcategory_id and await self.db.get(Category, subcategory_id) is None:
+        subcategory = await self.db.get(Category, subcategory_id) if subcategory_id else None
+        if subcategory_id and subcategory is None:
             raise HTTPException(
                 status_code=400,
                 detail="That category is no longer available. Go back and choose it again.",
             )
+        # The top-level category is the subcategory's parent, whatever name
+        # the request carried: the two used to be taken separately, so a
+        # draft could file a plot under "Electronics" - and the Land size
+        # rule below keys on the category.
+        category_name = data["category"]
+        if subcategory is not None:
+            top = (
+                await self.db.get(Category, subcategory.parent_id)
+                if subcategory.parent_id else subcategory
+            )
+            if top is not None:
+                category_name = top.name
+
+        attributes = data.get("attributes")
+        if category_name.strip().lower() == rules.LAND_CATEGORY.lower():
+            # Land must say how big it is (validation.clean_land_details).
+            try:
+                attributes = rules.clean_land_details(attributes)
+            except PydanticCustomError as exc:
+                raise HTTPException(status_code=400, detail=exc.message())
 
         # Store association (optional - spec §5/§11: "[No Store] / [My
         # Store]" at creation time). Ownership is checked server-side
@@ -316,11 +339,17 @@ class ListingService:
             store_id=store.id if store else None,
             name=data["name"],
             description=data.get("description"),
-            category=data["category"],
+            category=category_name,
             subcategory_id=subcategory_id,
             condition=data.get("condition"),
-            attributes=json.dumps(data["attributes"]) if data.get("attributes") else None,
+            attributes=json.dumps(attributes) if attributes else None,
             price=data["price"],
+            price_unit=data.get("price_unit"),
+            quantity=data.get("quantity"),
+            price_negotiable=data.get("price_negotiable", True) is not False,
+            delivery_available=data.get("delivery_available"),
+            delivery_note=(data.get("delivery_note") or None) if data.get("delivery_available") else None,
+            sms_alerts=data.get("sms_alerts", True) is not False,
             lat=lat,
             lng=lng,
             location_name=_derive_location_name(county, subcounty, data.get("location_name")),
@@ -379,7 +408,7 @@ class ListingService:
             listing_id=listing.id,
             seller_id=seller_id,
             price=data["price"],
-            category=data["category"],
+            category=category_name,
         ))
 
         # The authenticated creator, reading back what they just created -
@@ -541,7 +570,9 @@ class ListingService:
             # cannot. init_db()'s index_patches now creates the matching
             # lower(category) expression index so this stays indexed on both
             # dialects.
-            q = q.where(func.lower(Listing.category) == category.strip().lower())
+            # An old app build asking for "Vehicles" means "Automobiles".
+            from api.domains.categories.seed import canonical_category_name
+            q = q.where(func.lower(Listing.category) == canonical_category_name(category).strip().lower())
         if subcategory_id:
             # Most specific filter wins outright.
             q = q.where(Listing.subcategory_id == subcategory_id)
@@ -943,6 +974,8 @@ class ListingService:
             # has_reserve/reserve_met instead - see the note in
             # _listing_dict and lifecycle.public_state.
             "reserve_price": listing.reserve_price,
+            # The seller's own notification choice; nothing a buyer needs.
+            "sms_alerts": getattr(listing, "sms_alerts", True) is not False,
         }
 
     @staticmethod
@@ -1030,6 +1063,13 @@ class ListingService:
             # row used to fail every page it appeared on.
             "attributes": load_attributes(listing.attributes),
             "price": listing.price,
+            # Selling terms (2026-09-25); see the Listing model. getattr for
+            # rows built in memory by code that predates the columns.
+            "price_unit": listing.price_unit,
+            "quantity": listing.quantity,
+            "price_negotiable": getattr(listing, "price_negotiable", True) is not False,
+            "delivery_available": listing.delivery_available,
+            "delivery_note": listing.delivery_note,
             "lat": listing.lat,
             "lng": listing.lng,
             "location_name": listing.location_name,

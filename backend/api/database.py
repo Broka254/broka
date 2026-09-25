@@ -391,6 +391,30 @@ class Listing(Base):
     # Activate again - gets back the listing the first attempt made instead
     # of posting the item twice. NULL for listings made without a key.
     client_ref    = Column(String(64), nullable=True)
+    # Selling terms (2026-09-25 listing overhaul). All describe the offer,
+    # none of them move money: escrow still holds whatever amount a deal
+    # agrees.
+    #   price_unit       what one unit of `price` is ("bag": KES 3,500 per
+    #                    bag). NULL = the price is for the whole listing.
+    #   quantity         how many units the seller has (100 bags). NULL =
+    #                    not said, which reads as one.
+    #   price_negotiable False when the seller said the price is fixed;
+    #                    Zeno tells buyers so instead of inviting offers.
+    #                    Listings from before the question read True, which
+    #                    is how BROKA always treated them.
+    #   delivery_available / delivery_note  whether the seller can arrange
+    #                    delivery if a buyer needs it, and where. NULL =
+    #                    not asked (older listings).
+    #   sms_alerts       whether the seller wants an SMS when a buyer
+    #                    messages and they haven't replied (the availability
+    #                    nudge, api/core/workers.py). True for older
+    #                    listings: that SMS was always sent.
+    price_unit         = Column(String(24), nullable=True)
+    quantity           = Column(Integer, nullable=True)
+    price_negotiable   = Column(Boolean, nullable=False, default=True)
+    delivery_available = Column(Boolean, nullable=True)
+    delivery_note      = Column(String(120), nullable=True)
+    sms_alerts         = Column(Boolean, nullable=False, default=True)
 
     __table_args__ = (
         Index("uq_listings_seller_client_ref", "seller_id", "client_ref", unique=True),
@@ -1298,6 +1322,15 @@ async def init_db():
             # Retry-safe listing creation (Listing.client_ref). Its unique
             # index is in index_patches below, after this has run.
             "ALTER TABLE listings ADD COLUMN client_ref VARCHAR(64)",
+            # Selling terms (Listing.price_unit ... sms_alerts). The two
+            # booleans default to what BROKA did before it asked: offers
+            # were welcome and the availability SMS was sent.
+            "ALTER TABLE listings ADD COLUMN price_unit VARCHAR(24)",
+            "ALTER TABLE listings ADD COLUMN quantity INTEGER",
+            "ALTER TABLE listings ADD COLUMN price_negotiable BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE listings ADD COLUMN delivery_available BOOLEAN",
+            "ALTER TABLE listings ADD COLUMN delivery_note VARCHAR(120)",
+            "ALTER TABLE listings ADD COLUMN sms_alerts BOOLEAN NOT NULL DEFAULT TRUE",
             # Data repair, not schema. Listings used to accept NaN and
             # Infinity (api/domains/listings/validation.py); PostgreSQL
             # stores them and every response containing such a row fails,

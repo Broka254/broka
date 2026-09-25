@@ -124,7 +124,7 @@ class TestBuyAgent:
         # against name+description, not structured attribute comparison,
         # so the listing has to actually say it, the same way a real
         # seller's listing would need to for a real buyer to find it this way.
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Samsung Galaxy A54 8GB RAM", "category": "electronics", "price": 42000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -164,7 +164,7 @@ class TestBuyAgent:
         }, headers={"Authorization": f"Bearer {buyer_token}"})
 
         # Wrong category - should not match.
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Office Chair", "category": "electronics", "price": 8000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -197,7 +197,7 @@ class TestBuyAgentBugHunt:
         listing matched fine through the standing-request matcher.
         """
         buyer = await _register(client, "0766003300", "Cat Buyer", "cat.buyer@test.ke")
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Solar Water Pump 2HP", "category": "Agriculture", "price": 31000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -265,7 +265,7 @@ class TestBuyAgentBugHunt:
         }, headers=headers)
         assert made.status_code == 200
 
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Toyota Probox 2014", "category": "Vehicles", "price": 640000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -294,7 +294,7 @@ class TestBuyAgentBugHunt:
         }, headers=headers)).status_code == 200
 
         for i in range(2):
-            r = await client.post("/listings/", json={
+            r = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
                 "name": f"Mahogany Dining Set {i}", "category": "Home & Furniture", "price": 40000 + i,
                 "lat": -1.286, "lng": 36.817,
             }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -316,7 +316,7 @@ class TestBuyAgentBugHunt:
             "category": "Fashion", "max_price": 20000, "negotiation_authorized": True,
         }, headers=headers)).status_code == 200
 
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Leather Jacket", "category": "Fashion", "price": 9000,
             "lat": -1.286, "lng": 36.817,
         }, headers=headers)
@@ -339,7 +339,7 @@ class TestBuyAgentBugHunt:
         }, headers=headers)
         assert made.json()["status"] == "SUCCESS", made.json()
 
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Second-hand Bicycle", "category": "Sports & Fitness", "price": 6000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -357,7 +357,7 @@ class TestBuyAgentBugHunt:
         Zeno messages on the same thread."""
         buyer = await _register(client, "0766004000", "Nego Buyer", "nego.buyer@test.ke")
         headers = {"Authorization": f"Bearer {buyer}"}
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Ex-UK Laptop i7", "category": "Electronics", "price": 55000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -389,7 +389,7 @@ class TestBuyAgentBugHunt:
 
     @pytest.mark.asyncio
     async def test_start_negotiation_rejects_own_and_missing_listings(self, client, seller_token):
-        own = await client.post("/listings/", json={
+        own = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "My Own Sofa", "category": "Home & Furniture", "price": 15000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -469,7 +469,7 @@ class TestBuyAgentBugHunt:
             "category": "Music & Instruments", "max_price": 80000,
         }, headers=headers)).status_code == 200
 
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Yamaha Keyboard PSR", "category": "music & instruments", "price": 35000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -506,7 +506,7 @@ class TestBuyAgentBugHunt:
             "category": "Pets & Animals", "max_price": 60000,
         }, headers=headers)).status_code == 200
 
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "German Shepherd Puppy", "category": "Pets & Animals", "price": 25000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})

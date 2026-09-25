@@ -74,7 +74,7 @@ async def seller(client):
 
 
 async def _create_listing_and_interest(client, seller_token, buyer_token, name):
-    create_resp = await client.post("/listings/", json={
+    create_resp = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
         "name": name, "category": "electronics", "price": 20000,
         "lat": -1.286, "lng": 36.817,
     }, headers={"Authorization": f"Bearer {seller_token}"})

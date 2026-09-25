@@ -1073,6 +1073,14 @@ async def _fire_availability_nudge(session, interest) -> bool:
         interest.nudge_cancelled_at = datetime.utcnow()
         return False
 
+    # The seller answered Zeno's "should I text you when a buyer shows up?"
+    # with no when they listed it (Listing.sms_alerts). Cancelled, not left
+    # due: the answer is a standing one, and a retry every sweep would just
+    # re-read it.
+    if getattr(listing, "sms_alerts", True) is False:
+        interest.nudge_cancelled_at = datetime.utcnow()
+        return False
+
     # SYSTEM-GENERATED, NOT AI-GENERATED (2026-09-14).
     #
     # This used to call AIBrokerService.draft_availability_nudge_sms() with

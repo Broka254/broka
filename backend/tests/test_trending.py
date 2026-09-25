@@ -89,11 +89,11 @@ class TestTrending:
     ):
         # Two listings, created back-to-back via the same helper
         # test_listings.py uses (POST /listings/), not hand-built rows.
-        low = await client.post("/listings/", json={
+        low = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Low Engagement Sofa", "category": "furniture", "price": 20000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
-        high = await client.post("/listings/", json={
+        high = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "High Engagement Sofa", "category": "furniture", "price": 20000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})
@@ -128,7 +128,7 @@ class TestTrending:
         # Ch.24's TODO: trending results must carry the same fields as
         # every other listing response (image/verified/price), not a
         # thinner placeholder shape.
-        await client.post("/listings/", json={
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Shape Check Item", "category": "electronics", "price": 5000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {seller_token}"})

@@ -1215,7 +1215,7 @@ class TestFullJourney:
         # ── 1. Seller creates an auction with real terms ─────────────────
         starts = datetime.utcnow() + timedelta(minutes=30)
         ends = starts + timedelta(hours=2)
-        created = await client.post("/listings/", headers=sh, json={
+        created = await client.post("/listings/", headers=sh, json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Journey Tractor",
             "category": "Agriculture",
             "price": 200000,
@@ -1387,7 +1387,7 @@ class TestFullJourney:
         sh = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
         bh = {"Authorization": f"Bearer {create_access_token({'sub': bidder.id})}"}
 
-        created = await client.post("/listings/", headers=sh, json={
+        created = await client.post("/listings/", headers=sh, json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Journey Reserve Piano",
             "category": "Music & Instruments",
             "price": 20000,
@@ -1768,7 +1768,7 @@ class TestReserveIsNeverPublic:
         create response keeps the reserve - that is not the leak."""
         seller = await _user("Seller creates")
         headers = {"Authorization": f"Bearer {create_access_token({'sub': seller.id})}"}
-        res = await client.post("/listings/", headers=headers, json={
+        res = await client.post("/listings/", headers=headers, json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Reserve creation check", "category": "Electronics",
             "price": 20000, "lat": -1.29, "lng": 36.82,
             "listing_type": "auction", "reserve_price": 60000,
@@ -1799,7 +1799,7 @@ class TestCreationIsValidatedToo:
 
     @staticmethod
     def _body(**over) -> dict:
-        body = {
+        body = {"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": f"Created auction {_tag()}", "category": "Electronics",
             "price": 20000, "lat": -1.29, "lng": 36.82,
             "listing_type": "auction",

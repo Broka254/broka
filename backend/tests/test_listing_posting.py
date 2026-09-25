@@ -71,7 +71,7 @@ async def _user(**extra) -> tuple[User, dict]:
 
 
 def _body(**extra) -> dict:
-    return {"name": f"Phone {uuid.uuid4().hex[:6]}", "category": "Electronics",
+    return {"description": "Well kept, works perfectly - selling because I upgraded.", "name": f"Phone {uuid.uuid4().hex[:6]}", "category": "Electronics",
             "price": 25000, "lat": -1.28, "lng": 36.82, **extra}
 
 
@@ -114,7 +114,7 @@ class TestNonFiniteNumbers:
     @pytest.mark.parametrize("field", ["lat", "lng", "reserve_price", "min_bid_increment"])
     async def test_infinity_in_any_number_is_refused(self, client, field):
         _, h = await _user()
-        base = {"name": "Radio", "category": "Electronics", "price": 100, "lat": -1.28, "lng": 36.82}
+        base = {"description": "Well kept, works perfectly - selling because I upgraded.", "name": "Radio", "category": "Electronics", "price": 100, "lat": -1.28, "lng": 36.82}
         text = ", ".join(f'"{k}": {v if not isinstance(v, str) else chr(34) + v + chr(34)}'
                          for k, v in base.items() if k != field)
         r = await _post_raw(client, h, "{" + text + f', "{field}": Infinity}}')

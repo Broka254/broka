@@ -87,6 +87,12 @@ class BuyAgentService:
                 detail="You already have an active buy request. Cancel it before creating a new one.",
             )
 
+        # A renamed category's old name ("Vehicles", from an older app build)
+        # is stored under the current one ("Automobiles"): matching compares
+        # it with the listing's category name, which is always current.
+        from api.domains.categories.seed import canonical_category_name
+        category = canonical_category_name(category)
+
         now = datetime.utcnow()
         req = BuyAgentRequest(
             id=str(uuid.uuid4()), buyer_id=buyer_id, category=category, max_price=max_price,

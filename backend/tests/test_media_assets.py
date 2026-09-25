@@ -111,7 +111,7 @@ async def _upload(client, headers, purpose="listing_photo", raw=None) -> dict:
 
 
 def _listing_body(**extra) -> dict:
-    return {"name": f"Phone {uuid.uuid4().hex[:6]}", "category": "Electronics",
+    return {"description": "Well kept, works perfectly - selling because I upgraded.", "name": f"Phone {uuid.uuid4().hex[:6]}", "category": "Electronics",
             "price": 25000, "lat": -1.28, "lng": 36.82, **extra}
 
 

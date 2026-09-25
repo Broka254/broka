@@ -129,7 +129,7 @@ class TestTraders:
 
         # ListingCreated fires trader_specialization_subscribers.py, which
         # only matches a canonical Category by exact name.
-        create = await client.post("/listings/", json={
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
             "name": "Used Laptop", "category": "Test Electronics", "price": 45000,
             "lat": -1.286, "lng": 36.817,
         }, headers={"Authorization": f"Bearer {token}"})

@@ -1011,6 +1011,34 @@ def _haversine_km(lat1, lng1, lat2, lng2):
     return R * 2 * math.asin(math.sqrt(a))
 
 
+def _selling_terms(listing) -> str:
+    """The seller's own answers from the sell wizard (2026-09-25): what the
+    price is per, how many they have, whether it's negotiable, whether they
+    deliver. Given to Zeno as facts so it can answer a buyer's "is the
+    price negotiable?" or "can you deliver?" with the seller's answer
+    instead of guessing - and quote "KES 3,500 per bag" rather than
+    presenting a per-bag price as the price of the lot. Lines are omitted
+    when the seller wasn't asked (listings from before these existed)."""
+    lines = []
+    unit = getattr(listing, "price_unit", None)
+    if unit:
+        lines.append(f"- Price is per:      {unit} (the asking price is for ONE {unit})")
+    quantity = getattr(listing, "quantity", None)
+    if quantity:
+        lines.append(f"- Quantity for sale: {quantity:,}{(' ' + unit) if unit else ''}")
+    if getattr(listing, "price_negotiable", True) is False:
+        lines.append("- Price:             FIXED - the seller does not negotiate on price")
+    else:
+        lines.append("- Price:             open to offers")
+    delivery = getattr(listing, "delivery_available", None)
+    if delivery is True:
+        note = getattr(listing, "delivery_note", None)
+        lines.append(f"- Delivery:          seller can arrange delivery{(' (' + note + ')') if note else ''}")
+    elif delivery is False:
+        lines.append("- Delivery:          no - the buyer collects")
+    return "\n".join(lines)
+
+
 def _context_block(listing, seller, b_name, dist_str) -> str:
     return f"""
 
@@ -1018,6 +1046,7 @@ NEGOTIATION CONTEXT:
 - Product:           {listing.name}
 - Category:          {listing.category}
 - Asking price:      KES {listing.price:,.0f}
+{_selling_terms(listing)}
 - Location:          {listing.location_name or 'East Africa'}
 - Listing type:      {listing.listing_type}
 

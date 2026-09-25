@@ -106,7 +106,7 @@ async def _blobs_exist(asset: MediaAsset) -> bool:
 
 
 def _listing(**extra) -> dict:
-    return {"name": "Phone", "category": "Electronics", "price": 1000, "lat": -1.2, "lng": 36.8, **extra}
+    return {"description": "Well kept, works perfectly - selling because I upgraded.", "name": "Phone", "category": "Electronics", "price": 1000, "lat": -1.2, "lng": 36.8, **extra}
 
 
 @pytest.mark.asyncio

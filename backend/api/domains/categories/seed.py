@@ -24,88 +24,189 @@ from __future__ import annotations
 import json
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 
 from api.database import AsyncSessionLocal, Category, CategoryFilter
 
-# Canonical top-level taxonomy (Design Journal Volume 6 / spec §2).
+# Canonical top-level taxonomy (Design Journal Volume 6 / spec §2), in the
+# order sellers and buyers see it: GET /categories returns this order (see
+# service.py), so the Home rail and the sell wizard's category list lead
+# with what Kenyans sell most and end on the catch-all "Other".
+#
+# 2026-09-25 listing overhaul: "Vehicles" is now "Automobiles" (renamed in
+# place - see RENAMED_CATEGORIES), and Land, Food & Beverages, Health &
+# Medical, Baby & Kids and Arts & Crafts are new. Land used to be a
+# Property subcategory; a plot is what a large share of Kenyan sellers
+# list, and it needs its own required details (its size), so it is a
+# category of its own now (see MOVED_SUBCATEGORIES).
 CANONICAL_CATEGORIES = [
-    "Vehicles", "Property", "Electronics", "Gaming", "Home & Furniture",
-    "Fashion", "Agriculture", "Construction", "Beauty & Personal Care",
+    "Automobiles", "Property", "Land", "Electronics", "Fashion", "Agriculture",
+    "Home & Furniture", "Food & Beverages", "Construction",
+    "Beauty & Personal Care", "Health & Medical", "Baby & Kids", "Gaming",
     "Sports & Fitness", "Books & Education", "Music & Instruments",
-    "Business & Industrial", "Pets & Animals", "Services", "Other",
+    "Arts & Crafts", "Business & Industrial", "Pets & Animals", "Services",
+    "Other",
 ]
 
-# Subcategories per top-level category (spec §3). "Other" is deliberately
-# left with zero subcategories - a real catch-all, not padded out just to
-# have rows.
+# Top-level categories renamed in place: the row keeps its id, so every
+# listing, subcategory, filter and store that points at it keeps pointing
+# at it. The seed is otherwise skip-if-exists by name, so without this a
+# new name would create a second, empty category next to the old one.
+RENAMED_CATEGORIES: dict[str, str] = {
+    "Vehicles": "Automobiles",
+}
+
+# Subcategories renamed in place, keyed by (parent's current name, old
+# name). Same reason as above.
+RENAMED_SUBCATEGORIES: dict[tuple[str, str], str] = {
+    ("Automobiles", "Motorcycles"): "Motorcycles & Boda Bodas",
+}
+
+# Subcategories that moved to another top-level category, keyed by (old
+# parent, old name) -> (new parent, new name). The row is re-parented, not
+# copied, so listings filed under it move with it.
+MOVED_SUBCATEGORIES: dict[tuple[str, str], tuple[str, str]] = {
+    ("Property", "Land"): ("Land", "Residential Plots"),
+}
+
+# Seller-form fields a subcategory no longer asks for. Metadata only: the
+# values listings already carry in their attributes are untouched. Land's
+# size is its own required field now (land_size + land_size_unit, checked
+# in listings/validation.py), so the old free "acreage" box would ask for
+# it twice.
+RETIRED_SUBCATEGORY_FILTERS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("Land", "Residential Plots"): ("acreage",),
+}
+
+# Subcategories per top-level category (spec §3), in display order - the
+# most common first (service.py returns them in this order). "Other" is
+# deliberately left with zero subcategories - a real catch-all, not padded
+# out just to have rows.
+MTUMBA = "Mtumba (Second-hand Clothes)"
+
 SUBCATEGORIES: dict[str, list[str]] = {
-    "Vehicles": [
-        "Cars", "Motorcycles", "Trucks", "Buses & Matatus", "Vans",
-        "Trailers", "Agricultural Vehicles", "Parts & Accessories",
+    "Automobiles": [
+        "Cars", "Motorcycles & Boda Bodas", "Pickups", "Buses & Matatus",
+        "Trucks", "Vans", "Tuk-Tuks & Three-Wheelers", "Agricultural Vehicles",
+        "Trailers", "Boats & Watercraft", "Parts & Accessories", "Tyres & Rims",
     ],
     "Property": [
-        "Houses", "Apartments", "Land", "Commercial Property", "Offices",
-        "Shops", "Farms", "Rentals",
+        "Houses", "Apartments", "Rentals", "Short Stays & Airbnb",
+        "Commercial Property", "Offices", "Shops", "Warehouses & Godowns",
+        "Farms",
+    ],
+    "Land": [
+        "Residential Plots", "Agricultural Land", "Commercial Land",
+        "Industrial Land", "Beach & Waterfront Land", "Ranches & Large Tracts",
+        "Land for Lease",
     ],
     "Electronics": [
         "Phones", "Laptops & Computers", "Tablets", "TVs", "Audio",
-        "Cameras", "Gaming", "Networking", "Accessories",
-    ],
-    "Gaming": ["Consoles", "PC Gaming", "Games", "Accessories", "Controllers"],
-    "Home & Furniture": [
-        "Living Room", "Bedroom", "Kitchen & Dining", "Office Furniture",
-        "Outdoor & Garden", "Home Décor", "Appliances", "Storage & Organization",
+        "Smartwatches & Wearables", "Cameras", "Solar & Power Backup",
+        "Printers & Scanners", "Computer Components", "Networking", "Gaming",
+        "Accessories",
     ],
     "Fashion": [
-        "Men's Clothing", "Women's Clothing", "Kids' Clothing", "Shoes",
+        MTUMBA, "Men's Clothing", "Women's Clothing", "Kids' Clothing", "Shoes",
         "Bags & Accessories", "Jewelry & Watches", "Traditional Wear",
+        "Wedding Wear", "Uniforms & Workwear", "Fabrics & Textiles",
     ],
     "Agriculture": [
-        "Livestock", "Poultry", "Crops & Produce", "Seeds", "Animal Feed",
-        "Farm Equipment", "Farm Tools", "Agricultural Supplies",
+        "Cereals & Grains", "Fruits & Vegetables", "Crops & Produce",
+        "Livestock", "Poultry", "Dairy & Eggs", "Seeds", "Seedlings & Nursery",
+        "Animal Feed", "Fertilizers & Agrochemicals", "Farm Equipment",
+        "Farm Tools", "Irrigation & Water Tanks", "Beekeeping & Honey",
+        "Agricultural Supplies",
+    ],
+    "Home & Furniture": [
+        "Living Room", "Bedroom", "Beds & Mattresses", "Kitchen & Dining",
+        "Kitchenware & Cookware", "Appliances", "Home Décor",
+        "Bedding & Curtains", "Lighting", "Office Furniture", "Outdoor & Garden",
+        "Storage & Organization",
+    ],
+    "Food & Beverages": [
+        "Packaged Foods & Groceries", "Beverages", "Bakery & Snacks",
+        "Meat & Fish", "Spices, Oils & Condiments", "Ready Meals & Catering",
     ],
     "Construction": [
-        "Building Materials", "Heavy Machinery", "Hand & Power Tools",
-        "Plumbing & Electrical", "Paint & Hardware", "Scaffolding & Safety Gear",
+        "Building Materials", "Roofing Materials", "Steel & Metal Works",
+        "Doors, Windows & Gates", "Tiles & Flooring", "Plumbing & Electrical",
+        "Paint & Hardware", "Hand & Power Tools", "Heavy Machinery",
+        "Scaffolding & Safety Gear",
     ],
     "Beauty & Personal Care": [
-        "Skincare", "Haircare", "Makeup", "Fragrances", "Personal Hygiene",
-        "Salon & Spa Equipment",
+        "Skincare", "Haircare", "Wigs & Hair Extensions", "Makeup", "Fragrances",
+        "Nails", "Men's Grooming", "Personal Hygiene", "Salon & Spa Equipment",
     ],
+    "Health & Medical": [
+        "Medical Equipment", "Health Monitors", "Mobility Aids",
+        "First Aid & Supplies", "Vitamins & Supplements",
+    ],
+    "Baby & Kids": [
+        "Toys & Games", "Strollers & Car Seats", "Cots & Baby Furniture",
+        "Feeding & Nursing", "Diapers & Baby Care", "Maternity",
+    ],
+    "Gaming": ["Consoles", "Games", "Controllers", "PC Gaming", "Accessories"],
     "Sports & Fitness": [
-        "Fitness Equipment", "Team Sports", "Outdoor & Camping", "Cycling",
-        "Swimming", "Sportswear",
+        "Fitness Equipment", "Team Sports", "Cycling", "Sportswear",
+        "Racket Sports", "Outdoor & Camping", "Swimming",
     ],
     "Books & Education": [
-        "Textbooks", "Fiction", "Non-Fiction", "Children's Books",
-        "Stationery & Supplies", "Educational Materials",
+        "Textbooks", "Revision Books & Past Papers", "Fiction", "Non-Fiction",
+        "Children's Books", "Religious Books", "Stationery & Supplies",
+        "Educational Materials",
     ],
     "Music & Instruments": [
         "Guitars", "Keyboards & Pianos", "Drums & Percussion",
-        "Wind Instruments", "DJ & Studio Equipment", "Accessories",
+        "Wind Instruments", "Traditional Instruments", "DJ & Studio Equipment",
+        "PA & Sound Systems", "Accessories",
+    ],
+    "Arts & Crafts": [
+        "Paintings & Wall Art", "Carvings & Sculptures", "Beadwork",
+        "Baskets & Weaving", "Antiques & Collectibles", "Art & Craft Supplies",
     ],
     "Business & Industrial": [
-        "Office Equipment", "Industrial Machinery", "Restaurant & Catering Equipment",
-        "Retail & Shop Fixtures", "Safety & Security Equipment", "Packaging Supplies",
+        "Wholesale & Bulk Stock", "Office Equipment", "Industrial Machinery",
+        "Restaurant & Catering Equipment", "Retail & Shop Fixtures",
+        "Printing & Branding Equipment", "Welding & Workshop Equipment",
+        "Safety & Security Equipment", "Packaging Supplies",
     ],
     "Pets & Animals": [
-        "Dogs", "Cats", "Birds", "Fish & Aquarium", "Pet Supplies & Accessories",
-        "Pet Food",
+        "Dogs", "Cats", "Birds", "Fish & Aquarium", "Rabbits & Small Pets",
+        "Pet Food", "Pet Supplies & Accessories",
     ],
     "Services": [
-        "Home Services", "Automotive Services", "Professional Services",
-        "Events & Entertainment", "Repair & Maintenance", "Tutoring & Lessons",
+        "Home Services", "Cleaning Services", "Repair & Maintenance",
+        "Construction & Renovation", "Transport & Moving", "Automotive Services",
+        "Beauty & Wellness", "IT & Tech Services", "Photography & Videography",
+        "Events & Entertainment", "Tutoring & Lessons", "Professional Services",
     ],
     "Other": [],
 }
+
+# How mtumba is graded and sold in Kenyan markets (Gikomba, Toi, Kongowea):
+# "Grade 1" - the best of a bale, what traders call "camera" - down to
+# mixed, and bought as a single piece, a bundle or a whole bale.
+MTUMBA_GRADES = ["Grade 1 (Camera)", "Grade 2", "Grade 3", "Mixed"]
+BABY_AGE_GROUPS = ["0-6 months", "6-12 months", "1-3 years", "3-5 years", "5+ years"]
+
+# A Land listing must say how big the land is (listings/validation.py
+# refuses one that doesn't), in one of these units - "50x100 plots" being
+# how most Kenyan plots are sold. First in every Land subcategory's form:
+# the sell wizard gives them their own control, and app builds from before
+# it render them as ordinary fields, so either can post land.
+LAND_SIZE_UNIT_OPTIONS = ["Acres", "Hectares", "50x100 plots", "Square metres", "Square feet"]
+LAND_SIZE_FIELDS: list[tuple[str, str, list[str] | None]] = [
+    ("land_size", "number_range", None),
+    ("land_size_unit", "select", LAND_SIZE_UNIT_OPTIONS),
+]
 
 # "More Filters" fields per top-level category (spec §7). field_type is
 # "text" | "number_range" | "select"; options only used for "select".
 # Condition is deliberately never a CategoryFilter - it's the universal
 # listings.condition column, handled separately.
 CATEGORY_FILTERS: dict[str, list[tuple[str, str, list[str] | None]]] = {
-    "Vehicles": [
+    "Automobiles": [
         ("make", "text", None),
         ("model", "text", None),
         ("year", "number_range", None),
@@ -120,6 +221,17 @@ CATEGORY_FILTERS: dict[str, list[tuple[str, str, list[str] | None]]] = {
         ("title_deed", "select", ["Yes", "No"]),
         ("furnished", "select", ["Yes", "No", "Partly"]),
         ("parking", "select", ["Yes", "No"]),
+    ],
+    # land_size_acres is not something a seller types: the listing service
+    # derives it from land_size + land_size_unit (validation.py), so plots
+    # measured in acres, hectares or 50x100s can all be filtered on one scale.
+    "Land": [
+        ("land_size_acres", "number_range", None),
+        ("title_deed", "select", ["Yes", "No"]),
+        ("tenure", "select", ["Freehold", "Leasehold"]),
+        ("road_access", "select", ["Yes", "No"]),
+        ("water", "select", ["Yes", "No"]),
+        ("electricity", "select", ["Yes", "No"]),
     ],
     "Electronics": [
         ("brand", "text", None),
@@ -138,6 +250,7 @@ CATEGORY_FILTERS: dict[str, list[tuple[str, str, list[str] | None]]] = {
     "Fashion": [
         ("size", "select", ["XS", "S", "M", "L", "XL", "XXL"]),
         ("brand", "text", None),
+        ("grade", "select", MTUMBA_GRADES),
     ],
     "Agriculture": [
         ("brand", "text", None),
@@ -172,6 +285,21 @@ CATEGORY_FILTERS: dict[str, list[tuple[str, str, list[str] | None]]] = {
     "Services": [
         ("service_type", "text", None),
     ],
+    "Food & Beverages": [
+        ("brand", "text", None),
+        ("packaging", "select", ["Single", "Pack", "Carton", "Bulk"]),
+    ],
+    "Health & Medical": [
+        ("brand", "text", None),
+    ],
+    "Baby & Kids": [
+        ("age_group", "select", BABY_AGE_GROUPS),
+        ("brand", "text", None),
+    ],
+    "Arts & Crafts": [
+        ("material", "text", None),
+        ("handmade", "select", ["Yes", "No"]),
+    ],
     "Other": [],
 }
 
@@ -180,36 +308,36 @@ CATEGORY_FILTERS: dict[str, list[tuple[str, str, list[str] | None]]] = {
 # CATEGORY_FILTERS above, just seeded against subcategory rows instead of
 # top-level rows.
 SUBCATEGORY_FILTERS: dict[tuple[str, str], list[tuple[str, str, list[str] | None]]] = {
-    ("Vehicles", "Cars"): [
+    ("Automobiles", "Cars"): [
         ("make", "text", None), ("model", "text", None),
         ("year", "number_range", None), ("mileage", "number_range", None),
         ("fuel", "select", ["Petrol", "Diesel", "Hybrid", "Electric"]),
         ("transmission", "select", ["Automatic", "Manual"]),
         ("engine_size", "text", None),
     ],
-    ("Vehicles", "Motorcycles"): [
+    ("Automobiles", "Motorcycles & Boda Bodas"): [
         ("make", "text", None), ("model", "text", None),
         ("year", "number_range", None), ("mileage", "number_range", None),
         ("engine_size", "text", None),
     ],
-    ("Vehicles", "Trucks"): [
+    ("Automobiles", "Trucks"): [
         ("make", "text", None), ("model", "text", None),
         ("year", "number_range", None), ("mileage", "number_range", None),
         ("payload_capacity", "text", None),
     ],
-    ("Vehicles", "Buses & Matatus"): [
+    ("Automobiles", "Buses & Matatus"): [
         ("make", "text", None), ("model", "text", None),
         ("year", "number_range", None), ("seating_capacity", "number_range", None),
     ],
-    ("Vehicles", "Vans"): [
+    ("Automobiles", "Vans"): [
         ("make", "text", None), ("model", "text", None),
         ("year", "number_range", None), ("mileage", "number_range", None),
     ],
-    ("Vehicles", "Trailers"): [("make", "text", None), ("capacity", "text", None)],
-    ("Vehicles", "Agricultural Vehicles"): [
+    ("Automobiles", "Trailers"): [("make", "text", None), ("capacity", "text", None)],
+    ("Automobiles", "Agricultural Vehicles"): [
         ("make", "text", None), ("model", "text", None), ("year", "number_range", None),
     ],
-    ("Vehicles", "Parts & Accessories"): [
+    ("Automobiles", "Parts & Accessories"): [
         ("brand", "text", None), ("compatible_make", "text", None),
     ],
 
@@ -223,13 +351,6 @@ SUBCATEGORY_FILTERS: dict[tuple[str, str], list[tuple[str, str, list[str] | None
         ("bedrooms", "number_range", None), ("bathrooms", "number_range", None),
         ("furnished", "select", ["Yes", "No", "Partly"]),
         ("parking", "select", ["Yes", "No"]),
-    ],
-    ("Property", "Land"): [
-        ("acreage", "number_range", None),
-        ("title_deed", "select", ["Yes", "No"]),
-        ("road_access", "select", ["Yes", "No"]),
-        ("water", "select", ["Yes", "No"]),
-        ("electricity", "select", ["Yes", "No"]),
     ],
     ("Property", "Commercial Property"): [
         ("square_footage", "number_range", None), ("parking", "select", ["Yes", "No"]),
@@ -485,6 +606,212 @@ SUBCATEGORY_FILTERS: dict[tuple[str, str], list[tuple[str, str, list[str] | None
         ("service_type", "text", None), ("experience_years", "number_range", None),
     ],
     ("Services", "Tutoring & Lessons"): [("subject", "text", None), ("level", "text", None)],
+
+    # ── 2026-09-25 listing overhaul: new categories and subcategories ────
+    ("Automobiles", "Pickups"): [
+        ("make", "text", None), ("model", "text", None),
+        ("year", "number_range", None), ("mileage", "number_range", None),
+        ("drive", "select", ["2WD", "4WD"]),
+        ("fuel", "select", ["Petrol", "Diesel", "Hybrid", "Electric"]),
+    ],
+    ("Automobiles", "Tuk-Tuks & Three-Wheelers"): [
+        ("make", "text", None), ("year", "number_range", None),
+        ("use", "select", ["Passenger", "Cargo"]),
+    ],
+    ("Automobiles", "Boats & Watercraft"): [
+        ("type", "select", ["Fishing Boat", "Speed Boat", "Canoe", "Jet Ski", "Other"]),
+        ("length_ft", "number_range", None),
+    ],
+    ("Automobiles", "Tyres & Rims"): [
+        ("brand", "text", None), ("tyre_size", "text", None),
+        ("type", "select", ["Tyres", "Rims", "Tyres & Rims"]),
+    ],
+
+    ("Property", "Short Stays & Airbnb"): [
+        ("bedrooms", "number_range", None), ("guests", "number_range", None),
+        ("wifi", "select", ["Yes", "No"]), ("parking", "select", ["Yes", "No"]),
+    ],
+    ("Property", "Warehouses & Godowns"): [
+        ("square_footage", "number_range", None),
+        ("loading_bay", "select", ["Yes", "No"]),
+    ],
+
+    # LAND_SIZE_FIELDS lead every Land form: the size is required (see
+    # listings/validation.py clean_land_details).
+    ("Land", "Residential Plots"): [
+        *LAND_SIZE_FIELDS,
+        ("title_deed", "select", ["Yes", "No"]),
+        ("tenure", "select", ["Freehold", "Leasehold"]),
+        ("road_access", "select", ["Yes", "No"]),
+        ("water", "select", ["Yes", "No"]),
+        ("electricity", "select", ["Yes", "No"]),
+        ("fenced", "select", ["Yes", "No"]),
+    ],
+    ("Land", "Agricultural Land"): [
+        *LAND_SIZE_FIELDS,
+        ("title_deed", "select", ["Yes", "No"]),
+        ("water", "select", ["Yes", "No"]),
+        ("soil_type", "select", ["Red Soil", "Black Cotton", "Loam", "Sandy", "Volcanic", "Other"]),
+        ("road_access", "select", ["Yes", "No"]),
+    ],
+    ("Land", "Commercial Land"): [
+        *LAND_SIZE_FIELDS,
+        ("title_deed", "select", ["Yes", "No"]),
+        ("tenure", "select", ["Freehold", "Leasehold"]),
+        ("road_frontage", "select", ["Tarmac", "Murram", "None"]),
+        ("electricity", "select", ["Yes", "No"]),
+    ],
+    ("Land", "Industrial Land"): [
+        *LAND_SIZE_FIELDS,
+        ("title_deed", "select", ["Yes", "No"]),
+        ("tenure", "select", ["Freehold", "Leasehold"]),
+        ("electricity", "select", ["Yes", "No"]),
+        ("road_access", "select", ["Yes", "No"]),
+    ],
+    ("Land", "Beach & Waterfront Land"): [
+        *LAND_SIZE_FIELDS,
+        ("title_deed", "select", ["Yes", "No"]),
+        ("water_frontage", "select", ["Ocean", "Lake", "River"]),
+        ("road_access", "select", ["Yes", "No"]),
+    ],
+    ("Land", "Ranches & Large Tracts"): [
+        *LAND_SIZE_FIELDS,
+        ("title_deed", "select", ["Yes", "No"]),
+        ("water", "select", ["Yes", "No"]),
+        ("fenced", "select", ["Yes", "No"]),
+    ],
+    ("Land", "Land for Lease"): [
+        *LAND_SIZE_FIELDS,
+        ("lease_period", "select", ["Per season", "1 year", "2-5 years", "5+ years"]),
+        ("water", "select", ["Yes", "No"]),
+        ("road_access", "select", ["Yes", "No"]),
+    ],
+
+    ("Electronics", "Smartwatches & Wearables"): [
+        ("brand", "text", None),
+        ("compatible_with", "select", ["Android", "iPhone", "Both"]),
+    ],
+    ("Electronics", "Solar & Power Backup"): [
+        ("type", "select", ["Solar Panel", "Battery", "Inverter", "Solar Kit", "Generator", "UPS"]),
+        ("capacity", "text", None), ("brand", "text", None),
+    ],
+    ("Electronics", "Printers & Scanners"): [
+        ("brand", "text", None),
+        ("type", "select", ["Inkjet", "Laser", "Scanner", "All-in-one"]),
+    ],
+    ("Electronics", "Computer Components"): [
+        ("type", "select", ["Hard Drive / SSD", "RAM", "Graphics Card", "Monitor", "Keyboard & Mouse", "Other"]),
+        ("brand", "text", None),
+    ],
+
+    ("Fashion", MTUMBA): [
+        ("sold_as", "select", ["Single piece", "Bundle", "Bale"]),
+        ("grade", "select", MTUMBA_GRADES),
+        ("clothing_type", "select", [
+            "T-shirts & Tops", "Shirts", "Jeans & Trousers", "Dresses & Skirts",
+            "Jackets & Coats", "Sweaters & Hoodies", "Kids' Wear", "Sportswear",
+            "Shoes", "Bags", "Bedding & Duvets", "Curtains", "Mixed",
+        ]),
+        ("for", "select", ["Men", "Women", "Kids", "Unisex"]),
+        ("size", "select", ["XS", "S", "M", "L", "XL", "XXL", "Mixed"]),
+        ("bale_weight_kg", "number_range", None),
+    ],
+    ("Fashion", "Wedding Wear"): [
+        ("size", "select", ["XS", "S", "M", "L", "XL", "XXL"]),
+        ("for", "select", ["Bride", "Groom", "Bridal Party"]),
+    ],
+    ("Fashion", "Uniforms & Workwear"): [
+        ("type", "select", ["School Uniform", "Corporate", "Medical", "Security", "Overalls"]),
+        ("size", "text", None),
+    ],
+    ("Fashion", "Fabrics & Textiles"): [
+        ("fabric", "select", ["Kitenge", "Kikoi", "Maasai Shuka", "Cotton", "Silk", "Other"]),
+    ],
+
+    ("Agriculture", "Cereals & Grains"): [
+        ("crop", "select", ["Maize", "Beans", "Rice", "Wheat", "Sorghum", "Millet", "Green Grams", "Other"]),
+        ("bag_size_kg", "select", ["50kg", "70kg", "90kg", "Other"]),
+        ("moisture_dried", "select", ["Yes", "No"]),
+    ],
+    ("Agriculture", "Fruits & Vegetables"): [
+        ("produce", "text", None), ("organic", "select", ["Yes", "No"]),
+    ],
+    ("Agriculture", "Dairy & Eggs"): [
+        ("product", "select", ["Milk", "Eggs", "Ghee", "Cheese", "Yoghurt"]),
+    ],
+    ("Agriculture", "Seedlings & Nursery"): [("plant", "text", None)],
+    ("Agriculture", "Fertilizers & Agrochemicals"): [
+        ("type", "select", ["Fertilizer", "Pesticide", "Herbicide", "Fungicide", "Manure"]),
+        ("brand", "text", None),
+    ],
+    ("Agriculture", "Irrigation & Water Tanks"): [
+        ("type", "select", ["Water Tank", "Drip Kit", "Pump", "Sprinkler", "Pipes"]),
+        ("capacity", "text", None),
+    ],
+    ("Agriculture", "Beekeeping & Honey"): [
+        ("product", "select", ["Honey", "Beehive", "Beeswax", "Equipment"]),
+    ],
+
+    ("Home & Furniture", "Beds & Mattresses"): [
+        ("size", "select", ["3x6", "4x6", "5x6", "6x6"]), ("brand", "text", None),
+    ],
+    ("Home & Furniture", "Kitchenware & Cookware"): [("material", "text", None), ("brand", "text", None)],
+    ("Home & Furniture", "Bedding & Curtains"): [("type", "text", None), ("size", "text", None)],
+    ("Home & Furniture", "Lighting"): [("type", "text", None)],
+
+    ("Food & Beverages", "Packaged Foods & Groceries"): [("brand", "text", None)],
+    ("Food & Beverages", "Beverages"): [
+        ("type", "select", ["Soft Drinks", "Juice", "Water", "Tea & Coffee", "Other"]),
+        ("brand", "text", None),
+    ],
+    ("Food & Beverages", "Meat & Fish"): [
+        ("type", "select", ["Beef", "Goat", "Chicken", "Pork", "Fish", "Other"]),
+    ],
+
+    ("Construction", "Roofing Materials"): [
+        ("material", "select", ["Iron Sheets", "Tiles", "Stone Coated", "Other"]),
+        ("gauge", "text", None),
+    ],
+    ("Construction", "Steel & Metal Works"): [("type", "text", None)],
+    ("Construction", "Doors, Windows & Gates"): [
+        ("material", "select", ["Steel", "Wood", "Aluminium", "Glass"]),
+    ],
+    ("Construction", "Tiles & Flooring"): [("type", "text", None), ("size", "text", None)],
+
+    ("Beauty & Personal Care", "Wigs & Hair Extensions"): [
+        ("type", "select", ["Human Hair", "Synthetic", "Braids", "Weave"]),
+        ("length", "text", None),
+    ],
+    ("Beauty & Personal Care", "Men's Grooming"): [("brand", "text", None)],
+
+    ("Health & Medical", "Medical Equipment"): [("brand", "text", None), ("type", "text", None)],
+    ("Health & Medical", "Health Monitors"): [
+        ("type", "select", ["Blood Pressure", "Glucose", "Oximeter", "Thermometer", "Other"]),
+        ("brand", "text", None),
+    ],
+    ("Health & Medical", "Mobility Aids"): [
+        ("type", "select", ["Wheelchair", "Walker", "Crutches", "Other"]),
+    ],
+
+    ("Baby & Kids", "Toys & Games"): [("age_group", "select", BABY_AGE_GROUPS)],
+    ("Baby & Kids", "Strollers & Car Seats"): [("brand", "text", None)],
+    ("Baby & Kids", "Cots & Baby Furniture"): [("material", "text", None)],
+
+    ("Arts & Crafts", "Paintings & Wall Art"): [("medium", "text", None), ("size", "text", None)],
+    ("Arts & Crafts", "Carvings & Sculptures"): [
+        ("material", "select", ["Wood", "Soapstone", "Metal", "Other"]),
+    ],
+    ("Arts & Crafts", "Beadwork"): [("type", "text", None)],
+
+    ("Business & Industrial", "Wholesale & Bulk Stock"): [("product_type", "text", None)],
+    ("Business & Industrial", "Printing & Branding Equipment"): [("brand", "text", None), ("type", "text", None)],
+
+    ("Services", "Cleaning Services"): [("service_type", "text", None)],
+    ("Services", "Transport & Moving"): [
+        ("vehicle", "select", ["Pickup", "Lorry", "Van", "Motorbike"]),
+    ],
+    ("Services", "IT & Tech Services"): [("service_type", "text", None)],
+    ("Services", "Photography & Videography"): [("service_type", "text", None)],
 }
 
 
@@ -494,18 +821,48 @@ async def seed_categories() -> dict:
     Safe to call on every app startup and against a database that already
     has categories: every insert is skip-if-exists (by name for top-level
     categories, by (parent, name) for subcategories, by (category, field)
-    for filters). Never deletes, never overwrites an existing row, never
-    touches Listing/User data. Returns counts of what was newly created
-    (all zeros on a re-run against an already-seeded database).
+    for filters). Never deletes a category, never touches User data.
+    Returns counts of what was newly created or changed (all zeros on a
+    re-run against an already-seeded database).
+
+    The only rows it changes are the ones the tables above say changed: a
+    renamed or moved category keeps its id (so everything pointing at it
+    follows), and the free-text category name stored on listings, stores
+    and buy-agent requests is brought in line with it - on every start, so
+    a start that died between the two steps is finished by the next one.
     """
     counts = {
         "categories_created": 0,
         "subcategories_created": 0,
         "filters_created": 0,
         "subcategory_filters_created": 0,
+        "categories_renamed": 0,
+        "subcategories_moved": 0,
+        "filters_retired": 0,
     }
 
     async with AsyncSessionLocal() as db:
+        # ── Pass 0: renames, before anything is looked up by name ─────────
+        # A rename done after Pass 1 would be too late: Pass 1 would already
+        # have created an empty "Automobiles" next to the real "Vehicles".
+        # Skipped when the new name already exists (a database seeded fresh
+        # with the new taxonomy, or a rename done on an earlier start).
+        for old_name, new_name in RENAMED_CATEGORIES.items():
+            old_row = await _top_level(db, old_name)
+            if old_row is not None and await _top_level(db, new_name) is None:
+                old_row.name = new_name
+                counts["categories_renamed"] += 1
+        await db.flush()
+        for (parent_name, old_name), new_name in RENAMED_SUBCATEGORIES.items():
+            parent = await _top_level(db, parent_name)
+            if parent is None:
+                continue
+            old_row = await _child(db, parent.id, old_name)
+            if old_row is not None and await _child(db, parent.id, new_name) is None:
+                old_row.name = new_name
+                counts["categories_renamed"] += 1
+        await db.commit()
+
         # ── Pass 1: top-level categories ──────────────────────────────────
         # Scoped to parent_id IS NULL, and .first() rather than
         # .scalar_one_or_none(): "Gaming" is both a top-level category AND
@@ -516,9 +873,7 @@ async def seed_categories() -> dict:
         # here would work on a fresh DB but raise on every re-run once that
         # Electronics/Gaming subcategory row exists.
         for name in CANONICAL_CATEGORIES:
-            existing = (await db.execute(
-                select(Category).where(Category.name == name, Category.parent_id.is_(None))
-            )).scalars().first()
+            existing = await _top_level(db, name)
             if not existing:
                 db.add(Category(id=str(uuid.uuid4()), name=name, icon=None, parent_id=None))
                 counts["categories_created"] += 1
@@ -541,9 +896,22 @@ async def seed_categories() -> dict:
         # that fed `parent` in the first place that needs the same care.
         by_name = {}
         for name in CANONICAL_CATEGORIES:
-            by_name[name] = (await db.execute(
-                select(Category).where(Category.name == name, Category.parent_id.is_(None))
-            )).scalars().first()
+            by_name[name] = await _top_level(db, name)
+
+        # ── Pass 1b: subcategories that moved to another category ─────────
+        # Re-parented in place (after Pass 1, which created the new parent).
+        # Skipped when the destination already has a row of that name, so a
+        # fresh database - which never had the old row - is untouched.
+        for (old_parent, old_name), (new_parent, new_name) in MOVED_SUBCATEGORIES.items():
+            source, target = by_name.get(old_parent), by_name.get(new_parent)
+            if source is None or target is None:
+                continue
+            row = await _child(db, source.id, old_name)
+            if row is not None and await _child(db, target.id, new_name) is None:
+                row.parent_id = target.id
+                row.name = new_name
+                counts["subcategories_moved"] += 1
+        await db.commit()
 
         # ── Pass 2: subcategories ───────────────────────────────────────
         for parent_name, sub_names in SUBCATEGORIES.items():
@@ -608,6 +976,76 @@ async def seed_categories() -> dict:
                     options=json.dumps(options) if options else None,
                 ))
                 counts["subcategory_filters_created"] += 1
+
+        for (top_name, sub_name), retired in RETIRED_SUBCATEGORY_FILTERS.items():
+            top_cat = by_name.get(top_name)
+            sub_cat = by_parent_and_name.get((top_cat.id, sub_name)) if top_cat else None
+            if sub_cat is None:
+                continue
+            result = await db.execute(
+                delete(CategoryFilter).where(
+                    CategoryFilter.category_id == sub_cat.id,
+                    CategoryFilter.field_name.in_(retired),
+                )
+            )
+            counts["filters_retired"] += result.rowcount or 0
+        await db.commit()
+
+        # ── Pass 5: stored category names follow their category ─────────
+        await _sync_stored_category_names(db, by_name)
         await db.commit()
 
     return counts
+
+
+async def _top_level(db, name: str):
+    return (await db.execute(
+        select(Category).where(Category.name == name, Category.parent_id.is_(None))
+    )).scalars().first()
+
+
+async def _child(db, parent_id: str, name: str):
+    return (await db.execute(
+        select(Category).where(Category.parent_id == parent_id, Category.name == name)
+    )).scalars().first()
+
+
+async def _sync_stored_category_names(db, by_name: dict) -> None:
+    """Listings, stores and buy-agent requests store their top-level
+    category by NAME (free text, from before the taxonomy had ids), and the
+    feed, the category filter and a store's category rail all match on it.
+    After "Vehicles" became "Automobiles", a listing still saying "Vehicles"
+    would drop out of the Automobiles zone's name filter and render with the
+    catch-all icon. Matches nothing once done, so repeating it is one scan.
+    """
+    from api.database import BuyAgentRequest, Listing
+    from api.models.store import Store
+
+    for old_name, new_name in RENAMED_CATEGORIES.items():
+        for model in (Listing, Store, BuyAgentRequest):
+            await db.execute(
+                update(model).where(func.lower(model.category) == old_name.lower())
+                .values(category=new_name)
+            )
+    # A listing filed under a subcategory that moved (Property -> Land)
+    # says the old parent's name; it now belongs to the new parent.
+    for _old, (new_parent, new_name) in MOVED_SUBCATEGORIES.items():
+        parent = by_name.get(new_parent)
+        if parent is None:
+            continue
+        moved = await _child(db, parent.id, new_name)
+        if moved is None:
+            continue
+        await db.execute(
+            update(Listing).where(Listing.subcategory_id == moved.id, Listing.category != new_parent)
+            .values(category=new_parent)
+        )
+
+
+def canonical_category_name(value: str) -> str:
+    """The current name for a top-level category name that has been
+    renamed ("vehicles" -> "Automobiles"), in any case; anything else is
+    returned as given. Drafts and app builds from before a rename still
+    send the old name."""
+    renamed = {old.lower(): new for old, new in RENAMED_CATEGORIES.items()}
+    return renamed.get(value.strip().lower(), value)

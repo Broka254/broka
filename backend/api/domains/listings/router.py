@@ -37,8 +37,20 @@ class ListingIn(BaseModel):
     price: float
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
-    description: Optional[str] = None
+    # Required (2026-09-25). validate_default so a request that leaves it
+    # out gets the same sentence as one that sends it empty, not pydantic's
+    # "Field required".
+    description: Optional[str] = Field(default=None, validate_default=True)
     location_name: Optional[str] = None
+    # Selling terms (2026-09-25) - see the Listing model for what each
+    # means. All optional, with the defaults older app builds get: a price
+    # for the whole item, offers welcome, and the availability SMS on.
+    price_unit: Optional[str] = None
+    quantity: Optional[int] = None
+    price_negotiable: bool = True
+    delivery_available: Optional[bool] = None
+    delivery_note: Optional[str] = None
+    sms_alerts: bool = True
     # Structured location (2026-08-29). location_county/location_subcounty
     # are the new 3-part location step's real inputs; location_country
     # isn't sent by the client at all right now (fixed to Kenya - see
@@ -114,7 +126,22 @@ class ListingIn(BaseModel):
     @field_validator("description")
     @classmethod
     def _description(cls, v):
-        return rules.bounded_text(v, rules.MAX_DESCRIPTION_LEN, "description")
+        return rules.clean_description(v)
+
+    @field_validator("price_unit")
+    @classmethod
+    def _price_unit(cls, v):
+        return rules.clean_price_unit(v)
+
+    @field_validator("quantity")
+    @classmethod
+    def _quantity(cls, v):
+        return rules.clean_quantity(v)
+
+    @field_validator("delivery_note")
+    @classmethod
+    def _delivery_note(cls, v):
+        return rules.bounded_text(v, rules.MAX_DELIVERY_NOTE_LEN, "delivery note") or None
 
     @field_validator("location_name")
     @classmethod
