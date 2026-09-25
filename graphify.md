@@ -60,7 +60,7 @@ Counts: admin 16, optional 2, public 43, token 4, user 99.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:422) |
+| GET | `/` | public | `root` (backend/main.py:451) |
 | GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:136) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:177) |
 | GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:319) |
@@ -81,7 +81,7 @@ Counts: admin 16, optional 2, public 43, token 4, user 99.
 | POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:56) |
 | GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:119) |
 | GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:23) |
-| GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:139) |
+| GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:140) |
 | PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:56) |
 | PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:292) |
 | POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:155) |
@@ -145,25 +145,25 @@ Counts: admin 16, optional 2, public 43, token 4, user 99.
 | GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:129) |
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:123) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:300) |
-| GET | `/health` | public | `health` (backend/main.py:450) |
-| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:99) |
-| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:157) |
-| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:575) |
-| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:524) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:743) |
-| GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:93) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:778) |
-| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:213) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:809) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:820) |
-| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:387) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:760) |
+| GET | `/health` | public | `health` (backend/main.py:479) |
+| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:152) |
+| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:210) |
+| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:680) |
+| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:629) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:848) |
+| GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:146) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:883) |
+| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:300) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:914) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:925) |
+| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:492) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:865) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:66) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:78) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:51) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:786) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:798) |
-| GET | `/live` | public | `live` (backend/main.py:502) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:891) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:903) |
+| GET | `/live` | public | `live` (backend/main.py:531) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
@@ -191,7 +191,7 @@ Counts: admin 16, optional 2, public 43, token 4, user 99.
 | POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3451) |
 | POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3477) |
 | GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3499) |
-| GET | `/ready` | public | `ready` (backend/main.py:456) |
+| GET | `/ready` | public | `ready` (backend/main.py:485) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:23) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:38) |
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:87) |
@@ -287,9 +287,11 @@ Counts: admin 16, optional 2, public 43, token 4, user 99.
 
 ### `backend/api/domains/listings/`
 
+- `location.py` — Where a listing sits on the map, and the county it is filed under.
 - `router.py` — Listings Router v3.0
 - `sell_probability.py` — Probability that a listing sells — and what is holding it back.
 - `service.py` — Listings Service v3.0
+- `validation.py` — What a listing may contain - the checks behind POST /listings, PATCH /listings/{id} and POST /listings/{id}/interest.
 
 ### `backend/api/domains/media/`
 
@@ -423,43 +425,43 @@ Counts: admin 16, optional 2, public 43, token 4, user 99.
 
 | Table | Model | Defined at |
 |---|---|---|
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:506 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1011 |
-| `bids` | `Bid` | backend/api/database.py:495 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:613 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:516 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1021 |
+| `bids` | `Bid` | backend/api/database.py:505 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:623 |
 | `categories` | `Category` | backend/api/database.py:295 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:303 |
-| `deals` | `Deal` | backend/api/database.py:661 |
+| `deals` | `Deal` | backend/api/database.py:671 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:951 |
+| `disputes` | `Dispute` | backend/api/database.py:961 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:272 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:67 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:978 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1030 |
-| `interests` | `Interest` | backend/api/database.py:393 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:988 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1040 |
+| `interests` | `Interest` | backend/api/database.py:403 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:870 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:846 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:880 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:856 |
 | `listings` | `Listing` | backend/api/database.py:312 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:66 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:100 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:905 |
-| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:416 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:915 |
+| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:426 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:253 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:925 |
-| `reviews` | `Review` | backend/api/database.py:966 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:796 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:775 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:935 |
+| `reviews` | `Review` | backend/api/database.py:976 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:806 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:785 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:460 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:598 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:470 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:608 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:994 |
-| `wishlists` | `Wishlist` | backend/api/database.py:586 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1004 |
+| `wishlists` | `Wishlist` | backend/api/database.py:596 |
 
 ## Backend dependencies between domains
 
@@ -478,7 +480,7 @@ of a change.
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, ledger, workers; database, security
 - **escrow** — core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, reconciliation, secrets_crypto; database, security
-- **listings** — domains: auctions, media, trust; core: config, events, timeutil; database, security
+- **listings** — domains: auctions, escrow, media, trust; core: config, events, rate_limit, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — nothing outside itself
@@ -526,7 +528,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-67 files in `backend/tests/`.
+68 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -564,6 +566,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_fraud.py` — BROKA - Fraud Engine Unit Tests (v3.0) Tests trust score computation and trust band classification.
 - `test_idempotency.py` — Tests for the idempotency key guard.
 - `test_interest_nudges.py` — BROKA - Interest Availability Nudge Tests (v6.2) Run: pytest backend/tests/test_interest_nudges.py -v
+- `test_listing_posting.py` — Posting a listing: what POST /listings, PATCH /listings/{id} and the interest endpoint accept, and what a listing publishes about its selle…
 - `test_listings.py` — BROKA - Listings Endpoint Tests Run: pytest backend/tests/test_listings.py -v
 - `test_media_assets.py` — Image assets: processing, storage, upload, and what listings and stores do with them (Online Stores phase 1).
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
@@ -742,6 +745,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `global_poller_service.dart` — BROKA - Global Poller Service
 - `image_upload_service.dart` — Image uploads: one image in, an asset id and its URLs out.
 - `last_screen_tracker.dart` — BROKA - Last Screen Tracker Persists a lightweight descriptor of the most recently visited screen (route name + small JSON of primitive arg…
+- `listing_publisher.dart` — Publishing a listing from the sell wizard: the photos' ids, the showcase, then POST /listings - in a form that is safe to repeat.
 - `local_chat_store.dart` — BROKA - Local Chat Store
 - `notification_service.dart` — BROKA - Notification Service (local notifications + FCM foreground/tap handling)
 - `photo_upload_tracker.dart` — Background uploads for the photos a user picks, one per file.
@@ -778,6 +782,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `factor_trend_chart.dart` — BROKA — factor trend chart
 - `gradient_button.dart` — BROKA — Gradient Button Shared primary-action button used across auth, sell, profile, and inbox screens.
 - `lighting_coach.dart` — BROKA — Lighting coach for the selfie scan.
+- `list_picker.dart` — A searchable list in a bottom sheet, and the form field that opens one.
 - `message_receipt.dart` — BROKA - Message receipt indicator
 - `motion_widgets.dart` — BROKA — motion primitives
 - `otp_code_field.dart` — BROKA — 6-digit OTP entry.
@@ -812,6 +817,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `home_collapsing_scroll_test.dart` — Covers the Home collapsing-scroll architecture (2026-09-18 brief).
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
 - `incoming_call_notification_test.dart` — The incoming-call notification's Accept and Decline.
+- `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
@@ -892,6 +898,7 @@ Modules:
 - `FCM_SETUP_REMAINING.md` — FCM Setup — Remaining Steps
 - `GEMINI.md` — BROKA
 - `IOS_CALLING_SETUP.md` — BROKA iOS calling — what's in the repo, what still needs Xcode
+- `LISTING_POSTING_REVIEW.md` — BROKA — Listing Posting Review
 - `PRIVACY.md` — Message visibility — how the audience line is enforced
 - `README.md` — BROKA — AI-Mediated P2P Marketplace for East Africa
 - `REPO_REVIEW.md` — BROKA — Repository Review
