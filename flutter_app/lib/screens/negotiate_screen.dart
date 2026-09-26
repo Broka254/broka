@@ -983,10 +983,17 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   // ── Scroll ─────────────────────────────────────────────────────────────────
   /// Keeps a reply that is being written in view as it grows - unless the
   /// user has scrolled up to read something else.
+  ///
+  /// Called every frame while a reply is written, so each step is a few
+  /// pixels - smooth, not a jump per line. Never while a finger or a fling
+  /// is moving the list.
   void _followStream() {
     if (!_scrollCtrl.hasClients) return;
     final p = _scrollCtrl.position;
-    if (p.maxScrollExtent - p.pixels < 160) _scrollCtrl.jumpTo(p.maxScrollExtent);
+    if (p.isScrollingNotifier.value) return;
+    if (p.maxScrollExtent - p.pixels < 160 && p.pixels < p.maxScrollExtent) {
+      _scrollCtrl.jumpTo(p.maxScrollExtent);
+    }
   }
 
   void _scrollDown() => Future.delayed(const Duration(milliseconds: 120), () {

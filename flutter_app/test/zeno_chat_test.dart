@@ -238,6 +238,41 @@ void main() {
       expect(find.text(long), findsOneWidget);
     });
 
+    testWidgets('one word at a time, at a pace that can be read', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('zeno-composer')), 'Is 800K fair?');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+
+      final total = long.split(' ').length;
+      final counts = <int>[];
+      for (var frame = 0; frame < 500; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        // The greeting is the first; the reply, once it lands, the second.
+        final replies = find.byType(ZenoStreamingText);
+        if (replies.evaluate().length < 2) continue;
+        final text = tester.widget<Text>(
+            find.descendant(of: replies.last, matching: find.byType(Text)));
+        final shown = (text.data ?? text.textSpan!.toPlainText()).replaceAll('▍', '');
+        counts.add(shown.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length);
+        if (counts.last == total && text.data != null) break;
+      }
+
+      expect(counts.last, total);
+      for (var i = 1; i < counts.length; i++) {
+        expect(counts[i] - counts[i - 1], lessThanOrEqualTo(1),
+            reason: 'words arrive one at a time, never in lumps (frame $i)');
+      }
+      final firstWord = counts.indexWhere((c) => c > 0);
+      final lastWord = counts.indexOf(total);
+      final writingMs = (lastWord - firstWord) * 16;
+      // 23 words: about 1.8s at a steady reading pace. The first version
+      // wrote this in well under a second.
+      expect(writingMs, inInclusiveRange(1300, 3500));
+    });
+
     testWidgets('a conversation picked up again is not written out again',
         (tester) async {
       await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));

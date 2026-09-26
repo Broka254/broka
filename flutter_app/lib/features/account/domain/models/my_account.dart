@@ -59,6 +59,9 @@ class MyAccount {
 
   bool get isSeller => accountType == 'buyer_seller';
 
+  /// Only a seller set up as a business can open an online store.
+  bool get canOpenStore => isSeller && sellerTier == 'long_term';
+
   /// The preferred name when there is one - it's what the user asked to be
   /// called.
   String get displayName {

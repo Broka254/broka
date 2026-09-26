@@ -26,7 +26,7 @@ import '../../domain/kenya_locations.dart';
 import '../../domain/models/store.dart';
 import '../../domain/store_categories.dart';
 
-enum StoreSetupStep { business, name, link, category, location, logo, photos, email, review }
+enum StoreSetupStep { name, link, category, location, logo, photos, email, review }
 
 /// An image in the draft: a picked file (uploading, or uploaded), or an
 /// image the store already has.
@@ -151,17 +151,15 @@ class StoreSetupController extends ChangeNotifier {
   String? loadError;
   StoreOwnerProfile? owner;
 
-  /// True when this seller must add business details before opening a
-  /// store. Stays true for the session once shown, so the step stays in
-  /// the progress bar after it's done.
-  bool showBusinessStep = false;
-  bool businessDone = false;
+  /// True when this account can't open a store yet: only a seller set up
+  /// as a business can, and the server refuses anyone else. The wizard
+  /// doesn't make anyone a seller - it used to, with a "Your business" step
+  /// that turned a buyer into a long-term seller halfway through opening a
+  /// store, skipping the question signup and Start selling ask. Start
+  /// selling does that now, and the wizard waits for it.
+  bool needsBusiness = false;
 
   // ── Draft ────────────────────────────────────────────────────────────────
-
-  String businessName = '';
-  String? businessCategory;
-  String businessLocation = '';
 
   String name = '';
   String slug = '';
@@ -207,7 +205,6 @@ class StoreSetupController extends ChangeNotifier {
   bool busy = false;
 
   List<StoreSetupStep> get steps => [
-        if (showBusinessStep) StoreSetupStep.business,
         StoreSetupStep.name,
         StoreSetupStep.link,
         StoreSetupStep.category,
@@ -238,10 +235,7 @@ class StoreSetupController extends ChangeNotifier {
         owner = data;
     }
     final o = owner!;
-    showBusinessStep = !o.canOpenStore;
-    businessName = o.businessName ?? '';
-    businessCategory = StoreCategories.fromAny(o.businessCategory);
-    businessLocation = o.businessLocation ?? '';
+    needsBusiness = !o.canOpenStore;
 
     if (!await _restoreDraft()) _prefill(o);
     loading = false;
@@ -283,13 +277,6 @@ class StoreSetupController extends ChangeNotifier {
       // for the owner's own verified account email, which needs none.
       final o = owner;
       emailVerified = o != null && o.emailVerified && _sameEmail(email, o.email);
-      if (d['businessName'] is String && (d['businessName'] as String).isNotEmpty) {
-        businessName = d['businessName'] as String;
-      }
-      businessCategory = d['businessCategory'] as String? ?? businessCategory;
-      if (d['businessLocation'] is String && (d['businessLocation'] as String).isNotEmpty) {
-        businessLocation = d['businessLocation'] as String;
-      }
       // Picked images that hadn't finished uploading carry on.
       for (final (tracker, image) in [
         (logoUploads, logo),
@@ -338,9 +325,6 @@ class StoreSetupController extends ChangeNotifier {
         'cover': cover?.toJson(),
         'photos': [for (final p in photos) p.toJson()],
         'email': email,
-        'businessName': businessName,
-        'businessCategory': businessCategory,
-        'businessLocation': businessLocation,
       }));
     } catch (_) {}
   }
@@ -358,40 +342,6 @@ class StoreSetupController extends ChangeNotifier {
       return prefs.containsKey(_draftKey());
     } catch (_) {
       return false;
-    }
-  }
-
-  // ── Business details (sellers who can't open a store yet) ────────────────
-
-  void setBusinessName(String v) { businessName = v; _changed(); }
-  void setBusinessCategory(String v) { businessCategory = v; _changed(); }
-  void setBusinessLocation(String v) { businessLocation = v; _changed(); }
-
-  /// Saves the business details, making this a long-term seller. Returns
-  /// an error message, or null on success.
-  Future<String?> upgrade() async {
-    final problem = _businessFieldsProblem();
-    if (problem != null) return problem;
-    busy = true;
-    notifyListeners();
-    final result = await _repo.upgradeToLongTerm(
-      businessName: businessName.trim(),
-      businessCategory: businessCategory!,
-      businessLocation: businessLocation.trim(),
-    );
-    busy = false;
-    switch (result) {
-      case Failure(:final message):
-        notifyListeners();
-        return message;
-      case Success(:final data):
-        owner = data;
-        businessDone = true;
-        if (name.trim().isEmpty) setName(businessName.trim());
-        category ??= businessCategory;
-        county ??= KenyaLocations.guessCounty(businessLocation);
-        _changed();
-        return null;
     }
   }
 
@@ -685,19 +635,9 @@ class StoreSetupController extends ChangeNotifier {
 
   // ── Validation ───────────────────────────────────────────────────────────
 
-  String? _businessFieldsProblem() {
-    if (businessName.trim().length < 2) return 'Enter your business name.';
-    if (businessCategory == null) return 'Choose what your business sells.';
-    if (businessLocation.trim().length < 2) return 'Say where your business is.';
-    return null;
-  }
-
   /// What stops [step] from being complete, or null.
   String? validate(StoreSetupStep step) {
     switch (step) {
-      case StoreSetupStep.business:
-        if (businessDone) return null;
-        return _businessFieldsProblem() ?? 'Save your business details first.';
       case StoreSetupStep.name:
         final n = name.trim();
         if (n.length < 2) return 'Give your store a name.';
@@ -822,9 +762,10 @@ class StoreSetupController extends ChangeNotifier {
 
   SetupProblem _problemFor(String message, int? statusCode) {
     if (statusCode == 403) {
-      showBusinessStep = true;
-      businessDone = false;
-      return SetupProblem(message, StoreSetupStep.business);
+      // The account stopped being a business seller while the wizard was
+      // open (or never was, on an old draft): back to Start selling.
+      needsBusiness = true;
+      return SetupProblem(message);
     }
     if (statusCode == 409 && message.toLowerCase().contains('link')) {
       linkStatus = LinkStatus.unavailable;

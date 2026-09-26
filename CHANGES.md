@@ -1,3 +1,45 @@
+# A store needs a business seller first; Zeno's replies at a readable pace (2026-09-26)
+
+## Opening a store no longer makes a buyer a seller on the side
+
+The server has always refused a store to anyone but a long-term seller, but
+the store setup got round it: its first step, "Your business", sent a
+buyer's business name, category and location to `/auth/upgrade-to-seller`
+and carried on opening the store - a second way of becoming a seller that
+skipped the question signup and Start selling ask, used a different
+category list and had no preview. The Menu offered buyers "Open a store"
+straight into it.
+
+- The store setup makes no one a seller. For an account that isn't a
+  business seller it stops before the first store step and says why, with
+  "Set up my business": Start selling's business steps (the "a few items or
+  a business?" question is already answered - a store needs a business),
+  then back to the store setup, prefilled from the business just set up.
+  A 403 from `POST /stores` (the account changed meanwhile) returns there
+  too.
+- The Menu's store card, for a buyer or a short-term seller, says stores are
+  for businesses and its button is "Set up my business", leading to the
+  same steps and then on to the store.
+- Removed with it: the wizard's business step, its draft fields and
+  `StoresRepository.upgradeToLongTerm`.
+- `test/store_setup_test.dart` (the wizard never calls
+  `/auth/upgrade-to-seller`; a 403 goes back to the gate),
+  `test/start_selling_test.dart` (buyer -> business -> store setup, end to
+  end), `test/menu_test.dart`.
+
+## Zeno writes at a readable pace
+
+Replies were written out one to three words at a time every 35-105ms -
+about twice a comfortable reading pace, and in lumps. Now one word at a
+time, about 13 a second with a slight unevenness, a beat after commas and
+sentence ends, each word fading in over a little longer than the gap so the
+line flows, a steady caret, and the bubble easing open line by line; the
+chat follows it smoothly every frame (never while you're scrolling). Long
+replies speed up per word rather than arriving in lumps, so they still take
+about seven seconds at most. The new test in `test/zeno_chat_test.dart`
+(one word per frame at most, 1.3-3.5s for a 23-word reply) failed on the old
+pacing.
+
 # Voice input connects or says why; Start selling asks what signup asks; the negotiation screens on Home's look; Zeno writes its replies out (2026-09-26)
 
 ## Voice input stuck on "Connecting…"

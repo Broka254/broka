@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/stores/presentation/setup/store_setup_screen.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/screens/start_selling_screen.dart';
 import 'package:broka/widgets/constellation_background.dart';
@@ -179,6 +180,84 @@ void main() {
     await _settle(tester);
     await tapContinue(tester);
     expect(tester.takeException(), isNull);
+  });
+
+  group('on the way to an online store', () {
+    testWidgets('a buyer sets the business up first, then the store setup carries on',
+        (tester) async {
+      var upgraded = false;
+      setFakeRoute((uri) {
+        switch (uri.path) {
+          case '/auth/me':
+            return upgraded
+                ? {'id': 'u1', 'name': 'Grace', 'account_type': 'buyer_seller',
+                    'seller_tier': 'long_term', 'business_name': 'Clanix',
+                    'business_category': 'Electronics', 'business_location': 'Sira'}
+                : {'id': 'u1', 'name': 'Grace', 'account_type': 'buyer'};
+          case '/auth/upgrade-to-seller':
+            upgraded = true;
+            return {'id': 'u1', 'account_type': 'buyer_seller', 'seller_tier': 'long_term'};
+          case '/stores/mine':
+            return const FakeResponse(null);
+          case '/stores/name-available':
+            return {'name': uri.queryParameters['name'], 'available': true,
+                'url': 'https://broka.co.ke/store/${uri.queryParameters['name']}'};
+        }
+        return null;
+      });
+      await tester.pumpWidget(const MaterialApp(
+          home: StoreSetupScreen(animateBackground: false)));
+      await _settle(tester);
+
+      // No store steps for an account that isn't a business.
+      expect(find.text('Online stores are for businesses'), findsOneWidget);
+      expect(find.text('Name your store'), findsNothing);
+
+      await tester.tap(find.text('Set up my business'));
+      await _settle(tester);
+      // A store needs a business, so that question is already answered.
+      expect(find.text('What kind of seller?'), findsNothing);
+      expect(find.text('Business Name'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'Clanix');
+      await tapContinue(tester);
+      await tapContinue(tester); // Electronics
+      await tester.enterText(find.byType(TextField), 'Sira');
+      await tapContinue(tester);
+      await tester.tap(find.text('Skip — add it later'));
+      await _settle(tester);
+      expect(find.text('Clanix · Electronics · Sira'), findsOneWidget);
+      await tester.tap(find.text('On to my store'));
+      await _settle(tester);
+      await _settle(tester);
+
+      expect(upgradeRequest(), {
+        'seller_tier': 'long_term',
+        'business_name': 'Clanix',
+        'business_category': 'Electronics',
+        'business_location': 'Sira',
+      });
+      // Back in the store setup, starting from the business just set up.
+      expect(find.text('Name your store'), findsOneWidget);
+      expect(find.text('Clanix'), findsWidgets);
+      expect(find.text('THE DASHBOARD'), findsNothing);
+    });
+
+    testWidgets('a business seller goes straight to the store steps', (tester) async {
+      setFakeRoute((uri) => switch (uri.path) {
+            '/auth/me' => {'id': 'u1', 'account_type': 'buyer_seller',
+                'seller_tier': 'long_term', 'business_name': 'Clanix',
+                'business_category': 'Electronics', 'business_location': 'Sira'},
+            '/stores/mine' => const FakeResponse(null),
+            '/stores/name-available' => {'name': uri.queryParameters['name'],
+                'available': true},
+            _ => null,
+          });
+      await tester.pumpWidget(const MaterialApp(
+          home: StoreSetupScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.text('Online stores are for businesses'), findsNothing);
+      expect(find.text('Name your store'), findsOneWidget);
+    });
   });
 }
 

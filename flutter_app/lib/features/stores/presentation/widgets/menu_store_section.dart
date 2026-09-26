@@ -9,15 +9,18 @@
 //    counts (api/domains/stores/stats.py); a figure that failed to load shows
 //    a dash, never a zero.
 //  * It hasn't: what a store is, in three lines, and the button that starts
-//    one (or picks up a half-finished setup). Profile used to hide this from
-//    buyers entirely, although the setup wizard takes buyers - it collects
-//    the business details first.
+//    one (or picks up a half-finished setup). Only a business can have a
+//    store, so for a buyer or someone selling a few items the button sets
+//    the business up first (Start selling's business steps) and then goes
+//    on to the store - it never opens the store setup for an account that
+//    isn't a seller yet.
 //
 // Loads itself, so the Menu can refresh it by giving it a new key.
 import 'package:flutter/material.dart';
 
 import '../../../../core/utils/result.dart';
 import '../../../../main.dart' show BrokaColors;
+import '../../../../screens/start_selling_screen.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/gradient_button.dart';
 import '../../../../widgets/menu_tiles.dart';
@@ -28,10 +31,15 @@ import '../setup/store_setup_controller.dart';
 import '../store_entry.dart';
 
 class MenuStoreSection extends StatefulWidget {
-  const MenuStoreSection({super.key, this.repository, this.share});
+  const MenuStoreSection({super.key, this.repository, this.share, this.businessReady});
 
   final StoresRepository? repository;
   final StoreShare? share;
+
+  /// Whether the account is a seller set up as a business - the only kind
+  /// that can open a store. Null while the Menu's account is loading, in
+  /// which case the store setup's own check still applies.
+  final bool? businessReady;
 
   @override
   State<MenuStoreSection> createState() => _MenuStoreSectionState();
@@ -84,6 +92,11 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
   }
 
   Future<void> _openStoreFlow() async {
+    if (widget.businessReady == false) {
+      final done = await Navigator.of(context).push<bool>(MaterialPageRoute(
+          builder: (_) => const StartSellingScreen(forStore: true)));
+      if (done != true || !mounted) return;
+    }
     await StoreEntry.open(context, repository: _repo);
     if (mounted) _load();
   }
@@ -121,7 +134,13 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
       ]);
     }
     final store = _store;
-    if (store == null) return _NoStoreCard(hasDraft: _hasDraft, onStart: _openStoreFlow);
+    if (store == null) {
+      return _NoStoreCard(
+        hasDraft: _hasDraft,
+        needsBusiness: widget.businessReady == false,
+        onStart: _openStoreFlow,
+      );
+    }
     return _StoreCard(
       store: store,
       stats: _stats,
@@ -328,8 +347,11 @@ class _SquareAction extends StatelessWidget {
 // ── No store yet ─────────────────────────────────────────────────────────────
 
 class _NoStoreCard extends StatelessWidget {
-  const _NoStoreCard({required this.hasDraft, required this.onStart});
+  const _NoStoreCard({required this.hasDraft, required this.needsBusiness, required this.onStart});
   final bool hasDraft;
+
+  /// Not a business seller yet: the button sets the business up first.
+  final bool needsBusiness;
   final VoidCallback onStart;
 
   static const _benefits = [
@@ -370,9 +392,11 @@ class _NoStoreCard extends StatelessWidget {
                         color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 2),
                 Text(
-                    hasDraft
-                        ? 'Your setup is saved on this phone - pick up where you left off.'
-                        : 'A shop of your own on BROKA, with a link to share anywhere.',
+                    needsBusiness
+                        ? 'For sellers running a business - set yours up first, then open your store.'
+                        : hasDraft
+                            ? 'Your setup is saved on this phone - pick up where you left off.'
+                            : 'A shop of your own on BROKA, with a link to share anywhere.',
                     style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.3)),
               ]),
             ),
@@ -396,7 +420,10 @@ class _NoStoreCard extends StatelessWidget {
             borderRadius: 12,
             colors: const [BrokaColors.neonPurple, BrokaColors.neonBlue],
             onPressed: onStart,
-            child: Text(hasDraft ? 'Continue setting up' : 'Open a store',
+            child: Text(
+                needsBusiness
+                    ? 'Set up my business'
+                    : (hasDraft ? 'Continue setting up' : 'Open a store'),
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14.5)),
           ),
         ]),

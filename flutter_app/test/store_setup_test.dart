@@ -234,7 +234,7 @@ void main() {
       });
       final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
       await c.load();
-      expect(c.showBusinessStep, isFalse);
+      expect(c.needsBusiness, isFalse);
       expect(c.steps.first, StoreSetupStep.name);
       expect(c.name, 'Clanix Electronics');
       expect(c.slug, 'clanix-electronics');
@@ -247,36 +247,45 @@ void main() {
       expect(c.validate(StoreSetupStep.location), 'Choose or type your area.');
     });
 
-    test('a short-term seller adds business details first', () async {
+    test('an account that is not a business seller is sent to set one up - '
+        'the wizard never makes anyone a seller', () async {
+      for (final (type, tier) in [('buyer', null), ('buyer_seller', 'short_term')]) {
+        final backend = FakeBackend({
+          'GET /auth/me': (_) => _json({..._owner(), 'account_type': type, 'seller_tier': tier,
+              'business_name': null, 'business_category': null, 'business_location': null}),
+          'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+              'available': true}),
+        });
+        final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+        await c.load();
+        expect(c.needsBusiness, isTrue, reason: '$type/$tier');
+        expect(c.steps.first, StoreSetupStep.name);
+        // The wizard used to turn a buyer into a long-term seller from a
+        // step of its own, skipping the questions every other way asks.
+        expect(backend.bodiesFor('POST', '/auth/upgrade-to-seller'), isEmpty);
+        c.dispose();
+      }
+    });
+
+    test('a store refused because the account is not a business goes back to the gate',
+        () async {
       final backend = FakeBackend({
-        'GET /auth/me': (_) => _json({..._owner(tier: 'short_term'),
-            'business_name': null, 'business_category': null, 'business_location': null}),
-        'POST /auth/upgrade-to-seller': (r) {
-          final b = jsonDecode(r.body) as Map;
-          return _json({..._owner(), 'business_name': b['business_name'],
-              'business_category': b['business_category']});
-        },
+        'GET /auth/me': (_) => _json(_owner()),
         'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
-            'available': true}),
+            'available': true, 'url': 'https://broka.co.ke/store/${r.url.queryParameters['name']}'}),
+        'POST /stores': (_) => _json({'detail': 'Only long-term sellers can open a store.'}, 403),
       });
       final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
       await c.load();
-      expect(c.steps.first, StoreSetupStep.business);
-      expect(await c.upgrade(), 'Enter your business name.');
+      await pumpEventQueue();
       c
-        ..setBusinessName('Wanjiru Hardware')
-        ..setBusinessCategory('Construction')
-        ..setBusinessLocation('Ruiru');
-      expect(await c.upgrade(), isNull);
-      expect(c.businessDone, isTrue);
-      expect(c.validate(StoreSetupStep.business), isNull);
-      expect(c.name, 'Wanjiru Hardware');
-      expect(c.slug, 'wanjiru-hardware');
-      expect(c.category, 'Construction');
-      expect(c.county, 'Kiambu');
-      final sent = backend.bodiesFor('POST', '/auth/upgrade-to-seller').single;
-      expect(sent['business_category'], 'Construction');
-      expect(ApiService.currentUserAccountType, 'buyer_seller');
+        ..setCounty('Nairobi')
+        ..setSubcounty('Westlands');
+      final (store, problem) = await c.launch();
+      expect(store, isNull);
+      expect(problem, isNotNull);
+      expect(c.needsBusiness, isTrue);
+      c.dispose();
     });
 
     test('the live link check waits for typing to stop and ignores stale answers', () async {
@@ -665,7 +674,6 @@ void main() {
         final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
         await c.load();
         c.setEmail('sales@clanix.co.ke');
-        c.showBusinessStep = true;
         await tester.pump();
 
         for (final step in StoreSetupStep.values) {
@@ -681,7 +689,6 @@ void main() {
             error: 'Something needs fixing on this step before you continue.',
             animateBackground: false,
             child: switch (step) {
-              StoreSetupStep.business => BusinessStep(c),
               StoreSetupStep.name => NameStep(c),
               StoreSetupStep.link => LinkStep(c),
               StoreSetupStep.category => CategoryStep(c),

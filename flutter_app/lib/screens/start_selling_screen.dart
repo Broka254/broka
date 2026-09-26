@@ -30,7 +30,13 @@ Widget sellerDashboardOrSetup() => ApiService.currentUserAccountType == 'buyer_s
 enum _Step { horizon, name, category, location, description, preview }
 
 class StartSellingScreen extends StatefulWidget {
-  const StartSellingScreen({super.key, this.animateBackground = true});
+  const StartSellingScreen({super.key, this.forStore = false, this.animateBackground = true});
+
+  /// Opened on the way to an online store, which only a business can have:
+  /// the "few items or a business?" question is already answered, so it
+  /// goes straight to the business steps, and it pops with `true` when done
+  /// instead of opening the dashboard - the store setup carries on.
+  final bool forStore;
 
   /// False renders one still frame of the background (tests).
   final bool animateBackground;
@@ -46,12 +52,12 @@ class _StartSellingScreenState extends State<StartSellingScreen> {
   final _otherCategoryCtrl = TextEditingController();
 
   /// 'short_term' | 'long_term' - preselected as at signup.
-  String _tier = 'short_term';
+  late String _tier = widget.forStore ? 'long_term' : 'short_term';
 
   /// One of kBusinessCategories.
   String _category = 'Electronics';
 
-  _Step _step = _Step.horizon;
+  late _Step _step = widget.forStore ? _Step.name : _Step.horizon;
   bool _submitting = false;
   String? _error;
 
@@ -69,7 +75,7 @@ class _StartSellingScreenState extends State<StartSellingScreen> {
   /// The steps this answer actually visits: someone selling a few items is
   /// never shown the business screens, so the progress bar tells the truth.
   List<_Step> get _steps => [
-        _Step.horizon,
+        if (!widget.forStore) _Step.horizon,
         if (_isBusiness) ...[
           _Step.name, _Step.category, _Step.location, _Step.description, _Step.preview,
         ],
@@ -144,6 +150,10 @@ class _StartSellingScreenState extends State<StartSellingScreen> {
         businessDescription: _isBusiness ? _descriptionCtrl.text.trim() : null,
       );
       if (!mounted) return;
+      if (widget.forStore) {
+        Navigator.of(context).pop(true);
+        return;
+      }
       // Where they were headed: the dashboard is the seller's home.
       Navigator.of(context).pushReplacementNamed('/seller-dashboard');
     } on ApiException catch (e) {
@@ -171,14 +181,16 @@ class _StartSellingScreenState extends State<StartSellingScreen> {
         if (!didPop && !_submitting) _back();
       },
       child: WizardScaffold(
-        flowTitle: 'Start selling',
+        flowTitle: widget.forStore ? 'Set up your business' : 'Start selling',
         position: _position,
         total: _steps.length,
         title: _titles[_step]!,
         subtitle: _subtitles[_step],
         onBack: _position > 0 ? _back : null,
         onNext: _next,
-        nextLabel: _isLastStep ? 'Start selling' : 'Continue',
+        nextLabel: !_isLastStep
+            ? 'Continue'
+            : (widget.forStore ? 'On to my store' : 'Start selling'),
         nextIcon: _isLastStep ? Icons.storefront_rounded : Icons.arrow_forward_rounded,
         loading: _submitting,
         error: _error,
@@ -197,8 +209,11 @@ class _StartSellingScreenState extends State<StartSellingScreen> {
             SetupTextField(_nameCtrl, 'Business name', Icons.storefront_outlined,
                 autofocus: true, onChanged: (_) => setState(() {})),
             const SizedBox(height: 10),
-            const SetupHint('Buying stays exactly the same. This just unlocks listing '
-                'and selling on your account.'),
+            SetupHint(widget.forStore
+                ? 'Online stores are for businesses, so your business comes first. '
+                    'Buying stays exactly the same.'
+                : 'Buying stays exactly the same. This just unlocks listing '
+                    'and selling on your account.'),
           ]),
         _Step.category => BusinessCategoryPicker(
             value: _category,

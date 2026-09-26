@@ -19,7 +19,6 @@ import 'store_setup_controller.dart';
 // ── Titles ───────────────────────────────────────────────────────────────────
 
 String stepTitle(StoreSetupStep step) => switch (step) {
-      StoreSetupStep.business => 'Your business',
       StoreSetupStep.name => 'Name your store',
       StoreSetupStep.link => 'Choose your link',
       StoreSetupStep.category => 'What you sell',
@@ -31,8 +30,6 @@ String stepTitle(StoreSetupStep step) => switch (step) {
     };
 
 String stepSubtitle(StoreSetupStep step) => switch (step) {
-      StoreSetupStep.business =>
-        'Online stores are for businesses. This also makes you a long-term seller.',
       StoreSetupStep.name => 'Buyers see this at the top of your store',
       StoreSetupStep.link => 'Share it on WhatsApp, TikTok, Instagram and flyers',
       StoreSetupStep.category => 'Buyers find your store under this category',
@@ -209,48 +206,6 @@ class _CategoryChips extends StatelessWidget {
           ),
         ),
       );
-}
-
-// ── Business details (upgrade) ───────────────────────────────────────────────
-
-class BusinessStep extends StatelessWidget {
-  const BusinessStep(this.c, {super.key});
-  final StoreSetupController c;
-
-  @override
-  Widget build(BuildContext context) {
-    if (c.businessDone) {
-      return const _Hint('Business details saved - you are now a long-term seller. '
-          'Continue to set up your store.',
-          icon: Icons.verified_rounded, color: BrokaColors.success);
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _SyncedField(
-        value: c.businessName,
-        onChanged: c.setBusinessName,
-        label: 'Business name',
-        icon: Icons.storefront_outlined,
-        maxLength: 60,
-        textCapitalization: TextCapitalization.words,
-      ),
-      const SizedBox(height: 12),
-      _label('What does it sell?'),
-      _CategoryChips(selected: c.businessCategory, onSelected: c.setBusinessCategory),
-      const SizedBox(height: 22),
-      _SyncedField(
-        value: c.businessLocation,
-        onChanged: c.setBusinessLocation,
-        label: 'Where is it?',
-        hint: 'e.g. Moi Avenue, Nairobi',
-        icon: Icons.place_outlined,
-        maxLength: 80,
-        textCapitalization: TextCapitalization.words,
-      ),
-      const SizedBox(height: 8),
-      const _Hint('Buying stays exactly the same. Your business name appears on '
-          'your products, so buyers know who they are dealing with.'),
-    ]);
-  }
 }
 
 // ── Name ─────────────────────────────────────────────────────────────────────

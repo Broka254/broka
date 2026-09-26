@@ -926,7 +926,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Voice input connects or says why; Start selling asks what signup asks; the negotiation screens on Home's look; Zeno writes its replies out…
+- `CHANGES.md` — A store needs a business seller first; Zeno's replies at a readable pace (2026-09-26)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

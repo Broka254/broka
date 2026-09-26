@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
-import '../../../../services/api_service.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
 
@@ -150,28 +149,6 @@ class StoresRepository {
   /// The signed-in seller, for the setup wizard.
   Future<Result<StoreOwnerProfile>> getOwnerProfile() => _guard(() async =>
       StoreOwnerProfile.fromJson(await _client.get('/auth/me') as Map<String, dynamic>));
-
-  /// Makes the signed-in account a long-term seller with these business
-  /// details - what opening a store needs. Works for buyers and short-term
-  /// sellers alike.
-  Future<Result<StoreOwnerProfile>> upgradeToLongTerm({
-    required String businessName,
-    required String businessCategory,
-    required String businessLocation,
-    String? businessDescription,
-  }) =>
-      _guard(() async {
-        final data = await _client.post('/auth/upgrade-to-seller', {
-          'business_name': businessName,
-          'business_category': businessCategory,
-          'business_location': businessLocation,
-          if (businessDescription != null && businessDescription.isNotEmpty)
-            'business_description': businessDescription,
-        }) as Map<String, dynamic>;
-        final profile = StoreOwnerProfile.fromJson(data);
-        await ApiService.rememberAccountType(profile.accountType);
-        return profile;
-      });
 
   Future<Result<StoreStats>> getStats(String storeId, {int days = 7}) => _guard(() async =>
       StoreStats.fromJson(await _client.get('/stores/$storeId/stats',

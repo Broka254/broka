@@ -193,7 +193,10 @@ class _MenuScreenState extends State<MenuScreen> {
           ),
       ]),
       const MenuSectionLabel('Online store'),
-      MenuStoreSection(key: ValueKey('store-$_storeNonce')),
+      MenuStoreSection(
+        key: ValueKey('store-$_storeNonce'),
+        businessReady: account?.canOpenStore,
+      ),
       const MenuSectionLabel('Account'),
       MenuGroup(children: [
         MenuTile(

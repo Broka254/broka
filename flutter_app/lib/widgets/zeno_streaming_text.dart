@@ -284,12 +284,19 @@ class _ZenoStreamingBubbleState extends State<ZenoStreamingBubble>
 /// own frame, and that already showed typing dots while Zeno thought, so
 /// the first words start at once instead of after a "thinking" beat.
 ///
-/// Only a reply that has just arrived streams ([animate]); one restored from
-/// earlier, or scrolled back to, is simply there. A long reply comes in
-/// bigger bursts so it never takes much more than a few seconds.
+/// One word at a time, at a steady reading pace (about 13 words a second),
+/// with a beat after a comma or the end of a sentence. Each word fades in
+/// from Zeno's violet over a little longer than the gap between words, so
+/// the line flows rather than ticks, and the bubble grows smoothly. The
+/// first version dropped one to three words at once every 35-105ms - about
+/// twice this pace and in lumps - which read as jittery rather than typed.
+/// A long reply goes faster per word instead of arriving in lumps, so it
+/// still never takes much more than about seven seconds.
 ///
-/// Under reduced motion the whole text is shown at once. Screen readers get
-/// the whole text, never half a sentence.
+/// Only a reply that has just arrived streams ([animate]); one restored from
+/// earlier, or scrolled back to, is simply there. Under reduced motion the
+/// whole text is shown at once. Screen readers get the whole text, never
+/// half a sentence.
 class ZenoStreamingText extends StatefulWidget {
   const ZenoStreamingText(
     this.text, {
@@ -309,8 +316,8 @@ class ZenoStreamingText extends StatefulWidget {
   /// (the listings the Buying Agent found, say).
   final VoidCallback? onDone;
 
-  /// After each burst of words, so the chat can keep up with the growing
-  /// bubble.
+  /// Every frame while the reply is being written, so the chat can follow
+  /// the growing bubble smoothly rather than in jumps.
   final VoidCallback? onGrow;
 
   /// For tests.
@@ -322,8 +329,18 @@ class ZenoStreamingText extends StatefulWidget {
 
 class _ZenoStreamingTextState extends State<ZenoStreamingText>
     with SingleTickerProviderStateMixin {
-  // How long a new word takes to surface from Zeno's colour into the text's.
-  static const _fadeMs = 260;
+  /// The gap between words, before punctuation beats and jitter.
+  static const _wordMs = 75;
+
+  /// How long a new word takes to fade in - longer than [_wordMs], so each
+  /// word is still arriving as the next starts.
+  static const _fadeMs = 420;
+
+  /// Roughly the longest a reply takes to write out.
+  static const _longestMs = 7000;
+
+  static final _sentenceEnd = RegExp(r'[.!?…]$');
+  static final _clauseEnd = RegExp(r'[,;:]$');
 
   late final Random _rnd = widget.random ?? Random();
   // Only a reply that streams needs one; most never do.
@@ -333,7 +350,10 @@ class _ZenoStreamingTextState extends State<ZenoStreamingText>
 
   List<String> _pieces = const [];
   final List<int> _revealedAtMs = [];
-  late int _burstBase;
+
+  /// 1 for an ordinary reply; below 1 for a long one, to keep it near
+  /// [_longestMs].
+  double _pace = 1;
   bool _streaming = false;
   bool _started = false;
 
@@ -352,17 +372,27 @@ class _ZenoStreamingTextState extends State<ZenoStreamingText>
       return;
     }
     _pieces = _wordPieces.allMatches(widget.text).map((m) => m.group(0)!).toList();
-    // 1-3 words a burst for an ordinary reply; a few more at a time for a
-    // long one, which would otherwise take ten seconds to read out.
-    _burstBase = max(1, _pieces.length ~/ 60);
+    var estimate = 0;
+    for (final p in _pieces) {
+      estimate += _wordMs + _beatAfter(p.trimRight());
+    }
+    _pace = estimate > _longestMs ? max(0.3, _longestMs / estimate) : 1;
     _streaming = true;
     _ticker = createTicker(_onTick)..start();
     _emit();
   }
 
+  /// The extra pause after [word]: a sentence ends, a clause ends, or not.
+  int _beatAfter(String word) {
+    if (_sentenceEnd.hasMatch(word)) return 230;
+    if (_clauseEnd.hasMatch(word)) return 110;
+    return 0;
+  }
+
   void _onTick(Duration elapsed) {
     if (!mounted) return;
     setState(() => _nowMs = elapsed.inMilliseconds);
+    widget.onGrow?.call();
     if (_revealedAtMs.length >= _pieces.length &&
         _nowMs - _revealedAtMs.last > _fadeMs) {
       _ticker?.stop();
@@ -373,17 +403,12 @@ class _ZenoStreamingTextState extends State<ZenoStreamingText>
 
   void _emit() {
     if (!mounted) return;
-    final burst = _burstBase + _rnd.nextInt(3);
-    for (var i = 0; i < burst && _revealedAtMs.length < _pieces.length; i++) {
-      _revealedAtMs.add(_nowMs + i * 25);
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.onGrow?.call();
-    });
+    _revealedAtMs.add(_nowMs);
     if (_revealedAtMs.length >= _pieces.length) return; // the ticker finishes
-    _timer = Timer(
-        Duration(milliseconds: _pauseAfterMs(_pieces[_revealedAtMs.length - 1], _rnd)),
-        _emit);
+    final word = _pieces[_revealedAtMs.length - 1].trimRight();
+    // A little unevenness (±10ms) so it doesn't read as a metronome.
+    final gap = (_wordMs + _rnd.nextInt(21) - 10 + _beatAfter(word)) * _pace;
+    _timer = Timer(Duration(milliseconds: gap.round()), _emit);
   }
 
   @override
@@ -399,26 +424,33 @@ class _ZenoStreamingTextState extends State<ZenoStreamingText>
     final base = widget.style.color ?? Colors.white;
     final spans = <InlineSpan>[];
     for (var i = 0; i < _revealedAtMs.length; i++) {
-      final age = (_nowMs - _revealedAtMs[i]).clamp(0, _fadeMs) / _fadeMs;
+      final t = Curves.easeOutCubic
+          .transform((_nowMs - _revealedAtMs[i]).clamp(0, _fadeMs) / _fadeMs);
       spans.add(TextSpan(
         text: _pieces[i],
         style: TextStyle(
-          color: Color.lerp(BrokaColors.neonPurple, base, age)!
-              .withOpacity(0.35 + 0.65 * age),
+          color: Color.lerp(BrokaColors.neonPurple, base, t)!.withOpacity(t),
         ),
       ));
     }
     if (_revealedAtMs.length < _pieces.length) {
+      // Steady, not blinking: a blink every 420ms fought the words' own
+      // rhythm and made the line look busier than it is.
       spans.add(TextSpan(
         text: '▍',
-        style: TextStyle(
-            color: BrokaColors.neonBlue.withOpacity((_nowMs ~/ 420).isEven ? 1 : 0.25)),
+        style: TextStyle(color: BrokaColors.neonBlue.withOpacity(0.85)),
       ));
     }
     return Semantics(
       label: widget.text,
       excludeSemantics: true,
-      child: Text.rich(TextSpan(style: widget.style, children: spans)),
+      // A new line eases open instead of the bubble snapping a line taller.
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topLeft,
+        child: Text.rich(TextSpan(style: widget.style, children: spans)),
+      ),
     );
   }
 }

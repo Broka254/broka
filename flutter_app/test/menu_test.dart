@@ -124,10 +124,26 @@ void main() {
       expect(find.text('Seller Dashboard'), findsNothing);
       // No finished deal, no rating - the column's default is not a score.
       expect(find.text('New'), findsOneWidget);
-      // The store wizard takes buyers (it collects business details first);
-      // Profile used to hide this from them.
+      // Stores are for businesses: a buyer is shown what one is, and the
+      // way there starts with setting the business up - never the store
+      // setup directly, which used to make buyers sellers on its own.
       expect(find.text('Open your online store'), findsOneWidget);
+      expect(find.text('Open a store'), findsNothing);
+      await tester.scrollUntilVisible(find.text('Set up my business'), 200);
+      await tester.tap(find.text('Set up my business'));
+      await _settle(tester);
+      expect(find.text('Set up your business'), findsOneWidget);
+      expect(find.text('Business Name'), findsOneWidget);
+      expect(find.text('What kind of seller?'), findsNothing);
+    });
+
+    testWidgets('a business seller without a store is offered one directly',
+        (tester) async {
+      setFakeRoute(_account(me: _me(accountType: 'buyer_seller')));
+      await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
+      await _settle(tester);
       expect(find.text('Open a store'), findsOneWidget);
+      expect(find.text('Set up my business'), findsNothing);
     });
 
     testWidgets('with a store: its link, status, products and last week',

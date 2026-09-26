@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../../main.dart' show BrokaColors;
+import '../../../../screens/start_selling_screen.dart';
+import '../../../../widgets/gradient_button.dart';
 import '../../../../widgets/constellation_background.dart';
 import '../../../../core/utils/result.dart';
 import '../../../../widgets/wizard_scaffold.dart';
@@ -79,14 +81,6 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
   Future<void> _next() async {
     FocusScope.of(context).unfocus();
     final step = _step;
-    if (step == StoreSetupStep.business && !c.businessDone) {
-      final problem = await c.upgrade();
-      if (!mounted) return;
-      if (problem != null) {
-        setState(() => _error = problem);
-        return;
-      }
-    }
     if (step == StoreSetupStep.review) {
       await _launch();
       return;
@@ -99,6 +93,18 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
     await c.saveDraft();
     if (!mounted) return;
     setState(() { _index = (_index + 1).clamp(0, _steps.length - 1); _error = null; });
+  }
+
+  /// Start selling's business steps, then back here with the store setup
+  /// prefilled from what was just entered.
+  Future<void> _setUpBusiness() async {
+    final done = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => StartSellingScreen(
+            forStore: true, animateBackground: widget.animateBackground)));
+    if (done == true && mounted) {
+      setState(() { _index = 0; _error = null; });
+      await _load();
+    }
   }
 
   Future<void> _launch() async {
@@ -115,8 +121,6 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
 
   String _nextLabel() {
     switch (_step) {
-      case StoreSetupStep.business:
-        return c.businessDone ? 'Continue' : 'Save and continue';
       case StoreSetupStep.logo:
         return c.logo == null ? 'Skip for now' : 'Continue';
       case StoreSetupStep.photos:
@@ -131,7 +135,6 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
   }
 
   Widget _content() => switch (_step) {
-        StoreSetupStep.business => BusinessStep(c),
         StoreSetupStep.name => NameStep(c),
         StoreSetupStep.link => LinkStep(c),
         StoreSetupStep.category => CategoryStep(c),
@@ -145,6 +148,7 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
   @override
   Widget build(BuildContext context) {
     if (c.loading || c.loadError != null) return _loadingOrError();
+    if (c.needsBusiness) return _needsBusiness();
     return PopScope(
       canPop: _index == 0 && !c.busy,
       onPopInvokedWithResult: (didPop, _) {
@@ -166,6 +170,78 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
         error: _error,
         animateBackground: widget.animateBackground,
         child: KeyedSubtree(key: ValueKey(_step), child: _content()),
+      ),
+    );
+  }
+
+  /// Before any store step: this account isn't a business seller, and only
+  /// a business can have a store. Says so, and offers the way there.
+  Widget _needsBusiness() {
+    final buyer = c.owner?.accountType != 'buyer_seller';
+    return Scaffold(
+      backgroundColor: BrokaColors.bg,
+      body: ConstellationBackground(
+        animate: widget.animateBackground,
+        child: SafeArea(
+          child: Column(children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: IconButton(
+                  tooltip: 'Close',
+                  icon: const Icon(Icons.close_rounded, color: BrokaColors.textMid),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(28, 12, 28, 16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: BrokaColors.gold.withOpacity(0.16),
+                      border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
+                    ),
+                    child: const Icon(Icons.storefront_rounded, color: BrokaColors.gold, size: 30),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Online stores are for businesses',
+                      style: TextStyle(color: BrokaColors.textHigh, fontSize: 22,
+                          fontWeight: FontWeight.w800, height: 1.2)),
+                  const SizedBox(height: 10),
+                  Text(
+                    buyer
+                        ? "Your account is set up to buy. Set up your business first - "
+                            "its name, what it sells and where it is - and then open "
+                            'your store.'
+                        : 'You sell a few items at a time. A store needs your business '
+                            'set up first - its name, what it sells and where it is.',
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 14.5, height: 1.45),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('It takes about a minute. Buying stays exactly the same.',
+                      style: TextStyle(color: BrokaColors.textLow, fontSize: 12.5, height: 1.4)),
+                ]),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+              child: GradientButton(
+                height: 56,
+                borderRadius: 16,
+                colors: const [BrokaColors.neonPurple, BrokaColors.neonBlue],
+                onPressed: _setUpBusiness,
+                child: const Text('Set up my business',
+                    style: TextStyle(color: Colors.white, fontSize: 16.5, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ]),
+        ),
       ),
     );
   }
