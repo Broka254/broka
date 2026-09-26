@@ -1,3 +1,67 @@
+# Voice input connects or says why; Start selling asks what signup asks; the negotiation screens on Home's look; Zeno writes its replies out (2026-09-26)
+
+## Voice input stuck on "Connecting…"
+
+When the speech provider refused the connection (a rejected token comes
+back as HTTP 401) or couldn't be reached, each provider closed the failed
+socket and waited for the close to finish. web_socket_channel never
+finishes closing a socket whose handshake failed, so the voice card said
+"Connecting…" until the manager's 45-second watchdog gave up on Deepgram -
+and then again for AssemblyAI. A socket that never opened is now not waited
+for, and a live one gets two seconds (`closeSocketWithoutHanging` in
+`services/realtime_stt.dart`). The card now says within seconds that voice
+couldn't connect, with a small reference underneath
+(`DEEPGRAM_HANDSHAKE_FAILED`, `ASSEMBLYAI_NETWORK_UNREACHABLE`...) - the
+diagnostics are printed in debug builds only, so on a phone that line is the
+only trace of why. `test/stt_refused_connection_test.dart` runs the real
+WebSocket client against a local server that refuses the upgrade; all three
+tests hung on the old code.
+
+What makes the providers refuse on the phone is not something the app can
+see - the reference on the card says which provider and which stage.
+
+## Start selling replaces Become a Seller
+
+A buyer who opens the Seller Dashboard (from the Menu, their profile, or a
+restored last screen) or taps "Start selling" in the Menu now answers what
+signup asks: a few items - nothing more to fill in - or a business, which
+goes on to the business name, what it sells, location, description and a
+preview (`screens/start_selling_screen.dart`). The one-form "Become a
+Seller" screen, which demanded a business from everyone, is deleted. Signup
+and Start selling share their widgets (`widgets/seller_setup.dart`).
+
+`POST /auth/upgrade-to-seller` takes `seller_tier`: `short_term` needs no
+business details; `long_term` (the default, for older clients and the store
+wizard) needs name, category and location - blank ones are now a 422 rather
+than a display name of " · ". Answering "a few items" never downgrades an
+account already set up as a business. `backend/tests/test_seller_signup.py`
+(`TestStartSellingLater`; three of its four tests failed on the old
+endpoint), `test/start_selling_test.dart`.
+
+## The negotiation screens on Home's look
+
+The Zeno negotiation room and the one-on-one chat were on
+ChatAmbientBackground under opaque bars, with gold "composing..." italics
+and role-coloured blue and green bubbles. Both now have the constellation,
+Home's header language (bare back chevron, square header buttons), cards
+like Home's, your messages on the brand gradient, and Zeno's composer -
+Home's search pill with the actions inside it and a send button that takes
+no room until there is something to send. The composer, send button, typing
+dots and bubble frames are shared (`widgets/chat_parts.dart`) by these two
+and Zeno's own screen. `test/negotiation_screens_test.dart` (both screens,
+including 320dp at 1.3x text).
+
+## Zeno writes its replies out
+
+On Zeno's screen and in the negotiation room, a new reply arrives a few
+words at a time, each word surfacing from Zeno's violet, with a caret at
+the end - the way a language model's does (`ZenoStreamingText` in
+`widgets/zeno_streaming_text.dart`, sharing its pacing with the sell
+wizard's streaming bubble). Replies restored from earlier are simply there;
+the Buying Agent's listings appear once its sentence is finished; long
+replies stream in bigger bursts; reduced motion shows the reply at once, and
+screen readers always get the whole reply. `test/zeno_chat_test.dart`.
+
 # Category rail hint, Zeno and the Seller Dashboard restyled, Zeno remembers, no robotic voice (2026-09-26)
 
 ## Home: the category rail says there is more

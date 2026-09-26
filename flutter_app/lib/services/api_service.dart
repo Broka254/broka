@@ -472,33 +472,30 @@ class ApiService {
     return data;
   }
 
-  /// Upgrades the current buyer account to buyer+seller. The server
-  /// generates the structured display name (e.g. "Clanix · Wholesale ·
-  /// Sira") from the three fields below — the seller never free-types it.
+  /// Lets a buyer start selling, with the answers signup would have taken:
+  /// [sellerTier] 'short_term' (a few items - nothing else needed) or
+  /// 'long_term' (a business - name, category and location required). The
+  /// server generates the display name (e.g. "Clanix · Wholesale · Sira")
+  /// from those fields; the seller never free-types it.
+  ///
+  /// Through [apiClient], so an expired session is renewed rather than
+  /// failing the last step of the setup. Throws [ApiException].
   static Future<Map<String, dynamic>> upgradeToSeller({
-    required String businessName,
-    required String businessCategory,
-    required String businessLocation,
+    required String sellerTier,
+    String? businessName,
+    String? businessCategory,
+    String? businessLocation,
     String? businessDescription,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/upgrade-to-seller'),
-      headers: _headers,
-      body: jsonEncode({
-        'business_name': businessName,
-        'business_category': businessCategory,
-        'business_location': businessLocation,
-        if (businessDescription != null) 'business_description': businessDescription,
-      }),
-    ).timeout(const Duration(seconds: 30));
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    if (response.statusCode == 200) {
-      currentUserAccountType = data['account_type'] as String? ?? currentUserAccountType;
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_account_type', currentUserAccountType);
-    } else {
-      throw Exception(data['detail']?.toString() ?? 'Could not complete seller upgrade');
-    }
+    final data = await apiClient.post('/auth/upgrade-to-seller', {
+      'seller_tier': sellerTier,
+      if (businessName != null) 'business_name': businessName,
+      if (businessCategory != null) 'business_category': businessCategory,
+      if (businessLocation != null) 'business_location': businessLocation,
+      if (businessDescription != null && businessDescription.isNotEmpty)
+        'business_description': businessDescription,
+    }, timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
+    await rememberAccountType(data['account_type'] as String? ?? 'buyer_seller');
     return data;
   }
 

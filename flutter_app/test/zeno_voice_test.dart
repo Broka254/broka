@@ -8,10 +8,12 @@
 // parsing that broke on a real `Results` frame breaks here too. The failover
 // between providers is covered separately, in stt_fallback_test.dart.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'package:broka/services/deepgram_stt_service.dart';
 import 'package:broka/services/realtime_stt.dart';
@@ -708,6 +710,24 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(find.textContaining('Listening'), findsOneWidget);
+    });
+
+    testWidgets('a failure says what failed, as a code someone can quote',
+        (tester) async {
+      socket = FakeSocket(
+        handshakeError: WebSocketChannelException.from(const WebSocketException(
+            "Connection to 'https://api.deepgram.com/v1/listen' was not "
+            'upgraded to websocket')),
+      );
+      await tester.pumpWidget(host());
+      await controller.open();
+      await _settle(tester);
+
+      expect(find.textContaining("Voice couldn't connect"), findsOneWidget);
+      final reference = find.byKey(const Key('voice-error-reference'));
+      expect(reference, findsOneWidget);
+      expect(tester.widget<SelectableText>(reference).data,
+          'DEEPGRAM_HANDSHAKE_FAILED');
     });
 
     // One test per width rather than a loop: each gets the group's freshly

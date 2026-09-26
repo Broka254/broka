@@ -8,9 +8,10 @@
 //   Step 5 - BROKA Biometric Setup (fresh fingerprint or face scan, not stored device data)
 //   Step 6 - Confirmation / account created
 //
-// Registering as a seller is NOT part of this flow anymore - every account
-// starts as a buyer; becoming a seller is a separate step from Profile
-// ("Become a Seller" -> BecomeSellerScreen) once the account exists.
+// Selling is asked up front: buyer or buyer-and-seller, then for a seller a
+// few items (short-term) or a business (long-term, which adds the business
+// steps). A buyer who decides to sell later answers the same questions from
+// the Menu (StartSellingScreen); both use lib/widgets/seller_setup.dart.
 
 import 'dart:async';
 import 'dart:convert';
@@ -25,6 +26,7 @@ import '../services/sms_autofill_service.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/country_phone_field.dart';
 import '../widgets/otp_code_field.dart';
+import '../widgets/seller_setup.dart';
 import '../widgets/wizard_scaffold.dart';
 
 /// Primary call-to-action gradient: violet into blue, the left two thirds of
@@ -67,12 +69,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// 'short_term' | 'long_term' — only meaningful when selling.
   String _sellerTier = 'short_term';
 
-  /// Mirrors BecomeSellerScreen's list so a business set up at signup and one
-  /// set up later from Profile can never land in different category spaces.
-  static const List<String> _kBizCategories = [
-    'Electronics', 'Wholesale', 'Clothing & Fashion', 'Supermarket',
-    'Property', 'Automotive', 'Food & Beverages', 'Services', 'Other',
-  ];
+  /// One of kBusinessCategories.
   String _bizCategory = 'Electronics';
 
   // Phone verification (steps 1-2) — OTP is optional at signup; the user
@@ -1033,16 +1030,16 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   // never sees the seller questions at all.
 
   Widget _buildAccountTypeStep() => Column(children: [
-    _choiceCard(
+    SellerChoiceCard(
       selected: _accountType == 'buyer',
       icon: Icons.shopping_bag_outlined,
       title: 'I want to buy',
       body: 'Browse, negotiate and buy safely through escrow. '
-            'You can start selling later from your profile.',
+            'You can start selling later from the Menu.',
       onTap: () => setState(() => _accountType = 'buyer'),
     ),
     const SizedBox(height: 12),
-    _choiceCard(
+    SellerChoiceCard(
       selected: _accountType == 'buyer_seller',
       icon: Icons.storefront_outlined,
       title: 'I want to buy and sell',
@@ -1052,88 +1049,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     ),
   ]);
 
-  Widget _buildSellerHorizonStep() => Column(children: [
-    _choiceCard(
-      selected: _sellerTier == 'short_term',
-      icon: Icons.sell_outlined,
-      title: 'Just a few items',
-      body: 'Under about 5 things — clearing out, or selling one-offs. '
-            'No business setup needed.',
-      onTap: () => setState(() => _sellerTier = 'short_term'),
-    ),
-    const SizedBox(height: 12),
-    _choiceCard(
-      selected: _sellerTier == 'long_term',
-      icon: Icons.business_center_outlined,
-      title: "I'm running a business",
-      body: 'Selling regularly on BROKA. We will set up your business '
-            'name and storefront now so buyers can find you.',
-      onTap: () => setState(() => _sellerTier = 'long_term'),
-    ),
-  ]);
-
-  /// A large, tappable option card. Used for both filtering questions so the
-  /// two screens read as one decision the user is walking through.
-  Widget _choiceCard({
-    required bool selected,
-    required IconData icon,
-    required String title,
-    required String body,
-    required VoidCallback onTap,
-  }) => GestureDetector(
-    onTap: onTap,
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(selected ? 0.75 : 0.4),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: selected
-              ? BrokaColors.gold
-              : BrokaColors.border.withOpacity(0.7),
-          width: selected ? 1.6 : 1,
-        ),
-        boxShadow: selected
-            ? [BoxShadow(color: BrokaColors.gold.withOpacity(0.25),
-                blurRadius: 20, spreadRadius: -4)]
-            : null,
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          width: 44, height: 44,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: selected
-                ? BrokaColors.gold.withOpacity(0.18)
-                : BrokaColors.bgMid,
-          ),
-          child: Icon(icon,
-              color: selected ? BrokaColors.gold : BrokaColors.textMid,
-              size: 22),
-        ),
-        const SizedBox(width: 14),
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: TextStyle(
-                color: selected ? BrokaColors.textHigh : BrokaColors.textMid,
-                fontSize: 16, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            Text(body, style: const TextStyle(
-                color: BrokaColors.textMid, fontSize: 12, height: 1.45)),
-          ],
-        )),
-        const SizedBox(width: 8),
-        Icon(
-          selected
-              ? Icons.radio_button_checked_rounded
-              : Icons.radio_button_unchecked_rounded,
-          color: selected ? BrokaColors.gold : BrokaColors.border,
-          size: 20,
-        ),
-      ]),
-    ),
+  Widget _buildSellerHorizonStep() => SellerHorizonChoices(
+    tier: _sellerTier,
+    onChanged: (t) => setState(() => _sellerTier = t),
   );
 
   // ── Business setup (long-term sellers only) ───────────────────────────────
@@ -1142,94 +1060,30 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       ? _bizCustomCategoryCtrl.text.trim()
       : _bizCategory;
 
-  /// Mirrors the server's own composition (see
-  /// generate_business_display_name) so the preview step shows what will
-  /// actually be stored, not a client-side guess.
-  String get _bizDisplayName => [
-    _bizNameCtrl.text.trim(),
-    _effectiveBizCategory,
-    _bizLocationCtrl.text.trim(),
-  ].where((p) => p.isNotEmpty).join(' · ');
+  String get _bizDisplayName => businessDisplayName(
+      _bizNameCtrl.text, _effectiveBizCategory, _bizLocationCtrl.text);
 
   Widget _buildBizNameStep() => Column(children: [
     _field(_bizNameCtrl, 'Business name', Icons.storefront_outlined,
         autofocus: true, onChanged: (_) => setState(() {})),
     const SizedBox(height: 10),
-    const Padding(
-      padding: EdgeInsets.only(left: 4),
-      child: Text('Buying stays exactly the same. This just unlocks listing '
-          'and selling on your account.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
-    ),
+    const SetupHint('Buying stays exactly the same. This just unlocks listing '
+        'and selling on your account.'),
   ]);
 
-  Widget _buildBizCategoryStep() => Column(children: [
-    Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.55),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrokaColors.border.withOpacity(0.7)),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _bizCategory,
-          isExpanded: true,
-          dropdownColor: const Color(0xFF0B1020),
-          icon: const Icon(Icons.keyboard_arrow_down_rounded,
-              color: BrokaColors.textMid),
-          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16),
-          items: [
-            for (final c in _kBizCategories)
-              DropdownMenuItem(
-                value: c,
-                child: Text(c, style: const TextStyle(
-                    color: BrokaColors.textHigh, fontSize: 16)),
-              ),
-          ],
-          // The closed button renders through this rather than reusing the
-          // menu item, so the selected value is styled explicitly instead of
-          // inheriting whatever DefaultTextStyle happens to be in scope —
-          // the same inheritance gap that had the sign-in prompt rendering
-          // in the wrong font.
-          selectedItemBuilder: (_) => [
-            for (final c in _kBizCategories)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(c, style: const TextStyle(
-                    color: BrokaColors.textHigh, fontSize: 16,
-                    fontWeight: FontWeight.w500)),
-              ),
-          ],
-          onChanged: (v) => setState(() => _bizCategory = v ?? _bizCategory),
-        ),
-      ),
-    ),
-    if (_bizCategory == 'Other') ...[
-      const SizedBox(height: 14),
-      _field(_bizCustomCategoryCtrl, 'Describe what you sell',
-          Icons.edit_outlined, autofocus: true,
-          onChanged: (_) => setState(() {})),
-    ],
-    const SizedBox(height: 10),
-    const Padding(
-      padding: EdgeInsets.only(left: 4),
-      child: Text('This becomes part of your business name, and it is how '
-          'buyers filter for what you sell.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
-    ),
-  ]);
+  Widget _buildBizCategoryStep() => BusinessCategoryPicker(
+    value: _bizCategory,
+    onChanged: (v) => setState(() => _bizCategory = v),
+    otherController: _bizCustomCategoryCtrl,
+    onOtherChanged: (_) => setState(() {}),
+  );
 
   Widget _buildBizLocationStep() => Column(children: [
     _field(_bizLocationCtrl, 'Immediate location', Icons.place_outlined,
         autofocus: true, onChanged: (_) => setState(() {})),
     const SizedBox(height: 10),
-    const Padding(
-      padding: EdgeInsets.only(left: 4),
-      child: Text('The estate, street or town buyers would come to — not the '
-          'whole county. Specific beats broad here.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
-    ),
+    const SetupHint('The estate, street or town buyers would come to — not the '
+        'whole county. Specific beats broad here.'),
   ]);
 
   Widget _buildBizDescriptionStep() => Column(children: [
@@ -1245,12 +1099,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       ),
     ),
     const SizedBox(height: 10),
-    const Padding(
-      padding: EdgeInsets.only(left: 4),
-      child: Text('Recommended. Zeno reads this when it represents you in a '
-          'negotiation, so the more it knows, the better it argues your case.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.5)),
-    ),
+    const SetupHint('Recommended. Zeno reads this when it represents you in a '
+        'negotiation, so the more it knows, the better it argues your case.'),
     const SizedBox(height: 16),
     Center(
       child: GestureDetector(
@@ -1266,25 +1116,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// jumps straight back to the step that owns it, so correcting a typo does
   /// not mean backing out through three screens.
   Widget _buildBizPreviewStep() => Column(children: [
-    Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.6),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Your business will appear as',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-        const SizedBox(height: 8),
-        Text(
-          _bizDisplayName.isEmpty ? '—' : _bizDisplayName,
-          style: const TextStyle(color: BrokaColors.gold, fontSize: 20,
-              fontWeight: FontWeight.w800, height: 1.3),
-        ),
-      ]),
-    ),
+    BusinessPreviewCard(displayName: _bizDisplayName),
     const SizedBox(height: 18),
     const Padding(
       padding: EdgeInsets.only(left: 4, bottom: 10),
@@ -1303,33 +1135,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     ),
   ]);
 
-  Widget _bizEditRow(String label, String value, int step) => GestureDetector(
+  Widget _bizEditRow(String label, String value, int step) => BusinessEditRow(
+    label: label,
+    value: value,
     onTap: () => _animateStep(step),
-    child: Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.4),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BrokaColors.border.withOpacity(0.6)),
-      ),
-      child: Row(children: [
-        SizedBox(
-          width: 110,
-          child: Text(label, style: const TextStyle(
-              color: BrokaColors.textMid, fontSize: 12)),
-        ),
-        Expanded(child: Text(
-          value.isEmpty ? '—' : value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: BrokaColors.textHigh,
-              fontSize: 13, fontWeight: FontWeight.w600),
-        )),
-        const SizedBox(width: 8),
-        const Icon(Icons.edit_outlined, color: BrokaColors.gold, size: 16),
-      ]),
-    ),
   );
 
   // Step 1 - Phone number

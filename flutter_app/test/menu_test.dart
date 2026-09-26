@@ -119,7 +119,8 @@ void main() {
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
 
-      expect(find.text('Become a seller'), findsOneWidget);
+      expect(find.text('Start selling'), findsOneWidget);
+      expect(find.text('Become a seller'), findsNothing);
       expect(find.text('Seller Dashboard'), findsNothing);
       // No finished deal, no rating - the column's default is not a score.
       expect(find.text('New'), findsOneWidget);

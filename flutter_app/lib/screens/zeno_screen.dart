@@ -30,7 +30,6 @@
 // Home's search-pill composer, instead of flat grey bars over its own
 // background.
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
@@ -38,10 +37,12 @@ import '../services/zeno_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
 import '../widgets/zeno_voice_card.dart';
 import '../main.dart';
+import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/product_card.dart';
 import '../widgets/zeno_avatar.dart';
+import '../widgets/zeno_streaming_text.dart';
 import '../services/api_service.dart';
 import '../models/models.dart';
 // Result.fold is an EXTENSION method (ResultExtension in result.dart), so the
@@ -123,6 +124,10 @@ class _ZenoScreenState extends State<ZenoScreen>
   bool _typing      = false;
   final List<_Turn> _turns = [];
   final List<Map<String, String>> _history = [];
+
+  /// Replies that have just arrived and are still being written out, word
+  /// by word. Anything restored from earlier is simply there.
+  final Set<_Turn> _fresh = Set.identity();
 
   bool get _isBuying => widget.mode == ZenoMode.buyingAgent;
 
@@ -352,6 +357,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     if (!mounted) return;
     setState(() {
       _turns.clear();
+      _fresh.clear();
       _history.clear();
       _slots = {};
       _questionsAsked = 0;
@@ -431,8 +437,10 @@ class _ZenoScreenState extends State<ZenoScreen>
       );
       if (mounted) {
         _history.add({'role': 'assistant', 'content': reply});
+        final turn = _Turn(Message(role: 'broker', content: reply));
         setState(() {
-          _turns.add(_Turn(Message(role: 'broker', content: reply)));
+          _turns.add(turn);
+          _fresh.add(turn);
           _typing = false;
         });
         _persist();
@@ -490,6 +498,7 @@ class _ZenoScreenState extends State<ZenoScreen>
         final reply = (data['reply'] as String?)?.trim() ?? '';
         final matches = (data['matches'] as List?) ?? const [];
         _history.add({'role': 'assistant', 'content': reply});
+        final turn = _Turn(Message(role: 'broker', content: reply), matches: matches);
         setState(() {
           _slots = (data['slots'] as Map?)?.cast<String, dynamic>() ?? _slots;
           _questionsAsked = (data['questions_asked'] as num?)?.toInt() ?? _questionsAsked;
@@ -497,7 +506,8 @@ class _ZenoScreenState extends State<ZenoScreen>
           // A fresh search replaces the old offer to keep watching - the
           // criteria it would have watched for have moved on.
           if (data['phase'] == 'RESULTS') _watching = false;
-          _turns.add(_Turn(Message(role: 'broker', content: reply), matches: matches));
+          _turns.add(turn);
+          _fresh.add(turn);
           _typing = false;
         });
         _persist();
@@ -711,8 +721,23 @@ class _ZenoScreenState extends State<ZenoScreen>
     });
   }
 
+  /// A reply has finished writing itself out: show what came with it.
+  void _streamed(_Turn turn) {
+    if (!mounted || !_fresh.remove(turn)) return;
+    setState(() {});
+    if (turn.matches.isNotEmpty) _scrollDown();
+  }
+
+  /// Keeps a reply that is being written in view as it grows - unless the
+  /// user has scrolled up to read something else.
+  void _followStream() {
+    if (!_scrollCtrl.hasClients) return;
+    final p = _scrollCtrl.position;
+    if (p.maxScrollExtent - p.pixels < 160) _scrollCtrl.jumpTo(p.maxScrollExtent);
+  }
+
   /// Zeno's colours - the brand gradient Home's Zeno CTA and the splash use.
-  static const _zenoGradient = [BrokaColors.neonPurple, BrokaColors.neonBlue];
+  static const _zenoGradient = kChatGradient;
 
   @override
   Widget build(BuildContext context) {
@@ -839,18 +864,27 @@ class _ZenoScreenState extends State<ZenoScreen>
     itemBuilder: (_, i) {
       final turn = _turns[i];
       final isLast = i == _turns.length - 1;
-      if (turn.matches.isEmpty) {
+      // What Zeno found comes after Zeno has said so, not under a sentence
+      // still being written.
+      final writing = _fresh.contains(turn);
+      final bubble = _ZenoBubble(
+        message: turn.message,
+        stream: writing,
+        onStreamed: () => _streamed(turn),
+        onGrow: _followStream,
+      );
+      if (turn.matches.isEmpty || writing) {
         // The offer to keep watching belongs on the last turn even when it
         // found nothing - an empty search is exactly when a standing watch
         // is worth the most.
-        final offerWatch = _isBuying && isLast && _lastVerdict == 'EMPTY';
+        final offerWatch = _isBuying && isLast && _lastVerdict == 'EMPTY' && !writing;
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _ZenoBubble(message: turn.message),
+          bubble,
           if (offerWatch) _buildWatchOffer(),
         ]);
       }
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _ZenoBubble(message: turn.message),
+        bubble,
         ...turn.matches.map((m) => _buildMatchCard(m as Map<String, dynamic>)),
         if (isLast) _buildWatchOffer(),
         const SizedBox(height: 4),
@@ -1047,21 +1081,9 @@ class _ZenoScreenState extends State<ZenoScreen>
     ]),
   );
 
-  Widget _buildTypingIndicator() => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-    child: Row(children: [
-      const ZenoAvatar(size: 28),
-      const SizedBox(width: 8),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.30)),
-        ),
-        child: const _TypingDots(),
-      ),
-    ]),
+  Widget _buildTypingIndicator() => const Padding(
+    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    child: ZenoTypingBubble(),
   );
 
   /// Openers as chips floating over the constellation, like a Zone's
@@ -1182,89 +1204,10 @@ class _ZenoScreenState extends State<ZenoScreen>
             ),
           ),
         ),
-        const SizedBox(width: 8),
-        AnimatedScale(
-          scale: (_hasDraft || _typing) ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutBack,
-          child: AnimatedOpacity(
-            opacity: (_hasDraft || _typing) ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 140),
-            child: GestureDetector(
-              onTap: (_typing || !_hasDraft) ? null : () => _send(),
-              child: Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: _zenoGradient,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: BrokaColors.neonBlue.withOpacity(0.35),
-                      blurRadius: 14, spreadRadius: 1),
-                  ],
-                ),
-                child: _typing
-                    ? const Center(
-                        child: SizedBox(width: 18, height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white)))
-                    : const Icon(Icons.arrow_upward_rounded,
-                        color: Colors.white, size: 22),
-              ),
-            ),
-          ),
-        ),
+        ChatSendButton(visible: _hasDraft, busy: _typing, onTap: () => _send()),
       ],
     ),
   );
-}
-
-/// Three dots rising and falling in turn while Zeno thinks.
-///
-/// The previous dots were three one-shot fades that finished after 600ms and
-/// then sat still, so a slow reply looked like a frozen one.
-class _TypingDots extends StatefulWidget {
-  const _TypingDots();
-
-  @override
-  State<_TypingDots> createState() => _TypingDotsState();
-}
-
-class _TypingDotsState extends State<_TypingDots> with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat();
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) => Row(mainAxisSize: MainAxisSize.min, children: [
-          for (var i = 0; i < 3; i++) ...[
-            if (i > 0) const SizedBox(width: 5),
-            Opacity(
-              opacity: 0.35 + 0.65 * (0.5 + 0.5 * math.sin(2 * math.pi * (_c.value - i * 0.18))),
-              child: Container(
-                width: 7,
-                height: 7,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
-                ),
-              ),
-            ),
-          ],
-        ]),
-      );
 }
 
 // ── Zeno Chat Bubble ─────────────────────────────────────────────────────────
@@ -1273,7 +1216,12 @@ class _TypingDotsState extends State<_TypingDots> with SingleTickerProviderState
 // gradient, like Home's Zeno CTA and every primary button in the app.
 class _ZenoBubble extends StatelessWidget {
   final Message message;
-  const _ZenoBubble({required this.message});
+
+  /// A reply that has just arrived: written out word by word.
+  final bool stream;
+  final VoidCallback? onStreamed;
+  final VoidCallback? onGrow;
+  const _ZenoBubble({required this.message, this.stream = false, this.onStreamed, this.onGrow});
 
   @override
   Widget build(BuildContext context) {
@@ -1319,10 +1267,19 @@ class _ZenoBubble extends StatelessWidget {
                     ? null
                     : [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 10)],
               ),
-              child: Text(message.content,
-                  style: TextStyle(
-                      color: isAI ? BrokaColors.textHigh : Colors.white,
-                      fontSize: 14.5, height: 1.5)),
+              child: isAI
+                  ? ZenoStreamingText(
+                      message.content,
+                      key: ObjectKey(message),
+                      style: const TextStyle(
+                          color: BrokaColors.textHigh, fontSize: 14.5, height: 1.5),
+                      animate: stream,
+                      onDone: onStreamed,
+                      onGrow: onGrow,
+                    )
+                  : Text(message.content,
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 14.5, height: 1.5)),
             ),
           ),
         ],

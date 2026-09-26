@@ -4,7 +4,7 @@ login (phone + password/biometric), and seller upgrade.
 Wraps AuthService, adds rate limiting."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,9 +116,14 @@ class ProfilePatch(BaseModel):
 
 
 class SellerUpgradeIn(BaseModel):
-    business_name: str
-    business_category: str
-    business_location: str
+    # The question signup asks. "short_term" - a few items - needs nothing
+    # else; "long_term" needs the three business fields. It defaults to
+    # long_term because that is what every client meant before the field
+    # existed (the store wizard still sends only business details).
+    seller_tier: Literal["short_term", "long_term"] = "long_term"
+    business_name: Optional[str] = None
+    business_category: Optional[str] = None
+    business_location: Optional[str] = None
     business_description: Optional[str] = None
 
 
@@ -230,6 +235,7 @@ async def upgrade_to_seller(
     svc = AuthService(db)
     return await svc.upgrade_to_seller(
         user_id=current_user["id"],
+        seller_tier=body.seller_tier,
         business_name=body.business_name,
         business_category=body.business_category,
         business_location=body.business_location,

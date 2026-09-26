@@ -185,6 +185,19 @@ class _ZenoVoiceCardState extends State<ZenoVoiceCard>
           _topRow(c, accent, narrow),
           const SizedBox(height: 8),
           _statusLine(c, accent, narrow),
+          if (c.state == VoiceSessionState.error && c.errorReference != null) ...[
+            const SizedBox(height: 3),
+            // Small and selectable: something to quote in a support message,
+            // not something to read.
+            SelectableText(
+              c.errorReference!,
+              key: const Key('voice-error-reference'),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: const TextStyle(
+                  color: BrokaColors.textLow, fontSize: 10, letterSpacing: 0.3),
+            ),
+          ],
           const SizedBox(height: 8),
           _transcriptRow(c, accent, narrow),
           if (c.languageUnsupported && c.state != VoiceSessionState.error) ...[

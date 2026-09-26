@@ -277,7 +277,7 @@ class AuthService:
         profile_photo: Optional[str] = None,
         # Signup-time seller categorisation. account_type "buyer_seller"
         # creates a selling account outright rather than making the user come
-        # back through Profile -> Become a Seller. Business fields are only
+        # back through Menu -> Start selling. Business fields are only
         # meaningful for a long_term seller; the wizard does not ask a
         # short_term one for them.
         account_type: Optional[str] = None,
@@ -488,28 +488,54 @@ class AuthService:
     async def upgrade_to_seller(
         self,
         user_id: str,
-        business_name: str,
-        business_category: str,
-        business_location: str,
+        business_name: Optional[str] = None,
+        business_category: Optional[str] = None,
+        business_location: Optional[str] = None,
         business_description: Optional[str] = None,
+        seller_tier: str = SellerTier.long_term.value,
     ) -> dict:
+        """Lets a buyer start selling - the seller questions signup asks,
+        asked later: a short-term seller (a few items) needs nothing more; a
+        long-term one sets up the business identity."""
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        display_name = generate_business_display_name(business_name, business_category, business_location)
+        if seller_tier == SellerTier.short_term.value:
+            # Never a downgrade: an account already set up as a business keeps
+            # its business name and store. Answering "just a few items" again
+            # must not take those away.
+            if user.seller_tier == SellerTier.long_term and user.business_display_name:
+                return self._user_dict(user)
+            user = await self.repo.update(
+                user,
+                account_type=AccountType.buyer_seller,
+                seller_tier=SellerTier.short_term,
+            )
+            return self._user_dict(user)
+
+        b_name = (business_name or "").strip()
+        b_cat = (business_category or "").strip()
+        b_loc = (business_location or "").strip()
+        # All three or nothing, as at signup: a half-filled business becomes a
+        # display name like "· Electronics ·" in search, and the old endpoint
+        # stored exactly that for empty strings.
+        if not (b_name and b_cat and b_loc):
+            raise HTTPException(
+                status_code=422,
+                detail="A business needs a name, what it sells and a location",
+            )
         user = await self.repo.update(
             user,
             account_type=AccountType.buyer_seller,
             # Filling in a full business identity is what long_term means, so
-            # an upgrade through Profile lands there regardless of what was
-            # chosen at signup.
+            # this lands there regardless of what was chosen at signup.
             seller_tier=SellerTier.long_term,
-            business_name=business_name.strip(),
-            business_category=business_category.strip(),
-            business_location=business_location.strip(),
+            business_name=b_name,
+            business_category=b_cat,
+            business_location=b_loc,
             business_description=(business_description or "").strip() or None,
-            business_display_name=display_name,
+            business_display_name=generate_business_display_name(b_name, b_cat, b_loc),
         )
         return self._user_dict(user)
 

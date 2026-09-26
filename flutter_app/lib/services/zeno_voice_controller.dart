@@ -88,6 +88,7 @@ class ZenoVoiceController extends ChangeNotifier {
   VoiceSessionState _state = VoiceSessionState.idle;
   String _interim = '';
   String? _errorMessage;
+  String? _errorReference;
   bool _open = false;
   // Bumped by every open() and close(), so an async step can tell whether
   // the card it started in is still the card that is showing.
@@ -102,6 +103,12 @@ class ZenoVoiceController extends ChangeNotifier {
   String get interim => _interim;
 
   String? get errorMessage => _errorMessage;
+
+  /// What failed, as a short code - "ASSEMBLYAI_HANDSHAKE_FAILED" (the
+  /// provider answered and refused) against "DEEPGRAM_NETWORK_UNREACHABLE" -
+  /// shown small under the error. Diagnostics are printed in debug builds
+  /// only, so on a release phone this is the one trace of why.
+  String? get errorReference => _errorReference;
 
   /// Whether the card should be mounted at all.
   bool get isOpen => _open;
@@ -144,6 +151,7 @@ class ZenoVoiceController extends ChangeNotifier {
   Future<void> _retryAfterError() async {
     final session = _session;
     _errorMessage = null;
+    _errorReference = null;
     _set(VoiceSessionState.connecting);
     await _cancelSubs();
     await _service.cancel();
@@ -155,6 +163,7 @@ class ZenoVoiceController extends ChangeNotifier {
 
   Future<void> _start() async {
     _errorMessage = null;
+    _errorReference = null;
     _interim = '';
     _set(VoiceSessionState.connecting);
 
@@ -194,6 +203,7 @@ class ZenoVoiceController extends ChangeNotifier {
     _level = 0;
     transcript.clear();
     _errorMessage = null;
+    _errorReference = null;
     _state = VoiceSessionState.idle;
     notifyListeners();
 
@@ -381,10 +391,20 @@ class ZenoVoiceController extends ChangeNotifier {
 
   void _failWith(VoiceSessionException e) {
     _errorMessage = _messageFor(e.failure);
+    _errorReference = referenceFor(e);
     _interim = '';
     _level = 0;
     _set(VoiceSessionState.error);
     unawaited(_service.cancel());
+  }
+
+  /// The reference shown under an error: the failing stage's diagnostic
+  /// event, plus the close code when the provider hung up on a live session.
+  @visibleForTesting
+  static String? referenceFor(VoiceSessionException e) {
+    final d = e.diagnostic;
+    if (d == null) return null;
+    return d.closeCode == null ? d.event : '${d.event} · close ${d.closeCode}';
   }
 
   /// One honest sentence per failure, each of which ends with the user still

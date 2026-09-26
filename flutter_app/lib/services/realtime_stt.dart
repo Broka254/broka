@@ -22,6 +22,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// Why a voice session could not run, or stopped running.
 ///
@@ -238,6 +239,41 @@ class SttTimeouts {
   static const Duration token = Duration(seconds: 12);
   static const Duration handshake = Duration(seconds: 10);
   static const Duration microphoneStart = Duration(seconds: 8);
+}
+
+/// Closes a provider's socket without ever hanging the caller.
+///
+/// web_socket_channel never completes `sink.close()` on a channel whose
+/// handshake failed - an upgrade the server refused (a rejected token comes
+/// back as HTTP 401) or a host that couldn't be reached: nothing listens on
+/// the stream the close is waiting for. Both providers awaited it inside
+/// their handshake retry, so start() froze there and the voice card said
+/// "Connecting…" until RealtimeSttManager's 45-second watchdog gave up on
+/// the provider - and then the same again for the next one. Nobody waits
+/// 90 seconds; to the user the microphone simply never worked.
+///
+/// A socket that never opened has nothing to say goodbye to, so its close is
+/// not waited for at all. An open one gets [grace] to exchange close frames
+/// with a server that may already be gone.
+Future<void> closeSocketWithoutHanging(
+  WebSocketChannel? channel, {
+  required bool opened,
+  Duration grace = const Duration(seconds: 2),
+}) async {
+  if (channel == null) return;
+  final Future<void> closed;
+  try {
+    closed = channel.sink.close();
+  } catch (_) {
+    return;
+  }
+  if (!opened) {
+    unawaited(closed.catchError((_) {}));
+    return;
+  }
+  try {
+    await closed.timeout(grace);
+  } catch (_) {}
 }
 
 /// A provider's answer for one BROKA language.

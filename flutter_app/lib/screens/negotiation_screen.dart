@@ -21,7 +21,10 @@ import '../main.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/message_receipt.dart';
-import '../widgets/chat_ambient_background.dart';
+import '../widgets/chat_parts.dart';
+import '../widgets/collapsing_screen_header.dart';
+import '../widgets/constellation_background.dart';
+import '../widgets/zeno_avatar.dart';
 import '../services/ringtone_service.dart';
 import '../models/models.dart';
 import '../models/listing.dart';
@@ -100,7 +103,11 @@ class ChatMessage {
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 class NegotiationScreen extends StatefulWidget {
-  const NegotiationScreen({super.key});
+  const NegotiationScreen({super.key, this.animateBackground = true});
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
+
   @override
   State<NegotiationScreen> createState() => _NegotiationScreenState();
 }
@@ -1214,14 +1221,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: BrokaColors.bg,
-    // The constellation field from the splash screen, retuned so it sits
-    // behind conversation content without fighting it - see
-    // widgets/chat_ambient_background.dart. Intensity is held back here
-    // (vs Zeno's own screen) because this thread carries photos, voice
-    // notes and payment panels that need the background to stay out of
-    // their way.
-    body: ChatAmbientBackground(
-      intensity: 0.85,
+    // Home's constellation, as on every screen reached from it. This thread
+    // used to sit on ChatAmbientBackground - the splash field retuned and
+    // held back - under an opaque header bar and an opaque composer bar,
+    // which made it look like a different app from Home and Zeno.
+    body: ConstellationBackground(
+      animate: widget.animateBackground,
       child: Column(children: [
         _buildHeader(),
         if (_dealInfo != null) _buildPaymentPanel(),
@@ -1249,33 +1254,32 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Header ─────────────────────────────────────────────────────────────────
 
+  /// Home's header language: a bare back chevron, the person's photo, their
+  /// name, and square controls on the right - no opaque bar across the top.
   Widget _buildHeader() => SafeArea(
     bottom: false,
     child: Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      padding: const EdgeInsets.fromLTRB(4, 6, 12, 10),
       decoration: BoxDecoration(
-        color: BrokaColors.bgMid.withOpacity(0.88),
-        border: const Border(bottom: BorderSide(color: BrokaColors.border)),
+        border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6))),
       ),
       child: Row(children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            width: 36, height: 36,
-            decoration: BoxDecoration(color: BrokaColors.bgCard,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: BrokaColors.border)),
-            child: const Icon(Icons.arrow_back_ios_new_rounded,
-                color: BrokaColors.textMid, size: 16),
-          ),
+        // Compact: four controls share this row with the person's name,
+        // and the name is what the header is for.
+        IconButton(
+          tooltip: 'Back',
+          visualDensity: VisualDensity.compact,
+          onPressed: () => Navigator.maybePop(context),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: BrokaColors.textHigh, size: 19),
         ),
-        const SizedBox(width: 12),
         Stack(children: [
           Container(
-            width: 38, height: 38,
-            decoration: const BoxDecoration(
+            width: 36, height: 36,
+            decoration: BoxDecoration(
               shape: BoxShape.circle,
-              gradient: LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim])),
+              gradient: const LinearGradient(colors: kChatGradient),
+              border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.45), width: 1.2)),
             clipBehavior: Clip.antiAlias,
             child: (_counterpartyPhoto != null && _counterpartyPhoto!.isNotEmpty)
                 ? _decodedPhoto(_counterpartyPhoto!)
@@ -1287,106 +1291,80 @@ class _NegotiationScreenState extends State<NegotiationScreen>
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: BrokaColors.neonGreen,
-                border: Border.all(color: BrokaColors.bgMid, width: 2),
+                border: Border.all(color: BrokaColors.bg, width: 2),
               ),
             )),
         ]),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const SizedBox(width: 9),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text(_role == 'buyer'
               ? (_listing?.sellerName ?? 'Seller')
               : 'Buyer',
+              maxLines: 1, overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: BrokaColors.textHigh,
-                  fontWeight: FontWeight.w700, fontSize: 15)),
-          Text(
-            _counterpartyLastSeen ?? (_counterpartyOnline ? 'Active now' : ''),
-            style: TextStyle(
-                color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textMid,
-                fontSize: 11, fontWeight: _counterpartyOnline ? FontWeight.w600 : FontWeight.w400),
-            maxLines: 1, overflow: TextOverflow.ellipsis),
+                  fontWeight: FontWeight.w800, fontSize: 15.5)),
+          const SizedBox(height: 2),
+          Row(children: [
+            // The live connection, folded into the status line rather than
+            // a lone dot among the buttons.
+            Container(
+              width: 6, height: 6, margin: const EdgeInsets.only(right: 5),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _wsConnected ? BrokaColors.neonGreen : BrokaColors.textLow),
+            ),
+            Flexible(child: Text(
+              _counterpartyLastSeen ?? (_counterpartyOnline ? 'Active now' : 'Direct chat'),
+              style: TextStyle(
+                  color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textMid,
+                  fontSize: 11.5, fontWeight: _counterpartyOnline ? FontWeight.w600 : FontWeight.w400),
+              maxLines: 1, overflow: TextOverflow.ellipsis)),
+          ]),
         ])),
-        // WS indicator
-        Container(
-          width: 8, height: 8, margin: const EdgeInsets.only(right: 8),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _wsConnected ? BrokaColors.neonGreen : BrokaColors.textLow),
-        ),
-        // Audio call
-        GestureDetector(
+        const SizedBox(width: 4),
+        BrokaHeaderButton(
+          icon: Icons.call_rounded,
+          tooltip: 'Voice call',
           onTap: () => _initiateCall('audio'),
-          child: Container(
-            width: 36, height: 36, margin: const EdgeInsets.only(right: 6),
-            decoration: BoxDecoration(
-              color: BrokaColors.neonGreen.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.3))),
-            child: const Icon(Icons.call_rounded, color: BrokaColors.neonGreen, size: 18),
-          ),
+        ),
+        const SizedBox(width: 5),
+        BrokaHeaderButton(
+          icon: Icons.videocam_rounded,
+          tooltip: 'Video call',
+          onTap: () => _initiateCall('video'),
         ),
         // Finalize - relocated from the deleted language row, where it was
         // the only control that actually did anything. It belongs with the
         // other thread-level actions, not stranded among dead chips.
-        if (_role == 'buyer' && _dealInfo == null)
-          GestureDetector(
+        if (_role == 'buyer' && _dealInfo == null) ...[
+          const SizedBox(width: 5),
+          BrokaHeaderButton(
+            icon: Icons.handshake_rounded,
+            tooltip: 'Agree the deal',
             onTap: _finalizeDeal,
-            child: Container(
-              height: 36, margin: const EdgeInsets.only(right: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: BrokaColors.neonGreen.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.35))),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.handshake_rounded, size: 15, color: BrokaColors.neonGreen),
-                SizedBox(width: 5),
-                Text('Deal', style: TextStyle(color: BrokaColors.neonGreen,
-                    fontSize: 11, fontWeight: FontWeight.w700)),
-              ]),
-            ),
           ),
-        // Video call
-        GestureDetector(
-          onTap: () => _initiateCall('video'),
-          child: Container(
-            width: 36, height: 36, margin: const EdgeInsets.only(right: 6),
-            decoration: BoxDecoration(
-              color: BrokaColors.neonBlue.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.3))),
-            child: const Icon(Icons.videocam_rounded, color: BrokaColors.neonBlue, size: 18),
+        ],
+        const SizedBox(width: 5),
+        // Zeno, a tap away, with its unread replies counted.
+        Stack(clipBehavior: Clip.none, children: [
+          BrokaHeaderButton(
+            icon: Icons.auto_awesome_rounded,
+            active: true,
+            tooltip: 'Ask Zeno',
+            onTap: _openZenoAi,
           ),
-        ),
-        // Zeno AI button
-        GestureDetector(
-          onTap: _openZenoAi,
-          child: Stack(clipBehavior: Clip.none, children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          if (_zenoUnreadCount > 0)
+            Positioned(right: -4, top: -4, child: IgnorePointer(child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: BoxDecoration(
-                color: BrokaColors.gold.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: BrokaColors.gold.withOpacity(0.5))),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.auto_awesome_rounded, size: 14, color: BrokaColors.gold),
-                SizedBox(width: 5),
-                Text('AI', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                    color: BrokaColors.gold)),
-              ]),
-            ),
-            if (_zenoUnreadCount > 0)
-              Positioned(right: -4, top: -4, child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                  color: BrokaColors.danger,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: BrokaColors.bgMid, width: 1.5),
-                ),
-                child: Text('$_zenoUnreadCount',
-                    style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
-              )),
-          ]),
-        ),
+                color: BrokaColors.danger,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: BrokaColors.bg, width: 1.5),
+              ),
+              child: Text('$_zenoUnreadCount',
+                  style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
+            ))),
+        ]),
       ]),
     ),
   );
@@ -1397,12 +1375,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     final deal = _dealInfo;
     if (deal == null) return const SizedBox();
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: BrokaColors.neonGreen.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.4))),
+        color: BrokaColors.bgCard.withOpacity(0.86),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45))),
       child: Row(children: [
         const Icon(Icons.check_circle_rounded, color: BrokaColors.neonGreen, size: 20),
         const SizedBox(width: 10),
@@ -1492,6 +1470,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     }
     return ListView.builder(
       controller: _scrollCtrl,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       itemCount: _messages.length,
       itemBuilder: (_, i) => _ChatBubble(
@@ -1512,108 +1491,80 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   Widget _buildRecordingBar() => SafeArea(
     top: false,
-    child: Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-      decoration: const BoxDecoration(
-        color: BrokaColors.bgMid,
-        border: Border(top: BorderSide(color: BrokaColors.border))),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
       child: Row(children: [
         // Cancel
-        GestureDetector(
-          onTap: _cancelRecording,
-          child: Container(
-            width: 44, height: 44,
-            decoration: BoxDecoration(
-              color: BrokaColors.danger.withOpacity(0.15),
-              shape: BoxShape.circle,
-              border: Border.all(color: BrokaColors.danger.withOpacity(0.4))),
-            child: const Icon(Icons.delete_rounded, color: BrokaColors.danger, size: 20)),
+        Tooltip(
+          message: 'Discard the recording',
+          child: GestureDetector(
+            onTap: _cancelRecording,
+            child: Container(
+              width: 50, height: 50,
+              decoration: BoxDecoration(
+                color: BrokaColors.bgCard.withOpacity(0.92),
+                shape: BoxShape.circle,
+                border: Border.all(color: BrokaColors.danger.withOpacity(0.5))),
+              child: const Icon(Icons.delete_rounded, color: BrokaColors.danger, size: 20)),
+          ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 8),
         Expanded(child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          constraints: const BoxConstraints(minHeight: 50),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: BrokaColors.danger.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: BrokaColors.danger.withOpacity(0.3))),
+            color: BrokaColors.bgCard.withOpacity(0.92),
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: BrokaColors.danger.withOpacity(0.55), width: 1.2)),
           child: Row(children: [
             Container(width: 10, height: 10,
               decoration: const BoxDecoration(
                 shape: BoxShape.circle, color: BrokaColors.danger)),
             const SizedBox(width: 10),
-            const Text('Recording…',
-                style: TextStyle(color: BrokaColors.danger, fontSize: 13,
-                    fontWeight: FontWeight.w600)),
+            const Flexible(child: Text('Recording…',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: BrokaColors.danger, fontSize: 14,
+                    fontWeight: FontWeight.w600))),
             const Spacer(),
             if (_recordStart != null)
               _RecordingTimer(start: _recordStart!),
           ]),
         )),
-        const SizedBox(width: 12),
-        // Send
-        GestureDetector(
-          onTap: _stopAndSendVoice,
-          child: Container(
-            width: 46, height: 46,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(colors: [BrokaColors.neonGreen, Color(0xFF059669)])),
-            child: const Icon(Icons.send_rounded, color: Colors.white, size: 20)),
-        ),
+        ChatSendButton(visible: true, onTap: _stopAndSendVoice),
       ]),
     ),
   );
 
   // ── Input bar ──────────────────────────────────────────────────────────────
 
+  /// Home's search pill, as on Zeno's screen. Attachment and mic sit inside
+  /// the pill, as in every messaging app people already know; the send
+  /// button scales in only once there is something to send.
   Widget _buildInputBar() => SafeArea(
     top: false,
-    child: Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-      decoration: BoxDecoration(
-        // Slight translucency so the constellation reads through the
-        // composer instead of the bar looking like a lid clamped over it.
-        color: BrokaColors.bgMid.withOpacity(0.92),
-        border: const Border(top: BorderSide(color: BrokaColors.border)),
-      ),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // ── The composer pill ───────────────────────────────────────────
-          // REDESIGN: attachment and mic now live INSIDE the pill, which is
-          // what every messaging app the user already knows does (WhatsApp,
-          // Telegram, Gemini). Previously they were two large standalone
-          // squares sitting to the left of the field, each with its own
-          // tinted fill and border - three separate bordered boxes competing
-          // in one row, which is what made the input read as casual and
-          // unfinished rather than like a real chat composer.
           Expanded(
-            child: Container(
-              constraints: const BoxConstraints(minHeight: 46),
-              decoration: BoxDecoration(
-                color: BrokaColors.bgCard,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: _composerFocused
-                      ? BrokaColors.gold.withOpacity(0.55)
-                      : BrokaColors.border,
-                  width: _composerFocused ? 1.4 : 1,
-                ),
-              ),
+            child: ChatComposerPill(
+              focused: _composerFocused,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  _ComposerAction(
+                  ChatComposerAction(
                     icon: Icons.add_photo_alternate_outlined,
                     tooltip: 'Send a photo',
                     onTap: _showImageSourceSheet,
                   ),
                   Expanded(
                     child: TextField(
+                      key: const Key('direct-chat-composer'),
                       controller: _msgCtrl,
                       focusNode: _composerFocus,
                       style: const TextStyle(
-                          color: BrokaColors.textHigh, fontSize: 15, height: 1.35),
+                          color: BrokaColors.textHigh, fontSize: 15.5, height: 1.35),
                       // Room to compose a real paragraph - a marketplace
                       // negotiation is not a one-liner - while still
                       // scrolling rather than eating the conversation.
@@ -1622,15 +1573,18 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                       textCapitalization: TextCapitalization.sentences,
                       keyboardType: TextInputType.multiline,
                       textInputAction: TextInputAction.newline,
-                      cursorColor: BrokaColors.gold,
+                      cursorColor: BrokaColors.neonBlue,
                       decoration: InputDecoration(
                         isDense: true,
+                        filled: false,
                         hintText: _role == 'buyer' ? 'Message seller' : 'Message buyer',
                         hintStyle: const TextStyle(
-                            color: BrokaColors.textLow, fontSize: 15),
+                            color: BrokaColors.textMid, fontSize: 15),
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
                         contentPadding:
-                            const EdgeInsets.symmetric(horizontal: 4, vertical: 13),
+                            const EdgeInsets.symmetric(horizontal: 4, vertical: 14),
                       ),
                     ),
                   ),
@@ -1639,83 +1593,18 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   // that makes sense, and keeping a second one visible just
                   // asks the user to aim.
                   if (!_hasDraft)
-                    _ComposerAction(
+                    ChatComposerAction(
                       icon: Icons.mic_none_rounded,
                       tooltip: 'Record a voice note',
                       onTap: _startRecording,
+                      leading: false,
                     ),
                 ],
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          // ── Send ────────────────────────────────────────────────────────
-          // Scales in only when there is something to send. An always-on
-          // send button next to an empty field is dead weight that trains
-          // people to ignore it.
-          AnimatedScale(
-            scale: _hasDraft || _sending ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOutBack,
-            child: AnimatedOpacity(
-              opacity: _hasDraft || _sending ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 140),
-              child: GestureDetector(
-                onTap: (_sending || !_hasDraft) ? null : _send,
-                child: Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [BrokaColors.gold, BrokaColors.neonBlue],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: BrokaColors.gold.withOpacity(0.35),
-                        blurRadius: 14,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                  child: _sending
-                      ? const Center(
-                          child: SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white)))
-                      : const Icon(Icons.arrow_upward_rounded,
-                          color: Colors.white, size: 21),
-                ),
-              ),
-            ),
-          ),
+          ChatSendButton(visible: _hasDraft, busy: _sending, onTap: _send),
         ],
-      ),
-    ),
-  );
-}
-
-// ── Composer action (icon inside the input pill) ─────────────────────────────
-
-class _ComposerAction extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-  const _ComposerAction({required this.icon, required this.tooltip, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => Tooltip(
-    message: tooltip,
-    child: InkResponse(
-      onTap: onTap,
-      radius: 22,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 11, 8, 11),
-        child: Icon(icon, size: 22, color: BrokaColors.textMid),
       ),
     ),
   );
@@ -1821,34 +1710,21 @@ class _ChatBubble extends StatelessWidget {
       );
     }
 
-    // Broker bubbles are centered
+    // Zeno's notes in this thread: Zeno's avatar and bubble, as on Zeno's
+    // own screen.
     if (isBroker) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: Column(children: [
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Container(
-              width: 18, height: 18,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue])),
-              child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 10)),
-            const SizedBox(width: 5),
-            const Text('ZENO', style: TextStyle(color: BrokaColors.gold, fontSize: 10,
-                fontWeight: FontWeight.w800, letterSpacing: 1.0)),
-          ]),
-          const SizedBox(height: 6),
-          Container(
-            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.88),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const ZenoAvatar(size: 28),
+          const SizedBox(width: 8),
+          Flexible(child: Container(
+            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [
-                BrokaColors.gold.withOpacity(0.10), BrokaColors.bgCard]),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: BrokaColors.gold.withOpacity(0.3))),
+            decoration: zenoBubbleDecoration(),
             child: Text(message.content, style: const TextStyle(
                 color: BrokaColors.textHigh, fontSize: 14, height: 1.5)),
-          ),
+          )),
         ]),
       );
     }
@@ -1866,22 +1742,15 @@ class _ChatBubble extends StatelessWidget {
     } else if (message.msgType == 'image' && message.mediaUrl != null) {
       bubbleContent = _ImageBubble(url: message.mediaUrl!);
     } else {
+      // Yours on the brand gradient, theirs on a card - as on Zeno's screen
+      // - rather than a role-coloured blue or green.
       bubbleContent = Container(
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: isMe
-              ? (message.role == 'buyer'
-                  ? const Color(0xFF1565C0) : const Color(0xFF2E7D32))
-              : BrokaColors.bgCard,
-          borderRadius: BorderRadius.only(
-            topLeft:     Radius.circular(isMe ? 14 : 4),
-            topRight:    Radius.circular(isMe ? 4 : 14),
-            bottomLeft:  const Radius.circular(14),
-            bottomRight: const Radius.circular(14)),
-          border: Border.all(color: roleColor().withOpacity(0.2))),
+        decoration: isMe ? myBubbleDecoration() : theirBubbleDecoration(),
         child: Text(message.content,
-            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14, height: 1.4)),
+            style: TextStyle(color: isMe ? Colors.white : BrokaColors.textHigh,
+                fontSize: 14.5, height: 1.4)),
       );
     }
 

@@ -149,6 +149,9 @@ class DeepgramSttService implements RealtimeSttProvider {
   final _failures = StreamController<VoiceSessionException>.broadcast();
 
   WebSocketChannel? _channel;
+
+  /// Whether [_channel]'s handshake completed - see closeSocketWithoutHanging.
+  bool _socketOpened = false;
   StreamSubscription<Uint8List>? _audioSub;
   StreamSubscription? _socketSub;
   Timer? _keepAlive;
@@ -440,6 +443,7 @@ class DeepgramSttService implements RealtimeSttProvider {
             info: {'auth_mode': mode.name}),
       );
     }
+    _socketOpened = true;
   }
 
   Uri _uriFor(ProviderLanguageConfig config, {String? accessToken}) => Uri(
@@ -685,12 +689,12 @@ class DeepgramSttService implements RealtimeSttProvider {
   Future<void> _closeSocket() async {
     final sub = _socketSub;
     final channel = _channel;
+    final opened = _socketOpened;
     _socketSub = null;
     _channel = null;
+    _socketOpened = false;
     await sub?.cancel();
-    try {
-      await channel?.sink.close();
-    } catch (_) {}
+    await closeSocketWithoutHanging(channel, opened: opened);
   }
 
   void _fail(VoiceSessionException e) {

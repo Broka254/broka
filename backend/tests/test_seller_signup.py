@@ -195,3 +195,69 @@ class TestProfileUpgrade:
         me = await _me(client, token)
         assert me["account_type"] == "buyer_seller"
         assert me["seller_tier"] == "long_term"
+
+
+class TestStartSellingLater:
+    """A buyer who starts selling later is asked what signup asks: a few
+    items (nothing more to fill in) or a business (the business details)."""
+
+    @staticmethod
+    async def _buyer(client, phone: str) -> dict:
+        r = await _register(client, phone)
+        assert r.status_code == 201, r.text
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    async def test_a_few_items_needs_no_business_details(self, client):
+        auth = await self._buyer(client, "+254700222101")
+        up = await client.post(
+            "/auth/upgrade-to-seller", headers=auth, json={"seller_tier": "short_term"},
+        )
+        assert up.status_code == 200, up.text
+
+        me = await _me(client, auth["Authorization"].split()[1])
+        assert me["account_type"] == "buyer_seller"
+        assert me["seller_tier"] == "short_term"
+        assert me["business_display_name"] is None
+
+    async def test_a_business_still_needs_its_details(self, client):
+        auth = await self._buyer(client, "+254700222102")
+        for body in (
+            {"seller_tier": "long_term"},
+            {"business_name": "Mama Mboga", "business_category": "Food & Beverages"},
+            # Blank strings used to be stored, giving the display name " · ".
+            {"business_name": "  ", "business_category": " ", "business_location": ""},
+        ):
+            up = await client.post("/auth/upgrade-to-seller", headers=auth, json=body)
+            assert up.status_code == 422, (body, up.text)
+
+        me = await _me(client, auth["Authorization"].split()[1])
+        assert me["account_type"] == "buyer"
+
+    async def test_a_business_is_never_downgraded_by_a_few_items(self, client):
+        auth = await self._buyer(client, "+254700222103")
+        up = await client.post(
+            "/auth/upgrade-to-seller",
+            headers=auth,
+            json={
+                "seller_tier": "long_term",
+                "business_name": "Clanix",
+                "business_category": "Wholesale",
+                "business_location": "Sira",
+            },
+        )
+        assert up.status_code == 200, up.text
+
+        again = await client.post(
+            "/auth/upgrade-to-seller", headers=auth, json={"seller_tier": "short_term"},
+        )
+        assert again.status_code == 200, again.text
+        me = await _me(client, auth["Authorization"].split()[1])
+        assert me["seller_tier"] == "long_term"
+        assert me["business_display_name"] == "Clanix · Wholesale · Sira"
+
+    async def test_an_unknown_tier_is_refused(self, client):
+        auth = await self._buyer(client, "+254700222104")
+        up = await client.post(
+            "/auth/upgrade-to-seller", headers=auth, json={"seller_tier": "forever"},
+        )
+        assert up.status_code == 422

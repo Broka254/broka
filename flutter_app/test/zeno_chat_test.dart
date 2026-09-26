@@ -11,6 +11,7 @@ import 'package:broka/services/zeno_chat_store.dart';
 import 'package:broka/widgets/chat_ambient_background.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:broka/widgets/zeno_avatar.dart';
+import 'package:broka/widgets/zeno_streaming_text.dart';
 
 import 'support/fake_api.dart';
 
@@ -49,6 +50,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
     await _settle(tester);
+    // Zeno's reply writes itself out; wait for the last word.
+    await _stream(tester);
   }
 
   testWidgets('the conversation is still there after Zeno is closed', (tester) async {
@@ -195,6 +198,100 @@ void main() {
     expect(stored.single, {'id': 'l1', 'name': 'iPhone', 'price': 1000});
   });
 
+  group('replies are written out like a language model writes', () {
+    const long = 'A fair price for a 2014 Axio in Nairobi is between 780K and '
+        '850K, depending on mileage and whether it has been locally used.';
+
+    setUp(() => setFakeRoute((uri) => uri.path == '/negotiate/chat'
+        ? {'role': 'broker', 'content': long}
+        : null));
+
+    /// What the newest reply shows right now, caret and all.
+    String shown(WidgetTester tester) => tester
+        .widget<Text>(find.descendant(
+            of: find.byType(ZenoStreamingText).last, matching: find.byType(Text)))
+        .textSpan!
+        .toPlainText();
+
+    testWidgets('a new reply arrives a few words at a time', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('zeno-composer')), 'Is 800K fair?');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 150));
+
+      final early = shown(tester);
+      expect(early, isNot(long), reason: 'not the whole reply at once');
+      expect(early, endsWith('▍'), reason: 'a caret where the next word goes');
+      expect(long, startsWith(early.replaceAll('▍', '')));
+
+      await tester.pump(const Duration(milliseconds: 400));
+      final later = shown(tester).replaceAll('▍', '');
+      expect(later.length, greaterThan(early.replaceAll('▍', '').length),
+          reason: 'more words keep arriving');
+
+      await _stream(tester);
+      await _stream(tester);
+      expect(find.text(long), findsOneWidget);
+    });
+
+    testWidgets('a conversation picked up again is not written out again',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
+      await _settle(tester);
+      await say(tester, 'Is 800K fair?');
+      await _stream(tester);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
+      await _settle(tester);
+      expect(find.text(long), findsOneWidget);
+    });
+
+    testWidgets('under reduced motion the reply is there at once', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: MediaQuery(
+              data: MediaQueryData(disableAnimations: true), child: ZenoScreen())));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('zeno-composer')), 'Is 800K fair?');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await _settle(tester);
+      expect(find.text(long), findsOneWidget);
+    });
+
+    testWidgets("the Buying Agent's listings wait for its sentence", (tester) async {
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? {
+              'reply': 'I found two iPhones near you that fit what you described.',
+              'phase': 'RESULTS',
+              'verdict': 'MATCHES',
+              'matches': [fakeListingJson(1)..['name'] = 'iPhone 13 Pro'],
+              'slots': {'query': 'iphone'},
+              'questions_asked': 2,
+            }
+          : null);
+      await tester.pumpWidget(const MaterialApp(home: ZenoScreen(mode: ZenoMode.buyingAgent)));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('zeno-composer')), 'iPhone 13, under 60K');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(find.text('iPhone 13 Pro'), findsNothing);
+
+      await _stream(tester);
+      await _stream(tester);
+      expect(find.text('iPhone 13 Pro'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+    });
+  });
+
   testWidgets("on Home's visual system", (tester) async {
     await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
     await _settle(tester);
@@ -210,5 +307,12 @@ void main() {
 Future<void> _settle(WidgetTester tester) async {
   for (int i = 0; i < 6; i++) {
     await tester.pump(const Duration(milliseconds: 80));
+  }
+}
+
+/// Long enough for a short reply to finish writing itself out.
+Future<void> _stream(WidgetTester tester) async {
+  for (int i = 0; i < 25; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
   }
 }

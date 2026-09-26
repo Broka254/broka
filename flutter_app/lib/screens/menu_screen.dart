@@ -187,9 +187,9 @@ class _MenuScreenState extends State<MenuScreen> {
         ] else
           MenuTile(
             icon: Icons.sell_outlined,
-            title: 'Become a seller',
-            subtitle: 'List your own products and reach buyers through Zeno',
-            onTap: () => _open('/become-seller'),
+            title: 'Start selling',
+            subtitle: 'A few items or a whole business - set up in a minute',
+            onTap: () => _open('/start-selling'),
           ),
       ]),
       const MenuSectionLabel('Online store'),

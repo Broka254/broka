@@ -19,6 +19,19 @@ import '../main.dart' show BrokaColors;
 
 enum ZenoStreamPhase { thinking, writing, done }
 
+// Word-sized pieces with the space after them, so a piece never splits a
+// word (or an emoji) in half.
+final _wordPieces = RegExp(r'\S+\s*');
+
+/// How long to wait after [piece] before the next burst: a beat after the
+/// end of a sentence, less after a comma, hardly any mid-sentence.
+int _pauseAfterMs(String piece, Random rnd) {
+  final last = piece.trimRight();
+  if (RegExp(r'[.!?:]$').hasMatch(last)) return 180 + rnd.nextInt(220);
+  if (last.endsWith(',')) return 90 + rnd.nextInt(90);
+  return 35 + rnd.nextInt(70);
+}
+
 class ZenoStreamingBubble extends StatefulWidget {
   const ZenoStreamingBubble({
     super.key,
@@ -40,10 +53,6 @@ class ZenoStreamingBubble extends StatefulWidget {
 
 class _ZenoStreamingBubbleState extends State<ZenoStreamingBubble>
     with SingleTickerProviderStateMixin {
-  // Word-sized pieces with the space after them, so a piece never splits a
-  // word (or an emoji) in half.
-  static final _token = RegExp(r'\S+\s*');
-
   late final Random _rnd = widget.random ?? Random();
   late final Ticker _ticker;
   // Milliseconds since the ticker started: the clock the fade-ins, the
@@ -94,7 +103,7 @@ class _ZenoStreamingBubbleState extends State<ZenoStreamingBubble>
     if (_still) {
       if (text == null) return;
       _started = true;
-      _tokens = _token.allMatches(text).map((m) => m.group(0)!).toList();
+      _tokens = _wordPieces.allMatches(text).map((m) => m.group(0)!).toList();
       _revealedAtMs
         ..clear()
         ..addAll(List.filled(_tokens.length, -100000));
@@ -107,7 +116,7 @@ class _ZenoStreamingBubbleState extends State<ZenoStreamingBubble>
     _startTicker();
     if (text == null) return; // keep thinking until there's something to say
     _started = true;
-    _tokens = _token.allMatches(text).map((m) => m.group(0)!).toList();
+    _tokens = _wordPieces.allMatches(text).map((m) => m.group(0)!).toList();
     _revealedAtMs.clear();
     _phase = ZenoStreamPhase.thinking;
     // A beat to "think" before the first word, never the same length twice.
@@ -133,10 +142,7 @@ class _ZenoStreamingBubbleState extends State<ZenoStreamingBubble>
       widget.onDone?.call();
       return;
     }
-    final last = _tokens[_revealedAtMs.length - 1].trimRight();
-    final pause = RegExp(r'[.!?:]$').hasMatch(last)
-        ? 180 + _rnd.nextInt(220)
-        : (last.endsWith(',') ? 90 + _rnd.nextInt(90) : 35 + _rnd.nextInt(70));
+    final pause = _pauseAfterMs(_tokens[_revealedAtMs.length - 1], _rnd);
     _timer = Timer(Duration(milliseconds: pause), _emit);
   }
 
@@ -271,5 +277,148 @@ class _ZenoStreamingBubbleState extends State<ZenoStreamingBubble>
       ));
     }
     return Text.rich(TextSpan(children: spans));
+  }
+}
+
+/// Just the words of a reply, streaming in - for a chat bubble that has its
+/// own frame, and that already showed typing dots while Zeno thought, so
+/// the first words start at once instead of after a "thinking" beat.
+///
+/// Only a reply that has just arrived streams ([animate]); one restored from
+/// earlier, or scrolled back to, is simply there. A long reply comes in
+/// bigger bursts so it never takes much more than a few seconds.
+///
+/// Under reduced motion the whole text is shown at once. Screen readers get
+/// the whole text, never half a sentence.
+class ZenoStreamingText extends StatefulWidget {
+  const ZenoStreamingText(
+    this.text, {
+    super.key,
+    required this.style,
+    this.animate = true,
+    this.onDone,
+    this.onGrow,
+    this.random,
+  });
+
+  final String text;
+  final TextStyle style;
+  final bool animate;
+
+  /// Once every word is on screen - for what should wait for the reply
+  /// (the listings the Buying Agent found, say).
+  final VoidCallback? onDone;
+
+  /// After each burst of words, so the chat can keep up with the growing
+  /// bubble.
+  final VoidCallback? onGrow;
+
+  /// For tests.
+  final Random? random;
+
+  @override
+  State<ZenoStreamingText> createState() => _ZenoStreamingTextState();
+}
+
+class _ZenoStreamingTextState extends State<ZenoStreamingText>
+    with SingleTickerProviderStateMixin {
+  // How long a new word takes to surface from Zeno's colour into the text's.
+  static const _fadeMs = 260;
+
+  late final Random _rnd = widget.random ?? Random();
+  // Only a reply that streams needs one; most never do.
+  Ticker? _ticker;
+  int _nowMs = 0;
+  Timer? _timer;
+
+  List<String> _pieces = const [];
+  final List<int> _revealedAtMs = [];
+  late int _burstBase;
+  bool _streaming = false;
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (!widget.animate || still || widget.text.trim().isEmpty) {
+      if (widget.animate) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onDone?.call();
+        });
+      }
+      return;
+    }
+    _pieces = _wordPieces.allMatches(widget.text).map((m) => m.group(0)!).toList();
+    // 1-3 words a burst for an ordinary reply; a few more at a time for a
+    // long one, which would otherwise take ten seconds to read out.
+    _burstBase = max(1, _pieces.length ~/ 60);
+    _streaming = true;
+    _ticker = createTicker(_onTick)..start();
+    _emit();
+  }
+
+  void _onTick(Duration elapsed) {
+    if (!mounted) return;
+    setState(() => _nowMs = elapsed.inMilliseconds);
+    if (_revealedAtMs.length >= _pieces.length &&
+        _nowMs - _revealedAtMs.last > _fadeMs) {
+      _ticker?.stop();
+      setState(() => _streaming = false);
+      widget.onDone?.call();
+    }
+  }
+
+  void _emit() {
+    if (!mounted) return;
+    final burst = _burstBase + _rnd.nextInt(3);
+    for (var i = 0; i < burst && _revealedAtMs.length < _pieces.length; i++) {
+      _revealedAtMs.add(_nowMs + i * 25);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onGrow?.call();
+    });
+    if (_revealedAtMs.length >= _pieces.length) return; // the ticker finishes
+    _timer = Timer(
+        Duration(milliseconds: _pauseAfterMs(_pieces[_revealedAtMs.length - 1], _rnd)),
+        _emit);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ticker?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_streaming) return Text(widget.text, style: widget.style);
+    final base = widget.style.color ?? Colors.white;
+    final spans = <InlineSpan>[];
+    for (var i = 0; i < _revealedAtMs.length; i++) {
+      final age = (_nowMs - _revealedAtMs[i]).clamp(0, _fadeMs) / _fadeMs;
+      spans.add(TextSpan(
+        text: _pieces[i],
+        style: TextStyle(
+          color: Color.lerp(BrokaColors.neonPurple, base, age)!
+              .withOpacity(0.35 + 0.65 * age),
+        ),
+      ));
+    }
+    if (_revealedAtMs.length < _pieces.length) {
+      spans.add(TextSpan(
+        text: '▍',
+        style: TextStyle(
+            color: BrokaColors.neonBlue.withOpacity((_nowMs ~/ 420).isEven ? 1 : 0.25)),
+      ));
+    }
+    return Semantics(
+      label: widget.text,
+      excludeSemantics: true,
+      child: Text.rich(TextSpan(style: widget.style, children: spans)),
+    );
   }
 }

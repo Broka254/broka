@@ -29,8 +29,7 @@ import 'screens/zeno_insights_screen.dart';
 import 'screens/listing_map_screen.dart';
 import 'screens/selfie_camera_screen.dart';
 import 'screens/user_profile_screen.dart';
-import 'screens/seller_dashboard_screen.dart';
-import 'screens/become_seller_screen.dart';
+import 'screens/start_selling_screen.dart';
 import 'screens/mpesa_confirmation_screen.dart';
 import 'screens/econfirm_payment_screen.dart';
 import 'screens/deal_receipt_history_screen.dart';
@@ -552,8 +551,8 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/store-explainer':  (_) => const StoreExplainerScreen(),
         '/selfie':           (_) => const SelfieCameraScreen(),
         '/user-profile':     (_) => const UserProfileScreen(),
-        '/seller-dashboard': (_) => const SellerDashboardScreen(),
-        '/become-seller':    (_) => const BecomeSellerScreen(),
+        '/seller-dashboard': (_) => sellerDashboardOrSetup(),
+        '/start-selling':    (_) => const StartSellingScreen(),
         '/mpesa-confirm':    (_) => const MpesaConfirmationScreen(),
         '/escrow-payment':   (_) => const EConfirmPaymentScreen(),
         '/deal-history':     (_) => const DealReceiptHistoryScreen(),

@@ -83,26 +83,26 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:23) |
 | GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:140) |
 | PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:56) |
-| PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:292) |
-| POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:155) |
-| POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:172) |
-| PATCH | `/auth/fcm-token` | user | `update_fcm_token` (backend/api/domains/auth/router.py:340) |
-| PATCH | `/auth/heartbeat` | user | `heartbeat` (backend/api/domains/auth/router.py:324) |
-| PATCH | `/auth/language` | user | `set_language` (backend/api/domains/auth/router.py:276) |
-| PATCH | `/auth/location` | user | `update_location` (backend/api/domains/auth/router.py:264) |
-| PATCH | `/auth/location-visibility` | user | `location_visibility` (backend/api/domains/auth/router.py:308) |
-| POST | `/auth/login` | public | `login` (backend/api/domains/auth/router.py:212) |
-| GET | `/auth/me` | user | `me` (backend/api/domains/auth/router.py:241) |
-| POST | `/auth/otp/request` | public | `request_otp` (backend/api/domains/auth/router.py:128) |
-| POST | `/auth/otp/verify` | public | `verify_otp` (backend/api/domains/auth/router.py:145) |
-| PATCH | `/auth/profile` | user | `update_profile` (backend/api/domains/auth/router.py:250) |
-| POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:182) |
-| GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:356) |
+| PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:298) |
+| POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:160) |
+| POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:177) |
+| PATCH | `/auth/fcm-token` | user | `update_fcm_token` (backend/api/domains/auth/router.py:346) |
+| PATCH | `/auth/heartbeat` | user | `heartbeat` (backend/api/domains/auth/router.py:330) |
+| PATCH | `/auth/language` | user | `set_language` (backend/api/domains/auth/router.py:282) |
+| PATCH | `/auth/location` | user | `update_location` (backend/api/domains/auth/router.py:270) |
+| PATCH | `/auth/location-visibility` | user | `location_visibility` (backend/api/domains/auth/router.py:314) |
+| POST | `/auth/login` | public | `login` (backend/api/domains/auth/router.py:217) |
+| GET | `/auth/me` | user | `me` (backend/api/domains/auth/router.py:247) |
+| POST | `/auth/otp/request` | public | `request_otp` (backend/api/domains/auth/router.py:133) |
+| POST | `/auth/otp/verify` | public | `verify_otp` (backend/api/domains/auth/router.py:150) |
+| PATCH | `/auth/profile` | user | `update_profile` (backend/api/domains/auth/router.py:256) |
+| POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:187) |
+| GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:362) |
 | POST | `/auth/token/refresh` | public | `refresh_access_token` (backend/api/domains/auth/refresh_router.py:79) |
 | POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:129) |
 | POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:147) |
-| POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:225) |
-| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:370) |
+| POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:230) |
+| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:376) |
 | POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:233) |
 | POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:200) |
 | POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:166) |
@@ -614,7 +614,6 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/assistant` | `AiAssistantScreen` |
 | `/auction` | `AuctionScreen` |
 | `/auth` | `AuthScreen` |
-| `/become-seller` | `BecomeSellerScreen` |
 | `/boost` | `BoostScreen` |
 | `/broker` | `BrokerScreen` |
 | `/create-store` | `StoreSetupScreen` |
@@ -636,9 +635,10 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/review` | `ReviewScreen` |
 | `/selfie` | `SelfieCameraScreen` |
 | `/sell` | `SellPhotosScreen` |
-| `/seller-dashboard` | `SellerDashboardScreen` |
+| `/seller-dashboard` | `sellerDashboardOrSetup` |
 | `/settings` | `SettingsScreen` |
 | `/splash` | `SplashScreen` |
+| `/start-selling` | `StartSellingScreen` |
 | `/store-explainer` | `StoreExplainerScreen` |
 | `/store-manage` | `MyStoreScreen` |
 | `/store-setup` | `StoreSetupScreen` |
@@ -797,6 +797,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `broka_image.dart` — One widget for every image the backend sends, whatever shape it is in.
 - `broka_search_field.dart` — The search box inside a screen: the Category Zones ("Electronics Zone"), Traders and Stores.
 - `chat_ambient_background.dart` — BROKA — Ambient constellation background for conversation screens
+- `chat_parts.dart` — BROKA - the pieces every chat screen is built from.
 - `collapsing_screen_header.dart` — lib/widgets/collapsing_screen_header.dart
 - `constellation_background.dart` — BROKA — Constellation Background
 - `country_phone_field.dart` — BROKA — Phone number field with a country-code selector.
@@ -815,6 +816,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `product_grid_view.dart` — Reusable 2-column paginated grid used by the home feed, category zones, search results, and Trending "See All" (Design Journal Volume 6, Ch…
 - `protection_badge.dart` — BROKA - Protection Badge (Volume 2 §2.1)
 - `sell_step_scaffold.dart` — BROKA - Sell Wizard Step Scaffold
+- `seller_setup.dart` — BROKA - the seller questions, shared.
 - `splash_painters.dart` — Visual-effects painters for the BROKA "AI boot sequence" splash screen.
 - `voice_waveform.dart` — lib/widgets/voice_waveform.dart
 - `wizard_scaffold.dart` — BROKA - step-by-step wizard chrome
@@ -832,7 +834,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/screens/` (46 files)
 
-`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `become_seller_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `buyer_tips_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
+`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `buyer_tips_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
 
 ### Tests (`flutter_app/test/`)
 
@@ -846,14 +848,17 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
 - `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
+- `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
+- `start_selling_test.dart` — A buyer who starts selling later is asked what signup asks (2026-09-26): a few items - nothing more to fill in - or a business, which goes…
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
+- `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
 - `zeno_sms_prompts_test.dart` — How Zeno asks about SMS alerts on the sell wizard's last step (ZenoSmsPrompts, ZenoStreamingBubble): ten phrasings, never the same one twic…
 - `zeno_voice_test.dart` — Covers the Zeno voice layer: the Deepgram service, the session controller, and the floating card.
@@ -921,7 +926,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Category rail hint, Zeno and the Seller Dashboard restyled, Zeno remembers, no robotic voice (2026-09-26)
+- `CHANGES.md` — Voice input connects or says why; Start selling asks what signup asks; the negotiation screens on Home's look; Zeno writes its replies out…
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
