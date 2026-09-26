@@ -1,17 +1,27 @@
 """
 BROKA - TTS Router (Hybrid)
-  English  → Microsoft Edge TTS (en-US-AriaNeural)
+  English  → Microsoft Edge TTS (en-US-AriaNeural) - English text only
   Swahili  → Microsoft Edge TTS (sw-KE-ZuriNeural)
   Sheng    → Kokoro on Hugging Face Space (Xxavierxxbo/broka-tts)
   Luo      → Kokoro on Hugging Face Space
   Kikuyu   → Kokoro on Hugging Face Space
   Luganda  → Kokoro on Hugging Face Space
 
+The English voice never reads another language (2026-09-26). It used to be
+the default for anything without a voice of its own, and it read whatever
+text it was given: a user on the English setting who chatted in Swahili got
+Zeno's Swahili reply in an American accent. Now:
+  * a language with no voice here is a 422 - the app shows the text and
+    stays silent rather than mispronounce it;
+  * text sent as "english" that reads as Swahili (or Swahili-based Sheng)
+    is spoken by the Swahili voice (_reads_as_swahili).
+
 No API keys needed - both services are free.
 """
 
 import io
 import logging
+import re
 import httpx
 import edge_tts
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +44,50 @@ EDGE_VOICES = {
 # Languages routed to HF Space Kokoro
 KOKORO_LANGUAGES = {"sheng", "luo", "kikuyu", "luganda"}
 
+# Everyday Swahili (and Swahili-based Sheng) words that English text almost
+# never contains. Function words carry most of the signal: "na", "ya", "ni"
+# and "kwa" turn up in nearly every Swahili sentence.
+_SWAHILI_MARKERS = frozenset("""
+    na ya wa za la kwa ni si ndio ndiyo hapana sawa asante tafadhali karibu
+    habari mambo poa niaje vipi sasa hii hiyo hizi hizo huu hicho kile hapa
+    pale kuna hakuna gani nini nani lini wapi je kama lakini pia tu bado
+    kabisa sana zaidi kidogo mimi wewe yeye sisi nyinyi wao yangu yako yake
+    yetu yenu yao kwenye kutoka mpaka ili bei pesa shilingi elfu laki milioni
+    rahisi ghali nzuri mzuri safi nataka unataka anataka tunataka naweza
+    unaweza nina una ana tuna mna wana niko uko yuko tuko nimeona umeona
+    kununua kuuza nunua uza simu gari nyumba shamba kiwanja leo kesho jana
+    wiki mwezi mwaka rafiki ndugu biashara muuzaji mnunuzi soko manze msee
+    fiti rada sema ganji
+""".split())
+
+_WORD = re.compile(r"[a-zA-Z']+")
+
+
+def _reads_as_swahili(text: str) -> bool:
+    """True when [text] is mostly Swahili (or Sheng) rather than English.
+
+    Zeno answers in the language it is written to, not only the one in the
+    user's settings, so text sent as "english" can be Swahili. A greeting
+    borrowed into English ("Karibu! Here are three phones") stays English:
+    it takes at least two marker words, and a fifth of all the words.
+    """
+    words = [w.lower() for w in _WORD.findall(text)]
+    if not words:
+        return False
+    hits = sum(1 for w in words if w in _SWAHILI_MARKERS)
+    return hits >= 2 and hits / len(words) >= 0.2
+
+
+def voice_language(text: str, requested: str) -> str | None:
+    """The language to speak [text] in, or None when no voice here can."""
+    if requested in KOKORO_LANGUAGES:
+        return requested
+    if requested == "english" and _reads_as_swahili(text):
+        return "swahili"
+    if requested in EDGE_VOICES:
+        return requested
+    return None
+
 # Hugging Face Space API endpoint
 HF_SPACE_URL = "https://xxavierxxbo-broka-tts.hf.space/run/predict"
 
@@ -54,15 +108,18 @@ async def speak(
     if not text:
         raise HTTPException(status_code=400, detail="Empty text")
 
-    if lang in KOKORO_LANGUAGES:
-        return await _speak_kokoro(text, lang)
-    else:
-        return await _speak_edge(text, lang)
+    spoken = voice_language(text, lang)
+    if spoken is None:
+        # Silence beats an English voice mispronouncing another language.
+        raise HTTPException(status_code=422, detail="no_voice_for_language")
+    if spoken in KOKORO_LANGUAGES:
+        return await _speak_kokoro(text, spoken)
+    return await _speak_edge(text, spoken)
 
 
 async def _speak_edge(text: str, language: str) -> Response:
-    """Microsoft Edge TTS for English and Swahili."""
-    voice = EDGE_VOICES.get(language, EDGE_VOICES["english"])
+    """Microsoft Edge TTS for English and Swahili - each in its own voice."""
+    voice = EDGE_VOICES[language]
     logger.info("Edge TTS - voice=%s lang=%s", voice, language)
     try:
         communicate = edge_tts.Communicate(text, voice)

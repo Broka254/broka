@@ -27,6 +27,7 @@
 // one app.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -35,6 +36,7 @@ import '../utils/backend_time.dart';
 import '../main.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/api_service.dart';
+import '../theme/motion.dart';
 import '../utils/auth_gate.dart';
 import '../utils/price_format.dart';
 import '../widgets/constellation_background.dart';
@@ -59,6 +61,19 @@ import '../features/listings/data/repositories/listings_repository.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  /// Whether the category rail's "there's more" glide runs (see
+  /// _playRailHint). Tests that measure where the rail's pills sit turn it
+  /// off; home_rail_hint_test.dart covers the glide itself.
+  @visibleForTesting
+  static bool railHintEnabled = true;
+
+  /// Once per app launch: a hint repeated on every return to Home stops
+  /// being a hint and starts being the rail wandering off on its own.
+  static bool _railHintShown = false;
+
+  @visibleForTesting
+  static void debugResetRailHint() => _railHintShown = false;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -174,6 +189,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // longer triggers detection on its own. It should be wired to an
     // explicit call site (e.g. an opt-in "near me" filter) if and when
     // Home grows a feature that genuinely needs it.
+    _railScrollController.addListener(_onRailScroll);
     _loadTopCategories();
     // _loadTrending()/_loadLiveAuctions() removed (home-redesign brief
     // round 2, 2026-08-17): Home no longer renders a Trending grid or a
@@ -191,6 +207,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _railHintTimer?.cancel();
+    _railScrollController.removeListener(_onRailScroll);
     _railScrollController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -221,16 +239,86 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   final ScrollController _railScrollController = ScrollController();
 
+  // ── "There's more" on the category rail (2026-09-26) ─────────────────────
+  //
+  // People were seeing the first five or six categories and not realising
+  // the rail scrolls - Land, Services and the rest were a swipe away that
+  // nobody made. The 2026-08-19 pass had removed a 56px auto-nudge for moving
+  // on its own; this brings motion back in a form that shows the thing it is
+  // pointing at: once per launch the rail glides far enough to bring about
+  // two more categories into view, pauses, and glides home. A touch on the
+  // rail ends it on the spot, it is skipped under reduced motion, and it
+  // doesn't run when every category already fits. The chevron at the right
+  // edge stays until the end of the rail has been seen, for anyone who
+  // missed the glide.
+
+  Timer? _railHintTimer;
+  bool _railTouched = false;
+  bool _railAtEnd = false;
+
+  void _onRailScroll() {
+    final c = _railScrollController;
+    if (!c.hasClients) return;
+    final atEnd = c.position.pixels >= c.position.maxScrollExtent - 4;
+    if (atEnd != _railAtEnd && mounted) setState(() => _railAtEnd = atEnd);
+  }
+
+  void _scheduleRailHint() {
+    if (!HomeScreen.railHintEnabled || HomeScreen._railHintShown || _railTouched) return;
+    _railHintTimer?.cancel();
+    // After Home has settled and the rail has faded in (_Entrance), so the
+    // glide is something seen rather than part of the page arriving.
+    _railHintTimer = Timer(const Duration(milliseconds: 900), _playRailHint);
+  }
+
+  Future<void> _playRailHint() async {
+    if (!mounted || _railTouched || HomeScreen._railHintShown) return;
+    if (BrokaMotion.reduced(context)) return;
+    final c = _railScrollController;
+    if (!c.hasClients) return;
+    final max = c.position.maxScrollExtent;
+    if (max <= 0) return; // every category already fits
+    HomeScreen._railHintShown = true;
+    // A pill is its circle plus 22px of label width plus 8px of margins.
+    final pill = (_narrow(context) ? 48.0 : 52.0) + 30;
+    final reveal = math.min(max, pill * 2.5);
+    // animateTo's future completes when a drag interrupts it, too.
+    await c.animateTo(reveal,
+        duration: const Duration(milliseconds: 1100), curve: Curves.easeInOutCubic);
+    if (!mounted || _railTouched) return;
+    _railHintTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted || _railTouched || !c.hasClients) return;
+      c.animateTo(0, duration: const Duration(milliseconds: 900), curve: Curves.easeInOutCubic);
+    });
+  }
+
+  /// The chevron: a page of rail further on.
+  void _railForward() {
+    final c = _railScrollController;
+    if (!c.hasClients) return;
+    _railTouched = true;
+    final target = math.min(c.position.maxScrollExtent,
+        c.position.pixels + c.position.viewportDimension * 0.7);
+    c.animateTo(target, duration: const Duration(milliseconds: 450), curve: Curves.easeOutCubic);
+  }
+
   // ── Category carousel ─────────────────────────────────────────────────────
 
   Future<void> _loadTopCategories() async {
     final result = await categoriesRepository.getTopLevel();
     if (!mounted) return;
     result.fold(
-      onSuccess: (data) => setState(() {
-        _topCategories = data;
-        _categoriesLoaded = true;
-      }),
+      onSuccess: (data) {
+        setState(() {
+          _topCategories = data;
+          _categoriesLoaded = true;
+        });
+        // The rail has to be laid out before it knows how far it scrolls.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _onRailScroll();
+          _scheduleRailHint();
+        });
+      },
       // Previously silent (carousel just stayed empty/hidden) - which made
       // "categories table hasn't been seeded yet" indistinguishable from
       // "this is broken". _categoriesLoaded lets the carousel below tell
@@ -269,9 +357,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // apart at a glance, so a single thin divider now sits between the last
   // category and Trending onward - see isDestination on _RailItem and
   // _railDivider() below. The old post-load auto-scroll nudge
-  // (_nudgeDiscoveryRail(), 0→56px→0) is also gone, replaced by a static
-  // right-edge fade so the rail no longer moves on its own; the user
-  // controls it entirely now.
+  // (_nudgeDiscoveryRail(), 0→56px→0) was replaced by a static right-edge
+  // fade - and on 2026-09-26 by a once-per-launch glide and a chevron,
+  // because the fade alone left people unaware the rail scrolled at all
+  // (see _playRailHint).
   //
   // Collapsing-scroll pass (2026-09-18): the rail is unchanged in structure -
   // still one horizontal strip, still one pill shape - but its height is
@@ -367,35 +456,81 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // without hardcoding a fade-to color that could drift from it.
     return SizedBox(
       height: railHeight,
-      child: ShaderMask(
-        blendMode: BlendMode.dstIn,
-        shaderCallback: (bounds) => const LinearGradient(
-          begin: Alignment.centerRight,
-          end: Alignment.centerLeft,
-          colors: [Colors.transparent, Colors.white],
-          stops: [0.0, 0.07],
-        ).createShader(bounds),
-        child: ListView.builder(
-          controller: _railScrollController,
-          scrollDirection: Axis.horizontal,
-          // 12 here + each pill's own 4px margin puts the first circle's
-          // edge at 16 - the same content edge as the search bar, the Zeno
-          // CTA, the Fresh heading and the grid (brief §16).
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          itemCount: items.length,
-          itemBuilder: (_, i) {
-            // Divider sits only at the one category→destination boundary,
-            // never between two categories or between two destinations.
-            final showDivider = i > 0 && items[i].isDestination && !items[i - 1].isDestination;
-            final pill = _railPill(items[i], circle: circle, labelSize: labelSize);
-            if (!showDivider) return pill;
-            return Row(mainAxisSize: MainAxisSize.min, children: [
-              _railDivider(circle),
-              pill,
-            ]);
+      child: Stack(children: [
+        // A finger on the rail ends the "there's more" glide at once.
+        Listener(
+          onPointerDown: (_) {
+            _railTouched = true;
+            _railHintTimer?.cancel();
           },
+          child: ShaderMask(
+            blendMode: BlendMode.dstIn,
+            shaderCallback: (bounds) => const LinearGradient(
+              begin: Alignment.centerRight,
+              end: Alignment.centerLeft,
+              colors: [Colors.transparent, Colors.white],
+              stops: [0.0, 0.07],
+            ).createShader(bounds),
+            child: ListView.builder(
+              key: const Key('home-category-rail'),
+              controller: _railScrollController,
+              scrollDirection: Axis.horizontal,
+              // 12 here + each pill's own 4px margin puts the first circle's
+              // edge at 16 - the same content edge as the search bar, the
+              // Zeno CTA, the Fresh heading and the grid (brief §16).
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              itemCount: items.length,
+              itemBuilder: (_, i) {
+                // Divider sits only at the one category→destination boundary,
+                // never between two categories or between two destinations.
+                final showDivider = i > 0 && items[i].isDestination && !items[i - 1].isDestination;
+                final pill = _railPill(items[i], circle: circle, labelSize: labelSize);
+                if (!showDivider) return pill;
+                return Row(mainAxisSize: MainAxisSize.min, children: [
+                  _railDivider(circle),
+                  pill,
+                ]);
+              },
+            ),
+          ),
         ),
-      ),
+        // "More this way", level with the circles, until the end of the
+        // rail has been seen.
+        Positioned(
+          right: 6,
+          top: 4 + circle / 2 - 14,
+          child: IgnorePointer(
+            ignoring: _railAtEnd,
+            child: AnimatedOpacity(
+              opacity: _railAtEnd ? 0 : 1,
+              duration: const Duration(milliseconds: 220),
+              child: Semantics(
+                button: true,
+                label: 'More categories',
+                child: GestureDetector(
+                  key: const Key('home-rail-more'),
+                  onTap: _railForward,
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: BrokaColors.bgCard.withOpacity(0.92),
+                      border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.5)),
+                      boxShadow: [
+                        BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.25), blurRadius: 8),
+                      ],
+                    ),
+                    child: const Icon(Icons.chevron_right_rounded,
+                        size: 20, color: BrokaColors.textHigh),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]),
     );
   }
 

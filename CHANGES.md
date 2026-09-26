@@ -1,3 +1,62 @@
+# Category rail hint, Zeno and the Seller Dashboard restyled, Zeno remembers, no robotic voice (2026-09-26)
+
+## Home: the category rail says there is more
+
+People saw the first few categories and never realised the rail scrolls.
+Once per app launch it now glides far enough to bring about two more
+categories into view, pauses and glides back (`_playRailHint` in
+`home_screen.dart`). A touch on the rail stops it, reduced motion skips it,
+and it doesn't run when everything fits. A chevron at the rail's right edge
+moves it on a page and stays until the end has been seen.
+`test/home_rail_hint_test.dart`.
+
+## Zeno: Home's look, and the conversation is kept
+
+- On the constellation with Home's header language (bare back chevron,
+  Home's Zeno avatar, a glowing title, square controls), brand-gradient
+  bubbles, openers as chips over the background, and Home's search pill as
+  the composer - instead of flat grey bars over a different background.
+- The conversation is saved on the phone after every turn
+  (`services/zeno_chat_store.dart`) and comes back when Zeno opens, for 30
+  days after the last message - per account, and separately for the market
+  assistant and the Buying Agent (whose budget, specs and question count
+  come back too). "New chat" starts over. Arriving from Home's search with a
+  request starts a fresh Buying Agent conversation.
+- Fixed on the way: every message was sent to Zeno twice (once as the new
+  message, once at the end of the history - both endpoints add the new
+  message themselves); a kept conversation would have passed
+  `/negotiate/chat`'s 100-entry history limit, so only the recent context is
+  sent (20 entries; 40 for the Buying Agent); the typing dots faded in once
+  and then stood still.
+- `test/zeno_chat_test.dart`; the persistence and double-send tests failed
+  on the old screen.
+
+## Seller Dashboard: Home's look
+
+The constellation, the shared header (back chevron, badge, glowing title,
+refresh as a header button) and a pill switcher in the brand gradient for
+Overview / Products / Deals, which follows a swipe between tabs. The "LIVE"
+pill is gone (the dashboard loads once; nothing on it is live). Labels drawn
+in `textLow` (about 1.6:1) now use `textMid`. Five overflows on small phones
+or at large text sizes are fixed (metric cards, pipeline labels, escrow
+chips, deal summary). `test/seller_dashboard_shell_test.dart` runs at 320dp
+and 1.3x text with Roboto's real glyph widths.
+
+## Zeno's voice
+
+- `flutter_tts` is removed. It was the fallback whenever the backend's
+  voices failed: the phone's own engine, robotic, and usually without
+  Swahili or any Kenyan language, so it read them with an English accent.
+  Zeno now stays silent and says once that replies are text only.
+- The Microsoft English voice reads English only
+  (`backend/api/routers/tts.py`). It was the default for any language
+  without a voice, and read whatever it was given - a user on the English
+  setting who chatted in Swahili heard Zeno's Swahili in an American accent.
+  Text sent as English that reads as Swahili (or Sheng) goes to the Swahili
+  voice; a language with no voice is a 422 and the app stays silent.
+  `backend/tests/test_tts_voices.py` (the two behaviour tests failed on the
+  old router).
+
 # Home search is listings only; Trader search; the Menu (2026-09-25)
 
 Every bug fix has a regression test that failed on the old code (the

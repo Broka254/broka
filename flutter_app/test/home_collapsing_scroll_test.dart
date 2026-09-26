@@ -32,6 +32,9 @@ import 'support/fake_api.dart';
 
 void main() {
   setUpAll(installFakeApi);
+  // These tests measure where the rail's pills sit; the rail's one-time
+  // glide is home_rail_hint_test.dart's subject.
+  setUpAll(() => HomeScreen.railHintEnabled = false);
 
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

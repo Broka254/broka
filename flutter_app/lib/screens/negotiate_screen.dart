@@ -206,11 +206,11 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
                            if (mounted) setState(() => _speaking = true);  };
     _tts.onDone     = () { _voice.setZenoSpeaking(false);
                            if (mounted) setState(() => _speaking = false); };
-    _tts.onFallback = () {
+    _tts.onUnavailable = (reason) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Using offline voice — Zeno's usual voice is unavailable."),
-        duration: Duration(seconds: 3),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ttsUnavailableMessage(reason)),
+        duration: const Duration(seconds: 3),
         behavior: SnackBarBehavior.floating,
       ));
     };

@@ -16,7 +16,10 @@ dependencies:
   url_launcher: ^6.2.6
   image_picker: ^1.1.2
   camera: ^0.11.0
-  flutter_tts: ^4.0.2
+  # flutter_tts removed (2026-09-26). It was the fallback when the backend's
+  # voices failed - the phone's own engine, robotic and without Swahili or
+  # any Kenyan language, so it read them in an English accent. Zeno stays
+  # silent instead (lib/services/broka_tts.dart).
   audioplayers: ^6.1.0
   # speech_to_text removed (Deepgram voice-card pass, 2026-09-18). Deepgram is
   # the single production STT provider now; nothing in lib/ imported this any

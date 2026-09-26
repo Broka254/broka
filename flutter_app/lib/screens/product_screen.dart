@@ -32,11 +32,11 @@ class _ProductScreenState extends State<ProductScreen> {
   @override
   void initState() {
     super.initState();
-    BrokaTts.instance.onFallback = () {
+    BrokaTts.instance.onUnavailable = (reason) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Using offline voice — Zeno\'s usual voice is unavailable right now.'),
-        duration: Duration(seconds: 3),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ttsUnavailableMessage(reason)),
+        duration: const Duration(seconds: 3),
         behavior: SnackBarBehavior.floating,
       ));
     };

@@ -36,12 +36,6 @@
 @import flutter_local_notifications;
 #endif
 
-#if __has_include(<flutter_tts/FlutterTtsPlugin.h>)
-#import <flutter_tts/FlutterTtsPlugin.h>
-#else
-@import flutter_tts;
-#endif
-
 #if __has_include(<flutter_webrtc/FlutterWebRTCPlugin.h>)
 #import <flutter_webrtc/FlutterWebRTCPlugin.h>
 #else
@@ -110,7 +104,6 @@
   [FLTFirebaseCorePlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseCorePlugin"]];
   [FLTFirebaseMessagingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseMessagingPlugin"]];
   [FlutterLocalNotificationsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterLocalNotificationsPlugin"]];
-  [FlutterTtsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterTtsPlugin"]];
   [FlutterWebRTCPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterWebRTCPlugin"]];
   [GeolocatorPlugin registerWithRegistrar:[registry registrarForPlugin:@"GeolocatorPlugin"]];
   [FLTImagePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTImagePickerPlugin"]];

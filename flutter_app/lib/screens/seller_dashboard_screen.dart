@@ -2,13 +2,20 @@
 // Futuristic UI: radial gauges · glow revenue chart · deal pipeline · Zeno insight cards · revenue calc
 // All v3 features preserved: radar, HexTrustBadge, per-product views/day + week, Zeno pricing,
 // deal status pills, platform escrow, transaction receipts.
+//
+// 2026-09-26: on Home's visual system - the constellation, the header every
+// screen reached from Home uses (bare back chevron, badge, glowing title,
+// square controls) and a pill tab switcher in the brand gradient - instead
+// of its own background, a boxed back button, a "LIVE" pill and a Material
+// tab strip with a gold underline. What is on the three tabs is unchanged.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../widgets/motion_widgets.dart';
-import '../widgets/chat_ambient_background.dart';
+import '../widgets/collapsing_screen_header.dart';
+import '../widgets/constellation_background.dart';
 import '../widgets/factor_trend_chart.dart';
 import '../widgets/zeno_avatar.dart';
 import '../data/seller_insights.dart';
@@ -18,7 +25,10 @@ import '../widgets/particle_field.dart';
 import '../models/listing.dart';
 
 class SellerDashboardScreen extends StatefulWidget {
-  const SellerDashboardScreen({super.key});
+  const SellerDashboardScreen({super.key, this.animateBackground = true});
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
   @override
   State<SellerDashboardScreen> createState() => _SellerDashboardScreenState();
 }
@@ -33,6 +43,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
 
   late final TabController       _tabs;
   late final AnimationController _glow;
+  // Drives the deal pipeline's flowing arrows.
   late final AnimationController _pulse;
 
   // ── Per-listing state ────────────────────────────────────────────────────────
@@ -77,6 +88,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       ..repeat(reverse: true);
     _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
       ..repeat(reverse: true);
+    // Rebuilds the tab switcher, which draws its own selected state.
+    _tabs.animation?.addListener(() {
+      if (mounted) setState(() {});
+    });
     _load();
   }
 
@@ -664,121 +679,156 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   // ROOT BUILD
   // ════════════════════════════════════════════════════════════════════════════
   @override
-  Widget build(BuildContext context) => ChatAmbientBackground(
-    // Wraps the whole Scaffold rather than sitting inside `body`, so the
-    // field runs behind the app bar and tab strip too and the effect is
-    // continuous from the status bar down. Putting it in `body` would stop
-    // it at a hard line under the tabs, which reads as a panel rather than
-    // as depth.
-    //
-    // Not extendBodyBehindAppBar: that makes the body start at y=0, so the
-    // first card of every tab hides under the app bar unless each scroll
-    // view gets manual top padding matched to the bar height. Wrapping gets
-    // the same look with the layout untouched.
-    //
-    // Intensity dialled back from the chat screens' 1.0. There the field is
-    // the only thing on a near-empty surface; here it sits under dense
-    // cards, charts and numbers, and at full strength the nodes compete
-    // with the data - particularly the trend lines, which are thin strokes
-    // in the same blue.
-    // Raised from 0.55 now that the cards below are opaque. The field is
-    // meant to show in the GAPS between sections, not through them - so
-    // the two moved together: brighter behind, darker in front.
-    intensity: 0.85,
-    child: Scaffold(
-      // Transparent so the field shows through instead of being painted
-      // over by the scaffold's own fill.
-      backgroundColor: Colors.transparent,
-      appBar: _buildAppBar(),
-      body: _loading ? _buildLoadingShimmer()
-          : TabBarView(
-              controller: _tabs,
-              children: [_buildOverviewTab(), _buildProductsTab(), _buildDealsTab()],
-            ),
-    ),
-  );
-
-  PreferredSizeWidget _buildAppBar() => AppBar(
-    // Translucent rather than transparent: the title and tab labels need a
-    // stable surface to stay legible against a field that moves under them,
-    // and a fully clear bar would leave them sitting on whatever node
-    // happened to drift past. 0.55 keeps the constellation visible while
-    // holding enough contrast for the text.
-    backgroundColor: BrokaColors.bgMid.withOpacity(0.55),
-    elevation: 0,
-    scrolledUnderElevation: 0,
-    leading: PressableScale(
-      onTap: () => Navigator.pop(context),
-      child: Container(
-        margin: const EdgeInsets.all(8),
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: BrokaColors.bg,
+    // The constellation Home and every screen reached from it sit on. The
+    // cards below are opaque, so the field shows in the gaps between
+    // sections rather than competing with the numbers and trend lines.
+    body: ConstellationBackground(
+      animate: widget.animateBackground,
+      child: DecoratedBox(
+        // The dashboard's gold, washing down from the top the way a
+        // category's colour does in its Zone.
         decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: BrokaColors.border)),
-        child: const Icon(Icons.arrow_back_ios_new_rounded, color: BrokaColors.textMid, size: 16)),
-    ),
-    title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text('BROKA', style: TextStyle(
-            color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 1.6)),
-        // "SELLER 4.0" removed - a version number the seller has no use for,
-        // taking the line under the title on every screen of the dashboard.
-        Text('SELLER DASHBOARD', style: TextStyle(
-            color: BrokaColors.gold.withOpacity(0.85),
-            fontSize: 8.5, fontWeight: FontWeight.w700, letterSpacing: 3.0)),
-      ]),
-    actions: [
-      // ── Live status pulse ────────────────────────────────────────────────────
-      AnimatedBuilder(
-        animation: _pulse,
-        builder: (_, __) => Container(
-          margin: const EdgeInsets.only(right: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-          decoration: BoxDecoration(
-            color: BrokaColors.neonGreen.withOpacity(0.09 + 0.05 * _pulse.value),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: BrokaColors.neonGreen.withOpacity(0.30 + 0.18 * _pulse.value))),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Container(width: 6, height: 6,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: BrokaColors.neonGreen,
-                boxShadow: [BoxShadow(
-                  color: BrokaColors.neonGreen.withOpacity(0.55 + 0.35 * _pulse.value),
-                  blurRadius: 7 + 4 * _pulse.value)])),
-            const SizedBox(width: 5),
-            const Text('LIVE', style: TextStyle(
-                color: BrokaColors.neonGreen, fontSize: 8,
-                fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+          gradient: RadialGradient(
+            center: Alignment.topCenter,
+            radius: 1.2,
+            colors: [BrokaColors.gold.withOpacity(0.13), Colors.transparent],
+            stops: const [0.0, 0.55],
+          ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: Column(children: [
+            _buildHeader(),
+            _buildTabSwitcher(),
+            Expanded(
+              child: _loading
+                  ? _buildLoadingShimmer()
+                  : TabBarView(
+                      controller: _tabs,
+                      children: [_buildOverviewTab(), _buildProductsTab(), _buildDealsTab()],
+                    ),
+            ),
           ]),
         ),
       ),
-      PressableScale(
-        onTap: _load,
-        child: Container(
-          margin: const EdgeInsets.only(right: 12, left: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim]),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.28), blurRadius: 10)]),
-          child: const Text('↻ Sync',
-              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700))),
-      ),
-    ],
-    bottom: TabBar(
-      controller: _tabs,
-      indicatorColor: BrokaColors.gold,
-      indicatorWeight: 2.5,
-      labelColor: BrokaColors.gold,
-      unselectedLabelColor: BrokaColors.textMid,
-      labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.1),
-      unselectedLabelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
-      dividerColor: BrokaColors.border,
-      tabs: const [Tab(text: 'OVERVIEW'), Tab(text: 'PRODUCTS'), Tab(text: 'DEALS')],
     ),
   );
+
+  static const _dashGradient = [BrokaColors.gold, BrokaColors.neonBlue];
+
+  /// The header every screen reached from Home wears (CollapsingScreenHeader's
+  /// layout, fixed here because the three tabs each own their scroll view).
+  Widget _buildHeader() {
+    final narrow = MediaQuery.sizeOf(context).width < 360;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 6, 16, 6),
+      child: Row(children: [
+        IconButton(
+          tooltip: 'Back',
+          onPressed: () => Navigator.maybePop(context),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: BrokaColors.textHigh, size: 19),
+        ),
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(colors: [
+              _dashGradient.first.withOpacity(0.28),
+              _dashGradient.last.withOpacity(0.14),
+            ]),
+            border: Border.all(color: _dashGradient.first.withOpacity(0.5)),
+          ),
+          child: const Icon(Icons.insights_rounded, size: 18, color: BrokaColors.textHigh),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: ZoneGlowText(
+            'Seller Dashboard',
+            gradient: _dashGradient,
+            fontSize: narrow ? 17 : 19,
+            maxLines: 1,
+            letterSpacing: narrow ? 0.8 : 1.1,
+          ),
+        ),
+        const SizedBox(width: 8),
+        BrokaHeaderButton(icon: Icons.refresh_rounded, onTap: _load, tooltip: 'Refresh'),
+      ]),
+    );
+  }
+
+  /// Overview / Products / Deals as a pill switcher in Home's chip language:
+  /// the dark card surface, and the selected tab in the brand gradient.
+  Widget _buildTabSwitcher() {
+    const labels = ['Overview', 'Products', 'Deals'];
+    final position = _tabs.animation?.value ?? _tabs.index.toDouble();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.86),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: LayoutBuilder(builder: (context, box) {
+          final w = box.maxWidth / labels.length;
+          return Stack(children: [
+            // The selected pill slides with a swipe between tabs as well as
+            // on a tap, because it follows the TabController's animation.
+            Positioned(
+              left: position * w,
+              top: 0,
+              bottom: 0,
+              width: w,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                      colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: [
+                    BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.25), blurRadius: 10),
+                  ],
+                ),
+              ),
+            ),
+            Row(children: [
+              for (var i = 0; i < labels.length; i++)
+                Expanded(
+                  child: Semantics(
+                    button: true,
+                    selected: _tabs.index == i,
+                    child: GestureDetector(
+                      key: Key('dashboard-tab-$i'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _tabs.animateTo(i),
+                      child: Center(
+                        child: Text(labels[i],
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: (position - i).abs() < 0.5
+                                  ? Colors.white
+                                  : BrokaColors.textMid,
+                              fontSize: 13,
+                              fontWeight: (position - i).abs() < 0.5
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                            )),
+                      ),
+                    ),
+                  ),
+                ),
+            ]),
+          ]);
+        }),
+      ),
+    );
+  }
 
   /// Skeleton in the shape of the real Overview tab.
   ///
@@ -923,7 +973,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                 const SizedBox(width: 8),
               ],
               const Text('BROKA SELLER',
-                  style: TextStyle(color: BrokaColors.textLow, fontSize: 10, letterSpacing: 1.4)),
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 10, letterSpacing: 1.4)),
             ]),
           ])),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -931,7 +981,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                 color: BrokaColors.gold, fontSize: 34, fontWeight: FontWeight.w900,
                 height: 1.0, fontFamily: 'monospace')),
             const Text('PRODUCTS', style: TextStyle(
-                color: BrokaColors.textLow, fontSize: 8, letterSpacing: 1.6)),
+                color: BrokaColors.textMid, fontSize: 8, letterSpacing: 1.6)),
           ]),
         ]),
         const SizedBox(height: 18),
@@ -1121,18 +1171,29 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       child: Row(children: [
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label, style: const TextStyle(
-              color: BrokaColors.textLow, fontSize: 8,
+              color: BrokaColors.textMid, fontSize: 8,
               fontWeight: FontWeight.w700, letterSpacing: 1.2)),
           const SizedBox(height: 6),
-          Text(value, style: TextStyle(
-              color: color, fontSize: 24, fontWeight: FontWeight.w900,
-              fontFamily: 'monospace', height: 1.0)),
+          // Shrinks rather than overflows: beside the 56px gauge, half a
+          // 320dp screen leaves about 50px for a figure like "12,480".
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, maxLines: 1, style: TextStyle(
+                color: color, fontSize: 24, fontWeight: FontWeight.w900,
+                fontFamily: 'monospace', height: 1.0)),
+          ),
           const SizedBox(height: 4),
           Row(children: [
             Icon(up ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
                 size: 10, color: up ? BrokaColors.neonGreen : BrokaColors.danger),
             const SizedBox(width: 3),
-            Text(sub, style: const TextStyle(color: BrokaColors.textMid, fontSize: 9)),
+            Flexible(
+              child: Text(sub,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 9)),
+            ),
           ]),
         ])),
         SizedBox(width: 56, height: 56, child: CustomPaint(
@@ -1212,7 +1273,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           const SizedBox(height: 8),
           Row(children: List.generate(labels.length, (i) => Expanded(child: Center(
             child: Text(labels[i], style: const TextStyle(
-                color: BrokaColors.textLow, fontSize: 8, letterSpacing: 0.3)))))),
+                color: BrokaColors.textMid, fontSize: 8, letterSpacing: 0.3)))))),
           const SizedBox(height: 16),
           Container(height: 1, color: BrokaColors.border),
           const SizedBox(height: 14),
@@ -1249,7 +1310,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         Icon(ic, color: c, size: 16),
         const SizedBox(height: 4),
         Text(lbl, style: const TextStyle(
-            color: BrokaColors.textLow, fontSize: 7, letterSpacing: 0.8)),
+            color: BrokaColors.textMid, fontSize: 7, letterSpacing: 0.8)),
         const SizedBox(height: 2),
         Text(val, style: TextStyle(
             color: c, fontSize: 11, fontWeight: FontWeight.w800)),
@@ -1262,7 +1323,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   Widget _viewsStat(String lbl, String val, Color c) =>
       Expanded(child: Column(children: [
         Text(lbl, style: const TextStyle(
-            color: BrokaColors.textLow, fontSize: 7, letterSpacing: 0.8)),
+            color: BrokaColors.textMid, fontSize: 7, letterSpacing: 0.8)),
         const SizedBox(height: 4),
         Text(val, style: TextStyle(
             color: c, fontSize: 13, fontWeight: FontWeight.w800)),
@@ -1289,7 +1350,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         // later stages discoverable without the seller having to guess that
         // the row moves at all.
         child: SizedBox(
-          height: 118,
+          // Grows with the user's text size, which the stage labels do.
+          height: 118 * MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.35),
           child: _AutoScrollRail(
             itemCount: 1,
             itemWidth: 520,
@@ -1347,10 +1409,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
               color: c, fontSize: 20, fontWeight: FontWeight.w900,
               fontFamily: 'monospace', height: 1.0)),
           const SizedBox(height: 3),
-          Text(lbl, style: const TextStyle(
-              color: BrokaColors.textMid, fontSize: 7,
-              fontWeight: FontWeight.w700, letterSpacing: 0.8),
-            textAlign: TextAlign.center),
+          // One line, scaled to fit: the pipeline row is a fixed 118px, and
+          // "NEGOTIATING" wrapping to two lines on a small phone overflowed it.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(lbl, maxLines: 1, style: const TextStyle(
+                color: BrokaColors.textMid, fontSize: 7,
+                fontWeight: FontWeight.w700, letterSpacing: 0.8),
+              textAlign: TextAlign.center),
+          ),
           const SizedBox(height: 4),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1740,7 +1807,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     required void Function(double) onChanged,
   }) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text(label, style: const TextStyle(
-        color: BrokaColors.textLow, fontSize: 8,
+        color: BrokaColors.textMid, fontSize: 8,
         letterSpacing: 1.0, fontWeight: FontWeight.w700)),
     const SizedBox(height: 6),
     Container(
@@ -1774,7 +1841,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   }) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Row(children: [
       Text(label, style: const TextStyle(
-          color: BrokaColors.textLow, fontSize: 8,
+          color: BrokaColors.textMid, fontSize: 8,
           letterSpacing: 1.0, fontWeight: FontWeight.w700)),
       const Spacer(),
       Text('${value.toStringAsFixed(1)}$suffix', style: TextStyle(
@@ -1894,7 +1961,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             style: TextStyle(color: BrokaColors.textMid, fontSize: 16)),
         const SizedBox(height: 8),
         const Text("Tap 'Sell' to list your first product",
-            style: TextStyle(color: BrokaColors.textLow, fontSize: 13)),
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
         const SizedBox(height: 20),
         PressableScale(
           onTap: () => Navigator.pushNamed(context, '/sell'),
@@ -1928,7 +1995,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     child: Row(children: [
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('${_listings.length} PRODUCT${_listings.length == 1 ? "" : "S"}',
-            style: const TextStyle(color: BrokaColors.textLow, fontSize: 10,
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 10,
                 fontWeight: FontWeight.w700, letterSpacing: 1.4)),
         const SizedBox(height: 2),
         Text('$_activeCount active · $_featuredCount featured',
@@ -2376,12 +2443,17 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
               decoration: BoxDecoration(shape: BoxShape.circle, color: c.withOpacity(0.12)),
               child: Icon(ic, color: c, size: 18)),
             const SizedBox(width: 10),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Expanded + ellipsis: "Completed" beside the icon is wider than
+            // half a small phone at a large text size.
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               _CountUpText(value: v, style: TextStyle(
                   color: c, fontSize: 20,
                   fontWeight: FontWeight.w800, fontFamily: 'monospace')),
-              Text(l, style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
-            ]),
+              Text(l,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+            ])),
           ]),
         ));
 
@@ -2407,9 +2479,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         'giving both parties full protection. Never accept payment outside the platform.',
         style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.5)),
       const SizedBox(height: 10),
-      Row(children: [
-        _chip2('No cash risks'), const SizedBox(width: 8),
-        _chip2('Dispute protection'), const SizedBox(width: 8),
+      // Wrap, not Row: three chips don't fit one line on a small phone.
+      Wrap(spacing: 8, runSpacing: 6, children: [
+        _chip2('No cash risks'),
+        _chip2('Dispute protection'),
         _chip2('Instant release'),
       ]),
     ]),
@@ -2464,7 +2537,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             const Icon(Icons.visibility_rounded, size: 10, color: BrokaColors.textLow),
             const SizedBox(width: 3),
             Text('${l.views}', style: const TextStyle(
-                color: BrokaColors.textLow, fontSize: 10)),
+                color: BrokaColors.textMid, fontSize: 10)),
           ]),
         ]),
       ]),
@@ -2472,9 +2545,11 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   }
 
   // ── Shared helper ─────────────────────────────────────────────────────────────
+  /// The Menu's section label (MenuSectionLabel): textMid, not textLow - at
+  /// about 1.6:1 against the background the old labels could not be read.
   Widget _secLabel(String t, {Color? color}) => Text(t, style: TextStyle(
-      color: color ?? BrokaColors.textLow, fontSize: 10,
-      fontWeight: FontWeight.w700, letterSpacing: 1.2));
+      color: color ?? BrokaColors.textMid, fontSize: 11,
+      fontWeight: FontWeight.w700, letterSpacing: 1.3));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2699,7 +2774,7 @@ class _DayViewsPainter extends CustomPainter {
       }
 
       tp.text = TextSpan(text: _labels[i],
-          style: const TextStyle(color: BrokaColors.textLow, fontSize: 8.5));
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 8.5));
       tp.layout();
       tp.paint(canvas, Offset(left + barW / 2 - tp.width / 2, bottom + 4));
     }
@@ -2800,7 +2875,7 @@ class _BarChartPainter extends CustomPainter {
           begin: Alignment.topCenter, end: Alignment.bottomCenter,
         ).createShader(Rect.fromLTWH(left, top, barW, barH)));
       tp.text = TextSpan(text: labels[i],
-          style: const TextStyle(color: BrokaColors.textLow, fontSize: 9));
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 9));
       tp.layout();
       tp.paint(canvas, Offset(left + barW / 2 - tp.width / 2, size.height - 14));
     }

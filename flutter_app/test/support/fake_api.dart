@@ -53,6 +53,29 @@ void installFakeApi({FakeRoute? route}) {
 /// Swaps the handler for one test. Pass null to go back to [defaultRoute].
 void setFakeRoute(FakeRoute? route) => _activeRoute = route;
 
+/// One request the app made, with its body - for asserting on what was sent,
+/// not only where.
+class FakeRequest {
+  FakeRequest(this.method, this.uri, this.body);
+  final String method;
+  final Uri uri;
+  final String body;
+
+  /// The body as JSON, or null when it isn't JSON.
+  Object? get json {
+    try {
+      return jsonDecode(body);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// Every request since the last [clearFakeRequests], oldest first.
+final List<FakeRequest> fakeRequests = [];
+
+void clearFakeRequests() => fakeRequests.clear();
+
 /// The canonical taxonomy, as the backend's /categories endpoint returns it.
 /// Ids are the names themselves so a test can assert on them readably.
 const List<String> fakeTopLevelCategories = [
@@ -234,16 +257,23 @@ class _FakeHttpClientRequest implements HttpClientRequest {
   @override
   Encoding encoding = utf8;
 
+  final List<int> _body = [];
+
   @override
-  void add(List<int> data) {}
+  void add(List<int> data) => _body.addAll(data);
 
   @override
   Future<void> addStream(Stream<List<int>> stream) async {
-    await stream.drain<void>();
+    await for (final chunk in stream) {
+      _body.addAll(chunk);
+    }
   }
 
   @override
-  Future<HttpClientResponse> close() => _respond(uri);
+  Future<HttpClientResponse> close() {
+    fakeRequests.add(FakeRequest(method, uri, utf8.decode(_body, allowMalformed: true)));
+    return _respond(uri);
+  }
 
   @override
   Future<HttpClientResponse> get done => close();

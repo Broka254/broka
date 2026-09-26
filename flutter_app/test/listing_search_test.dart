@@ -15,6 +15,7 @@ import 'support/fake_api.dart';
 
 void main() {
   setUpAll(installFakeApi);
+  setUpAll(() => HomeScreen.railHintEnabled = false);
 
   setUp(() {
     setFakeRoute(null);
