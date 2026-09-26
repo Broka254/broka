@@ -844,6 +844,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `home_collapsing_scroll_test.dart` — Covers the Home collapsing-scroll architecture (2026-09-18 brief).
 - `home_rail_hint_test.dart` — The category rail's "there's more" hint (2026-09-26): people saw the first few categories and never realised the rail scrolled.
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
+- `inbox_screen_test.dart` — The Inbox on Home's visual system (2026-09-26): the constellation, the collapsing header the Menu next to it uses, and cards like Home's in…
 - `incoming_call_notification_test.dart` — The incoming-call notification's Accept and Decline.
 - `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
 - `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
@@ -926,7 +927,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — A store needs a business seller first; Zeno's replies at a readable pace (2026-09-26)
+- `CHANGES.md` — The Inbox on Home's look (2026-09-26)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

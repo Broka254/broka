@@ -1,3 +1,14 @@
+# The Inbox on Home's look (2026-09-26)
+
+The Inbox was the last tab on a flat grey app bar over a plain background.
+It now matches the Menu beside it in the bottom bar: the constellation, the
+shared collapsing header (with the unread count as a "3 new" pill in the
+brand gradient), listing groups as cards like Home's (lit with the brand
+glow when they hold unread messages), the offline notice as a card rather
+than a strip, and the shared empty and error states. Nothing about loading,
+caching or opening a conversation changed. `test/inbox_screen_test.dart`
+(the Inbox had no tests), including 320dp at 1.3x text.
+
 # A store needs a business seller first; Zeno's replies at a readable pace (2026-09-26)
 
 ## Opening a store no longer makes a buyer a seller on the side

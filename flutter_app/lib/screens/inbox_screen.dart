@@ -1,11 +1,19 @@
 // BROKA - Inbox Screen
 // Grouped by listing: general inbox -> per-listing sub-inbox
 // Seller selling 5 items sees 5 groups; each group contains all buyer threads.
+//
+// On Home's visual system (2026-09-26), like the Menu next to it in the
+// bottom bar: the constellation, the shared collapsing header, and cards
+// like Home's. It was the last tab on a flat grey app bar over a plain
+// background.
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../widgets/chat_parts.dart' show kChatGradient;
+import '../widgets/collapsing_screen_header.dart';
+import '../widgets/constellation_background.dart';
 import '../widgets/gradient_button.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
@@ -13,7 +21,11 @@ import '../services/last_screen_tracker.dart';
 import '../services/local_chat_store.dart';
 
 class InboxScreen extends StatefulWidget {
-  const InboxScreen({super.key});
+  const InboxScreen({super.key, this.animateBackground = true});
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
+
   @override
   State<InboxScreen> createState() => _InboxScreenState();
 }
@@ -142,126 +154,181 @@ class _InboxScreenState extends State<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final unread = _totalUnread;
     return Scaffold(
       backgroundColor: BrokaColors.bg,
-      appBar: AppBar(
-        backgroundColor: BrokaColors.bgMid,
-        title: Row(children: [
-          const Text('Inbox', style: TextStyle(
-              color: BrokaColors.textHigh, fontWeight: FontWeight.w800)),
-          if (_totalUnread > 0) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                color: BrokaColors.danger,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text('$_totalUnread', style: const TextStyle(
-                  color: Colors.white, fontSize: 11,
-                  fontWeight: FontWeight.w800)),
+      body: ConstellationBackground(
+        animate: widget.animateBackground,
+        child: SafeArea(
+          bottom: false,
+          child: RefreshIndicator(
+            color: BrokaColors.gold,
+            backgroundColor: BrokaColors.bgCard,
+            displacement: 72,
+            onRefresh: _loadInbox,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: CollapsingScreenHeader(
+                    title: 'Inbox',
+                    emoji: '💬',
+                    gradient: kChatGradient,
+                    onBack: () => Navigator.maybePop(context),
+                    narrow: media.size.width < 360,
+                    textScale: media.textScaler.scale(1.0).clamp(1.0, 1.35).toDouble(),
+                    trailing: unread > 0 ? _UnreadPill(unread) : null,
+                    trailingKey: unread,
+                  ),
+                ),
+                ..._body(media),
+              ],
             ),
-          ],
-        ]),
-      ),
-      body: RefreshIndicator(
-        color: BrokaColors.gold,
-        backgroundColor: BrokaColors.bgCard,
-        onRefresh: _loadInbox,
-        child: _buildBody(),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildBody() {
+  List<Widget> _body(MediaQueryData media) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(
-        color: BrokaColors.gold, strokeWidth: 1.5));
+      return const [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: CircularProgressIndicator(
+              color: BrokaColors.gold, strokeWidth: 1.5)),
+        ),
+      ];
     }
 
     if (_error != null) {
-      return Center(child: Column(
-      mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline, color: BrokaColors.danger, size: 40),
-        const SizedBox(height: 12),
-        Text(_error!, textAlign: TextAlign.center,
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-        const SizedBox(height: 16),
-        GradientButton(onPressed: _loadInbox,
-          child: const Text('Retry', style: TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w700))),
-      ],
-    ));
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: BrokaEmptyState(
+            emoji: '📡',
+            gradient: kChatGradient,
+            headline: "Couldn't load your inbox",
+            body: _error!,
+            action: GradientButton(
+              onPressed: _loadInbox,
+              colors: kChatGradient,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Text('Retry', style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          )),
+        ),
+      ];
     }
 
-    if (_grouped.isEmpty) return _buildEmpty();
+    if (_grouped.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: BrokaEmptyState(
+            emoji: '💬',
+            gradient: kChatGradient,
+            headline: 'No conversations yet',
+            body: 'Find something you like and start a deal - '
+                'your conversations with sellers and buyers land here.',
+            action: GradientButton(
+              onPressed: () => Navigator.pushNamedAndRemoveUntil(
+                  context, '/home', (_) => false),
+              colors: kChatGradient,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Text('Browse listings', style: TextStyle(
+                    fontWeight: FontWeight.w700, fontSize: 14, color: Colors.white)),
+              ),
+            ),
+          )),
+        ),
+      ];
+    }
 
     final listingIds = _grouped.keys.toList();
-    return Column(children: [
-      if (_isOffline) _buildOfflineBanner(),
-      Expanded(child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-        itemCount: listingIds.length,
-        itemBuilder: (_, i) {
-          final lid     = listingIds[i];
-          final threads = _grouped[lid]!;
-          final first   = threads.first;
-          final unread  = threads.fold(0, (s, t) => s + ((t['unread'] as int?) ?? 0));
-          final isExpanded = _expanded == lid;
+    return [
+      if (_isOffline) SliverToBoxAdapter(child: _buildOfflineBanner()),
+      SliverPadding(
+        padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + media.padding.bottom),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) {
+              final lid     = listingIds[i];
+              final threads = _grouped[lid]!;
+              final first   = threads.first;
+              final unread  = threads.fold(0, (s, t) => s + ((t['unread'] as int?) ?? 0));
+              final isExpanded = _expanded == lid;
 
-          return _ListingGroup(
-            listingId:   lid,
-            listingName: first['listing_name'] as String,
-            category:    first['listing_category'] as String,
-            price:       (first['listing_price'] as num).toDouble(),
-            unreadCount: unread,
-            threadCount: threads.length,
-            isExpanded:  isExpanded,
-            onToggle: () => setState(() =>
-                _expanded = isExpanded ? null : lid),
-            threads:     threads,
-            onThreadTap: _openThread,
-          );
-        },
-      )),
-    ]);
+              return _ListingGroup(
+                listingId:   lid,
+                listingName: first['listing_name'] as String,
+                category:    first['listing_category'] as String,
+                price:       (first['listing_price'] as num).toDouble(),
+                unreadCount: unread,
+                threadCount: threads.length,
+                isExpanded:  isExpanded,
+                onToggle: () => setState(() =>
+                    _expanded = isExpanded ? null : lid),
+                threads:     threads,
+                onThreadTap: _openThread,
+              );
+            },
+            childCount: listingIds.length,
+          ),
+        ),
+      ),
+    ];
   }
 
+  /// A card over the constellation, like Home's notices - not a flat strip.
   Widget _buildOfflineBanner() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-    color: BrokaColors.gold.withOpacity(0.12),
+    margin: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    decoration: BoxDecoration(
+      color: BrokaColors.bgCard.withOpacity(0.92),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: BrokaColors.warning.withOpacity(0.45)),
+    ),
     child: const Row(children: [
-      Icon(Icons.cloud_off_rounded, size: 14, color: BrokaColors.gold),
-      SizedBox(width: 8),
+      Icon(Icons.cloud_off_rounded, size: 16, color: BrokaColors.warning),
+      SizedBox(width: 10),
       Expanded(child: Text(
         "You're offline - showing your last saved messages",
-        style: TextStyle(color: BrokaColors.gold, fontSize: 11.5, fontWeight: FontWeight.w600),
+        style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w600),
       )),
     ]),
   );
+}
 
-  Widget _buildEmpty() => Center(child: Column(
-    mainAxisSize: MainAxisSize.min, children: [
-      const Icon(Icons.inbox_outlined, color: BrokaColors.textLow, size: 52),
-      const SizedBox(height: 14),
-      const Text('No conversations yet', style: TextStyle(
-          color: BrokaColors.textMid, fontSize: 16, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 6),
-      const Text('Browse listings and start a deal',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 13)),
-      const SizedBox(height: 20),
-      GradientButton(
-        onPressed: () => Navigator.pushNamedAndRemoveUntil(
-            context, '/home', (_) => false),
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
-          child: Text('Browse Listings', style: TextStyle(
-              fontWeight: FontWeight.w700, fontSize: 14, color: Colors.white)),
-        ),
+/// "3 new" in the header - the brand gradient, like the header's other
+/// lit controls.
+class _UnreadPill extends StatelessWidget {
+  const _UnreadPill(this.count);
+  final int count;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: '$count unread',
+    excludeSemantics: true,
+    child: Container(
+      height: CollapsingScreenHeader.control,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: kChatGradient),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.3), blurRadius: 12)],
       ),
-    ],
-  ));
+      child: Text('$count new', style: const TextStyle(
+          color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w800)),
+    ),
+  );
 }
 
 // ── Listing Group (accordion) ─────────────────────────────────────────────────
@@ -297,23 +364,28 @@ class _ListingGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A card like Home's over the constellation; one with unread messages
+    // lit with the brand glow.
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: BrokaColors.bgCard,
-        borderRadius: BorderRadius.circular(14),
+        color: BrokaColors.bgCard.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: unreadCount > 0
-              ? BrokaColors.gold.withOpacity(0.5)
+              ? BrokaColors.neonBlue.withOpacity(0.55)
               : BrokaColors.border,
-          width: unreadCount > 0 ? 1.5 : 1,
+          width: unreadCount > 0 ? 1.4 : 1,
         ),
+        boxShadow: unreadCount > 0
+            ? [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.14), blurRadius: 16)]
+            : null,
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(children: [
         // ── Group header (tap to expand/collapse) ──
         InkWell(
           onTap: onToggle,
-          borderRadius: BorderRadius.circular(14),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             child: Row(children: [
@@ -322,12 +394,14 @@ class _ListingGroup extends StatelessWidget {
                 width: 46, height: 46,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(colors: unreadCount > 0
-                      ? [BrokaColors.gold, BrokaColors.goldDim]
-                      : [BrokaColors.bgMid, BrokaColors.bgMid]),
+                  gradient: LinearGradient(colors: [
+                    kChatGradient.first.withOpacity(unreadCount > 0 ? 0.35 : 0.16),
+                    kChatGradient.last.withOpacity(unreadCount > 0 ? 0.25 : 0.08),
+                  ]),
                   border: Border.all(
                     color: unreadCount > 0
-                        ? BrokaColors.gold : BrokaColors.border),
+                        ? BrokaColors.neonBlue.withOpacity(0.7)
+                        : BrokaColors.border),
                 ),
                 child: Center(child: Text(_emoji(category),
                     style: const TextStyle(fontSize: 22))),
@@ -343,14 +417,15 @@ class _ListingGroup extends StatelessWidget {
                     fontSize: 14),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
-                Row(children: [
+                // Wraps rather than overflowing on a small phone at a large
+                // text size.
+                Wrap(spacing: 8, children: [
                   Text(_fmt(price), style: const TextStyle(
                       color: BrokaColors.neonGreen,
-                      fontSize: 11, fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 8),
+                      fontSize: 11.5, fontWeight: FontWeight.w700)),
                   Text('$threadCount conversation${threadCount == 1 ? '' : 's'}',
                       style: const TextStyle(
-                          color: BrokaColors.textLow, fontSize: 11)),
+                          color: BrokaColors.textMid, fontSize: 11.5)),
                 ]),
               ])),
               // Unread badge
@@ -383,7 +458,7 @@ class _ListingGroup extends StatelessWidget {
           curve: Curves.easeOut,
           child: isExpanded
               ? Column(children: [
-                  const Divider(color: BrokaColors.border, height: 1),
+                  Divider(color: BrokaColors.border.withOpacity(0.7), height: 1),
                   ...threads.map((t) => _ThreadRow(
                     thread: t,
                     onTap: () => onThreadTap(t),
@@ -439,10 +514,10 @@ class _ThreadRow extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: LinearGradient(colors: unread > 0
-                    ? [BrokaColors.gold, BrokaColors.goldDim]
+                    ? kChatGradient
                     : [BrokaColors.bgMid, BrokaColors.bgMid]),
                 border: Border.all(
-                  color: unread > 0 ? BrokaColors.gold : BrokaColors.border,
+                  color: unread > 0 ? BrokaColors.neonBlue : BrokaColors.border,
                   width: unread > 0 ? 2 : 1,
                 ),
               ),
@@ -483,8 +558,10 @@ class _ThreadRow extends StatelessWidget {
                   fontWeight: unread > 0 ? FontWeight.w700 : FontWeight.w500,
                   fontSize: 13),
                   maxLines: 1, overflow: TextOverflow.ellipsis)),
-              Text(timeAgo, style: const TextStyle(
-                  color: BrokaColors.textLow, fontSize: 10)),
+              Text(timeAgo, style: TextStyle(
+                  color: unread > 0 ? BrokaColors.neonBlue : BrokaColors.textMid,
+                  fontSize: 10.5,
+                  fontWeight: unread > 0 ? FontWeight.w700 : FontWeight.w400)),
             ]),
             const SizedBox(height: 3),
             Row(children: [
@@ -492,7 +569,7 @@ class _ThreadRow extends StatelessWidget {
                   shape: BoxShape.circle, color: roleColor)),
               const SizedBox(width: 5),
               Expanded(child: Text(lastMsg, style: TextStyle(
-                  color: unread > 0 ? BrokaColors.textMid : BrokaColors.textLow,
+                  color: unread > 0 ? BrokaColors.textHigh : BrokaColors.textMid,
                   fontSize: 12,
                   fontWeight: unread > 0 ? FontWeight.w500 : FontWeight.normal),
                   maxLines: 1, overflow: TextOverflow.ellipsis)),
