@@ -39,15 +39,15 @@ from __future__ import annotations
 
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Category, User
 from api.domains.listings.service import ListingService
-from .service import BuyAgentService
+from .service import BuyAgentService, clean_condition, lock_buyer
 from fastapi import HTTPException
 
 
@@ -134,23 +134,74 @@ class SearchProductsParams(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
-class CreateBuyingRequestParams(BaseModel):
+# Bounds for what a standing request stores (FIX, buying-agent review,
+# 2026-09-26). These fields had none: they are saved on the row, loaded
+# again for every new listing in the category, and returned on every Home
+# load, so one request could park megabytes there. The limits sit above
+# what the app ever sends - Zeno's own slots are clipped to 120/80
+# characters and 10 attributes (AIBrokerService.buy_agent_turn).
+MAX_QUERY_CHARS = 200
+MAX_LOCATION_CHARS = 120
+MAX_FEATURES = 20
+MAX_FEATURE_CHARS = 100
+MAX_ATTRIBUTES = 20
+MAX_ATTRIBUTE_KEY_CHARS = 40
+MAX_ATTRIBUTE_VALUE_CHARS = 100
+# A watch further than this is not a distance limit at all; a negative one
+# (accepted before) could never match anything.
+MAX_DISTANCE_KM = 2000
+
+Feature = Annotated[str, StringConstraints(max_length=MAX_FEATURE_CHARS)]
+
+
+class _StandingRequestFields(BaseModel):
+    """Checks shared by CreateBuyingRequestParams and
+    UpdateBuyingRequestParams. A failure here is an INVALID_PARAMETERS
+    response, raised before anything touches the database."""
+
+    @field_validator("condition", check_fields=False)
+    @classmethod
+    def _condition_as_listings_spell_it(cls, v):
+        # Same rule BuyAgentService applies for every other path in.
+        try:
+            return clean_condition(v)
+        except HTTPException as e:
+            raise ValueError(e.detail)
+
+    @field_validator("attributes", check_fields=False)
+    @classmethod
+    def _bounded_attributes(cls, v):
+        if v is None:
+            return v
+        if len(v) > MAX_ATTRIBUTES:
+            raise ValueError(f"at most {MAX_ATTRIBUTES} attributes")
+        for key, value in v.items():
+            if len(str(key)) > MAX_ATTRIBUTE_KEY_CHARS:
+                raise ValueError(f"attribute names are at most {MAX_ATTRIBUTE_KEY_CHARS} characters")
+            if isinstance(value, (dict, list)) or len(str(value)) > MAX_ATTRIBUTE_VALUE_CHARS:
+                raise ValueError(
+                    f"attribute values are single values of at most {MAX_ATTRIBUTE_VALUE_CHARS} characters"
+                )
+        return v
+
+
+class CreateBuyingRequestParams(_StandingRequestFields):
     """Fields match Design v2 §25's conceptual BuyingAgentRequest, checked
     against the actual doc (previous pass had reconstructed this from
     memory while the doc was temporarily missing from uploads - see
     migration 0019). category/max_price stay required, matching the
     original (pre-action-engine) BuyAgentRequestIn shape that the plain
     POST /buy-agent-requests endpoint still uses."""
-    category: str
-    subcategory: Optional[str] = None
-    query: Optional[str] = None
+    category: str = Field(max_length=60)
+    subcategory: Optional[str] = Field(default=None, max_length=60)
+    query: Optional[str] = Field(default=None, max_length=MAX_QUERY_CHARS)
     max_price: float
     min_price: Optional[float] = None
-    location: Optional[str] = None
-    max_distance_km: Optional[float] = None
+    location: Optional[str] = Field(default=None, max_length=MAX_LOCATION_CHARS)
+    max_distance_km: Optional[float] = Field(default=None, gt=0, le=MAX_DISTANCE_KM)
     condition: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None
-    must_have_features: List[str] = Field(default_factory=list)
+    must_have_features: List[Feature] = Field(default_factory=list, max_length=MAX_FEATURES)
     # FIX (ChatGPT-review audit, 2026-08-15): lets a buyer opt into Zeno
     # auto-messaging a seller the instant a match is found, vs. just being
     # notified and reviewing matches themselves via START_NEGOTIATION.
@@ -159,23 +210,23 @@ class CreateBuyingRequestParams(BaseModel):
     negotiation_authorized: bool = False
 
 
-class UpdateBuyingRequestParams(BaseModel):
+class UpdateBuyingRequestParams(_StandingRequestFields):
     """All-optional partial update for UPDATE_BUYING_REQUEST (Design v2
     §17). Only fields the buyer actually wants to change should be set -
     anything left as None/omitted is left untouched on the existing
-    request. Same field shape as CreateBuyingRequestParams minus the
-    required-ness of category/max_price, since this is a partial patch, not
-    a fresh request."""
-    category: Optional[str] = None
-    subcategory: Optional[str] = None
-    query: Optional[str] = None
+    request. Same field shape (and bounds) as CreateBuyingRequestParams
+    minus the required-ness of category/max_price, since this is a partial
+    patch, not a fresh request."""
+    category: Optional[str] = Field(default=None, max_length=60)
+    subcategory: Optional[str] = Field(default=None, max_length=60)
+    query: Optional[str] = Field(default=None, max_length=MAX_QUERY_CHARS)
     max_price: Optional[float] = None
     min_price: Optional[float] = None
-    location: Optional[str] = None
-    max_distance_km: Optional[float] = None
+    location: Optional[str] = Field(default=None, max_length=MAX_LOCATION_CHARS)
+    max_distance_km: Optional[float] = Field(default=None, gt=0, le=MAX_DISTANCE_KM)
     condition: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None
-    must_have_features: Optional[List[str]] = None
+    must_have_features: Optional[List[Feature]] = Field(default=None, max_length=MAX_FEATURES)
     negotiation_authorized: Optional[bool] = None
 
 
@@ -190,10 +241,9 @@ class ChangeBudgetParams(BaseModel):
 class StartNegotiationParams(BaseModel):
     """§17/§24. listing_id is required - Zeno must already know which
     specific match the buyer wants to pursue (surfaced from a prior
-    SEARCH_PRODUCTS response's `matches`). message is optional free text the
-    buyer/Zeno wants to open with; when omitted a plain, honest default
-    opener is used (same style as buy_agent_subscribers.py's auto-match
-    opener, not a second AI-authored-message pipeline)."""
+    SEARCH_PRODUCTS response's `matches`). message is optional free text
+    from the BUYER: it reaches the seller as the buyer's own message, after
+    Zeno's fixed opener - never as Zeno's words (see _start_negotiation)."""
     listing_id: str
     # Bounded: this is free text that lands in someone else's inbox, and it
     # arrives as whatever JSON the client sent. negotiate.py's own message
@@ -646,6 +696,10 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
     # itself through negotiate.py's own audience-scoped history), which is
     # also why tests/test_message_visibility_guard.py is satisfied by the
     # recipient_role constraint rather than by a justification marker.
+    #
+    # Taken under the buyer's lock (buy_agent/service.py lock_buyer): two
+    # taps landing together both found no opener and both wrote one.
+    await lock_buyer(db, buyer_id)
     existing_id = (await db.execute(
         select(NegotiationMessage.id).where(
             NegotiationMessage.listing_id == params.listing_id,
@@ -664,11 +718,11 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
             "message_id": existing_id,
         }
 
-    # The default opener deliberately does not quote the listing price back
-    # at the seller - they set it, so repeating it says nothing, and it is
-    # the same class of detail buy_agent_subscribers.py was leaking in the
-    # other direction (the buyer's ceiling).
-    opening = (params.message or "").strip() or (
+    # The opener deliberately does not quote the listing price back at the
+    # seller - they set it, so repeating it says nothing, and it is the same
+    # class of detail buy_agent_subscribers.py was leaking in the other
+    # direction (the buyer's ceiling).
+    opening = (
         f"Hi! I'm Zeno, reaching out on behalf of a buyer interested in your "
         f"listing \"{listing.name}\". Would you be open to a conversation?"
     )
@@ -678,8 +732,27 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
         msg_type="text", via_ai=True, is_agent_initiated=True,
     )
     db.add(msg)
+
+    # FIX (buying-agent review, 2026-09-26): `message` used to REPLACE the
+    # opener above, so whatever a buyer typed was stored as role="broker" -
+    # shown to the seller as Zeno speaking. The app never sends it; a
+    # hand-made request could make Zeno tell a seller "BROKA needs a KES 500
+    # verification fee, send it to 07...". Zeno's words are now always
+    # Zeno's, and the buyer's go in as the buyer's own direct message -
+    # exactly the row /negotiate/direct-message writes.
+    buyer_msg = None
+    own_words = (params.message or "").strip()
+    if own_words:
+        buyer_msg = NegotiationMessage(
+            listing_id=params.listing_id, sender_id=buyer_id, role="buyer",
+            recipient_role="seller", content=own_words, buyer_id=buyer_id,
+            msg_type="text", via_ai=False,
+        )
+        db.add(buyer_msg)
     await db.commit()
     await db.refresh(msg)
+    if buyer_msg is not None:
+        await db.refresh(buyer_msg)
 
     # Best-effort live WS push, same guarded pattern routers/negotiate.py's
     # direct_message endpoint uses - a missing/idle socket must never fail
@@ -687,6 +760,8 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
     try:
         from api.routers.media import broadcast_text_message
         await broadcast_text_message(params.listing_id, buyer_id, msg, "broker", False)
+        if buyer_msg is not None:
+            await broadcast_text_message(params.listing_id, buyer_id, buyer_msg, buyer_id, False)
     except Exception:
         pass
 

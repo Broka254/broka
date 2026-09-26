@@ -156,6 +156,83 @@ def _current_category(name):
     from api.domains.categories.seed import canonical_category_name
     return canonical_category_name(name)
 
+
+_BUY_CONDITIONS = ("new", "used", "refurbished")
+
+
+def clean_buy_agent_slots(
+    raw,
+    valid_categories: list[str],
+    subcategories_by_category: dict[str, list[str]],
+    fallback_category=None,
+) -> dict:
+    """The buying conversation's criteria reduced to the fixed shape and
+    values the rest of the flow relies on: a real category and subcategory
+    or None, positive numbers or None, one of three conditions, at most ten
+    short attributes, and short strings.
+
+    Applied to BOTH sides of a turn. The model's output always went
+    through it (buy_agent_turn). The slots the CLIENT hands back each turn
+    did not (FIX, buying-agent review, 2026-09-26): they went whole into
+    the billed prompt - the only client text there without a bound - and,
+    whenever the model was down or returned nothing usable, straight into
+    search and scoring, where a list for a category or a string for a
+    budget was a TypeError and a 500 (conversation.converse).
+
+    `fallback_category` is used when `raw` names no valid category - the
+    previous turn's, since category decides the SQL filter and a buyer
+    mid-conversation about phones has not stopped talking about phones.
+    Price, condition and attributes deliberately have no fallback: "don't
+    worry about the price" has to be able to clear the budget."""
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _category(value):
+        value = _current_category(value) if isinstance(value, str) else None
+        return value if value in valid_categories else None
+
+    category = _category(raw.get("category")) or _category(fallback_category)
+    subcategory = raw.get("subcategory")
+    if category is None or not isinstance(subcategory, str) \
+            or subcategory not in subcategories_by_category.get(category, []):
+        subcategory = None
+
+    def _num(key):
+        v = raw.get(key)
+        # isinstance(True, int) is True in Python - a bool here is a model
+        # mistake, not a price.
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+    def _text(key, limit):
+        v = raw.get(key)
+        return str(v)[:limit] if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip() else None
+
+    condition = raw.get("condition")
+    if condition not in _BUY_CONDITIONS:
+        condition = None
+
+    attributes = raw.get("attributes")
+    if not isinstance(attributes, dict):
+        attributes = {}
+    attributes = {
+        str(k)[:40]: str(v)[:60]
+        for k, v in list(attributes.items())[:10]
+        if v not in (None, "", [], {})
+    }
+
+    return {
+        "query": _text("query", 120),
+        "category": category,
+        "subcategory": subcategory,
+        "min_price": _num("min_price"),
+        "max_price": _num("max_price"),
+        "location": _text("location", 80),
+        "max_distance_km": _num("max_distance_km"),
+        "condition": condition,
+        "attributes": attributes,
+    }
+
+
 class AIBrokerService:
     def __init__(self):
         self.gemini_key     = settings.gemini_api_key
@@ -545,62 +622,19 @@ class AIBrokerService:
         if action not in ("ASK", "SEARCH"):
             action = "ASK"
 
-        raw_slots = parsed.get("slots")
-        if not isinstance(raw_slots, dict):
-            raw_slots = {}
-
-        # Category falls back to what was already gathered when the model
-        # omits it - it is structural (it decides the SQL filter) and a
-        # buyer mid-conversation about phones has not stopped talking about
-        # phones. Price, condition and attributes deliberately do NOT fall
-        # back: "don't worry about the price" has to be able to actually
-        # clear the budget, which is precisely the turn this flow exists
-        # to handle.
-        category = _current_category(raw_slots.get("category"))
-        if category not in valid_categories:
-            category = _current_category((slots or {}).get("category"))
-            if category not in valid_categories:
-                category = None
-        subcategory = raw_slots.get("subcategory")
-        if category is None or subcategory not in subcategories_by_category.get(category, []):
-            subcategory = None
-
-        def _num(key):
-            v = raw_slots.get(key)
-            # isinstance(True, int) is True in Python - a bool here is a model
-            # mistake, not a price.
-            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
-
-        condition = raw_slots.get("condition")
-        if condition not in ("new", "used", "refurbished"):
-            condition = None
-
-        attributes = raw_slots.get("attributes")
-        if not isinstance(attributes, dict):
-            attributes = {}
-        attributes = {
-            str(k)[:40]: str(v)[:60]
-            for k, v in list(attributes.items())[:10]
-            if v not in (None, "", [], {})
-        }
-
         reply = parsed.get("reply")
         reply = str(reply).strip() if reply else ""
 
+        # Category falls back to what was already gathered when the model
+        # omits it; price, condition and attributes deliberately do not -
+        # see clean_buy_agent_slots.
         return {
             "action": action,
             "reply": reply,
-            "slots": {
-                "query": str(raw_slots["query"])[:120] if raw_slots.get("query") else None,
-                "category": category,
-                "subcategory": subcategory,
-                "min_price": _num("min_price"),
-                "max_price": _num("max_price"),
-                "location": str(raw_slots["location"])[:80] if raw_slots.get("location") else None,
-                "max_distance_km": _num("max_distance_km"),
-                "condition": condition,
-                "attributes": attributes,
-            },
+            "slots": clean_buy_agent_slots(
+                parsed.get("slots"), valid_categories, subcategories_by_category,
+                fallback_category=(slots or {}).get("category"),
+            ),
         }
 
     async def narrate_matches(

@@ -1,3 +1,82 @@
+# Buying agent review (2026-09-26)
+
+A pass over the Buying Agent (backend `buy_agent/`, the standing-request
+matcher, Zeno's buying screen and Home's watch card) for weaknesses and
+points of failure. Every fix has a test that failed on the code before it.
+
+## Fixed
+
+- **A buyer could put words in Zeno's mouth.** START_NEGOTIATION's optional
+  `message` replaced Zeno's opener and was stored as `role="broker"`, so a
+  hand-made request could have "Zeno" tell a seller to pay a "verification
+  fee" to some number. Zeno's opener is now always the fixed text; the
+  buyer's words go into the thread as the buyer's own direct message.
+- **Watches nobody could see or stop.** A matched request keeps matching
+  but didn't count against the one-request cap, so after a first match a
+  buyer could start a second watch; GET /me, update and cancel only reach
+  the newest row, and the first went on pushing matches and opening
+  negotiations. Matched requests now count. And nothing in the app could
+  cancel a watch at all - Zeno said "cancel that one from the home screen",
+  which had no such control. Home's watch card has a Stop watching button,
+  Zeno offers to replace the current watch, and Home reloads the card on
+  the way back from Zeno.
+- **Two creates at once got past the cap on PostgreSQL** (the re-count
+  after the flush never sees the other transaction's row). The buyer's
+  `users` row is locked for create, update, cancel and START_NEGOTIATION's
+  one-opener check (`lock_buyer`); the last two could also race - an update
+  could revive a just-cancelled watch, and a double tap sent two openers.
+- **Watches matched things they weren't watching for.** The matcher
+  ignored the `query` and `attributes` Zeno stores, so a "Pixel 8" watch
+  fired on any Electronics listing under budget. Every query word must now
+  appear (the rule listing search uses), and a listing that states a spec
+  short of the ask is skipped. Condition is normalised to the listings'
+  lower-case values on write (an unknown one is refused) and compared
+  case-insensitively; before, "Used" never matched anything.
+- **Posting a listing waited on every watcher's push.** The matcher runs
+  inside POST /listings and sent one push per matched buyer in turn, 15
+  seconds allowed each. Tokens are read in one query and pushes go out in
+  the background, eight at a time. The already-opened check is one query
+  instead of one per watch.
+- **Lost match counts.** `match_count` was incremented in Python; two
+  listings matching at once both wrote the same number. It is incremented
+  in SQL, and only while the request is still watching.
+- **The conversation trusted the client's `slots`.** They went whole into
+  the billed prompt (the one unbounded client text there) and, when the
+  model was down, straight into scoring: a list for a category or a string
+  for a budget was a 500. They are cleaned by the same rules as the model's
+  output (`clean_buy_agent_slots`); `/parse-intent`'s `existing_filters`
+  too.
+- **The conversational search could miss the item it was asked for.** Its
+  pool was the category's top 200 by ranking, whatever the buyer said -
+  in a busy category, or with no category, the exact listing could fall
+  outside it. Listings with every word of the query are fetched first; the
+  ranked pool is still added for near misses.
+- **No bounds on what a watch stores.** Query, location, features and
+  attributes on CREATE/UPDATE_BUYING_REQUEST (and feature length on
+  POST /buy-agent-requests) had no limits; a negative distance was a watch
+  that could never match.
+- `buy_agent_requests` had no index but its key; GET /me (every Home load)
+  and the matcher now have `(buyer_id, status)` and `(status,
+  lower(category))`.
+
+Tests: `backend/tests/test_buy_agent.py::TestBuyAgentReview`,
+`backend/tests/test_buy_agent_conversation.py::TestConversationReview`
+(the concurrent-create test runs on PostgreSQL only),
+`flutter_app/test/home_buy_agent_watch_test.dart`, and a replace-the-watch
+test in `flutter_app/test/zeno_chat_test.dart`.
+
+## Still open
+
+- Watches never expire: a year-old watch with negotiation authorised still
+  messages sellers. How long a watch should live is a product call.
+- Matching reacts to new listings only. A listing whose price later drops
+  under a buyer's budget, or that comes back to active, is never matched.
+- Auction listings match watches like any other, and an authorised watch
+  sends their sellers "would you be open to a conversation?".
+- Buyers who already have two live requests (possible before this change)
+  keep them; Stop watching now reaches each in turn, newest first. A
+  one-off cleanup would need a decision about which to keep.
+
 # The Inbox on Home's look (2026-09-26)
 
 The Inbox was the last tab on a flat grey app bar over a plain background.

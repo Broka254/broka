@@ -616,7 +616,11 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// for a one-off search - this is where it has to be asked for. Asked
   /// once, at the moment it becomes necessary, rather than demanded up
   /// front by a form.
-  Future<void> _keepWatching() async {
+  ///
+  /// [replacing] is set on the retry after the buyer agreed to swap out the
+  /// watch they already had, so a second refusal is reported rather than
+  /// offered again.
+  Future<void> _keepWatching({bool replacing = false}) async {
     var maxPrice = (_slots['max_price'] as num?)?.toDouble();
     if (maxPrice == null) {
       maxPrice = await _askBudget();
@@ -643,16 +647,16 @@ class _ZenoScreenState extends State<ZenoScreen>
         if (data['status'] == 'SUCCESS') {
           setState(() => _watching = true);
           _persist();
+        } else if (data['error_code'] == 'ACTIVE_REQUEST_EXISTS' && !replacing) {
+          // One watch at a time. This used to tell the buyer to "cancel
+          // that one from the home screen", which had no such control -
+          // nothing in the app could stop a watch, so the first one was
+          // the only one a buyer would ever get. Offer the swap right here.
+          _offerToReplaceWatch();
         } else {
-          // Most often ACTIVE_REQUEST_EXISTS - say what it means and what
-          // to do, not the raw error code.
-          final code = data['error_code'];
           setState(() => _turns.add(_Turn(Message(
             role: 'broker',
-            content: code == 'ACTIVE_REQUEST_EXISTS'
-                ? "I'm already watching for something else for you. Cancel that one from "
-                  "the home screen and I'll pick this up instead."
-                : (data['message'] as String? ?? "I couldn't set that watch up just now."),
+            content: data['message'] as String? ?? "I couldn't set that watch up just now.",
           ))));
           _scrollDown();
         }
@@ -660,6 +664,48 @@ class _ZenoScreenState extends State<ZenoScreen>
       onFailure: (msg, __) => ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(msg))),
     );
+  }
+
+  /// Asks before stopping the buyer's current watch for this one - it may
+  /// still be finding them things - then retries [_keepWatching] once.
+  Future<void> _offerToReplaceWatch() async {
+    final replace = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        title: const Text('Replace your current watch?',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
+        content: const Text(
+          "I'm already watching for something else for you, and I keep one watch at a "
+          "time. Shall I stop that one and watch for this instead?",
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep the old one', style: TextStyle(color: BrokaColors.textMid))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Replace it', style: TextStyle(color: BrokaColors.gold))),
+        ],
+      ),
+    );
+    if (replace != true || !mounted) return;
+
+    setState(() => _watchBusy = true);
+    final cancelled = await buyAgentRepository.cancelRequest();
+    if (!mounted) return;
+    setState(() => _watchBusy = false);
+    // NO_ACTIVE_REQUEST means it is already gone (stopped elsewhere) - the
+    // slot is free either way.
+    final freed = cancelled.isSuccess &&
+        (cancelled.data['status'] == 'SUCCESS' ||
+            cancelled.data['error_code'] == 'NO_ACTIVE_REQUEST');
+    if (!freed) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("I couldn't stop the other watch just now. Try again in a moment."),
+      ));
+      return;
+    }
+    await _keepWatching(replacing: true);
   }
 
   Future<double?> _askBudget() async {

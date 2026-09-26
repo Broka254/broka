@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.database import get_db, Category
 from api.security import get_current_user
 from api.core.rate_limit import ai_chat_limiter, message_limiter
-from api.domains.ai_broker.service import AIBrokerService
+from api.domains.ai_broker.service import AIBrokerService, clean_buy_agent_slots
 from .service import BuyAgentService
-from .actions import ZenoActionRequest, ZenoActionError, ZenoActionName, execute_action
+from .actions import (
+    MAX_FEATURES, Feature, ZenoActionRequest, ZenoActionError, ZenoActionName, execute_action,
+)
 from . import conversation
 
 router = APIRouter()
@@ -33,7 +35,10 @@ class BuyAgentRequestIn(BaseModel):
     # the schema so the caller gets a 422 naming the field, the service so
     # the rule holds for every path into it, not just this one.
     max_price: float = Field(gt=0)
-    must_have_features: list[str] = Field(default_factory=list, max_length=20)
+    # Each item bounded as well as the list (buying-agent review,
+    # 2026-09-26): the row stores them and the matcher reads them back for
+    # every new listing in the category.
+    must_have_features: list[Feature] = Field(default_factory=list, max_length=MAX_FEATURES)
     # FIX (ChatGPT-review audit, 2026-08-15): added for parity with the
     # structured CREATE_BUYING_REQUEST action, which already gained this
     # field in the same pass - see actions.py/service.py. Defaults False,
@@ -110,9 +115,16 @@ async def parse_search_intent(
         c.name: [s.name for s in all_cats if s.parent_id == c.id]
         for c in top_level
     }
+    # Cleaned to the known filter fields before they reach the prompt
+    # (buying-agent review, 2026-09-26): the dict is the client's, and was
+    # json.dumps'd in whole - the one unbounded text in a billed prompt.
+    existing = (
+        clean_buy_agent_slots(body.existing_filters, valid_names, subs_by_cat)
+        if body.existing_filters else None
+    )
     return await AIBrokerService().parse_search_intent(
         text=body.text, valid_categories=valid_names, subcategories_by_category=subs_by_cat,
-        existing_filters=body.existing_filters,
+        existing_filters=existing,
     )
 
 

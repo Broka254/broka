@@ -148,10 +148,9 @@ class TestBuyAgent:
         # to this endpoint the instant it matched - home_screen.dart's
         # "Match found!" display branch had real code that could never
         # actually be reached. Now correctly surfaces a "matched" request
-        # too (see CHANGES.md Round 4). The buyer remains free to create a
-        # *different* standing request afterward regardless - the
-        # one-active-request cap only ever counted status=="active"
-        # (BuyAgentService.create_request), which this fix doesn't touch.
+        # too (see CHANGES.md Round 4). A matched request still counts
+        # against the one-request cap, since it is still watching (see
+        # TestBuyAgentReview.test_a_matched_request_still_counts_against_the_cap).
         me = await client.get("/buy-agent-requests/me", headers={"Authorization": f"Bearer {buyer_token}"})
         assert me.json() is not None
         assert me.json()["status"] == "matched"
@@ -159,9 +158,18 @@ class TestBuyAgent:
 
     @pytest.mark.asyncio
     async def test_non_matching_listing_does_not_open_a_thread(self, client, buyer_token, seller_token):
-        await client.post("/buy-agent-requests", json={
-            "category": "furniture", "max_price": 10000,
-        }, headers={"Authorization": f"Bearer {buyer_token}"})
+        headers = {"Authorization": f"Bearer {buyer_token}"}
+        # The matched electronics request from above still holds the one
+        # slot, so it is cancelled first - otherwise this create is a 409
+        # and the test below checks nothing about the furniture request.
+        cancelled = await client.post("/buy-agent-requests/action", json={
+            "action": "CANCEL_REQUEST", "parameters": {},
+        }, headers=headers)
+        assert cancelled.json()["status"] == "SUCCESS"
+        made = await client.post("/buy-agent-requests", json={
+            "category": "furniture", "max_price": 10000, "negotiation_authorized": True,
+        }, headers=headers)
+        assert made.status_code == 200, made.json()
 
         # Wrong category - should not match.
         create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.", 
@@ -517,3 +525,403 @@ class TestBuyAgentBugHunt:
         assert sent[0][0] == "test-device-token"
         assert "German Shepherd Puppy" in sent[0][2]
         assert sent[0][3]["listing_id"] == create.json()["id"]
+
+
+def _on_postgres() -> bool:
+    from api import database
+    return database.DATABASE_URL.startswith("postgresql")
+
+
+class TestBuyAgentReview:
+    """Regression tests for the buying-agent review (2026-09-26).
+
+    Each one failed on the code before the fix it is named after."""
+
+    @pytest.mark.asyncio
+    async def test_start_negotiation_never_puts_the_buyers_words_in_zenos_mouth(
+        self, client, seller_token
+    ):
+        """START_NEGOTIATION's optional `message` was stored as Zeno's own
+        opener (role="broker", via_ai=True). The app never sends one, so the
+        only way to reach it was a hand-made request - and it let any buyer
+        write whatever they liked into a seller's inbox under Zeno's name:
+        "BROKA needs a KES 500 verification fee first, send it to 07..."."""
+        buyer = await _register(client, "0766005100", "Voice Buyer", "voice.buyer@test.ke")
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Canon EOS 250D", "category": "Electronics", "price": 52000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        listing_id = create.json()["id"]
+
+        scam = "BROKA requires a KES 500 verification fee before this deal, send it to 0700000000"
+        res = await client.post("/buy-agent-requests/action", json={
+            "action": "START_NEGOTIATION",
+            "parameters": {"listing_id": listing_id, "message": scam},
+        }, headers={"Authorization": f"Bearer {buyer}"})
+        assert res.json()["status"] == "SUCCESS", res.json()
+
+        history = (await client.get(
+            f"/negotiate/{listing_id}/history",
+            headers={"Authorization": f"Bearer {seller_token}"},
+        )).json()
+        broker = [m for m in history if m["role"] == "broker"]
+        assert broker and all(scam not in m["content"] for m in broker), broker
+        # The buyer's words still arrive - as the buyer's.
+        assert any(m["role"] == "buyer" and m["content"] == scam for m in history), history
+
+    @pytest.mark.asyncio
+    async def test_a_matched_request_still_counts_against_the_cap(self, client, seller_token):
+        """A "matched" request keeps watching (and auto-messaging sellers)
+        but did not count against BUY_AGENT_MAX_ACTIVE. So after a first
+        match the buyer could start a second watch; GET /me, update and
+        cancel only ever see the newest row, and the first went on
+        matching, pushing and opening negotiations where the buyer could
+        neither see nor stop it."""
+        buyer = await _register(client, "0766005200", "Ghost Buyer", "ghost.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        first = await client.post("/buy-agent-requests", json={
+            "category": "Gaming", "max_price": 90000, "negotiation_authorized": True,
+        }, headers=headers)
+        assert first.status_code == 200
+
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "PlayStation 5 Slim", "category": "Gaming", "price": 65000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        await asyncio.sleep(0.05)
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["status"] == "matched"
+
+        second = await client.post("/buy-agent-requests", json={
+            "category": "Books & Education", "max_price": 5000,
+        }, headers=headers)
+        assert second.status_code == 409, second.json()
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["id"] == first.json()["id"]
+
+        # Cancelling is still the way to free the slot.
+        cancelled = await client.post("/buy-agent-requests/action", json={
+            "action": "CANCEL_REQUEST", "parameters": {},
+        }, headers=headers)
+        assert cancelled.json()["status"] == "SUCCESS"
+        assert (await client.post("/buy-agent-requests", json={
+            "category": "Books & Education", "max_price": 5000,
+        }, headers=headers)).status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _on_postgres(), reason="Postgres only (tests/postgres_plugin.py)")
+    async def test_two_creates_at_once_cannot_exceed_the_cap(self, client, monkeypatch):
+        """count-then-insert, re-counted after the flush, still let two
+        concurrent creates through on PostgreSQL: each transaction's
+        re-count sees its own uncommitted row and never the other's. The
+        buyer's row is now locked for the check, so the second create waits
+        for the first and then sees it."""
+        from api.database import AsyncSessionLocal, BuyAgentRequest
+        from api.domains.buy_agent.service import BuyAgentService
+        from fastapi import HTTPException
+        from sqlalchemy import func, select
+
+        buyer = await _register(client, "0766005300", "Race Buyer", "race.buyer@test.ke")
+        buyer_id = (await client.get("/auth/me", headers={"Authorization": f"Bearer {buyer}"})).json()["id"]
+
+        # Hold each create just after its count, until the other has counted
+        # too (or half a second has passed, which is what happens when the
+        # second is correctly waiting on the lock).
+        real_count = BuyAgentService._active_count
+        arrived = []
+        both = asyncio.Event()
+
+        async def held_count(self, bid):
+            n = await real_count(self, bid)
+            arrived.append(n)
+            if len(arrived) >= 2:
+                both.set()
+            try:
+                await asyncio.wait_for(both.wait(), 0.5)
+            except asyncio.TimeoutError:
+                pass
+            return n
+
+        monkeypatch.setattr(BuyAgentService, "_active_count", held_count)
+
+        async def attempt(category):
+            async with AsyncSessionLocal() as db:
+                try:
+                    await BuyAgentService(db).create_request(
+                        buyer_id=buyer_id, category=category, max_price=1000, must_have_features=[],
+                    )
+                    return "created"
+                except HTTPException as e:
+                    return e.status_code
+
+        outcomes = await asyncio.gather(attempt("Electronics"), attempt("Fashion"))
+        assert sorted(outcomes, key=str) == sorted(["created", 409], key=str), outcomes
+
+        async with AsyncSessionLocal() as db:
+            live = (await db.execute(select(func.count(BuyAgentRequest.id)).where(
+                BuyAgentRequest.buyer_id == buyer_id, BuyAgentRequest.status == "active",
+            ))).scalar_one()
+        assert live == 1
+
+    @pytest.mark.asyncio
+    async def test_a_watch_only_matches_listings_of_the_item_it_asked_for(self, client, seller_token):
+        """The matcher checked category and price and ignored `query`, so a
+        watch Zeno set up for "iPhone 14" fired on any Electronics listing
+        under budget - a TV, a kettle - telling the buyer it "matches what
+        you asked Zeno to watch for" and, when authorised, telling the
+        seller the same."""
+        buyer = await _register(client, "0766005400", "Query Buyer", "query.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        made = await client.post("/buy-agent-requests/action", json={
+            "action": "CREATE_BUYING_REQUEST",
+            "parameters": {"category": "Electronics", "query": "Pixel 8", "max_price": 150000},
+        }, headers=headers)
+        assert made.json()["status"] == "SUCCESS", made.json()
+
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "LG Soundbar SN4", "category": "Electronics", "price": 18000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        await asyncio.sleep(0.05)
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["match_count"] == 0
+
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Google Pixel 8 128GB", "category": "Electronics", "price": 70000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        await asyncio.sleep(0.05)
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["match_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_watch_skips_a_listing_that_states_a_spec_short_of_the_ask(self, client, seller_token):
+        """Attributes were stored on the standing request and never read
+        again. A listing that says 8GB must not be announced as a match for
+        a 12GB ask; one that doesn't say is still let through, the same
+        "unknown, don't exclude" rule every other field follows."""
+        buyer = await _register(client, "0766005500", "Spec Buyer", "spec.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        made = await client.post("/buy-agent-requests/action", json={
+            "action": "CREATE_BUYING_REQUEST",
+            "parameters": {"category": "Baby & Kids", "max_price": 90000,
+                           "attributes": {"ram": "12GB"}},
+        }, headers=headers)
+        assert made.json()["status"] == "SUCCESS", made.json()
+
+        short = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Kids Learning Tablet", "category": "Baby & Kids", "price": 15000,
+            "lat": -1.286, "lng": 36.817, "attributes": {"ram": "8GB"},
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        assert short.status_code == 201, short.text
+        await asyncio.sleep(0.05)
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["match_count"] == 0
+
+        silent = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Kids Learning Tablet Pro", "category": "Baby & Kids", "price": 25000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        assert silent.status_code == 201
+        await asyncio.sleep(0.05)
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["match_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_condition_is_stored_the_way_listings_spell_it(self, client, seller_token):
+        """Listings store condition lower-case ("used"). A watch created
+        with "Used" was stored as typed and compared with a case-sensitive
+        `!=`, so it could never match a single listing; an unknown value
+        ("mint") was accepted and matched nothing either."""
+        buyer = await _register(client, "0766005600", "Cond Buyer", "cond.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+
+        bad = await client.post("/buy-agent-requests/action", json={
+            "action": "CREATE_BUYING_REQUEST",
+            "parameters": {"category": "Arts & Crafts", "max_price": 30000, "condition": "mint"},
+        }, headers=headers)
+        assert bad.json()["status"] == "FAILED"
+        assert bad.json()["error_code"] == "INVALID_PARAMETERS"
+
+        made = await client.post("/buy-agent-requests/action", json={
+            "action": "CREATE_BUYING_REQUEST",
+            "parameters": {"category": "Arts & Crafts", "max_price": 30000, "condition": "Used"},
+        }, headers=headers)
+        assert made.json()["status"] == "SUCCESS", made.json()
+        assert made.json()["request"]["condition"] == "used"
+
+        await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Easel and Oil Paint Set", "category": "Arts & Crafts", "price": 8000,
+            "condition": "used", "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        await asyncio.sleep(0.05)
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json()["match_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_posting_a_listing_does_not_wait_on_match_notifications(
+        self, client, seller_token, monkeypatch
+    ):
+        """The matcher runs inside POST /listings (event_catalog.emit awaits
+        its handlers) and sent one push per matched buyer, one after the
+        other, each allowed 15 seconds. A slow FCM made every seller wait
+        for every watching buyer's notification before their own listing
+        was confirmed."""
+        release = asyncio.Event()
+        sent = []
+
+        async def slow_send(token, title, body, data):
+            await release.wait()
+            sent.append(token)
+
+        from api.core import push as push_module
+        monkeypatch.setattr(push_module.push_service, "send", slow_send)
+
+        buyer = await _register(client, "0766005700", "Slow Buyer", "slow.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        await client.patch("/auth/fcm-token?fcm_token=slow-device-token", headers=headers)
+        assert (await client.post("/buy-agent-requests", json={
+            "category": "Health & Medical", "max_price": 40000,
+        }, headers=headers)).status_code == 200
+
+        try:
+            create = await asyncio.wait_for(client.post("/listings/", json={
+                "description": "Well kept, works perfectly - selling because I upgraded.",
+                "name": "Omron Blood Pressure Monitor", "category": "Health & Medical", "price": 6000,
+                "lat": -1.286, "lng": 36.817,
+            }, headers={"Authorization": f"Bearer {seller_token}"}), timeout=3)
+        finally:
+            release.set()
+        assert create.status_code == 201
+
+        for _ in range(100):
+            if sent:
+                break
+            await asyncio.sleep(0.02)
+        assert sent == ["slow-device-token"]
+
+    @pytest.mark.asyncio
+    async def test_two_matches_at_once_both_count(self, client, seller_token, monkeypatch):
+        """match_count was read into Python, incremented and written back,
+        so two listings matching the same watch at the same moment both
+        wrote 1. It is incremented in SQL now."""
+        from api.core import buy_agent_subscribers as subs
+        from api.core.event_catalog import EventEnvelope, EventType
+
+        buyer = await _register(client, "0766005800", "Twin Buyer", "twin.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        ids = []
+        for name in ("Hardcover Atlas", "Hardcover Dictionary"):
+            r = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+                "name": name, "category": "Books & Education", "price": 2500,
+                "lat": -1.286, "lng": 36.817,
+            }, headers={"Authorization": f"Bearer {seller_token}"})
+            ids.append(r.json()["id"])
+        # Created after the listings, so neither has matched it yet.
+        assert (await client.post("/buy-agent-requests", json={
+            "category": "Books & Education", "max_price": 3000,
+        }, headers=headers)).status_code == 200
+
+        # Hold each handler's commit until both have loaded the request.
+        real_factory = subs.AsyncSessionLocal
+        waiting = []
+        both = asyncio.Event()
+
+        def factory():
+            session = real_factory()
+            real_commit = session.commit
+
+            async def held_commit():
+                waiting.append(1)
+                if len(waiting) >= 2:
+                    both.set()
+                try:
+                    await asyncio.wait_for(both.wait(), 0.5)
+                except asyncio.TimeoutError:
+                    pass
+                await real_commit()
+
+            session.commit = held_commit
+            return session
+
+        monkeypatch.setattr(subs, "AsyncSessionLocal", factory)
+
+        def envelope(listing_id):
+            return EventEnvelope(
+                id=listing_id, type=EventType.LISTING_CREATED, aggregate="listing",
+                aggregate_id=listing_id, actor="system",
+                payload={"listing_id": listing_id, "category": "Books & Education", "price": 2500},
+            )
+
+        await asyncio.gather(*(subs.on_listing_created_match_buy_agents(envelope(i)) for i in ids))
+        me = (await client.get("/buy-agent-requests/me", headers=headers)).json()
+        assert me["match_count"] == 2, me
+
+    @pytest.mark.asyncio
+    async def test_standing_request_fields_are_bounded(self, client):
+        """CREATE_BUYING_REQUEST's free-text and JSON fields had no bounds
+        at all - they are stored on the row, loaded for every new listing in
+        the category, and a negative distance produced a watch that could
+        never match anything."""
+        buyer = await _register(client, "0766005900", "Big Buyer", "big.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        for params in (
+            {"query": "x" * 5000},
+            {"location": "y" * 5000},
+            {"must_have_features": ["z" * 5000]},
+            {"must_have_features": ["ok"] * 100},
+            {"attributes": {f"k{i}": "v" for i in range(200)}},
+            {"max_distance_km": -5},
+        ):
+            res = await client.post("/buy-agent-requests/action", json={
+                "action": "CREATE_BUYING_REQUEST",
+                "parameters": {"category": "Services", "max_price": 1000, **params},
+            }, headers=headers)
+            assert res.json()["status"] == "FAILED", (params.keys(), res.json())
+            assert res.json()["error_code"] == "INVALID_PARAMETERS"
+
+    @pytest.mark.asyncio
+    async def test_the_hot_lookups_are_indexed(self):
+        """buy_agent_requests had no index but its primary key; GET /me
+        runs on every Home load and the matcher inside every POST /listings,
+        each a full scan of a table whose cancelled rows are never removed."""
+        from sqlalchemy import text
+        from api import database
+
+        async with database.engine.connect() as conn:
+            if conn.dialect.name == "postgresql":
+                rows = await conn.execute(text(
+                    "SELECT indexname FROM pg_indexes WHERE tablename = 'buy_agent_requests'"))
+            else:
+                rows = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' "
+                    "AND tbl_name = 'buy_agent_requests'"))
+            names = {r[0] for r in rows}
+        assert {"ix_buy_agent_requests_buyer_status", "ix_buy_agent_requests_status_category"} <= names
+
+    @pytest.mark.asyncio
+    async def test_a_buyer_with_two_live_requests_gets_one_opener_per_thread(
+        self, client, seller_token
+    ):
+        """Rows written before the cap counted "matched" can leave a buyer
+        with two live, authorised requests in one category. One new listing
+        must still open one thread, not two identical Zeno messages."""
+        from api.database import AsyncSessionLocal, BuyAgentRequest
+        import json as _json
+        import uuid as _uuid
+        from datetime import datetime as _dt
+
+        buyer = await _register(client, "0766006000", "Two Rows", "two.rows@test.ke")
+        buyer_id = (await client.get("/auth/me", headers={"Authorization": f"Bearer {buyer}"})).json()["id"]
+        async with AsyncSessionLocal() as db:
+            for status in ("matched", "active"):
+                db.add(BuyAgentRequest(
+                    id=str(_uuid.uuid4()), buyer_id=buyer_id, category="Construction",
+                    max_price=90000, must_have_features=_json.dumps([]), status=status,
+                    negotiation_authorized=True, match_count=0, created_at=_dt.utcnow(),
+                ))
+            await db.commit()
+
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Bosch Concrete Mixer", "category": "Construction", "price": 48000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        await asyncio.sleep(0.05)
+        history = (await client.get(
+            f"/negotiate/{create.json()['id']}/history?buyer_id={buyer_id}",
+            headers={"Authorization": f"Bearer {seller_token}"},
+        )).json()
+        assert len([m for m in history if m["role"] == "broker"]) == 1, history

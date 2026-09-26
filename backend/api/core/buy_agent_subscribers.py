@@ -112,20 +112,62 @@ comparison is a real, larger design decision (how long to wait, whether
 "good enough now" beats "maybe-better later") that deserves an explicit
 product call, not a unilateral change bundled into a matching-completeness
 fix.
+
+FIX (buying-agent review, 2026-09-26):
+
+1. `query` and `attributes` were stored on every watch Zeno sets up from a
+   conversation and never read here. A watch for "Pixel 8" in Electronics
+   fired on any Electronics listing under budget - a soundbar, a kettle -
+   pushed "matches what you asked Zeno to watch for", and, when
+   authorised, told that seller the same. Every word of the query must now
+   appear in the listing (the rule GET /listings?search= uses), and a
+   listing that states a spec short of the ask (8GB against 12GB) is
+   skipped; one that doesn't state it still gets through.
+
+2. Condition was compared case-sensitively against listings' lower-case
+   values. Requests are normalised at write time now (buy_agent/service.py
+   clean_condition); the comparison here is case-insensitive for rows
+   written before that.
+
+3. match_count was read, incremented in Python and written back, so two
+   listings matching one watch at the same moment both wrote the same
+   number. It is incremented in SQL, and only while the request is still
+   watching - the UPDATE re-checks the status, so a watch cancelled while
+   this ran is not revived as "matched".
+
+4. This handler runs INSIDE POST /listings (event_catalog.emit awaits its
+   handlers) and sent one push per matched buyer, one after another, each
+   allowed 15 seconds. A slow FCM made the seller wait for every watching
+   buyer's notification before their own listing was confirmed. The
+   tokens are read in one query and the pushes go out in the background,
+   a few at a time.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from api.core.event_catalog import subscribe_to, EventType, EventEnvelope
+from api.core.text_search import search_terms
 from api.database import (
-    AsyncSessionLocal, BuyAgentRequest, ListingStatus, NegotiationMessage, Listing,
+    AsyncSessionLocal, BuyAgentRequest, ListingStatus, NegotiationMessage, Listing, User,
 )
+from api.domains.buy_agent.matching import states_a_shortfall
+from api.domains.listings.validation import load_attributes
 
 logger = logging.getLogger(__name__)
+
+# How many match pushes go out at once. Bounded so one listing that
+# matches hundreds of watches doesn't open hundreds of connections to FCM.
+PUSH_CONCURRENCY = 8
+
+# Strong references to in-flight push batches - asyncio keeps only a weak
+# one to a running task, so an unreferenced task can be collected mid-send
+# (same reason as api/core/events.py's _inflight).
+_inflight: set = set()
 
 # Statuses a standing request still watches from. "matched" is included on
 # purpose - see fix (2) in this module's docstring: a request that found
@@ -176,7 +218,8 @@ def _listing_satisfies_request(listing: Listing, req: BuyAgentRequest) -> bool:
     if req.subcategory_id and listing.subcategory_id and req.subcategory_id != listing.subcategory_id:
         return False
 
-    if req.condition and listing.condition and req.condition != listing.condition:
+    if req.condition and listing.condition \
+            and req.condition.strip().lower() != str(listing.condition).strip().lower():
         return False
 
     if req.max_distance_km and req.lat is not None and req.lng is not None \
@@ -201,61 +244,93 @@ def _listing_satisfies_request(listing: Listing, req: BuyAgentRequest) -> bool:
             if not all(str(f).lower() in haystack for f in features if f):
                 return False
 
+    # What the buyer named ("Pixel 8"). Every word has to appear in the
+    # name, category or description - GET /listings?search='s own rule
+    # (api/core/text_search.py), so a watch fires on what the same words
+    # would have found in search, and on nothing else in the category.
+    terms = search_terms(req.query)
+    if terms:
+        haystack = f"{listing.name} {listing.category or ''} {listing.description or ''}".lower()
+        if not all(t in haystack for t in terms):
+            return False
+
+    # Specs the buyer stated ("12GB"). Only a value the listing states and
+    # falls short on excludes it; a listing silent on the field is let
+    # through, like every other optional field here.
+    if req.attributes:
+        try:
+            wanted = json.loads(req.attributes) if isinstance(req.attributes, str) else req.attributes
+        except (TypeError, ValueError):
+            wanted = None
+        if isinstance(wanted, dict) and wanted:
+            stored = load_attributes(listing.attributes) or {}
+            if any(states_a_shortfall(str(k), v, stored) for k, v in wanted.items()):
+                return False
+
     return True
 
 
-async def _already_opened(db, listing_id: str, buyer_id: str) -> bool:
-    """True when Zeno has already opened this exact thread on this buyer's
-    behalf. Guards against the duplicate openers a re-delivered event, or
-    a standing request matching the same listing twice, would otherwise
-    send to a seller (fix 6 in the module docstring). Scoped to
+async def _opened_threads(db, listing_id: str, buyer_ids: list[str]) -> set[str]:
+    """The buyers, among `buyer_ids`, whose thread on this listing Zeno has
+    already opened. Guards against the duplicate openers a re-delivered
+    event, or a standing request matching the same listing twice, would
+    otherwise send to a seller (fix 6 in the module docstring). One query
+    for every candidate rather than one per candidate. Scoped to
     agent-initiated broker messages only, so a human conversation that is
     already underway in the same thread is irrelevant to it."""
-    existing = (await db.execute(
-        select(NegotiationMessage.id).where(
+    if not buyer_ids:
+        return set()
+    rows = (await db.execute(
+        select(NegotiationMessage.buyer_id).where(
             NegotiationMessage.listing_id == listing_id,
-            NegotiationMessage.buyer_id == buyer_id,
+            NegotiationMessage.buyer_id.in_(buyer_ids),
             NegotiationMessage.role == "broker",
             # The seller-facing opener specifically - that is the message
             # this guards against sending twice. Constraining recipient_role
             # rather than marking the query # visibility-ok is also what
             # keeps tests/test_message_visibility_guard.py satisfied
-            # honestly: this reads one id and never any content, but the
+            # honestly: this reads buyer ids and never any content, but the
             # audience it means is a real part of the predicate, not an
             # exemption.
             NegotiationMessage.recipient_role == "seller",
             NegotiationMessage.is_agent_initiated.is_(True),
-        ).limit(1)
-    )).first()
-    return existing is not None
+        ).distinct()
+    )).scalars().all()
+    return set(rows)
 
 
-async def _notify_buyer_of_match(buyer_id: str, listing_id: str, listing_name: str) -> None:
-    """Fire-and-forget push to the buyer whose standing request just
-    matched. Both entry points into this feature promise this in writing
-    (buy_agent_sheet.dart, buy_agent_hub_screen.dart) and nothing sent
-    anything before. Failures are logged, never raised - the match is
-    already committed and must not be undone by a push problem, exactly
-    like api/core/push_subscribers.py's own _notify."""
-    try:
-        from sqlalchemy import select as _select
-        from api.core.push import push_service
-        from api.database import AsyncSessionLocal as _Session, User
+async def _push_matches(pushes: list[tuple[str, str, str]]) -> None:
+    """Send the match notifications for one listing: (fcm_token,
+    listing_id, listing_name) each. Both entry points into this feature
+    promise them in writing (buy_agent_sheet.dart, buy_agent_hub_screen.dart).
+    Failures are logged, never raised - the match is already committed and
+    must not be undone by a push problem, exactly like
+    api/core/push_subscribers.py's own _notify."""
+    from api.core.push import push_service
 
-        async with _Session() as db:
-            row = (await db.execute(_select(User.fcm_token).where(User.id == buyer_id))).one_or_none()
-        token = row[0] if row else None
-        if not token:
-            logger.debug("[buy_agent] no FCM token for buyer %s - match not pushed", buyer_id)
-            return
-        await push_service.send(
-            token,
-            title="🔎 Zeno found a match",
-            body=f'"{listing_name}" matches what you asked Zeno to watch for.',
-            data={"type": "buy_agent_match", "listing_id": listing_id, "screen": "product"},
-        )
-    except Exception as exc:
-        logger.error("[buy_agent] match notification failed buyer=%s: %s", buyer_id, exc)
+    gate = asyncio.Semaphore(PUSH_CONCURRENCY)
+
+    async def one(token: str, listing_id: str, listing_name: str) -> None:
+        async with gate:
+            try:
+                await push_service.send(
+                    token,
+                    title="🔎 Zeno found a match",
+                    body=f'"{listing_name}" matches what you asked Zeno to watch for.',
+                    data={"type": "buy_agent_match", "listing_id": listing_id, "screen": "product"},
+                )
+            except Exception as exc:
+                logger.error("[buy_agent] match notification failed listing=%s: %s", listing_id, exc)
+
+    await asyncio.gather(*(one(*p) for p in pushes))
+
+
+def _push_in_background(pushes: list[tuple[str, str, str]]) -> None:
+    if not pushes:
+        return
+    task = asyncio.create_task(_push_matches(pushes))
+    _inflight.add(task)
+    task.add_done_callback(_inflight.discard)
 
 
 @subscribe_to(EventType.LISTING_CREATED)
@@ -270,13 +345,6 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
     except (TypeError, ValueError):
         logger.warning("[buy_agent] ListingCreated carried a non-numeric price %r", price)
         return
-
-    # Plain values, not the ORM row: these are used after the session that
-    # loaded them has closed. AsyncSessionLocal is configured
-    # expire_on_commit=False today, so a detached Listing would happen to
-    # work - but that is a session setting, not a contract this handler
-    # should depend on from outside.
-    notify: list[tuple[str, str, str]] = []
 
     async with AsyncSessionLocal() as db:
         candidates = (await db.execute(
@@ -295,14 +363,36 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
         listing = await db.get(Listing, listing_id)
         if not listing:
             return
+        # Plain values, not the ORM row: these are used after the session
+        # that loaded them has closed.
+        listing_name = listing.name
 
-        for req in candidates:
-            if not _listing_satisfies_request(listing, req):
+        matching = [req for req in candidates if _listing_satisfies_request(listing, req)]
+        # Already matched and already introduced - nothing new to say to
+        # the seller, and nothing new to tell the buyer.
+        opened = await _opened_threads(db, listing_id, [req.buyer_id for req in matching])
+
+        matched_buyers: list[str] = []
+        for req in matching:
+            if req.buyer_id in opened:
                 continue
-
-            if await _already_opened(db, listing_id, req.buyer_id):
-                # Already matched and already introduced - nothing new to
-                # say to the seller, and nothing new to tell the buyer.
+            # In SQL, and only while the request is still watching: a
+            # read-increment-write lost counts when two listings matched at
+            # once, and a request cancelled since the SELECT above must not
+            # come back as "matched" (fix 3 in the module docstring).
+            counted = await db.execute(
+                update(BuyAgentRequest)
+                .where(
+                    BuyAgentRequest.id == req.id,
+                    BuyAgentRequest.status.in_(WATCHING_STATUSES),
+                )
+                .values(
+                    status="matched",
+                    match_count=func.coalesce(BuyAgentRequest.match_count, 0) + 1,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if counted.rowcount != 1:
                 continue
 
             if req.negotiation_authorized:
@@ -312,7 +402,7 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
                 # docstring).
                 opening = (
                     f"Hi! I'm Zeno, reaching out on behalf of a buyer who asked me to watch "
-                    f"for {req.category} like this. Your listing \"{listing.name}\" looks like "
+                    f"for {req.category} like this. Your listing \"{listing_name}\" looks like "
                     f"a match for what they're after - would you be open to a conversation?"
                 )
                 db.add(NegotiationMessage(
@@ -320,14 +410,21 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
                     recipient_role="seller", content=opening, buyer_id=req.buyer_id,
                     msg_type="text", via_ai=True, is_agent_initiated=True,
                 ))
-            req.status = "matched"
-            req.match_count = (req.match_count or 0) + 1
-            notify.append((req.buyer_id, listing.id, listing.name))
+                # A buyer with two live requests (possible for rows written
+                # before the cap counted "matched") gets one opener per
+                # thread, not one per request.
+                opened.add(req.buyer_id)
+            matched_buyers.append(req.buyer_id)
 
         await db.commit()
 
+        tokens = []
+        if matched_buyers:
+            tokens = (await db.execute(
+                select(User.fcm_token).where(User.id.in_(matched_buyers), User.fcm_token.isnot(None))
+            )).scalars().all()
+
     # After the commit, never before: a buyer told "Zeno found a match"
     # for something that then failed to save would be worse than a late
-    # notification.
-    for buyer_id, matched_id, matched_name in notify:
-        await _notify_buyer_of_match(buyer_id, matched_id, matched_name)
+    # notification. And in the background: see fix (4) above.
+    _push_in_background([(t, listing_id, listing_name) for t in tokens if t])

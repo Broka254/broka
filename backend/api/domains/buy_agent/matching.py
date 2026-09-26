@@ -161,6 +161,18 @@ def _score_attribute(key: str, wanted: Any, stored: Dict[str, Any]) -> Tuple[flo
     return 0.0, Miss(key, str(wanted), str(raw_actual))
 
 
+def states_a_shortfall(key: str, wanted: Any, stored: Dict[str, Any]) -> bool:
+    """True when the listing STATES a value for `key` that falls short of
+    `wanted` - the same judgement assess() makes, reduced to yes/no for
+    the standing-request matcher (core/buy_agent_subscribers.py). A listing
+    that doesn't state the field is not a shortfall here: the matcher lets
+    unknowns through, like every other optional field it checks."""
+    if wanted in (None, ""):
+        return False
+    _score, miss = _score_attribute(str(key), wanted, stored)
+    return miss is not None and miss.actual is not None
+
+
 def _relevance(query: str, listing: dict) -> float:
     """Word overlap against the listing's own words. A heuristic, and named
     as one - there is no search index in this codebase to do better."""

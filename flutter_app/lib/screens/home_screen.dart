@@ -632,12 +632,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // the flow had no way to ask which iPhone, how much RAM, or what budget,
   // and no way to say what it nearly found. Zeno now asks first and
   // reports back in conversation (see zeno_screen.dart's header).
+  //
+  // The watch card is reloaded on the way back: Zeno can start a watch or
+  // replace the current one, and the card used to keep showing the old
+  // one until the next pull-to-refresh.
   void _openBuyAgentHub() => Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent),
         ),
-      );
+      ).then((_) {
+        if (mounted) _loadActiveBuyAgentRequest();
+      });
 
   // ── Zeno Buying Agent (Home Redesign Guide §10, Design v2 §14) ────────────
   // Home-redesign brief §9 (2026-08-16): the previous card (avatar +
@@ -650,6 +656,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // breathing glow and the rotating message rebuild 56px instead of the
   // whole screen. The large promotional card is NOT coming back.
   Widget _buildZenoCompactCta() => _ZenoCompactCta(onTap: _openBuyAgentHub);
+
+  // Stops the buyer's standing watch. Until this existed nothing in the app
+  // could: Zeno told a buyer with a watch running to "cancel that one from
+  // the home screen", and this card was all the home screen had - so a
+  // buyer's first watch was the only one they would ever get.
+  Future<void> _stopWatching(BuyAgentRequest req) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        title: const Text('Stop watching?',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
+        content: Text(
+          "Zeno will stop looking for ${req.category} under ${formatKes(req.maxPrice)} "
+          "and won't tell you about new matches.",
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep watching', style: TextStyle(color: BrokaColors.textMid))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Stop', style: TextStyle(color: BrokaColors.gold))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final result = await buyAgentRepository.cancelRequest();
+    if (!mounted) return;
+    // NO_ACTIVE_REQUEST: already stopped elsewhere, so the card goes too.
+    final stopped = result.isSuccess &&
+        (result.data['status'] == 'SUCCESS' || result.data['error_code'] == 'NO_ACTIVE_REQUEST');
+    if (stopped) {
+      setState(() => _activeBuyAgentRequest = null);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Couldn't stop that watch just now. Try again in a moment."),
+      ));
+    }
+  }
 
   // "Zeno is watching for you" (Home Redesign Guide §13).
   Widget _buildActiveBuyAgentSection() {
@@ -687,6 +732,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   style: TextStyle(color: matched ? BrokaColors.success : BrokaColors.textLow, fontSize: 11.5),
                 ),
               ]),
+            ),
+            IconButton(
+              tooltip: 'Stop watching',
+              onPressed: () => _stopWatching(req),
+              icon: const Icon(Icons.close_rounded, color: BrokaColors.textLow, size: 18),
+              visualDensity: VisualDensity.compact,
             ),
             const Icon(Icons.chevron_right_rounded, color: BrokaColors.textLow, size: 20),
           ]),

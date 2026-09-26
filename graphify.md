@@ -103,12 +103,12 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:147) |
 | POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:230) |
 | GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:376) |
-| POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:233) |
-| POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:200) |
-| POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:166) |
-| GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:276) |
-| POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:61) |
-| POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:92) |
+| POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:245) |
+| POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:212) |
+| POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:178) |
+| GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
+| POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
+| POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
 | POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:440) |
 | POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:626) |
 | GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1066) |
@@ -841,6 +841,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
+- `home_buy_agent_watch_test.dart` — Home's "Zeno is watching for you" card can stop the watch (buying-agent review, 2026-09-26).
 - `home_collapsing_scroll_test.dart` — Covers the Home collapsing-scroll architecture (2026-09-18 brief).
 - `home_rail_hint_test.dart` — The category rail's "there's more" hint (2026-09-26): people saw the first few categories and never realised the rail scrolled.
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
@@ -927,7 +928,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The Inbox on Home's look (2026-09-26)
+- `CHANGES.md` — Buying agent review (2026-09-26)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

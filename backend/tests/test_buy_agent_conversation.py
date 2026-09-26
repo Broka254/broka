@@ -336,3 +336,125 @@ class TestConversationalBuyingAgent:
         }, headers={"Authorization": f"Bearer {buyer_token}"})
         assert res.status_code == 200
         assert res.json()["reply"]
+
+
+class TestConversationReview:
+    """Regression tests for the buying-agent review (2026-09-26). Fresh
+    buyers throughout: /converse is on ai_chat_limiter (20 a minute)."""
+
+    @pytest.mark.asyncio
+    async def test_malformed_slots_from_the_client_are_not_a_500(self, client, monkeypatch):
+        """`slots` came back from the client unchecked. A non-string
+        category was used as a dict key before any model call (TypeError:
+        unhashable), and on the model-down path the raw slots went straight
+        into scoring, where a string budget met a float - both a 500 on the
+        one screen whose fallbacks exist so it never 500s."""
+        from api.domains.ai_broker.service import AIBrokerService
+
+        buyer = await _register(client, "0755110033", "Odd Slots", "odd.slots@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+
+        _stub_ai(monkeypatch, turn={"action": "ASK", "reply": "Which laptop?", "slots": {}})
+        res = await client.post("/buy-agent-requests/converse", json={
+            "message": "a laptop", "history": [], "questions_asked": 0,
+            "slots": {"category": ["Electronics"], "subcategory": {"a": 1}},
+        }, headers=headers)
+        assert res.status_code == 200, res.text
+
+        async def dead(self, messages, cache_key=None):
+            raise RuntimeError("every provider is down")
+
+        monkeypatch.setattr(AIBrokerService, "_call_ai", dead)
+        res = await client.post("/buy-agent-requests/converse", json={
+            "message": "just search", "history": [], "questions_asked": 2,
+            "slots": {"query": "laptop", "max_price": "fifty thousand", "min_price": [1],
+                      "max_distance_km": "far", "attributes": "ram=8GB", "condition": 7},
+        }, headers=headers)
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["phase"] == "RESULTS"
+        assert body["slots"]["max_price"] is None
+        assert body["slots"]["attributes"] == {}
+
+    @pytest.mark.asyncio
+    async def test_client_slots_cannot_inflate_the_prompt(self, client, monkeypatch):
+        """history and message are clipped before they reach a billed
+        prompt; slots were pasted in whole, so one request could make every
+        turn's prompt as large as the 32MB body cap allows."""
+        from api.domains.ai_broker.service import AIBrokerService
+
+        prompts = []
+
+        async def capture(self, messages, cache_key=None):
+            prompts.append(messages[0]["content"])
+            return json.dumps({"action": "ASK", "reply": "Which one?", "slots": {}})
+
+        monkeypatch.setattr(AIBrokerService, "_call_ai", capture)
+        buyer = await _register(client, "0755110044", "Big Slots", "big.slots@test.ke")
+        res = await client.post("/buy-agent-requests/converse", json={
+            "message": "a phone", "history": [], "questions_asked": 0,
+            "slots": {"query": "q" * 50_000, "padding": "p" * 50_000,
+                      "attributes": {f"k{i}": "v" * 500 for i in range(200)}},
+        }, headers={"Authorization": f"Bearer {buyer}"})
+        assert res.status_code == 200, res.text
+        assert prompts and len(prompts[0]) < 15_000, len(prompts[0])
+
+    @pytest.mark.asyncio
+    async def test_the_named_item_is_found_even_past_the_ranked_pool(
+        self, client, seller_token, monkeypatch
+    ):
+        """The candidate pool was the category's top-N by BROKA ranking,
+        with the buyer's own words playing no part in which rows got in. In
+        a category busier than the pool, the listing a buyer names exactly
+        can rank outside it - and Zeno answered "closest I could get" with
+        unrelated items while the real thing sat on the marketplace."""
+        from api.domains.buy_agent import conversation
+
+        target = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Fender Stratocaster Electric Guitar", "category": "Music & Instruments", "price": 90000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        assert target.status_code == 201
+        for i in range(4):  # newer, so they out-rank it on the tie-break
+            await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+                "name": f"Cajon Drum Box {i}", "category": "Music & Instruments", "price": 7000 + i,
+                "lat": -1.286, "lng": 36.817,
+            }, headers={"Authorization": f"Bearer {seller_token}"})
+
+        monkeypatch.setattr(conversation, "CANDIDATE_POOL", 3)
+        _stub_ai(monkeypatch, turn={
+            "action": "SEARCH", "reply": "",
+            "slots": {"query": "Fender Stratocaster", "category": "Music & Instruments"},
+        })
+        buyer = await _register(client, "0755110055", "Strat Buyer", "strat.buyer@test.ke")
+        res = await client.post("/buy-agent-requests/converse", json={
+            "message": "a fender stratocaster", "history": [], "questions_asked": 2,
+        }, headers={"Authorization": f"Bearer {buyer}"})
+        body = res.json()
+        assert body["phase"] == "RESULTS"
+        assert body["matches"] and body["matches"][0]["id"] == target.json()["id"], [
+            m["name"] for m in body["matches"]]
+
+    @pytest.mark.asyncio
+    async def test_parse_intent_existing_filters_cannot_inflate_the_prompt(self, client, monkeypatch):
+        """/parse-intent pasted `existing_filters` into its prompt with
+        json.dumps and no bound - the same hole as /converse's slots."""
+        from api.domains.ai_broker.service import AIBrokerService
+
+        prompts = []
+
+        async def capture(self, messages, cache_key=None):
+            prompts.append(messages[0]["content"])
+            return "{}"
+
+        monkeypatch.setattr(AIBrokerService, "_call_ai", capture)
+        buyer = await _register(client, "0755110066", "Big Filters", "big.filters@test.ke")
+        res = await client.post("/buy-agent-requests/parse-intent", json={
+            "text": "cheaper please",
+            "existing_filters": {"query": "q" * 50_000, "junk": "j" * 50_000,
+                                 "category": "Electronics", "max_price": 50000},
+        }, headers={"Authorization": f"Bearer {buyer}"})
+        assert res.status_code == 200, res.text
+        assert prompts and len(prompts[0]) < 15_000, len(prompts[0])
+        # What the follow-up is meant to refine still reaches the model.
+        assert '"max_price": 50000' in prompts[0]

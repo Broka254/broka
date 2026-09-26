@@ -1447,6 +1447,16 @@ async def init_db():
             # keeps it fast. Expression indexes are supported by both
             # PostgreSQL and SQLite (3.9+).
             "CREATE INDEX IF NOT EXISTS ix_listings_category_lower ON listings(lower(category))",
+            # Buying-agent review (2026-09-26): buy_agent_requests had no
+            # index but its primary key, and its rows are never deleted -
+            # cancelled watches pile up. GET /buy-agent-requests/me (every
+            # Home load) looks a buyer's live request up by (buyer_id,
+            # status); the matcher, inside every POST /listings, selects
+            # the watching requests in the new listing's category.
+            "CREATE INDEX IF NOT EXISTS ix_buy_agent_requests_buyer_status "
+            "ON buy_agent_requests (buyer_id, status)",
+            "CREATE INDEX IF NOT EXISTS ix_buy_agent_requests_status_category "
+            "ON buy_agent_requests (status, lower(category))",
             # The auction close sweep queries "ends_at <= now AND closed_at
             # IS NULL" on every pass; ending-soon queries the same column.
             "CREATE INDEX IF NOT EXISTS ix_auction_meta_ends_at ON auction_meta(ends_at)",

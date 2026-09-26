@@ -327,6 +327,52 @@ void main() {
     });
   });
 
+  testWidgets('a watch already running can be replaced from Zeno', (tester) async {
+    // Zeno used to answer ACTIVE_REQUEST_EXISTS with "cancel that one from
+    // the home screen" - and nothing in the app could cancel a watch.
+    var actions = 0;
+    setFakeRoute((uri) {
+      if (uri.path.startsWith('/buy-agent-requests/converse')) {
+        return {
+          'reply': "Nothing yet - want me to keep watching?",
+          'phase': 'RESULTS',
+          'verdict': 'EMPTY',
+          'matches': const [],
+          'slots': {'query': 'sofa', 'category': 'Home & Furniture', 'max_price': 40000},
+          'questions_asked': 0,
+        };
+      }
+      if (uri.path.startsWith('/buy-agent-requests/action')) {
+        actions++;
+        return switch (actions) {
+          1 => {'action': 'CREATE_BUYING_REQUEST', 'status': 'FAILED',
+                'error_code': 'ACTIVE_REQUEST_EXISTS', 'message': 'You already have one.'},
+          2 => {'action': 'CANCEL_REQUEST', 'status': 'SUCCESS', 'request': {'status': 'cancelled'}},
+          _ => {'action': 'CREATE_BUYING_REQUEST', 'status': 'SUCCESS', 'request': {'status': 'active'}},
+        };
+      }
+      return null;
+    });
+    await tester.pumpWidget(const MaterialApp(home: ZenoScreen(mode: ZenoMode.buyingAgent)));
+    await _settle(tester);
+    await say(tester, 'a sofa under 40k');
+    await _stream(tester);
+
+    await tester.tap(find.text('Keep watching for me'));
+    await _settle(tester);
+    expect(find.text('Replace your current watch?'), findsOneWidget);
+    await tester.tap(find.text('Replace it'));
+    await _settle(tester);
+
+    final sent = fakeRequests
+        .where((r) => r.uri.path.startsWith('/buy-agent-requests/action'))
+        .map((r) => (r.json as Map)['action'])
+        .toList();
+    expect(sent, ['CREATE_BUYING_REQUEST', 'CANCEL_REQUEST', 'CREATE_BUYING_REQUEST']);
+    expect(find.text("I'll keep watching and tell you when something turns up."), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+  });
+
   testWidgets("on Home's visual system", (tester) async {
     await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
     await _settle(tester);

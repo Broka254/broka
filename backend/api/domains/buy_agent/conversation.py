@@ -43,8 +43,9 @@ STATE
 -----
 Deliberately stateless: the client holds the transcript and the gathered
 criteria and sends both each turn, exactly as the existing Zeno chat
-already does (api_service.dart's zenoChat). Nothing here trusts the slots
-it is handed beyond re-validating them - they only ever scope that same
+already does (api_service.dart's zenoChat). The slots it hands back are
+re-validated first thing every turn (clean_buy_agent_slots, the same rules
+the model's own output goes through) - they only ever scope that same
 buyer's own search.
 """
 from __future__ import annotations
@@ -56,7 +57,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Category, User
-from api.domains.ai_broker.service import AIBrokerService
+from api.domains.ai_broker.service import AIBrokerService, clean_buy_agent_slots
 from api.domains.categories.seed import CATEGORY_FILTERS, SUBCATEGORY_FILTERS
 from api.domains.listings.service import ListingService
 from . import matching
@@ -168,8 +169,11 @@ async def converse(
     viewer_lng: Optional[float] = None,
 ) -> dict:
     """One turn. Returns either a question or a finished search."""
-    slots = slots or {}
     cat_names, subs_by_cat, top_by_name, children_by_cat = await _taxonomy(db)
+    # The client's copy of the criteria is cleaned exactly like the model's
+    # before anything reads it - the prompt, the fallbacks below and the
+    # search all trusted it before (see clean_buy_agent_slots).
+    slots = clean_buy_agent_slots(slots, cat_names, subs_by_cat)
     # get_current_user() carries only an id (api/security.py), so the name
     # is looked up here - an agent that can say "Found it, Xavier" instead
     # of "Found it" is most of what makes this read as a person doing you a
@@ -298,14 +302,22 @@ async def search_for(
     # subcategory_id goes to the scorer instead: it is nullable on Listing
     # and routinely null, so filtering on it would drop exactly the
     # obviously-right listing this search exists to find. See matching.py.
-    pool = await ListingService(db).list_listings(
-        category=category_name,
-        viewer_lat=viewer_lat,
-        viewer_lng=viewer_lng,
-        sort=None,
-        limit=CANDIDATE_POOL,
-        offset=0,
-    )
+    svc = ListingService(db)
+    scope = dict(category=category_name, viewer_lat=viewer_lat, viewer_lng=viewer_lng,
+                 sort=None, offset=0, limit=CANDIDATE_POOL)
+    # FIX (buying-agent review, 2026-09-26): the pool used to be only the
+    # category's top CANDIDATE_POOL by BROKA ranking, with the buyer's words
+    # playing no part in which rows got in - so in a category busier than
+    # the pool (or with no category at all: the whole marketplace), the
+    # listing a buyer named exactly could rank outside it, and Zeno said
+    # "closest I could get" over unrelated items. Listings carrying every
+    # word of the query are fetched first; the ranked pool is still added
+    # after them, because it is where the near misses come from.
+    pool: List[dict] = []
+    if slots.get("query"):
+        pool = await svc.list_listings(search=slots["query"], **scope)
+    seen = {p["id"] for p in pool}
+    pool += [p for p in await svc.list_listings(**scope) if p["id"] not in seen]
 
     # A buyer's own listings are never an answer to their own search - same
     # rule the standing-request matcher applies (core/buy_agent_subscribers.py).

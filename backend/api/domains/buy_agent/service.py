@@ -14,7 +14,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
-from api.database import BuyAgentRequest
+from api.database import BuyAgentRequest, User
 from api.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,16 @@ logger = logging.getLogger(__name__)
 # matcher is still working on.
 LIVE_STATUSES: tuple[str, ...] = ("active", "matched")
 
-# Statuses that count against BUY_AGENT_MAX_ACTIVE. Narrower than
-# LIVE_STATUSES on purpose: a request that already found something should
-# not block the buyer from starting a different search, which is the
-# behaviour the cap has always had (see create_request).
-CAPPED_STATUSES: tuple[str, ...] = ("active",)
+# Statuses that count against BUY_AGENT_MAX_ACTIVE: every status the
+# matcher still watches from. This used to be ("active",) alone, so that a
+# request which had found something would not block a new search - but a
+# "matched" request keeps matching (buy_agent_subscribers.WATCHING_STATUSES),
+# and GET /me, update and cancel only ever reach the newest row. A buyer
+# whose first watch had matched could start a second one, and the first
+# went on pushing matches and opening negotiations on their behalf where
+# they could neither see nor stop it. The app offers to replace the current
+# watch instead (zeno_screen.dart).
+CAPPED_STATUSES: tuple[str, ...] = LIVE_STATUSES
 
 
 def _validate_price_range(max_price: float | None, min_price: float | None) -> None:
@@ -50,6 +55,36 @@ def _validate_price_range(max_price: float | None, min_price: float | None) -> N
         raise HTTPException(status_code=422, detail="min_price cannot be negative.")
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=422, detail="min_price cannot be greater than max_price.")
+
+
+def clean_condition(condition: str | None) -> str | None:
+    """A request's condition, spelt the way listings store it.
+
+    Listings keep "new" / "used" / "refurbished" in lower case
+    (listings/validation.py). A request stored "Used" as typed, and the
+    matcher's case-sensitive comparison meant it could never match a single
+    listing; a value outside the three matched nothing at all. Both now
+    fail or normalise at write time instead of silently watching for
+    nothing."""
+    from api.domains.listings.validation import CONDITIONS
+    if condition is None or not str(condition).strip():
+        return None
+    value = str(condition).strip().lower()
+    if value not in CONDITIONS:
+        raise HTTPException(status_code=422, detail="condition must be new, used or refurbished.")
+    return value
+
+
+async def lock_buyer(db: AsyncSession, buyer_id: str) -> None:
+    """Serialise this buyer's buy-agent writes for the rest of the
+    transaction by locking their users row (SELECT ... FOR UPDATE).
+
+    There is no row to lock for "the buyer's standing requests" before one
+    exists, and no constraint can express BUY_AGENT_MAX_ACTIVE, so the
+    buyer's own row stands in: a second create for the same buyer waits
+    here until the first commits, then counts it. A no-op on SQLite, which
+    has no FOR UPDATE and serialises writers anyway."""
+    await db.execute(select(User.id).where(User.id == buyer_id).with_for_update())
 
 
 class BuyAgentService:
@@ -76,7 +111,9 @@ class BuyAgentService:
         negotiation_authorized: bool = False,
     ) -> dict:
         _validate_price_range(max_price, min_price)
+        condition = clean_condition(condition)
 
+        await lock_buyer(self.db, buyer_id)
         # Cap is settings.buy_agent_max_active (BUY_AGENT_MAX_ACTIVE, default
         # 1 — Appendix C). count()-based rather than an existence check so
         # the env var has real effect; at the documented default of 1 this
@@ -116,20 +153,16 @@ class BuyAgentService:
         )
         self.db.add(req)
 
-        # FIX (buying-agent bug-hunt, 2026-09-17): the count above and the
-        # INSERT below are two statements, so two requests racing (a
-        # double-tapped "Start Buy Request", or the sheet and the Hub
-        # submitting together) could both read active_count=0 and both
-        # insert - leaving a buyer over the cap with no way to get back
-        # under it except cancelling twice, since cancel_request only ever
-        # touches one row. There is no DB constraint to lean on: "active"
-        # is a status, not existence (see the model docstring), and a
-        # partial unique index on (buyer_id) WHERE status='active' is
-        # Postgres-only while this codebase's dev/test default is SQLite.
-        # So: flush the INSERT, re-count inside the same transaction, and
-        # roll back if we lost the race. That closes the window to the
-        # flush-to-count gap on a single connection and turns the failure
-        # into the same honest 409 a serial caller would have got.
+        # Two creates racing (a double-tapped "keep watching", two devices)
+        # could both count 0 and both insert. The lock_buyer() above is what
+        # stops that on PostgreSQL: this re-count after the flush only ever
+        # saw its own transaction's row, never the other's uncommitted one,
+        # so on its own it let both through (tests/test_buy_agent.py
+        # test_two_creates_at_once_cannot_exceed_the_cap). It stays for
+        # SQLite, which has no FOR UPDATE but lets one writer in at a time:
+        # there this flush waits for the other create to commit, so the
+        # re-count does see its row and turns the race into the same honest
+        # 409 a serial caller would have got.
         await self.db.flush()
         if await self._active_count(buyer_id) > settings.buy_agent_max_active:
             await self.db.rollback()
@@ -191,6 +224,10 @@ class BuyAgentService:
 
         Returns None if the buyer has no active/matched request to update.
         """
+        # Locked first, like create_request: an update racing a cancel
+        # could otherwise load the row before the cancel committed and then
+        # write status="active" over it, bringing a cancelled watch back.
+        await lock_buyer(self.db, buyer_id)
         req = await self.get_request_row(buyer_id, statuses=LIVE_STATUSES)
         if not req:
             return None
@@ -214,7 +251,7 @@ class BuyAgentService:
         if "max_distance_km" in fields:
             req.max_distance_km = fields["max_distance_km"]
         if "condition" in fields:
-            req.condition = fields["condition"]
+            req.condition = clean_condition(fields["condition"])
         if "attributes" in fields and fields["attributes"] is not None:
             req.attributes = json.dumps(fields["attributes"])
         if "must_have_features" in fields and fields["must_have_features"] is not None:
@@ -238,14 +275,15 @@ class BuyAgentService:
     async def cancel_request(self, buyer_id: str) -> dict | None:
         """Sets status='cancelled' on the buyer's current standing request.
         A cancelled request no longer counts toward the one-active-request
-        cap (create_request only counts status=="active"), freeing the slot
-        for a new one. Returns None if the buyer had nothing to cancel.
+        cap (create_request counts CAPPED_STATUSES), freeing the slot for a
+        new one. Returns None if the buyer had nothing to cancel.
 
         Before this existed, there was NO way to reach "cancelled" from
         anywhere in the app: nothing ever set status away from
         "active"/"matched", so a buyer who hit BUY_AGENT_MAX_ACTIVE (default
         1) had no UI escape hatch to ever create a second request.
         """
+        await lock_buyer(self.db, buyer_id)
         req = await self.get_request_row(buyer_id, statuses=LIVE_STATUSES)
         if not req:
             return None
