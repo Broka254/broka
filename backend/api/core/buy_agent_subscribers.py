@@ -148,6 +148,7 @@ import asyncio
 import json
 import logging
 import math
+from datetime import datetime
 from sqlalchemy import func, select, update
 
 from api.core.event_catalog import subscribe_to, EventType, EventEnvelope
@@ -156,6 +157,7 @@ from api.database import (
     AsyncSessionLocal, BuyAgentRequest, ListingStatus, NegotiationMessage, Listing, User,
 )
 from api.domains.buy_agent.matching import states_a_shortfall
+from api.domains.buy_agent.service import not_expired
 from api.domains.listings.validation import load_attributes
 
 logger = logging.getLogger(__name__)
@@ -346,10 +348,14 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
         logger.warning("[buy_agent] ListingCreated carried a non-numeric price %r", price)
         return
 
+    now = datetime.utcnow()
     async with AsyncSessionLocal() as db:
         candidates = (await db.execute(
             select(BuyAgentRequest).where(
                 BuyAgentRequest.status.in_(WATCHING_STATUSES),
+                # A watch past its date has ended, whether or not the sweep
+                # has marked it yet (buy_agent/service.py not_expired).
+                not_expired(now),
                 # Case-insensitive on both sides: the request holds the
                 # canonical Category.name, the listing holds whatever the
                 # seller typed. See fix (4) in the module docstring.
@@ -385,6 +391,7 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
                 .where(
                     BuyAgentRequest.id == req.id,
                     BuyAgentRequest.status.in_(WATCHING_STATUSES),
+                    not_expired(now),
                 )
                 .values(
                     status="matched",

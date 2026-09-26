@@ -696,6 +696,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  String? _watchTimeLeft(BuyAgentRequest req) {
+    final days = req.daysLeft(DateTime.now());
+    if (days == null || days <= 0) return null;
+    return days == 1 ? 'Last day of watching' : '$days days left';
+  }
+
   // "Zeno is watching for you" (Home Redesign Guide §13).
   Widget _buildActiveBuyAgentSection() {
     final req = _activeBuyAgentRequest!;
@@ -731,6 +737,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       : 'Still searching…',
                   style: TextStyle(color: matched ? BrokaColors.success : BrokaColors.textLow, fontSize: 11.5),
                 ),
+                // Watches end by themselves (BUY_AGENT_WATCH_DAYS); say when,
+                // so one doesn't just vanish from Home.
+                if (_watchTimeLeft(req) case final left?)
+                  Text(left, style: const TextStyle(color: BrokaColors.textLow, fontSize: 10.5)),
               ]),
             ),
             IconButton(

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:broka/features/buy_agent/domain/models/buy_agent_request.dart';
 import 'package:broka/screens/home_screen.dart';
 
 import 'support/fake_api.dart';
@@ -87,5 +88,50 @@ void main() {
 
     expect(fakeRequests.where((r) => r.uri.path.startsWith('/buy-agent-requests/action')), isEmpty);
     expect(find.text('Zeno is watching for you'), findsOneWidget);
+  });
+
+  testWidgets('the watch card says how long the watch has left', (tester) async {
+    // A naive-UTC timestamp, the way the backend writes them.
+    final ends = DateTime.now().toUtc().add(const Duration(days: 12, hours: 3));
+    final naive = ends.toIso8601String().replaceAll('Z', '');
+    setFakeRoute((uri) => uri.path == '/buy-agent-requests/me'
+        ? {
+            'id': 'req-1', 'category': 'Electronics', 'max_price': 50000,
+            'must_have_features': const [], 'status': 'active', 'match_count': 0,
+            'expires_at': naive,
+          }
+        : null);
+    await tester.pumpWidget(const MaterialApp(
+      home: MediaQuery(data: MediaQueryData(size: Size(800, 1200)), child: HomeScreen()),
+    ));
+    await run(tester, const Duration(milliseconds: 400));
+    expect(find.text('13 days left'), findsOneWidget);
+  });
+
+  group('BuyAgentRequest.daysLeft', () {
+    BuyAgentRequest ending(String? expiresAt) => BuyAgentRequest.fromJson({
+          'id': 'r', 'category': 'Electronics', 'max_price': 1000,
+          'status': 'active', if (expiresAt != null) 'expires_at': expiresAt,
+        });
+    final now = DateTime.utc(2026, 9, 26, 12);
+
+    test('reads the backend\'s naive timestamp as UTC', () {
+      // Read as local time instead (plain DateTime.tryParse), this would be
+      // off by the device's offset - three hours in Nairobi, enough to end
+      // a watch early on its last day. Asserted on the instant itself so
+      // the test fails in any timezone, UTC included.
+      final ends = ending('2026-10-26T12:00:00').expiresAt!;
+      expect(ends.isUtc, isTrue);
+      expect(ends, DateTime.utc(2026, 10, 26, 12));
+      expect(ending('2026-10-26T12:00:00').daysLeft(now), 30);
+    });
+    test('a part day counts as a day', () {
+      expect(ending('2026-09-26T17:00:00').daysLeft(now), 1);
+      expect(ending('2026-09-28T13:00:00').daysLeft(now), 3);
+    });
+    test('past its date, or no date at all', () {
+      expect(ending('2026-09-26T11:59:00').daysLeft(now), 0);
+      expect(ending(null).daysLeft(now), isNull);
+    });
   });
 }

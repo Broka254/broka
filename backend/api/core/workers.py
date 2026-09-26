@@ -201,6 +201,10 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
             await task_collect_abandoned_media()
         except Exception as exc:
             logger.error("[sweep] media clean-up failed: %s", exc)
+        try:
+            await task_expire_buy_agent_watches()
+        except Exception as exc:
+            logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -259,6 +263,14 @@ async def task_collect_abandoned_media(ctx: dict | None = None) -> None:
     every instance at once: each asset is claimed with a compare-and-swap."""
     from api.domains.media.cleanup import collect_abandoned_uploads
     await collect_abandoned_uploads()
+
+
+async def task_expire_buy_agent_watches(ctx: dict | None = None) -> None:
+    """End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their
+    buyers. See api/domains/buy_agent/service.py expire_old_watches. Safe
+    on every instance at once: each watch is ended with a compare-and-swap."""
+    from api.domains.buy_agent import service
+    await service.expire_old_watches()
 
 
 async def start_periodic_sweep(interval_seconds: int = 300) -> None:

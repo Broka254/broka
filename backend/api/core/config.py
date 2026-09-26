@@ -339,6 +339,12 @@ class Settings:
     # relax below 1; HOMESCREEN_VARIANT is a Flutter-only compile-time flag
     # read via --dart-define, not a backend setting, so it has no entry here)
     buy_agent_max_active: int = field(default_factory=lambda: int(os.getenv("BUY_AGENT_MAX_ACTIVE", "1")))
+    # How long a standing watch runs before it ends by itself. Without an
+    # end, a watch outlived the buyer's interest: a year-old request with
+    # negotiation authorised kept messaging sellers for someone who had long
+    # since bought elsewhere. Changing a watch starts its time again. At
+    # least 1 - see buy_agent/service.py watch_days().
+    buy_agent_watch_days: int = field(default_factory=lambda: int(os.getenv("BUY_AGENT_WATCH_DAYS", "30")))
 
     # ── Auctions ──────────────────────────────────────────────────────────────
     # How long the winner has to pay before the win lapses. Configurable

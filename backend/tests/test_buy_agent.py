@@ -925,3 +925,188 @@ class TestBuyAgentReview:
             headers={"Authorization": f"Bearer {seller_token}"},
         )).json()
         assert len([m for m in history if m["role"] == "broker"]) == 1, history
+
+
+class TestWatchExpiry:
+    """Watches end after BUY_AGENT_WATCH_DAYS (2026-09-26). Before this a
+    watch ran for ever: a year-old request with negotiation authorised went
+    on messaging sellers for a buyer who had long since bought elsewhere."""
+
+    @staticmethod
+    async def _age(request_id, *, expires_at=..., created_at=...):
+        """Move a request's dates, as if it had been made long ago."""
+        from sqlalchemy import update as _update
+        from api.database import AsyncSessionLocal, BuyAgentRequest
+        values = {}
+        if expires_at is not ...:
+            values["expires_at"] = expires_at
+        if created_at is not ...:
+            values["created_at"] = created_at
+        async with AsyncSessionLocal() as db:
+            await db.execute(_update(BuyAgentRequest).where(BuyAgentRequest.id == request_id).values(**values))
+            await db.commit()
+
+    @pytest.mark.asyncio
+    async def test_a_new_watch_says_when_it_ends(self, client):
+        from datetime import datetime, timedelta
+        from api.core.config import settings
+
+        buyer = await _register(client, "0766007100", "Ends Buyer", "ends.buyer@test.ke")
+        made = await client.post("/buy-agent-requests", json={
+            "category": "Electronics", "max_price": 20000,
+        }, headers={"Authorization": f"Bearer {buyer}"})
+        assert made.status_code == 200
+        ends = datetime.fromisoformat(made.json()["expires_at"])
+        expected = datetime.utcnow() + timedelta(days=settings.buy_agent_watch_days)
+        assert abs((ends - expected).total_seconds()) < 60
+
+    @pytest.mark.asyncio
+    async def test_an_expired_watch_stops_matching_and_frees_the_slot(self, client, seller_token):
+        """Even before the sweep has flipped its status: the matcher, GET /me
+        and the cap all go by the date, so nothing waits on the next pass."""
+        from datetime import datetime, timedelta
+
+        buyer = await _register(client, "0766007200", "Old Buyer", "old.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        made = await client.post("/buy-agent-requests", json={
+            "category": "Agriculture", "max_price": 90000, "negotiation_authorized": True,
+        }, headers=headers)
+        await self._age(made.json()["id"], expires_at=datetime.utcnow() - timedelta(minutes=1))
+
+        create = await client.post("/listings/", json={"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Knapsack Sprayer 16L", "category": "Agriculture", "price": 4000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        await asyncio.sleep(0.05)
+        history = (await client.get(
+            f"/negotiate/{create.json()['id']}/history",
+            headers={"Authorization": f"Bearer {seller_token}"},
+        )).json()
+        assert [m for m in history if m["role"] == "broker"] == []
+
+        assert (await client.get("/buy-agent-requests/me", headers=headers)).json() is None
+        assert (await client.post("/buy-agent-requests", json={
+            "category": "Agriculture", "max_price": 90000,
+        }, headers=headers)).status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_ends_old_watches_and_tells_the_buyer_once(self, client, monkeypatch):
+        """Includes a row from before expires_at existed (NULL), aged by its
+        created_at - the watches this change is mostly for."""
+        from datetime import datetime, timedelta
+        from api.core import push as push_module
+        from api.core.config import settings
+        from sqlalchemy import select
+        from api.database import AsyncSessionLocal, BuyAgentRequest
+        from api.domains.buy_agent.service import expire_old_watches
+
+        sent = []
+
+        async def _capture(token, title, body, data):
+            sent.append((token, body, data))
+
+        monkeypatch.setattr(push_module.push_service, "send", _capture)
+
+        old = await _register(client, "0766007300", "Legacy Buyer", "legacy.buyer@test.ke")
+        new = await _register(client, "0766007400", "Fresh Buyer", "fresh.buyer@test.ke")
+        await client.patch("/auth/fcm-token?fcm_token=legacy-token", headers={"Authorization": f"Bearer {old}"})
+        await client.patch("/auth/fcm-token?fcm_token=fresh-token", headers={"Authorization": f"Bearer {new}"})
+        old_req = (await client.post("/buy-agent-requests/action", json={
+            "action": "CREATE_BUYING_REQUEST",
+            "parameters": {"category": "Fashion", "query": "leather boots", "max_price": 8000},
+        }, headers={"Authorization": f"Bearer {old}"})).json()["request"]
+        new_req = (await client.post("/buy-agent-requests", json={
+            "category": "Fashion", "max_price": 8000,
+        }, headers={"Authorization": f"Bearer {new}"})).json()
+        await self._age(
+            old_req["id"], expires_at=None,
+            created_at=datetime.utcnow() - timedelta(days=settings.buy_agent_watch_days + 5),
+        )
+
+        assert await expire_old_watches() >= 1
+        async with AsyncSessionLocal() as db:
+            statuses = {r.id: r.status for r in (await db.execute(
+                select(BuyAgentRequest).where(BuyAgentRequest.id.in_([old_req["id"], new_req["id"]]))
+            )).scalars()}
+        assert statuses == {old_req["id"]: "expired", new_req["id"]: "active"}
+
+        for _ in range(100):
+            if sent:
+                break
+            await asyncio.sleep(0.02)
+        assert [s[0] for s in sent] == ["legacy-token"]
+        assert "leather boots" in sent[0][1]
+        assert sent[0][2]["type"] == "buy_agent_expired"
+
+        # A second pass finds nothing new to end, and says nothing.
+        sent.clear()
+        await expire_old_watches()
+        await asyncio.sleep(0.1)
+        assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_changing_a_watch_starts_its_time_again(self, client):
+        from datetime import datetime, timedelta
+        from api.core.config import settings
+
+        buyer = await _register(client, "0766007500", "Renew Buyer", "renew.buyer@test.ke")
+        headers = {"Authorization": f"Bearer {buyer}"}
+        made = await client.post("/buy-agent-requests", json={
+            "category": "Gaming", "max_price": 30000,
+        }, headers=headers)
+        await self._age(made.json()["id"], expires_at=datetime.utcnow() + timedelta(days=1))
+
+        bumped = await client.post("/buy-agent-requests/action", json={
+            "action": "CHANGE_BUDGET", "parameters": {"max_price": 35000},
+        }, headers=headers)
+        assert bumped.json()["status"] == "SUCCESS", bumped.json()
+        ends = datetime.fromisoformat(bumped.json()["request"]["expires_at"])
+        assert ends > datetime.utcnow() + timedelta(days=settings.buy_agent_watch_days - 1)
+
+    @pytest.mark.asyncio
+    async def test_an_existing_table_gets_the_column(self):
+        """New columns reach a live database only through init_db()'s
+        statement list, whose failures are swallowed. Several older entries
+        say DATETIME, which PostgreSQL has no type for - a column added that
+        way never appears in production, and every query naming it fails."""
+        from sqlalchemy import inspect, text
+        from api import database
+
+        async with database.engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE buy_agent_requests DROP COLUMN expires_at"))
+        await init_db()
+        async with database.engine.connect() as conn:
+            columns = await conn.run_sync(
+                lambda c: {col["name"] for col in inspect(c).get_columns("buy_agent_requests")})
+        assert "expires_at" in columns
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_runs_it(self, monkeypatch):
+        from api.core import workers
+        from api.domains.buy_agent import service as buy_agent_service
+
+        ran = []
+
+        async def noop(*args, **kwargs):
+            return None
+
+        for name in (
+            "task_check_deal_timers", "task_reconcile_econfirm_escrows", "task_check_dispute_timers",
+            "task_refresh_dispute_summary_cache", "task_recompute_dcr_and_leaks",
+            "task_retrain_ml_models", "task_check_call_expiry", "task_backfill_media",
+            "task_collect_abandoned_media",
+        ):
+            monkeypatch.setattr(workers, name, noop)
+
+        async def record(*args, **kwargs):
+            ran.append(True)
+            return 0
+
+        monkeypatch.setattr(buy_agent_service, "expire_old_watches", record)
+
+        async def stop(_seconds):
+            workers._sweep_running = False
+
+        monkeypatch.setattr(workers.asyncio, "sleep", stop)
+        await workers._periodic_sweep_loop(1)
+        assert ran == [True]

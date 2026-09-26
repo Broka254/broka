@@ -428,41 +428,41 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | Table | Model | Defined at |
 |---|---|---|
 | `auction_meta` | `AuctionMeta` | backend/api/database.py:540 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1045 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1049 |
 | `bids` | `Bid` | backend/api/database.py:529 |
 | `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:647 |
 | `categories` | `Category` | backend/api/database.py:295 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:303 |
-| `deals` | `Deal` | backend/api/database.py:695 |
+| `deals` | `Deal` | backend/api/database.py:699 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:985 |
+| `disputes` | `Dispute` | backend/api/database.py:989 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:272 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:67 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1012 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1064 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1016 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1068 |
 | `interests` | `Interest` | backend/api/database.py:427 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:904 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:880 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:908 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:884 |
 | `listings` | `Listing` | backend/api/database.py:312 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:66 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:100 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:939 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:943 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:450 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:253 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:959 |
-| `reviews` | `Review` | backend/api/database.py:1000 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:830 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:809 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:963 |
+| `reviews` | `Review` | backend/api/database.py:1004 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:834 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:813 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:494 |
 | `user_specializations` | `UserSpecialization` | backend/api/database.py:632 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1028 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1032 |
 | `wishlists` | `Wishlist` | backend/api/database.py:620 |
 
 ## Backend dependencies between domains
@@ -476,7 +476,7 @@ of a change.
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
 - **auth** — domains: media; core: client_ip, config, email, events, fraud, nudge_templates, presence, rate_limit, sms, text_search; database, security
-- **buy_agent** — domains: ai_broker, categories, listings; core: config, rate_limit; database, security
+- **buy_agent** — domains: ai_broker, categories, listings; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
 - **deal_ws** — core: deal_hub; database, security
@@ -500,33 +500,34 @@ of a change.
 `task_*` functions in `backend/api/core/workers.py`: the in-process sweep
 (every 5 minutes) and ARQ workers.
 
-- `task_ai_summary` (backend/api/core/workers.py:1742)
-- `task_backfill_media` (backend/api/core/workers.py:247) — Convert a bounded batch of base64 images into image assets.
-- `task_check_call_expiry` (backend/api/core/workers.py:427) — Backstop cleanup for stale call sessions (api/core/call_state.py).
-- `task_check_deal_timers` (backend/api/core/workers.py:442) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
-- `task_check_dispute_timers` (backend/api/core/workers.py:1387) — Sweep for DisputeTimer objects whose fires_at has passed.
-- `task_check_interest_nudges` (backend/api/core/workers.py:975) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
-- `task_close_due_auctions` (backend/api/core/workers.py:1820) — Close auctions whose ends_at has passed, and hand winners to Deal.
-- `task_collect_abandoned_media` (backend/api/core/workers.py:256) — Remove uploads no listing, store or profile ever used, a week after they were made.
-- `task_expire_featured_listings` (backend/api/core/workers.py:406)
-- `task_fraud_sweep` (backend/api/core/workers.py:1758)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:1989) — Release listings whose winner never paid.
-- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:1913) — One reminder per auction, to everyone who has bid on it.
-- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1167) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
-- `task_recompute_trust_score` (backend/api/core/workers.py:376)
-- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:207) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
-- `task_reconcile_mpesa` (backend/api/core/workers.py:1781)
-- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1374) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
-- `task_retrain_ml_models` (backend/api/core/workers.py:1127) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
-- `task_send_email_notification` (backend/api/core/workers.py:1737)
-- `task_send_fcm_notification` (backend/api/core/workers.py:388)
+- `task_ai_summary` (backend/api/core/workers.py:1754)
+- `task_backfill_media` (backend/api/core/workers.py:251) — Convert a bounded batch of base64 images into image assets.
+- `task_check_call_expiry` (backend/api/core/workers.py:439) — Backstop cleanup for stale call sessions (api/core/call_state.py).
+- `task_check_deal_timers` (backend/api/core/workers.py:454) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
+- `task_check_dispute_timers` (backend/api/core/workers.py:1399) — Sweep for DisputeTimer objects whose fires_at has passed.
+- `task_check_interest_nudges` (backend/api/core/workers.py:987) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
+- `task_close_due_auctions` (backend/api/core/workers.py:1832) — Close auctions whose ends_at has passed, and hand winners to Deal.
+- `task_collect_abandoned_media` (backend/api/core/workers.py:260) — Remove uploads no listing, store or profile ever used, a week after they were made.
+- `task_expire_buy_agent_watches` (backend/api/core/workers.py:268) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
+- `task_expire_featured_listings` (backend/api/core/workers.py:418)
+- `task_fraud_sweep` (backend/api/core/workers.py:1770)
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2001) — Release listings whose winner never paid.
+- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:1925) — One reminder per auction, to everyone who has bid on it.
+- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1179) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
+- `task_recompute_trust_score` (backend/api/core/workers.py:388)
+- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:211) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
+- `task_reconcile_mpesa` (backend/api/core/workers.py:1793)
+- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1386) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+- `task_retrain_ml_models` (backend/api/core/workers.py:1139) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
+- `task_send_email_notification` (backend/api/core/workers.py:1749)
+- `task_send_fcm_notification` (backend/api/core/workers.py:400)
 
 ## Configuration (environment variables)
 
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BUY_AGENT_MAX_ACTIVE`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FAL_KEY`, `FAL_SHOWCASE_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SHOWCASE_AI_REQUIRE_PREMIUM`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FAL_KEY`, `FAL_SHOWCASE_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SHOWCASE_AI_REQUIRE_PREMIUM`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`
 
 ## Backend tests
 
@@ -928,7 +929,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Buying agent review (2026-09-26)
+- `CHANGES.md` — Zeno watches end after 30 days (2026-09-26)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

@@ -1,16 +1,18 @@
 """Buy-Agent Service v1 — standing 'find & negotiate for me' requests.
 Matching lives in api/core/buy_agent_subscribers.py, triggered by the
-already-live ListingCreated event; this service only owns CRUD + the
-one-active-request-per-buyer cap (Ch.9, Ch.22 — do not relax this).
+already-live ListingCreated event; this service only owns CRUD, the
+one-active-request-per-buyer cap (Ch.9, Ch.22 — do not relax this) and
+watch expiry (expire_old_watches, run by the 5-minute sweep).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
-from sqlalchemy import select, func
+from sqlalchemy import and_, or_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
@@ -55,6 +57,52 @@ def _validate_price_range(max_price: float | None, min_price: float | None) -> N
         raise HTTPException(status_code=422, detail="min_price cannot be negative.")
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=422, detail="min_price cannot be greater than max_price.")
+
+
+# ── Expiry ───────────────────────────────────────────────────────────────
+# A watch ends BUY_AGENT_WATCH_DAYS after it was made or last changed.
+# Everything that treats a request as live - the cap, GET /me, update,
+# cancel and the matcher - goes by the date itself, so an expired watch is
+# over the moment it expires; expire_old_watches() (the sweep) only flips
+# its status and tells the buyer. Rows from before expires_at existed have
+# it NULL and are aged by created_at.
+#
+# Both clauses are spelt out rather than one being NOT the other: every
+# column involved is nullable, and NOT over a NULL comparison is NULL, not
+# true - "NOT live" would silently skip exactly the legacy rows this is for.
+
+def watch_days() -> int:
+    return max(1, settings.buy_agent_watch_days)
+
+
+def watch_expiry(now: datetime) -> datetime:
+    """When a watch made or changed at `now` ends."""
+    return now + timedelta(days=watch_days())
+
+
+def not_expired(now: datetime):
+    cutoff = now - timedelta(days=watch_days())
+    return or_(
+        and_(BuyAgentRequest.expires_at.isnot(None), BuyAgentRequest.expires_at > now),
+        # No date at all can't be aged; expire_old_watches() gives such a
+        # row one, so it is live until then rather than ended unseen.
+        and_(
+            BuyAgentRequest.expires_at.is_(None),
+            or_(BuyAgentRequest.created_at.is_(None), BuyAgentRequest.created_at > cutoff),
+        ),
+    )
+
+
+def is_expired(now: datetime):
+    cutoff = now - timedelta(days=watch_days())
+    return or_(
+        and_(BuyAgentRequest.expires_at.isnot(None), BuyAgentRequest.expires_at <= now),
+        and_(
+            BuyAgentRequest.expires_at.is_(None),
+            BuyAgentRequest.created_at.isnot(None),
+            BuyAgentRequest.created_at <= cutoff,
+        ),
+    )
 
 
 def clean_condition(condition: str | None) -> str | None:
@@ -150,6 +198,7 @@ class BuyAgentService:
             # at all, not just exist as an inert column.
             negotiation_authorized=negotiation_authorized,
             match_count=0,
+            expires_at=watch_expiry(now),
         )
         self.db.add(req)
 
@@ -179,6 +228,9 @@ class BuyAgentService:
             select(func.count(BuyAgentRequest.id)).where(
                 BuyAgentRequest.buyer_id == buyer_id,
                 BuyAgentRequest.status.in_(CAPPED_STATUSES),
+                # An expired watch holds no slot, even before the sweep has
+                # marked it - the buyer can start a new one straight away.
+                not_expired(datetime.utcnow()),
             )
         )).scalar_one()
 
@@ -192,6 +244,7 @@ class BuyAgentService:
             select(BuyAgentRequest).where(
                 BuyAgentRequest.buyer_id == buyer_id,
                 BuyAgentRequest.status.in_(statuses),
+                not_expired(datetime.utcnow()),
             ).order_by(BuyAgentRequest.created_at.desc(), BuyAgentRequest.id.desc())
         )).scalars().first()
 
@@ -269,6 +322,9 @@ class BuyAgentService:
 
         req.status = "active"
         req.updated_at = datetime.utcnow()
+        # Changed criteria are a fresh watch, so its time starts again - the
+        # same reasoning as the status reset above.
+        req.expires_at = watch_expiry(req.updated_at)
         await self.db.commit()
         return self._dict(req)
 
@@ -330,4 +386,109 @@ class BuyAgentService:
             "negotiation_authorized": bool(r.negotiation_authorized),
             "match_count": r.match_count or 0,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "expires_at": self._ends(r),
         }
+
+    @staticmethod
+    def _ends(r: BuyAgentRequest) -> str | None:
+        """When the watch ends by itself - for a row from before expires_at
+        existed, the date its created_at gives it (see not_expired)."""
+        ends = r.expires_at or (r.created_at + timedelta(days=watch_days()) if r.created_at else None)
+        return ends.isoformat() if ends else None
+
+
+# How many watches one sweep pass ends, and how many "watch ended" pushes
+# go out at once. The first pass after this shipped ends every watch that
+# was already older than BUY_AGENT_WATCH_DAYS; the rest follow on later
+# passes rather than stretching one.
+EXPIRE_BATCH = 500
+EXPIRE_PUSH_CONCURRENCY = 8
+
+
+async def expire_old_watches(now: datetime | None = None) -> int:
+    """End watches past their date: status "expired", and a push telling
+    the buyer. Returns how many were ended.
+
+    Run by the 5-minute sweep (api/core/workers.py). Nothing depends on it
+    for correctness - everything that treats a watch as live already goes
+    by the date (see not_expired) - so a late or skipped pass only delays
+    the status and the notice. Each row is ended with a compare-and-swap on
+    its status and date, so two instances sweeping at once end it, and tell
+    the buyer, once."""
+    from api.database import AsyncSessionLocal
+
+    now = now or datetime.utcnow()
+    async with AsyncSessionLocal() as db:
+        # A live row with neither date can't be aged. It gets a full watch
+        # from now rather than being ended without the buyer having had one.
+        await db.execute(
+            update(BuyAgentRequest)
+            .where(
+                BuyAgentRequest.status.in_(LIVE_STATUSES),
+                BuyAgentRequest.expires_at.is_(None),
+                BuyAgentRequest.created_at.is_(None),
+            )
+            .values(expires_at=watch_expiry(now))
+            .execution_options(synchronize_session=False)
+        )
+        due = (await db.execute(
+            select(BuyAgentRequest.id, BuyAgentRequest.buyer_id,
+                   BuyAgentRequest.category, BuyAgentRequest.query)
+            .where(BuyAgentRequest.status.in_(LIVE_STATUSES), is_expired(now))
+            .limit(EXPIRE_BATCH)
+        )).all()
+
+        ended = []
+        for row in due:
+            result = await db.execute(
+                update(BuyAgentRequest)
+                .where(
+                    BuyAgentRequest.id == row.id,
+                    BuyAgentRequest.status.in_(LIVE_STATUSES),
+                    is_expired(now),
+                )
+                .values(status="expired", updated_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount == 1:
+                ended.append(row)
+        await db.commit()
+
+        tokens: dict[str, str] = {}
+        if ended:
+            tokens = {
+                user_id: token for user_id, token in (await db.execute(
+                    select(User.id, User.fcm_token).where(
+                        User.id.in_({r.buyer_id for r in ended}), User.fcm_token.isnot(None),
+                    )
+                )).all() if token
+            }
+
+    if ended:
+        logger.info("[buy_agent] ended %d watch(es) past %d days", len(ended), watch_days())
+    await _tell_buyers_watches_ended([(tokens[r.buyer_id], r) for r in ended if r.buyer_id in tokens])
+    return len(ended)
+
+
+async def _tell_buyers_watches_ended(pushes: list) -> None:
+    """One push per ended watch. Failures are logged, never raised: the
+    watch has already ended and a push problem must not undo that."""
+    from api.core.push import push_service
+
+    gate = asyncio.Semaphore(EXPIRE_PUSH_CONCURRENCY)
+
+    async def one(token: str, row) -> None:
+        what = row.query or row.category
+        async with gate:
+            try:
+                await push_service.send(
+                    token,
+                    title="Zeno stopped watching",
+                    body=(f"It's been {watch_days()} days since you asked Zeno to watch for "
+                          f"{what}. Ask again if you're still looking."),
+                    data={"type": "buy_agent_expired", "request_id": row.id},
+                )
+            except Exception as exc:
+                logger.error("[buy_agent] watch-ended notification failed request=%s: %s", row.id, exc)
+
+    await asyncio.gather(*(one(token, row) for token, row in pushes))

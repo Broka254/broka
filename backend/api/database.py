@@ -690,6 +690,10 @@ class BuyAgentRequest(Base):
     match_count        = Column(Integer, nullable=False, default=0)
     created_at         = Column(DateTime, default=datetime.utcnow)
     updated_at         = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    # When the watch ends by itself (naive UTC): BUY_AGENT_WATCH_DAYS after
+    # it was made or last changed - see buy_agent/service.py. NULL on rows
+    # from before it existed, which are aged by created_at instead.
+    expires_at         = Column(DateTime, nullable=True)
 
 
 class Deal(Base):
@@ -1227,6 +1231,12 @@ async def init_db():
             # (Base.metadata.create_all alone only creates missing *tables*,
             # never adds a missing *column* to one that already exists).
             "ALTER TABLE buy_agent_requests ADD COLUMN match_count INTEGER DEFAULT 0 NOT NULL",
+            # Watch expiry (2026-09-26). TIMESTAMP, not DATETIME: PostgreSQL
+            # has no DATETIME type, and a failure here is swallowed, so the
+            # column would silently never reach production and every query
+            # naming it would fail (tests/test_buy_agent.py
+            # TestWatchExpiry.test_an_existing_table_gets_the_column).
+            "ALTER TABLE buy_agent_requests ADD COLUMN expires_at TIMESTAMP",
             # Volume 2 Chapter 3 (Round 15-16): leak detection columns added
             # to the Deal model without a matching entry here at the time -
             # same gap as the buy_agent_requests entry above, caught this

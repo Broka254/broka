@@ -1,3 +1,30 @@
+# Zeno watches end after 30 days (2026-09-26)
+
+A watch used to run for ever: a year-old one with negotiation authorised
+kept messaging sellers for a buyer who had long since bought elsewhere.
+
+- A watch now ends `BUY_AGENT_WATCH_DAYS` (default 30) after it was made
+  or last changed; changing it (a new budget, say) starts its time again.
+  New column `buy_agent_requests.expires_at`. Watches from before it are
+  aged by when they were made, so the ones already older than 30 days end
+  on the first sweep after deploy.
+- The matcher, the one-watch limit, GET /buy-agent-requests/me, update and
+  cancel all go by the date, so a watch is over the moment it expires. The
+  5-minute sweep then marks it `expired` and pushes the buyer "Zeno
+  stopped watching", once, even with several instances sweeping.
+- Home's watch card says how long is left ("12 days left").
+- The column's startup migration says `TIMESTAMP`. 23 older entries in
+  `init_db()` say `DATETIME`, which PostgreSQL has no type for; their
+  failures are swallowed, so on a PostgreSQL table that predates one of
+  those columns it was never added (`deals.*` timers and timestamps,
+  `auction_meta.*`, `interests.nudge_*`, `users.last_seen`,
+  `thread_read_state.last_delivered_at`). Not changed here - worth checking
+  against the production schema.
+
+Tests: `backend/tests/test_buy_agent.py::TestWatchExpiry` (including one
+that drops the column and runs `init_db()`, which fails with `DATETIME` on
+PostgreSQL), `flutter_app/test/home_buy_agent_watch_test.dart`.
+
 # Buying agent review (2026-09-26)
 
 A pass over the Buying Agent (backend `buy_agent/`, the standing-request
@@ -67,8 +94,6 @@ test in `flutter_app/test/zeno_chat_test.dart`.
 
 ## Still open
 
-- Watches never expire: a year-old watch with negotiation authorised still
-  messages sellers. How long a watch should live is a product call.
 - Matching reacts to new listings only. A listing whose price later drops
   under a buyer's budget, or that comes back to active, is never matched.
 - Auction listings match watches like any other, and an authorised watch

@@ -84,6 +84,8 @@ services:
                              # it in the dashboard silently did nothing.)
       - key: REFRESH_TOKEN_EXPIRE_DAYS
         value: "30"
+      - key: BUY_AGENT_WATCH_DAYS
+        value: "30"          # Days a Zeno watch runs before it ends by itself.
       - key: JSON_LOGS
         value: "true"        # v4.0: structured JSON logs for Render log viewer
       - key: ENV
