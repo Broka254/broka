@@ -1,3 +1,67 @@
+# The Buying Agent, in motion (2026-09-26)
+
+The Buying Agent's screen showed the agent's work as one more chat: an
+italic caption while it searched, results stacked 210px tall down the
+conversation, a text button for the watch. It now shows the work
+(`flutter_app/lib/features/buy_agent/presentation/widgets/agent_motion.dart`):
+
+- **Before the first message**, Zeno at the centre of an animated core -
+  radar rings, a dashed orbit and a comet turning, the categories orbiting
+  it - with "Tell me -> I hunt -> I negotiate" under it, a light running
+  along the steps. It bursts open on arrival and collapses away as the
+  first message goes.
+- **Zeno's brief**: what Zeno has gathered (item, category, budget,
+  condition, place, specs) as chips under the header, each popping in as
+  Zeno learns it and again when it changes - a misheard budget is on
+  screen at once instead of turning up as a wrong search.
+- **Searching** is a radar card: a sweep with blips lighting as it passes,
+  the caption shimmering, a beam running along the bottom. Still a timer's
+  show of work - it never marks a step done.
+- **Results** are a deck to swipe through: a verdict badge ("1 exact · 2
+  close") and a count, cards dealt in from the right, turning in 3D as they
+  move, a page indicator. Confetti when every result is an exact match.
+- **The watch** is a card with a pinging radar orb; setting it flips it
+  over with a burst to "On watch" and a live dot, with confetti.
+- Bubbles arrive (the buyer's spring up from the composer, Zeno's slide
+  in), a light runs round Zeno's bubble while it writes, the openers fly
+  in, and the header's dot and status follow what Zeno is doing
+  (Thinking..., Hunting..., On watch).
+- Home: Zeno flies from the CTA into the agent's header (a shared Hero), a
+  glint crosses the CTA once every six seconds, and the "Zeno is watching"
+  card has the same live orb, a tint, and legible "days left" and controls.
+
+Everything honours the OS reduce-motion setting: same layout, no motion.
+
+## Weak spots fixed on the way
+
+Each has a test in `flutter_app/test/buy_agent_ui_test.dart` ("weak
+spots") that failed on the code before it.
+
+- **A reply to a conversation that was started over landed in the new
+  one**, bringing the old conversation's criteria, which the next turn sent
+  back as the new search's. Replies now carry which conversation they
+  belong to, and "New chat" frees the composer at once.
+- **The "searching" caption fired into the wrong turn.** It waited on a
+  `Future.delayed` nothing could cancel, so a quick turn's delay announced
+  a search 2.2s after the earlier message. Now a cancellable Timer.
+- **The budget question closed silently** on anything but a plain number
+  (nothing typed, "cheap"): no watch, no error. It now uses the sell
+  wizard's amount field (digits only, grouped as typed) and says what it
+  needs. Its controller was also never disposed.
+- **Budget before category.** A watch can't be made without a category,
+  but the budget was asked for first and the answer then thrown away.
+- **"I'll keep watching" after the watch was gone.** "Watching" was
+  remembered on the phone; after the watch was stopped from Home or ran
+  out, Zeno still said so and offered nothing. Checked against GET
+  /buy-agent-requests/me when the conversation is picked up again.
+- **Two searches returning the same listing broke opening it.** Every card
+  carries a Hero tagged with its listing id; two on one screen is an
+  assertion (and, in release, a photo flying from the wrong card). Only
+  the newest card for each listing flies now.
+- **A failed turn had to be retyped**, and the retyped message went to Zeno
+  twice (the unanswered one was still in the context). The error now has
+  Try again, which replaces the failed exchange.
+
 # Zeno watches end after 30 days (2026-09-26)
 
 A watch used to run for ever: a year-old one with negotiation authorised

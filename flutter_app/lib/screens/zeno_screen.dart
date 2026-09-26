@@ -29,6 +29,14 @@
 // glowing title with Home's Zeno avatar, brand-gradient bubbles and
 // Home's search-pill composer, instead of flat grey bars over its own
 // background.
+//
+// Later the same day, the Buying Agent got motion that shows it working
+// (features/buy_agent/presentation/widgets/agent_motion.dart): an animated
+// core before the first message, what Zeno has gathered as a live "brief"
+// under the header, a radar card while it searches, results as a deck of
+// cards to swipe through instead of a 210px column each, and a watch that
+// switches on with a burst. The same pass fixed the screen's weak spots -
+// see CHANGES.md and test/buy_agent_ui_test.dart.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -51,7 +59,10 @@ import '../models/models.dart';
 // CI red on the first push of the conversational buying agent.
 import '../core/utils/result.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
+import '../features/buy_agent/presentation/widgets/agent_motion.dart';
 import '../features/listings/domain/models/listing.dart';
+import '../theme/motion.dart';
+import '../utils/price_format.dart';
 
 /// What this screen is being used for. See the file header.
 enum ZenoMode { assistant, buyingAgent }
@@ -64,7 +75,10 @@ enum ZenoMode { assistant, buyingAgent }
 class _Turn {
   final Message message;
   final List<dynamic> matches;
-  const _Turn(this.message, {this.matches = const []});
+
+  /// Set on a reply that never came: the message to send again.
+  final String? retry;
+  const _Turn(this.message, {this.matches = const [], this.retry});
 }
 
 // ── Language definitions ──────────────────────────────────────────────────────
@@ -129,6 +143,24 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// by word. Anything restored from earlier is simply there.
   final Set<_Turn> _fresh = Set.identity();
 
+  /// Bubbles that have just been added, for their entrance, and result
+  /// turns whose cards have not been dealt yet. Each is cleared after its
+  /// first frame, so scrolling a bubble away and back doesn't replay it.
+  final Set<_Turn> _arriving = Set.identity();
+  final Set<_Turn> _dealing = Set.identity();
+
+  /// Which conversation this is. "New chat" moves it on, and a reply that
+  /// comes back for an earlier one is dropped: it used to land in the new
+  /// conversation, bringing the old one's criteria with it.
+  int _epoch = 0;
+
+  /// Goes up for each confetti burst - an exact match, a watch set.
+  int _confetti = 0;
+
+  /// When the watch was set in this visit, so its card bursts once as it
+  /// turns on - and not on a conversation picked up again later.
+  DateTime? _watchSetAt;
+
   bool get _isBuying => widget.mode == ZenoMode.buyingAgent;
 
   /// ZenoChatStore's key for this mode's conversation.
@@ -167,6 +199,10 @@ class _ZenoScreenState extends State<ZenoScreen>
   bool _searching = false;
   int _searchPhase = 0;
   Timer? _searchTicker;
+  // A Timer, not a Future.delayed: the delay has to be cancellable. The
+  // Future could not be, so a quick turn's delay fired into the NEXT turn
+  // and announced a search 2.2s after the earlier message.
+  Timer? _searchDelay;
   static const _searchPhases = [
     'Scanning Broka listings…',
     'Matching against your specs…',
@@ -259,6 +295,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     _scrollCtrl.dispose();
     _pulseCtrl.dispose();
     _searchTicker?.cancel();
+    _searchDelay?.cancel();
     _tts.stop();
     _voice.dispose();
     super.dispose();
@@ -294,7 +331,23 @@ class _ZenoScreenState extends State<ZenoScreen>
       _restoring = false;
     });
     _scrollDown(animate: false);
+    if (_isBuying && _watching) _checkWatchStillOn();
     if (fresh) _send(initial);
+  }
+
+  /// "Watching" is remembered on the phone, but the watch itself lives on
+  /// the server, and may have been stopped from Home or run out since. Zeno
+  /// went on saying it was keeping watch - and offered nothing to start
+  /// another. Only a definite "none running" clears it: offline says
+  /// nothing either way.
+  Future<void> _checkWatchStillOn() async {
+    final epoch = _epoch;
+    final result = await buyAgentRepository.getActive();
+    if (!mounted || epoch != _epoch) return;
+    if (result.isSuccess && result.data == null) {
+      setState(() => _watching = false);
+      _persist();
+    }
   }
 
   /// Saves the conversation as it stands. Called after every turn.
@@ -353,16 +406,26 @@ class _ZenoScreenState extends State<ZenoScreen>
     if (ok != true || !mounted) return;
     // Not awaited: silencing a reply mid-sentence must not hold up the reset.
     unawaited(_tts.stop());
+    // Before the await below, so a reply arriving meanwhile is already
+    // for an old conversation.
+    _epoch++;
+    _setSearching(false);
     await ZenoChatStore.clear(_storeMode);
     if (!mounted) return;
     setState(() {
       _turns.clear();
       _fresh.clear();
+      _arriving.clear();
+      _dealing.clear();
       _history.clear();
       _slots = {};
       _questionsAsked = 0;
       _lastVerdict = null;
       _watching = false;
+      _watchSetAt = null;
+      // A reply still on its way belongs to the old conversation; this one
+      // can start at once.
+      _typing = false;
       _negotiationOpened.clear();
       _addWelcome();
     });
@@ -407,12 +470,20 @@ class _ZenoScreenState extends State<ZenoScreen>
     _turns.add(_Turn(Message(role: 'broker', content: welcomeMsg)));
   }
 
+  /// Adds a bubble that should arrive rather than just be there.
+  void _addArriving(_Turn turn, {bool writing = false}) {
+    _turns.add(turn);
+    _arriving.add(turn);
+    if (writing) _fresh.add(turn);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _arriving.remove(turn));
+  }
+
   Future<void> _send([String? override]) async {
     final text = (override ?? _msgCtrl.text).trim();
     if (text.isEmpty || _typing) return;
     _msgCtrl.clear();
     setState(() {
-      _turns.add(_Turn(Message(role: 'user', content: text)));
+      _addArriving(_Turn(Message(role: 'user', content: text)));
       _typing = true;
     });
     _scrollDown();
@@ -423,9 +494,10 @@ class _ZenoScreenState extends State<ZenoScreen>
     final context40 = _recentHistory(40);
     _history.add({'role': 'user', 'content': text});
     _persist();
+    final epoch = _epoch;
 
     if (_isBuying) {
-      await _sendBuyingTurn(text, context40);
+      await _sendBuyingTurn(text, context40, epoch);
       return;
     }
 
@@ -435,27 +507,48 @@ class _ZenoScreenState extends State<ZenoScreen>
         history: context20,
         language: _langKey,
       );
-      if (mounted) {
-        _history.add({'role': 'assistant', 'content': reply});
-        final turn = _Turn(Message(role: 'broker', content: reply));
-        setState(() {
-          _turns.add(turn);
-          _fresh.add(turn);
-          _typing = false;
-        });
-        _persist();
-        if (_ttsEnabled) _speak(reply);
-      }
+      if (!mounted || epoch != _epoch) return;
+      _history.add({'role': 'assistant', 'content': reply});
+      setState(() {
+        _addArriving(_Turn(Message(role: 'broker', content: reply)), writing: true);
+        _typing = false;
+      });
+      _persist();
+      if (_ttsEnabled) _speak(reply);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _turns.add(const _Turn(Message(role: 'broker',
-              content: '⚠️ Zeno is unavailable right now. Please try again shortly.')));
-          _typing = false;
-        });
-      }
+      if (!mounted || epoch != _epoch) return;
+      _turnFailed(text, '⚠️ Zeno is unavailable right now. Please try again shortly.');
     }
     _scrollDown();
+  }
+
+  /// A turn whose reply never came. The error carries the message, so
+  /// "Try again" needs nothing retyped. Not saved - as before, a failure
+  /// is not part of the conversation to come back to.
+  void _turnFailed(String text, String error) {
+    setState(() {
+      _addArriving(_Turn(Message(role: 'broker', content: error), retry: text));
+      _typing = false;
+    });
+  }
+
+  /// Sends a failed message again. The unanswered exchange - the message
+  /// and the error under it - makes way for the new attempt, and the
+  /// message comes out of the context first: left in, the retry put it in
+  /// front of Zeno twice.
+  void _retry(_Turn failed) {
+    final text = failed.retry;
+    if (text == null || _typing || !identical(_turns.lastOrNull, failed)) return;
+    setState(() {
+      _turns.removeLast();
+      final mine = _turns.lastOrNull;
+      if (mine != null && mine.message.role == 'user' && mine.message.content == text) {
+        _turns.removeLast();
+      }
+    });
+    final h = _history.lastIndexWhere((e) => e['role'] == 'user' && e['content'] == text);
+    if (h != -1) _history.removeAt(h);
+    _send(text);
   }
 
   /// One turn of the buying conversation.
@@ -464,7 +557,7 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// the server does, and returns whichever it ran. That keeps the question
   /// budget, the criteria and the honesty of the result in one place
   /// instead of split across a client that could drift out of step with it.
-  Future<void> _sendBuyingTurn(String text, List<Map<String, String>> history) async {
+  Future<void> _sendBuyingTurn(String text, List<Map<String, String>> history, int epoch) async {
     // When the caption appears, and why it is a guess rather than a fact:
     // only the server knows whether this turn is a question or a search,
     // and it says so in the response - which arrives at the END. Two
@@ -474,10 +567,11 @@ class _ZenoScreenState extends State<ZenoScreen>
     // search is two plus a ranked scan, so anything still running after a
     // couple of seconds is almost certainly the search. A turn that
     // resolves quickly never shows it at all.
+    _searchDelay?.cancel();
     if (_questionsAsked >= 2) {
       _setSearching(true);
     } else {
-      Future.delayed(const Duration(milliseconds: 2200), () {
+      _searchDelay = Timer(const Duration(milliseconds: 2200), () {
         if (mounted && _typing && !_searching) _setSearching(true);
       });
     }
@@ -490,8 +584,11 @@ class _ZenoScreenState extends State<ZenoScreen>
       lat: ApiService.currentUserLat,
       lng: ApiService.currentUserLng,
     );
+    // An answer for a conversation that has since been started over. It
+    // must not touch this one - not even to stop its "searching" caption,
+    // which may belong to a search the new conversation is running.
+    if (!mounted || epoch != _epoch) return;
     _setSearching(false);
-    if (!mounted) return;
 
     result.fold(
       onSuccess: (data) {
@@ -506,22 +603,19 @@ class _ZenoScreenState extends State<ZenoScreen>
           // A fresh search replaces the old offer to keep watching - the
           // criteria it would have watched for have moved on.
           if (data['phase'] == 'RESULTS') _watching = false;
-          _turns.add(turn);
-          _fresh.add(turn);
+          _addArriving(turn, writing: true);
+          if (matches.isNotEmpty) _dealing.add(turn);
           _typing = false;
         });
         _persist();
         if (_ttsEnabled && reply.isNotEmpty) _speak(reply);
       },
-      onFailure: (msg, code) => setState(() {
-        _turns.add(_Turn(Message(
-          role: 'broker',
-          content: code == 429
-              ? "I need a moment — that's a lot of searching at once. Try me again shortly."
-              : "⚠️ I couldn't get that search through just now. Try me again in a moment.",
-        )));
-        _typing = false;
-      }),
+      onFailure: (msg, code) => _turnFailed(
+        text,
+        code == 429
+            ? "I need a moment — that's a lot of searching at once. Try me again shortly."
+            : "⚠️ I couldn't get that search through just now. Try me again in a moment.",
+      ),
     );
     _scrollDown();
   }
@@ -532,6 +626,7 @@ class _ZenoScreenState extends State<ZenoScreen>
   void _setSearching(bool on) {
     _searchTicker?.cancel();
     if (!on) {
+      _searchDelay?.cancel();
       if (mounted) setState(() { _searching = false; _searchPhase = 0; });
       return;
     }
@@ -621,19 +716,23 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// watch they already had, so a second refusal is reported rather than
   /// offered again.
   Future<void> _keepWatching({bool replacing = false}) async {
-    var maxPrice = (_slots['max_price'] as num?)?.toDouble();
-    if (maxPrice == null) {
-      maxPrice = await _askBudget();
-      if (maxPrice == null || !mounted) return;
-      _slots['max_price'] = maxPrice;
-    }
+    // The category first: a watch can't be made without one, and asking
+    // for a budget only to refuse afterwards threw the answer away.
     if (_slots['category'] == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text("Tell me roughly what kind of thing it is first, and I can watch for it."),
       ));
       return;
     }
+    var maxPrice = (_slots['max_price'] as num?)?.toDouble();
+    if (maxPrice == null) {
+      maxPrice = await _askBudget();
+      if (maxPrice == null || !mounted) return;
+      // setState: the brief under the header shows the budget.
+      setState(() => _slots['max_price'] = maxPrice);
+    }
 
+    final epoch = _epoch;
     setState(() => _watchBusy = true);
     final result = await buyAgentRepository.watchFromSlots(
       _slots,
@@ -642,10 +741,17 @@ class _ZenoScreenState extends State<ZenoScreen>
     );
     if (!mounted) return;
     setState(() => _watchBusy = false);
+    // Started over meanwhile: the watch is set, and Home shows it, but this
+    // conversation has nothing to say about it.
+    if (epoch != _epoch) return;
     result.fold(
       onSuccess: (data) {
         if (data['status'] == 'SUCCESS') {
-          setState(() => _watching = true);
+          setState(() {
+            _watching = true;
+            _watchSetAt = DateTime.now();
+            _confetti++;
+          });
           _persist();
         } else if (data['error_code'] == 'ACTIVE_REQUEST_EXISTS' && !replacing) {
           // One watch at a time. This used to tell the buyer to "cancel
@@ -654,7 +760,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           // the only one a buyer would ever get. Offer the swap right here.
           _offerToReplaceWatch();
         } else {
-          setState(() => _turns.add(_Turn(Message(
+          setState(() => _addArriving(_Turn(Message(
             role: 'broker',
             content: data['message'] as String? ?? "I couldn't set that watch up just now.",
           ))));
@@ -708,46 +814,8 @@ class _ZenoScreenState extends State<ZenoScreen>
     await _keepWatching(replacing: true);
   }
 
-  Future<double?> _askBudget() async {
-    final ctrl = TextEditingController();
-    return showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: BrokaColors.bgCard,
-        title: const Text("What's your ceiling?",
-            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text("To keep watching I need a top price, so I only bring you things "
-              "you'd actually consider.",
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            style: const TextStyle(color: BrokaColors.textHigh),
-            decoration: const InputDecoration(
-              prefixText: 'KES ',
-              prefixStyle: TextStyle(color: BrokaColors.textMid),
-              hintText: '80000',
-              hintStyle: TextStyle(color: BrokaColors.textLow),
-            ),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid))),
-          TextButton(
-            onPressed: () {
-              final v = double.tryParse(ctrl.text.trim().replaceAll(',', ''));
-              Navigator.pop(ctx, (v != null && v > 0) ? v : null);
-            },
-            child: const Text('Watch for it', style: TextStyle(color: BrokaColors.gold)),
-          ),
-        ],
-      ),
-    );
-  }
+  Future<double?> _askBudget() =>
+      showDialog<double>(context: context, builder: (_) => const _BudgetDialog());
 
   /// [animate] false jumps - for a restored conversation, which should open
   /// at its latest message rather than scroll there in front of the user.
@@ -770,8 +838,18 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// A reply has finished writing itself out: show what came with it.
   void _streamed(_Turn turn) {
     if (!mounted || !_fresh.remove(turn)) return;
-    setState(() {});
-    if (turn.matches.isNotEmpty) _scrollDown();
+    final allExact = turn.matches.isNotEmpty &&
+        turn.matches.every((m) => m is Map && m['match_is_exact'] == true);
+    setState(() {
+      // Everything asked for, found: that deserves more than a sentence.
+      if (allExact) _confetti++;
+    });
+    // The cards are dealt on the frame they first appear, and only then.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _dealing.remove(turn));
+    // Cards, or the offer to keep watching, have just appeared under the
+    // reply - bring them into view.
+    final offersWatch = _isBuying && _lastVerdict == 'EMPTY' && identical(turn, _turns.lastOrNull);
+    if (turn.matches.isNotEmpty || offersWatch) _scrollDown();
   }
 
   /// Keeps a reply that is being written in view as it grows - unless the
@@ -817,18 +895,43 @@ class _ZenoScreenState extends State<ZenoScreen>
               ),
             ),
             child: SafeArea(
-              child: Column(children: [
-                _buildHeader(),
-                Expanded(child: _buildMessages()),
-                if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
-                if (!_restoring && !_hasConversation) _buildSuggestions(),
-                _buildInputBar(),
+              child: Stack(children: [
+                Column(children: [
+                  _buildHeader(),
+                  // What Zeno has gathered, growing in under the header as
+                  // it learns it. No AnimatedSize under reduced motion: at a
+                  // zero duration it asserts that it was mutated in its own
+                  // layout.
+                  if (_isBuying)
+                    BrokaMotion.reduced(context)
+                        ? AgentBriefStrip(slots: _slots)
+                        : AnimatedSize(
+                            duration: BrokaMotion.standard,
+                            curve: BrokaMotion.enter,
+                            alignment: Alignment.topCenter,
+                            child: AgentBriefStrip(slots: _slots),
+                          ),
+                  Expanded(child: _buildMessages()),
+                  if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
+                  if (!_restoring && !_hasConversation) _buildSuggestions(),
+                  _buildInputBar(),
+                ]),
+                Positioned.fill(child: AgentConfetti(burst: _confetti)),
               ]),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// What the header says Zeno is doing, and the colour of its dot.
+  (String, Color) get _agentState {
+    if (!_isBuying) return ('AI Market Assistant', BrokaColors.neonGreen);
+    if (_searching) return ('Hunting…', BrokaColors.neonCyan);
+    if (_typing) return ('Thinking…', BrokaColors.neonPurple);
+    if (_watching) return ('On watch', BrokaColors.success);
+    return ('Buying Agent', BrokaColors.neonGreen);
   }
 
   /// Home's header language: a bare back chevron, the avatar Home uses for
@@ -847,22 +950,27 @@ class _ZenoScreenState extends State<ZenoScreen>
           icon: const Icon(Icons.arrow_back_ios_new_rounded,
               color: BrokaColors.textHigh, size: 19),
         ),
-        AnimatedBuilder(
-          animation: _pulseCtrl,
-          builder: (_, child) => Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: BrokaColors.neonBlue.withOpacity(0.18 + 0.14 * _pulseCtrl.value),
-                  blurRadius: 12 + 6 * _pulseCtrl.value,
-                ),
-              ],
+        // The Buying Agent's Zeno is the one Home's CTA flies into: in a
+        // ring that turns faster while it works.
+        if (_isBuying)
+          AgentOrb(size: 36, heroTag: kBuyingAgentHeroTag, busy: _typing)
+        else
+          AnimatedBuilder(
+            animation: _pulseCtrl,
+            builder: (_, child) => Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: BrokaColors.neonBlue.withOpacity(0.18 + 0.14 * _pulseCtrl.value),
+                    blurRadius: 12 + 6 * _pulseCtrl.value,
+                  ),
+                ],
+              ),
+              child: child,
             ),
-            child: child,
+            child: const ZenoAvatar(size: 38, glow: true),
           ),
-          child: const ZenoAvatar(size: 38, glow: true),
-        ),
         const SizedBox(width: 11),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -870,18 +978,40 @@ class _ZenoScreenState extends State<ZenoScreen>
                 gradient: _zenoGradient, fontSize: 20, maxLines: 1, letterSpacing: 1.6),
             const SizedBox(height: 3),
             Row(children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: const BoxDecoration(shape: BoxShape.circle, color: BrokaColors.neonGreen),
+              // The agent's state, not only that it is online: the dot
+              // takes the colour of what it is doing and breathes while it
+              // is busy.
+              AnimatedBuilder(
+                animation: _pulseCtrl,
+                builder: (_, __) {
+                  final busy = _isBuying && _typing;
+                  return Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _agentState.$2.withOpacity(busy ? 0.4 + 0.6 * _pulseCtrl.value : 1),
+                      boxShadow: busy
+                          ? [BoxShadow(color: _agentState.$2.withOpacity(0.6), blurRadius: 6)]
+                          : null,
+                    ),
+                  );
+                },
               ),
               const SizedBox(width: 5),
               Flexible(
-                child: Text(
-                  '${_isBuying ? 'Buying Agent' : 'AI Market Assistant'} · ${lang.flag} ${lang.name}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5),
+                child: AnimatedSwitcher(
+                  duration: BrokaMotion.quick,
+                  layoutBuilder: (current, previous) => Stack(
+                      alignment: Alignment.centerLeft,
+                      children: [...previous, if (current != null) current]),
+                  child: Text(
+                    '${_agentState.$1} · ${lang.flag} ${lang.name}',
+                    key: ValueKey(_agentState.$1),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5),
+                  ),
                 ),
               ),
             ]),
@@ -909,40 +1039,116 @@ class _ZenoScreenState extends State<ZenoScreen>
     );
   }
 
-  Widget _buildMessages() => ListView.builder(
-    controller: _scrollCtrl,
-    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-    itemCount: _turns.length,
-    itemBuilder: (_, i) {
-      final turn = _turns[i];
-      final isLast = i == _turns.length - 1;
-      // What Zeno found comes after Zeno has said so, not under a sentence
-      // still being written.
-      final writing = _fresh.contains(turn);
-      final bubble = _ZenoBubble(
-        message: turn.message,
-        stream: writing,
-        onStreamed: () => _streamed(turn),
-        onGrow: _followStream,
-      );
-      if (turn.matches.isEmpty || writing) {
-        // The offer to keep watching belongs on the last turn even when it
-        // found nothing - an empty search is exactly when a standing watch
-        // is worth the most.
-        final offerWatch = _isBuying && isLast && _lastVerdict == 'EMPTY' && !writing;
+  Widget _buildMessages() {
+    // In the Buying Agent the list's first row is the agent's core. It is
+    // always there, collapsing to nothing once the conversation starts, so
+    // no bubble's row - and the state of a reply being written in it - ever
+    // shifts by one.
+    final lead = _isBuying ? 1 : 0;
+    // Which turn's cards may fly into the product screen: the newest one
+    // holding each listing. Two searches often return the same listing, and
+    // two Heroes with one tag on a screen is an assertion the moment either
+    // is tapped - and, in a release build, a photo flying from the wrong one.
+    final heroTurn = <String, _Turn>{};
+    for (final t in _turns.reversed) {
+      for (final m in t.matches) {
+        if (m is Map && m['id'] is String) heroTurn.putIfAbsent(m['id'] as String, () => t);
+      }
+    }
+    return ListView.builder(
+      controller: _scrollCtrl,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      itemCount: _turns.length + lead,
+      itemBuilder: (_, index) {
+        if (index < lead) return _buildCore();
+        final i = index - lead;
+        final turn = _turns[i];
+        final isLast = i == _turns.length - 1;
+        // What Zeno found comes after Zeno has said so, not under a sentence
+        // still being written.
+        final writing = _fresh.contains(turn);
+        final bubble = AgentEntrance(
+          play: _arriving.contains(turn),
+          fromUser: !turn.message.isBroker,
+          child: _ZenoBubble(
+            message: turn.message,
+            stream: writing,
+            onStreamed: () => _streamed(turn),
+            onGrow: _followStream,
+          ),
+        );
+        if (turn.matches.isEmpty || writing) {
+          // The offer to keep watching belongs on the last turn even when it
+          // found nothing - an empty search is exactly when a standing watch
+          // is worth the most.
+          final offerWatch = _isBuying && isLast && _lastVerdict == 'EMPTY' && !writing;
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            bubble,
+            if (turn.retry != null && isLast && !_typing) _buildRetry(turn),
+            if (offerWatch) _buildWatchOffer(),
+          ]);
+        }
+        final exact = turn.matches.where((m) => m is Map && m['match_is_exact'] == true).length;
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           bubble,
-          if (offerWatch) _buildWatchOffer(),
+          Padding(
+            padding: const EdgeInsets.only(left: 36, bottom: 14),
+            child: AgentMatchCarousel(
+              key: ObjectKey(turn),
+              count: turn.matches.length,
+              exact: exact,
+              dealIn: _dealing.contains(turn),
+              itemBuilder: (_, k) {
+                final match = (turn.matches[k] as Map).cast<String, dynamic>();
+                return _buildMatchCard(match, hero: identical(heroTurn[match['id']], turn));
+              },
+            ),
+          ),
+          if (isLast) _buildWatchOffer(),
+          const SizedBox(height: 4),
         ]);
-      }
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        bubble,
-        ...turn.matches.map((m) => _buildMatchCard(m as Map<String, dynamic>)),
-        if (isLast) _buildWatchOffer(),
-        const SizedBox(height: 4),
-      ]);
-    },
+      },
+    );
+  }
+
+  /// The Buying Agent before anything has been asked: its core, and what it
+  /// does. Collapses away as the first message goes.
+  Widget _buildCore() {
+    final show = !_restoring && !_hasConversation;
+    return AnimatedSwitcher(
+      duration: BrokaMotion.of(context, const Duration(milliseconds: 650)),
+      switchInCurve: BrokaMotion.enter,
+      switchOutCurve: BrokaMotion.exit,
+      transitionBuilder: (child, a) => SizeTransition(
+        sizeFactor: a,
+        axisAlignment: -1,
+        child: FadeTransition(
+          opacity: a,
+          child: ScaleTransition(scale: Tween(begin: 0.7, end: 1.0).animate(a), child: child),
+        ),
+      ),
+      child: show
+          ? AgentCoreHero(
+              key: const ValueKey('core'),
+              orbit: [for (final s in _buyingSuggestions) s.$1],
+              subtitle: "Tell me what you're after. I'll ask a question or two, "
+                  'hunt it down across BROKA, and negotiate with the seller for you.',
+            )
+          : const SizedBox(key: ValueKey('none'), width: double.infinity),
+    );
+  }
+
+  Widget _buildRetry(_Turn turn) => Padding(
+    padding: const EdgeInsets.only(left: 36, bottom: 12),
+    child: SizedBox(
+      width: 150,
+      child: AgentActionButton(
+        label: 'Try again',
+        icon: Icons.refresh_rounded,
+        onTap: () => _retry(turn),
+      ),
+    ),
   );
 
   /// One result, with what it falls short on stated on its face.
@@ -952,82 +1158,66 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// the buyer is shown is the concrete shortfall the backend measured
   /// ("8GB RAM, you wanted 12GB"), which is a fact about the listing, not a
   /// number about our confidence.
-  Widget _buildMatchCard(Map<String, dynamic> match) {
+  ///
+  /// A page of AgentMatchCarousel: the card takes what the fixed-height
+  /// shortfall line and the button leave.
+  Widget _buildMatchCard(Map<String, dynamic> match, {required bool hero}) {
     final listing = BrokaListing.fromJson(match);
     final misses = (match['match_misses'] as List?) ?? const [];
     final isExact = match['match_is_exact'] == true;
+    final opened = _negotiationOpened.contains(listing.id);
+    final busy = _negotiating.contains(listing.id);
 
-    return Padding(
-      padding: const EdgeInsets.only(left: 38, bottom: 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(
-          height: 210,
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Expanded(
+        child: HeroMode(
+          enabled: hero,
           child: ProductCard(
             item: listing,
             onTap: () => Navigator.pushNamed(
                 context, '/product', arguments: {'listingId': listing.id}),
           ),
         ),
-        if (isExact)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Row(children: [
-              Icon(Icons.check_circle_rounded, size: 13, color: BrokaColors.success),
-              SizedBox(width: 5),
-              Text('Matches everything you asked for',
-                  style: TextStyle(color: BrokaColors.success, fontSize: 11.5,
-                      fontWeight: FontWeight.w600)),
-            ]),
-          )
-        else if (misses.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Wrap(spacing: 6, runSpacing: 6, children: [
-              for (final raw in misses.take(3))
-                _shortfallChip(raw as Map<String, dynamic>),
-            ]),
-          ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: SizedBox(
-            width: double.infinity,
-            child: _negotiationOpened.contains(listing.id)
-                ? OutlinedButton.icon(
-                    onPressed: () => Navigator.pushNamed(
-                        context, '/negotiate', arguments: {'listingId': listing.id}),
-                    icon: const Icon(Icons.check_rounded, size: 15, color: BrokaColors.success),
-                    label: const Text('Zeno reached out — open chat',
-                        style: TextStyle(color: BrokaColors.success, fontSize: 12.5,
-                            fontWeight: FontWeight.w600)),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: BrokaColors.success.withOpacity(0.4)),
-                      padding: const EdgeInsets.symmetric(vertical: 9),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  )
-                : OutlinedButton.icon(
-                    onPressed: _negotiating.contains(listing.id)
-                        ? null
-                        : () => _startNegotiation(listing),
-                    icon: _negotiating.contains(listing.id)
-                        ? const SizedBox(width: 15, height: 15,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: BrokaColors.neonBlue))
-                        : const Icon(Icons.chat_bubble_outline_rounded,
-                            size: 15, color: BrokaColors.neonBlue),
-                    label: const Text('Ask Zeno to negotiate this one',
-                        style: TextStyle(color: BrokaColors.neonBlue, fontSize: 12.5,
-                            fontWeight: FontWeight.w600)),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: BrokaColors.neonBlue.withOpacity(0.4)),
-                      padding: const EdgeInsets.symmetric(vertical: 9),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-          ),
-        ),
-      ]),
-    );
+      ),
+      const SizedBox(height: 8),
+      SizedBox(
+        height: 24,
+        child: isExact
+            ? const Row(children: [
+                Icon(Icons.check_circle_rounded, size: 14, color: BrokaColors.success),
+                SizedBox(width: 5),
+                Flexible(
+                  child: Text('Matches everything you asked for',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: BrokaColors.success, fontSize: 11.5,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ])
+            // A second line of shortfalls is cut off rather than scrolled:
+            // a sideways scroller inside a card you swipe sideways steals
+            // the swipe.
+            : Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  for (final raw in misses.take(3))
+                    if (raw is Map) _shortfallChip(raw.cast<String, dynamic>()),
+                ],
+              ),
+      ),
+      const SizedBox(height: 8),
+      AgentActionButton(
+        label: opened ? 'Zeno reached out — open chat' : 'Ask Zeno to negotiate this one',
+        icon: opened ? Icons.forum_rounded : Icons.handshake_rounded,
+        done: opened,
+        busy: busy,
+        onTap: opened
+            ? () => Navigator.pushNamed(context, '/negotiate', arguments: {'listingId': listing.id})
+            : (busy ? null : () => _startNegotiation(listing)),
+      ),
+    ]);
   }
 
   Widget _shortfallChip(Map<String, dynamic> miss) {
@@ -1038,14 +1228,18 @@ class _ZenoScreenState extends State<ZenoScreen>
         ? "$field not stated (you wanted $wanted)"
         : "$field $actual, you wanted $wanted";
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: BrokaColors.gold.withOpacity(0.10),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: BrokaColors.gold.withOpacity(0.35)),
       ),
-      child: Text(label, style: const TextStyle(
-          color: BrokaColors.gold, fontSize: 10.5, fontWeight: FontWeight.w600)),
+      child: Text(label,
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+              color: BrokaColors.gold, fontSize: 10.5, fontWeight: FontWeight.w600)),
     );
   }
 
@@ -1068,102 +1262,64 @@ class _ZenoScreenState extends State<ZenoScreen>
   Widget _buildWatchOffer() {
     if (!_isBuying) return const SizedBox.shrink();
     if (_slots['category'] == null && _slots['query'] == null) return const SizedBox.shrink();
-
-    if (_watching) {
-      return const Padding(
-        padding: EdgeInsets.only(left: 38, bottom: 14),
-        child: Row(children: [
-          Icon(Icons.visibility_rounded, size: 14, color: BrokaColors.success),
-          SizedBox(width: 6),
-          Flexible(child: Text("I'll keep watching and tell you when something turns up.",
-              style: TextStyle(color: BrokaColors.success, fontSize: 12,
-                  fontWeight: FontWeight.w600))),
-        ]),
-      );
-    }
-
+    final setAt = _watchSetAt;
     return Padding(
-      padding: const EdgeInsets.only(left: 38, bottom: 14),
-      child: OutlinedButton.icon(
-        onPressed: _watchBusy ? null : _keepWatching,
-        icon: _watchBusy
-            ? const SizedBox(width: 14, height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.gold))
-            : const Icon(Icons.visibility_outlined, size: 15, color: BrokaColors.gold),
-        label: const Text('Keep watching for me',
-            style: TextStyle(color: BrokaColors.gold, fontSize: 12.5,
-                fontWeight: FontWeight.w600)),
-        style: OutlinedButton.styleFrom(
-          side: BorderSide(color: BrokaColors.gold.withOpacity(0.4)),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
+      padding: const EdgeInsets.only(left: 36, bottom: 14),
+      child: AgentWatchOffer(
+        watching: _watching,
+        busy: _watchBusy,
+        onWatch: _keepWatching,
+        celebrate: setAt != null && DateTime.now().difference(setAt) < const Duration(seconds: 2),
       ),
     );
   }
 
-  Widget _buildSearchingIndicator() => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-    child: Row(children: [
-      AnimatedBuilder(
-        animation: _pulseCtrl,
-        builder: (_, child) => Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            boxShadow: [BoxShadow(
-              color: BrokaColors.neonBlue.withOpacity(0.25 + 0.35 * _pulseCtrl.value),
-              blurRadius: 10 + 10 * _pulseCtrl.value,
-            )],
-          ),
-          child: child,
-        ),
-        child: const ZenoAvatar(size: 28),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 320),
-          child: Text(
-            _searchPhases[_searchPhase],
-            key: ValueKey(_searchPhase),
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5,
-                fontStyle: FontStyle.italic),
-          ),
-        ),
-      ),
-    ]),
+  Widget _buildSearchingIndicator() => AgentScanCard(
+    caption: _searchPhases[_searchPhase],
+    step: _searchPhase,
+    steps: _searchPhases.length,
   );
 
   Widget _buildTypingIndicator() => const Padding(
     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-    child: ZenoTypingBubble(),
+    child: AgentEntrance(play: true, fromUser: false, child: ZenoTypingBubble()),
   );
 
   /// Openers as chips floating over the constellation, like a Zone's
-  /// subcategory rail - not a grey band across the screen.
+  /// subcategory rail - not a grey band across the screen. They fly in from
+  /// the right one after another.
   Widget _buildSuggestions() => SizedBox(
     height: 50,
     child: ListView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       children: [
-        for (final s in _suggestions)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Material(
-              color: BrokaColors.bgCard.withOpacity(0.86),
-              shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonPurple.withOpacity(0.35))),
-              child: InkWell(
-                customBorder: const StadiumBorder(),
-                onTap: () => _send(s.$2),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Text(s.$1, style: const TextStyle(fontSize: 14)),
-                    const SizedBox(width: 6),
-                    Text(s.$2, style: const TextStyle(
-                        color: BrokaColors.textHigh, fontSize: 12.5)),
-                  ]),
+        for (final (i, s) in _suggestions.indexed)
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: 1),
+            duration: BrokaMotion.of(context, const Duration(milliseconds: 900)),
+            curve: Interval((0.1 * i).clamp(0.0, 0.5), 1.0, curve: Curves.easeOutBack),
+            builder: (_, v, child) => Opacity(
+              opacity: v.clamp(0.0, 1.0),
+              child: Transform.translate(offset: Offset(60 * (1 - v), 0), child: child),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Material(
+                color: BrokaColors.bgCard.withOpacity(0.86),
+                shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonPurple.withOpacity(0.35))),
+                child: InkWell(
+                  customBorder: const StadiumBorder(),
+                  onTap: () => _send(s.$2),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(s.$1, style: const TextStyle(fontSize: 14)),
+                      const SizedBox(width: 6),
+                      Text(s.$2, style: const TextStyle(
+                          color: BrokaColors.textHigh, fontSize: 12.5)),
+                    ]),
+                  ),
                 ),
               ),
             ),
@@ -1276,6 +1432,12 @@ class _ZenoBubble extends StatelessWidget {
   final VoidCallback? onGrow;
   const _ZenoBubble({required this.message, this.stream = false, this.onStreamed, this.onGrow});
 
+  static const _zenoCorners = BorderRadius.only(
+      topLeft: Radius.circular(4),
+      topRight: Radius.circular(16),
+      bottomLeft: Radius.circular(16),
+      bottomRight: Radius.circular(16));
+
   @override
   Widget build(BuildContext context) {
     final isAI = message.isBroker;
@@ -1290,53 +1452,132 @@ class _ZenoBubble extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.82),
-              decoration: BoxDecoration(
-                color: isAI ? BrokaColors.bgCard.withOpacity(0.92) : null,
-                gradient: isAI
-                    ? null
-                    : const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
-                borderRadius: isAI
-                    ? const BorderRadius.only(
-                        topLeft: Radius.circular(4),
-                        topRight: Radius.circular(16),
-                        bottomLeft: Radius.circular(16),
-                        bottomRight: Radius.circular(16))
-                    : const BorderRadius.only(
-                        topLeft: Radius.circular(16),
-                        topRight: Radius.circular(4),
-                        bottomLeft: Radius.circular(16),
-                        bottomRight: Radius.circular(16)),
-                border: isAI
-                    ? Border.all(color: BrokaColors.neonPurple.withOpacity(0.30))
-                    : null,
-                boxShadow: isAI
-                    ? null
-                    : [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 10)],
+            // A light runs round the edge of a reply while it is written.
+            child: AgentLiveEdge(
+              active: isAI && stream,
+              borderRadius: _zenoCorners,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                constraints: BoxConstraints(
+                    maxWidth: MediaQuery.of(context).size.width * 0.82),
+                decoration: BoxDecoration(
+                  color: isAI ? BrokaColors.bgCard.withOpacity(0.92) : null,
+                  gradient: isAI
+                      ? null
+                      : const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                  borderRadius: isAI
+                      ? _zenoCorners
+                      : const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(4),
+                          bottomLeft: Radius.circular(16),
+                          bottomRight: Radius.circular(16)),
+                  border: isAI
+                      ? Border.all(color: BrokaColors.neonPurple.withOpacity(0.30))
+                      : null,
+                  boxShadow: isAI
+                      ? null
+                      : [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 10)],
+                ),
+                child: isAI
+                    ? ZenoStreamingText(
+                        message.content,
+                        key: ObjectKey(message),
+                        style: const TextStyle(
+                            color: BrokaColors.textHigh, fontSize: 14.5, height: 1.5),
+                        animate: stream,
+                        onDone: onStreamed,
+                        onGrow: onGrow,
+                      )
+                    : Text(message.content,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 14.5, height: 1.5)),
               ),
-              child: isAI
-                  ? ZenoStreamingText(
-                      message.content,
-                      key: ObjectKey(message),
-                      style: const TextStyle(
-                          color: BrokaColors.textHigh, fontSize: 14.5, height: 1.5),
-                      animate: stream,
-                      onDone: onStreamed,
-                      onGrow: onGrow,
-                    )
-                  : Text(message.content,
-                      style: const TextStyle(
-                          color: Colors.white, fontSize: 14.5, height: 1.5)),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+// ── The budget question ──────────────────────────────────────────────────────
+//
+// Asked only when a watch needs a ceiling the conversation never set. Its
+// own widget so the field's controller is disposed with the field - after
+// the dialog's closing animation, not while it is still on screen. The
+// field is the sell wizard's amount field (KesInputFormatter: digits only,
+// grouped as typed), and an empty answer is answered: it used to close the
+// dialog with no watch and no word, as if the button did nothing.
+class _BudgetDialog extends StatefulWidget {
+  const _BudgetDialog();
+
+  @override
+  State<_BudgetDialog> createState() => _BudgetDialogState();
+}
+
+class _BudgetDialogState extends State<_BudgetDialog> {
+  final _ctrl = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final v = parseKesInput(_ctrl.text);
+    if (v == null || v <= 0) {
+      setState(() => _error = 'Enter an amount, like 80,000.');
+      return;
+    }
+    Navigator.pop(context, v);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: BrokaColors.neonPurple.withOpacity(0.4)),
+        ),
+        title: const Text("What's your ceiling?",
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text("To keep watching I need a top price, so I only bring you things "
+              "you'd actually consider.",
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: const [KesInputFormatter()],
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
+            onSubmitted: (_) => _submit(),
+            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 18, fontWeight: FontWeight.w700),
+            decoration: InputDecoration(
+              prefixText: 'KES ',
+              prefixStyle: const TextStyle(color: BrokaColors.textMid),
+              hintText: '80,000',
+              hintStyle: const TextStyle(color: BrokaColors.textLow),
+              errorText: _error,
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid))),
+          TextButton(
+            onPressed: _submit,
+            child: const Text('Watch for it', style: TextStyle(color: BrokaColors.gold)),
+          ),
+        ],
+      );
 }

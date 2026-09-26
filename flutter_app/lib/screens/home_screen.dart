@@ -52,6 +52,7 @@ import '../features/auctions/presentation/auction_house_screen.dart';
 import 'zeno_screen.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/domain/models/buy_agent_request.dart';
+import '../features/buy_agent/presentation/widgets/agent_motion.dart';
 import 'ai_assistant_screen.dart';
 import 'listing_search_screen.dart';
 import '../features/traders/presentation/trader_list_screen.dart';
@@ -708,6 +709,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // hasMatches, not status == 'matched': "0 matches found!" was reachable
     // whenever the two ever disagreed.
     final matched = req.hasMatches;
+    final tone = matched ? BrokaColors.success : BrokaColors.neonCyan;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: GestureDetector(
@@ -715,17 +717,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
-            color: BrokaColors.bgCard,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [tone.withOpacity(0.10), BrokaColors.bgCard],
+            ),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: BrokaColors.border),
+            border: Border.all(color: tone.withOpacity(0.35)),
           ),
           child: Row(children: [
-            const ZenoAvatar(size: 30, glow: true),
+            // A watch is Zeno working while the buyer isn't: the same
+            // turning ring and radar pings as the agent's own screen, so it
+            // reads as live rather than as a saved search.
+            const AgentOrb(size: 28, pings: true),
             const SizedBox(width: 10),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Zeno is watching for you',
-                    style: TextStyle(color: BrokaColors.textLow, fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
                 const SizedBox(height: 2),
                 Text('${req.category} · Under ${formatKes(req.maxPrice)}',
                     style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w600),
@@ -735,21 +744,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   matched
                       ? '${req.matchCount} match${req.matchCount == 1 ? '' : 'es'} found!'
                       : 'Still searching…',
-                  style: TextStyle(color: matched ? BrokaColors.success : BrokaColors.textLow, fontSize: 11.5),
+                  style: TextStyle(color: matched ? BrokaColors.success : BrokaColors.textMid, fontSize: 11.5),
                 ),
                 // Watches end by themselves (BUY_AGENT_WATCH_DAYS); say when,
                 // so one doesn't just vanish from Home.
                 if (_watchTimeLeft(req) case final left?)
-                  Text(left, style: const TextStyle(color: BrokaColors.textLow, fontSize: 10.5)),
+                  Text(left, style: const TextStyle(color: BrokaColors.textMid, fontSize: 10.5)),
               ]),
             ),
             IconButton(
               tooltip: 'Stop watching',
               onPressed: () => _stopWatching(req),
-              icon: const Icon(Icons.close_rounded, color: BrokaColors.textLow, size: 18),
+              icon: const Icon(Icons.close_rounded, color: BrokaColors.textMid, size: 18),
               visualDensity: VisualDensity.compact,
             ),
-            const Icon(Icons.chevron_right_rounded, color: BrokaColors.textLow, size: 20),
+            const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid, size: 20),
           ]),
         ),
       ),
@@ -2089,89 +2098,98 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
         // RepaintBoundary so the glow's repaint stops here instead of
         // travelling out into the scroll view it sits in.
         child: RepaintBoundary(
-          child: AnimatedBuilder(
-            animation: _glow,
-            // `child` is built once and handed back on every frame - the row
-            // below never rebuilds, only the decoration around it repaints.
-            builder: (context, child) {
-              // Polish pass (2026-09-18, brief §4): 0.12-0.22 -> 0.09-0.15.
-              // A 10-point swing on a shadow next to a feed of product photos
-              // was a light pulsing in the corner of the eye while someone
-              // was trying to read prices. Zeno should earn attention by
-              // looking considered, not by moving.
-              final glow = 0.09 + 0.06 * _glow.value;
-              return Container(
-                padding: EdgeInsets.symmetric(
-                    horizontal: narrow ? 12 : 14, vertical: 9),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF1A1040), Color(0xFF0E1B3D)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.40)),
-                  boxShadow: [
-                    BoxShadow(
-                        color: BrokaColors.neonBlue.withOpacity(glow),
-                        blurRadius: 16,
-                        spreadRadius: 1),
-                  ],
-                ),
-                child: child,
-              );
-            },
-            child: Row(children: [
-              const ZenoAvatar(size: 30, glow: true),
-              SizedBox(width: narrow ? 8 : 11),
-              Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 520),
-                  switchInCurve: Curves.easeOut,
-                  switchOutCurve: Curves.easeIn,
-                  // Plain crossfade. A slide or a scale on a 56px row that
-                  // changes every five seconds is movement in the corner of
-                  // the eye while someone is trying to read listings.
-                  transitionBuilder: (child, animation) =>
-                      FadeTransition(opacity: animation, child: child),
-                  child: Column(
-                    key: ValueKey<int>(_index),
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(_messages[_index],
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              color: BrokaColors.textHigh,
-                              fontSize: narrow ? 13 : 14,
-                              height: 1.2,
-                              fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 1),
-                      Text('Ask Zeno to find and negotiate it',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              color: BrokaColors.textMid,
-                              fontSize: narrow ? 10.5 : 11,
-                              height: 1.2)),
+          // A glint crosses the row once every six seconds, as the message
+          // changes - a single pass of light that then rests, not a pulse:
+          // the brief's worry above was movement that never stops.
+          child: AgentShine(
+            child: AnimatedBuilder(
+              animation: _glow,
+              // `child` is built once and handed back on every frame - the row
+              // below never rebuilds, only the decoration around it repaints.
+              builder: (context, child) {
+                // Polish pass (2026-09-18, brief §4): 0.12-0.22 -> 0.09-0.15.
+                // A 10-point swing on a shadow next to a feed of product photos
+                // was a light pulsing in the corner of the eye while someone
+                // was trying to read prices. Zeno should earn attention by
+                // looking considered, not by moving.
+                final glow = 0.09 + 0.06 * _glow.value;
+                return Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: narrow ? 12 : 14, vertical: 9),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF1A1040), Color(0xFF0E1B3D)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.40)),
+                    boxShadow: [
+                      BoxShadow(
+                          color: BrokaColors.neonBlue.withOpacity(glow),
+                          blurRadius: 16,
+                          spreadRadius: 1),
                     ],
                   ),
+                  child: child,
+                );
+              },
+              child: Row(children: [
+                // Flies into the Buying Agent's header as it opens.
+                const Hero(
+                  tag: kBuyingAgentHeroTag,
+                  child: ZenoAvatar(size: 30, glow: true),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                width: 28,
-                height: 28,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                      colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                SizedBox(width: narrow ? 8 : 11),
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 520),
+                    switchInCurve: Curves.easeOut,
+                    switchOutCurve: Curves.easeIn,
+                    // Plain crossfade. A slide or a scale on a 56px row that
+                    // changes every five seconds is movement in the corner of
+                    // the eye while someone is trying to read listings.
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: Column(
+                      key: ValueKey<int>(_index),
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_messages[_index],
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: BrokaColors.textHigh,
+                                fontSize: narrow ? 13 : 14,
+                                height: 1.2,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 1),
+                        Text('Ask Zeno to find and negotiate it',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: BrokaColors.textMid,
+                                fontSize: narrow ? 10.5 : 11,
+                                height: 1.2)),
+                      ],
+                    ),
+                  ),
                 ),
-                child: const Icon(Icons.arrow_forward_rounded,
-                    color: Colors.white, size: 15),
-              ),
-            ]),
+                const SizedBox(width: 8),
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                        colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                  ),
+                  child: const Icon(Icons.arrow_forward_rounded,
+                      color: Colors.white, size: 15),
+                ),
+              ]),
+            ),
           ),
         ),
       ),

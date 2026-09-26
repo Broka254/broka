@@ -674,6 +674,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `data/repositories/buy_agent_repository.dart` — lib/features/buy_agent/data/repositories/buy_agent_repository.dart
 - `domain/models/buy_agent_request.dart` — lib/features/buy_agent/domain/models/buy_agent_request.dart
+- `presentation/widgets/agent_motion.dart` — BROKA - the Buying Agent's motion.
 
 ### `flutter_app/lib/features/categories/`
 
@@ -839,6 +840,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### Tests (`flutter_app/test/`)
 
+- `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
@@ -929,7 +931,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno watches end after 30 days (2026-09-26)
+- `CHANGES.md` — The Buying Agent, in motion (2026-09-26)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
