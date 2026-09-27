@@ -1,0 +1,49 @@
+name: Trigger auto deployment for broka-api
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ main ]
+    paths:
+    - '**'
+    - '.github/workflows/broka-api-AutoDeployTrigger-7f524fe7-466d-42b4-a745-e4fd147aa06b.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:      
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.BROKAAPI_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.BROKAAPI_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.BROKAAPI_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          _targetLabelKey_: _targetLabel_
+          registryUrl: 
+          registryUsername: ${{ secrets.BROKAAPI_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.BROKAAPI_REGISTRY_PASSWORD }}
+          containerAppName: broka-api
+          resourceGroup: broka-production
+          imageToBuild: default/[parameters('containerAppName')]:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
+
+
