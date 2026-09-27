@@ -3097,6 +3097,21 @@ async def zeno_draft_sms(
     if not effective_buyer_id:
         raise HTTPException(status_code=400, detail="buyer_id required")
 
+    # The thread must exist. _resolve_role_and_buyer takes anyone who isn't
+    # the seller for "the buyer", and takes a seller's buyer_id on trust -
+    # so without this, any signed-in user could have Zeno text any seller,
+    # and a seller any user, and the draft told them the recipient's name
+    # and whether they have a phone. Checked before anything is looked up.
+    # visibility-ok: selects the id only, to prove the thread exists; no content is read
+    in_thread = (await db.execute(
+        select(NegotiationMessage.id).where(
+            NegotiationMessage.listing_id == data.listing_id,
+            NegotiationMessage.buyer_id == effective_buyer_id,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if in_thread is None:
+        raise HTTPException(status_code=403, detail="You can only text someone you're negotiating with.")
+
     listing_r = await db.execute(select(Listing).where(Listing.id == data.listing_id))
     listing = listing_r.scalar_one_or_none()
     if not listing:

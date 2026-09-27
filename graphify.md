@@ -175,23 +175,23 @@ Counts: admin 16, optional 2, public 50, token 4, user 108.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:212) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:484) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:118) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:3941) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:3956) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1677) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:3857) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3177) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:3872) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3192) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3568) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3583) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1729) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:3905) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:3920) |
 | POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3071) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3235) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3486) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3512) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3534) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3250) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3501) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3527) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3549) |
 | POST | `/premium/callback` | public | `premium_callback` (backend/api/domains/premium/router.py:80) |
 | POST | `/premium/callback/{secret}` | public | `premium_callback_secured` (backend/api/domains/premium/router.py:88) |
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
@@ -584,7 +584,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-76 files in `backend/tests/`.
+77 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -662,6 +662,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_user_privacy.py` — BROKA - What one user can see of another Run: pytest backend/tests/test_user_privacy.py -v
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
 - `test_zeno_assistant.py` — BROKA - Zeno as the user's assistant (POST /zeno/assistant/turn) Run: pytest backend/tests/test_zeno_assistant.py -v
+- `test_zeno_draft_sms.py` — Zeno texting the other side of a negotiation (POST /negotiate/zeno-action/draft-sms).
 
 ## Flutter app
 

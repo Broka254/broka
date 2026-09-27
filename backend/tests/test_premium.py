@@ -468,19 +468,29 @@ class TestSmsAlerts:
             await db.commit()
             listing_id = listing.id
         ask = {"listing_id": listing_id, "text": "Still available?", "send": True}
+
+        async def buyer(plan=None):
+            # Only someone in a conversation on the listing may text about it.
+            u, h = await _user(plan)
+            async with AsyncSessionLocal() as db:
+                db.add(NegotiationMessage(listing_id=listing_id, sender_id=u.id, role="buyer",
+                                          recipient_role="seller", buyer_id=u.id, content="Hi"))
+                await db.commit()
+            return h
+
         send = AsyncMock(return_value=True)
         with patch("api.core.sms.get_sms_provider", return_value=SimpleNamespace(send=send)):
-            _, free = await _user()
+            free = await buyer()
             refused = await client.post("/negotiate/zeno-action/draft-sms", headers=free, json=ask)
             assert refused.status_code == 402 and refused.json()["detail"]["upgrade_to"] == "plus"
             send.assert_not_called()
 
-            _, plus = await _user("plus")
+            plus = await buyer("plus")
             assert (await client.post("/negotiate/zeno-action/draft-sms", headers=plus, json=ask)).status_code == 200
             assert (await client.get("/premium/me", headers=plus)).json()["usage"]["sms_alerts"]["used"] == 1
 
             send.return_value = False
-            _, other = await _user("plus")
+            other = await buyer("plus")
             failed = await client.post("/negotiate/zeno-action/draft-sms", headers=other, json=ask)
             assert failed.status_code == 502
             assert (await client.get("/premium/me", headers=other)).json()["usage"]["sms_alerts"]["used"] == 0, \
