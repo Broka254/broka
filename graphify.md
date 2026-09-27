@@ -53,14 +53,14 @@ Where things usually are:
 
 ## Backend endpoints
 
-165 endpoints served by `backend/main.py`. **Auth** is read from each
+166 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 16, optional 2, public 44, token 4, user 99.
+Counts: admin 16, optional 2, public 44, token 4, user 100.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:451) |
+| GET | `/` | public | `root` (backend/main.py:453) |
 | GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:136) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:177) |
 | GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:319) |
@@ -146,7 +146,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:129) |
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:123) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:300) |
-| GET | `/health` | public | `health` (backend/main.py:479) |
+| GET | `/health` | public | `health` (backend/main.py:481) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:179) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:237) |
 | GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:707) |
@@ -164,7 +164,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:918) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:930) |
-| GET | `/live` | public | `live` (backend/main.py:531) |
+| GET | `/live` | public | `live` (backend/main.py:533) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
@@ -192,7 +192,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3480) |
 | POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3506) |
 | GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3528) |
-| GET | `/ready` | public | `ready` (backend/main.py:485) |
+| GET | `/ready` | public | `ready` (backend/main.py:487) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:23) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:38) |
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
@@ -226,6 +226,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:112) |
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:286) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:106) |
+| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:58) |
 
 ## Backend modules
 
@@ -339,6 +340,13 @@ Counts: admin 16, optional 2, public 44, token 4, user 99.
 - `response_time.py` — Seller response time — measured, not guessed.
 - `seller_advice.py` — Seller advice — "working for you" / "working against you".
 - `seller_rating.py` — Seller Overall Rating — one number out of 10, from the signals that matter.
+
+### `backend/api/domains/zeno_assistant/`
+
+- `contacts.py` — Who "Jane" is, when the user tells Zeno to call Jane.
+- `intents.py` — What Zeno, the assistant, may do - and the commands it understands without asking a model.
+- `router.py` — Zeno as the user's assistant - POST /zeno/assistant/turn.
+- `service.py` — One turn of Zeno as the user's assistant - text or voice, it is the same turn.
 
 ### `backend/api/core/`
 
@@ -494,6 +502,7 @@ of a change.
 - **trust** — domains: listings; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
+- **zeno_assistant** — domains: ai_broker; core: rate_limit; database, security
 
 ## Background jobs
 
@@ -531,7 +540,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-72 files in `backend/tests/`.
+73 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -605,6 +614,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_tts_voices.py` — BROKA - Which voice speaks what (POST /tts/speak) Run: pytest backend/tests/test_tts_voices.py -v
 - `test_user_privacy.py` — BROKA - What one user can see of another Run: pytest backend/tests/test_user_privacy.py -v
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
+- `test_zeno_assistant.py` — BROKA - Zeno as the user's assistant (POST /zeno/assistant/turn) Run: pytest backend/tests/test_zeno_assistant.py -v
 
 ## Flutter app
 
@@ -740,6 +750,15 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/repositories/trending_repository.dart` — lib/features/trending/data/repositories/trending_repository.dart
 - `presentation/trending_screen.dart` — lib/features/trending/presentation/trending_screen.dart Dense grid of the listings the backend ranks highest, fed by the trending repositor…
 
+### `flutter_app/lib/features/zeno_assistant/`
+
+- `data/zeno_assistant_repository.dart` — lib/features/zeno_assistant/data/zeno_assistant_repository.dart
+- `domain/zeno_action.dart` — What Zeno, the assistant, can do in the app - the app's side of the closed vocabulary in backend/api/domains/zeno_assistant/intents.py.
+- `presentation/zeno_action_card.dart` — What Zeno is doing, or asking to do, under its reply - in the typed conversation and, larger, in voice mode.
+- `presentation/zeno_live_overlay.dart` — Voice mode - talking to Zeno the way one talks to Siri.
+- `presentation/zeno_orb.dart` — Zeno's orb - what the user talks to in voice mode.
+- `zeno_action_runner.dart` — Doing what Zeno said it would.
+
 ### `flutter_app/lib/core/`
 
 - `network/api_client.dart` — BROKA v3.0 - Core API Client Centralises HTTP logic: base URL, auth headers, error handling, retries.
@@ -864,6 +883,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
+- `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
 - `zeno_sms_prompts_test.dart` — How Zeno asks about SMS alerts on the sell wizard's last step (ZenoSmsPrompts, ZenoStreamingBubble): ten phrasings, never the same one twic…
 - `zeno_voice_test.dart` — Covers the Zeno voice layer: the Deepgram service, the session controller, and the floating card.
@@ -931,7 +951,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The Buying Agent, in motion (2026-09-26)
+- `CHANGES.md` — Zeno, the assistant - talk to it, and it does things (2026-09-27)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
@@ -947,4 +967,4 @@ Modules:
 - `REPO_REVIEW.md` — BROKA — Repository Review
 - `SELLER_METRICS.md` — Seller metrics — phased build
 - `STORES_PLAN.md` — Online Stores — build plan (2026-09-23)
-- `ZENO_ACTIONS.md` — Zeno negotiation actions (2026-09-14)
+- `ZENO_ACTIONS.md` — Zeno as the user's assistant (2026-09-27)

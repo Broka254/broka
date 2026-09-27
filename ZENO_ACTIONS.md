@@ -1,3 +1,44 @@
+# Zeno as the user's assistant (2026-09-27)
+
+The pattern above, applied to Zeno one on one: the Zeno tab, typed or
+spoken (`POST /zeno/assistant/turn`, `api/domains/zeno_assistant/`).
+
+    message -> FAST PATH (plain commands, no model)
+            -> or MODEL (reply + at most one proposed action)
+            -> CLEAN (closed vocabulary) -> RESOLVE (whose conversation?)
+            -> {reply, action} -> the app acts; a CALL waits for a tap
+
+| Action | What the app does | Confirmation |
+|---|---|---|
+| `NAVIGATE` | opens one of `intents.DESTINATIONS` | none - it's a screen |
+| `SEARCH` | listing search on the query | none |
+| `FIND_FOR_ME` | the Buying Agent, opened with the query | none |
+| `OPEN_CHAT` | the negotiation thread with that person | none |
+| `CALL` | `ApiService.initiateCall` -> VoIP screen | **always a tap** |
+
+## Safety properties, all tested
+
+- **Only people the user already talks to.** `contacts.resolve` matches the
+  words the user said against the other party of the user's own threads -
+  the same relationship `/calls/initiate` requires. A stranger with the same
+  name is never offered, with or without the model's help.
+- **The model never names anyone.** It passes on the user's words ("the
+  Axio guy"); ids come only from the user's own threads. An id it writes is
+  dropped. No other user's name or listing title is put in its prompt, so no
+  other party can write instructions into it - the injection route this
+  file was first written about does not exist here.
+- **The vocabulary is closed**, on both sides: the server cleans the model's
+  proposal to it, and the app parses only what it knows (a newer server's
+  action does nothing on an older app).
+- **A call always waits for a tap**, typed or spoken. Voice never confirms:
+  a misheard "yes" must not ring anyone. It goes through the same
+  `/calls/initiate` as every other call, with its own checks and limits.
+- **Nothing moves money or changes server state.** Every action is
+  navigation or a call the user places.
+- **Plain commands need no model**, so they are instant and keep working
+  when every AI provider is down; "call it a day" is not taken for a call
+  (a call short-cuts only when it names someone the user talks to).
+
 # Zeno negotiation actions (2026-09-14)
 
 Applies the buy agent's structured-action pattern

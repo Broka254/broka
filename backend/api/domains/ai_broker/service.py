@@ -637,6 +637,94 @@ class AIBrokerService:
             ),
         }
 
+    async def assistant_turn(
+        self,
+        message: str,
+        history: list[dict],
+        destinations: dict[str, str],
+        language_instruction: str,
+        user_name: str = "",
+        voice: bool = False,
+    ) -> dict:
+        """One turn of Zeno as the user's assistant: talk, and - when asked -
+        name ONE thing to do (open a screen, search, hand over to the Buying
+        Agent, call or open a chat with someone).
+
+        Returns {"reply": str, "action": dict}. The action is only a
+        proposal - zeno_assistant/intents.clean_action cuts it down to the
+        closed vocabulary and contacts.resolve decides who "Jane" is, so
+        nothing here needs to be trusted. The prompt holds the user's own
+        words and nobody else's: no other user's name or listing title, so
+        another party cannot write instructions into it.
+
+        A model that ignores the JSON contract and just talks still gets
+        its words through as the reply - an assistant that goes silent
+        because its answer wasn't wrapped in braces is worse than one that
+        occasionally does nothing.
+        """
+        transcript = "\n".join(
+            f"{'User' if h.get('role') == 'user' else 'Zeno'}: "
+            f"{_clip(h.get('content', ''), _HISTORY_ENTRY_MAX_CHARS)}"
+            for h in history[-12:]
+            if isinstance(h, dict)
+        ) or "(nothing yet - this is the start of the conversation)"
+        screens = "\n".join(f"  {k}: {v}" for k, v in destinations.items())
+        style = (
+            "The user is TALKING to you and will hear your reply spoken aloud: one or two "
+            "short spoken sentences, no lists, no markdown, no emoji."
+            if voice else
+            "Keep replies short - two to four sentences unless they ask for detail. No markdown headings."
+        )
+
+        prompt = (
+            "You are Zeno, the AI assistant inside BROKA, an East African marketplace where "
+            "buyers and sellers deal through escrow. You talk with the user one on one - "
+            "sharp, warm, honest, like a brilliant friend who knows Kenyan markets - and you "
+            "can also DO things in the app for them.\n\n"
+            f"User's name: {user_name or '(unknown)'}\n"
+            f"Conversation so far:\n{transcript}\n\n"
+            f"User's newest message: \"{_clip(message, 1000)}\"\n\n"
+            "THINGS YOU CAN DO (at most one per turn, and only when the user asks for it or "
+            "clearly wants it):\n"
+            "- NAVIGATE: open a screen. destination must be one of these ids:\n"
+            f"{screens}\n"
+            "- SEARCH: show listings matching a few words (query), e.g. \"toyota axio\".\n"
+            "- FIND_FOR_ME: hand a shopping request to the Buying Agent, which asks follow-up "
+            "questions, searches and negotiates (query = what they want, in their words). Use "
+            "this rather than SEARCH when they want something found or bought for them.\n"
+            "- CALL: a voice or video call with someone they are already talking to on BROKA "
+            "(contact = who, exactly as the user referred to them, e.g. \"Jane\" or \"the "
+            "Axio seller\"; call_type audio or video). The app asks them to confirm first.\n"
+            "- OPEN_CHAT: open their conversation with someone (contact as above).\n"
+            "- NONE: just talk. Most turns are this.\n\n"
+            "Never claim you did something you did not do, never invent listings or prices you "
+            "have not seen, and never say you placed a call - the app does that after the user "
+            "confirms. When you pick an action, the reply is a short confirmation of it "
+            "(\"Opening your inbox.\", \"Calling Jane - just confirm.\").\n\n"
+            f"STYLE: {style}\n"
+            f"LANGUAGE: {language_instruction}\n\n"
+            "Respond with JSON only, no other text, no markdown fences:\n"
+            '{"reply": "<what you say>", "action": {"type": "NONE" | "NAVIGATE" | "SEARCH" | '
+            '"FIND_FOR_ME" | "CALL" | "OPEN_CHAT", "destination": "<screen id or null>", '
+            '"query": "<text or null>", "contact": "<text or null>", '
+            '"call_type": "audio" | "video" | null}}'
+        )
+
+        raw = (await self._call_ai([{"role": "user", "content": prompt}], cache_key=None) or "").strip()
+        try:
+            parsed = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+            if not isinstance(parsed, dict):
+                raise ValueError("not an object")
+        except (ValueError, json.JSONDecodeError):
+            logger.warning("[ai_broker] assistant_turn returned no usable JSON - using it as prose")
+            return {"reply": raw, "action": {"type": "NONE"}}
+
+        reply = parsed.get("reply")
+        return {
+            "reply": str(reply).strip() if reply else "",
+            "action": parsed.get("action") if isinstance(parsed.get("action"), dict) else {"type": "NONE"},
+        }
+
     async def narrate_matches(
         self,
         slots: dict,

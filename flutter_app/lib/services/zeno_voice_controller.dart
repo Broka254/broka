@@ -97,6 +97,16 @@ class ZenoVoiceController extends ChangeNotifier {
   bool _languageUnsupported = false;
   double _level = 0;
 
+  /// Running for [echoTail] after Zeno stops speaking. See [_hearingZeno].
+  /// A Timer rather than a timestamp, so it runs on the same clock as the
+  /// auto-send timer beside it.
+  Timer? _echoTimer;
+
+  /// How long after Zeno stops that what the microphone hears is still
+  /// taken to be Zeno: the provider's final text for the last words it
+  /// heard arrives a few hundred milliseconds after the audio.
+  static const echoTail = Duration(milliseconds: 700);
+
   VoiceSessionState get state => _state;
 
   /// Live, still-being-revised text from Deepgram.
@@ -199,6 +209,8 @@ class ZenoVoiceController extends ChangeNotifier {
     _session++;
     _autoSendTimer?.cancel();
     _autoSendTimer = null;
+    _echoTimer?.cancel();
+    _echoTimer = null;
     _interim = '';
     _level = 0;
     transcript.clear();
@@ -243,11 +255,25 @@ class ZenoVoiceController extends ChangeNotifier {
   void setZenoSpeaking(bool speaking) {
     if (!_open) return;
     if (speaking) {
+      _autoSendTimer?.cancel();
+      _interim = '';
       _set(VoiceSessionState.speaking);
     } else if (_state == VoiceSessionState.speaking) {
+      _echoTimer?.cancel();
+      _echoTimer = Timer(echoTail, () => _echoTimer = null);
       _set(VoiceSessionState.listening);
     }
   }
+
+  /// Whether the microphone is hearing Zeno's own voice.
+  ///
+  /// The session stays open while Zeno talks, through the phone's speaker,
+  /// into the same microphone. Everything transcribed then used to be taken
+  /// as the user's: Zeno's reply landed in the box and, in direct voice
+  /// mode, was sent straight back to Zeno as the user's next turn. While
+  /// Zeno speaks - and for [echoTail] after - what is heard is dropped. To
+  /// cut in, the user stops Zeno (voice mode's stop button, or tapping it).
+  bool get _hearingZeno => _state == VoiceSessionState.speaking || _echoTimer != null;
 
   /// The user touched the transcript field. Stops the auto-send countdown:
   /// someone correcting a transcription must not have it sent out from under
@@ -276,6 +302,8 @@ class ZenoVoiceController extends ChangeNotifier {
     _open = false;
     _autoSendTimer?.cancel();
     _autoSendTimer = null;
+    _echoTimer?.cancel();
+    _echoTimer = null;
     _state = VoiceSessionState.idle;
     _interim = '';
     _level = 0;
@@ -288,6 +316,7 @@ class ZenoVoiceController extends ChangeNotifier {
   @override
   void dispose() {
     _autoSendTimer?.cancel();
+    _echoTimer?.cancel();
     unawaited(_cancelSubs());
     unawaited(_service.dispose());
     transcript.dispose();
@@ -299,7 +328,7 @@ class ZenoVoiceController extends ChangeNotifier {
   void _listen() {
     _subs.addAll([
       _service.interimTranscript.listen((text) {
-        if (!_open || _userEdited) return;
+        if (!_open || _userEdited || _hearingZeno) return;
         _interim = text;
         if (_state == VoiceSessionState.listening ||
             _state == VoiceSessionState.connecting) {
@@ -308,7 +337,7 @@ class ZenoVoiceController extends ChangeNotifier {
         notifyListeners();
       }),
       _service.finalTranscript.listen((text) {
-        if (!_open) return;
+        if (!_open || _hearingZeno) return;
         _interim = '';
         if (_userEdited) {
           // Respect the edit, but do not lose what was said next.
@@ -322,7 +351,7 @@ class ZenoVoiceController extends ChangeNotifier {
         _set(VoiceSessionState.processing);
       }),
       _service.speechFinal.listen((_) {
-        if (!_open) return;
+        if (!_open || _hearingZeno) return;
         if (!hasSendableText) {
           _set(VoiceSessionState.listening);
           return;

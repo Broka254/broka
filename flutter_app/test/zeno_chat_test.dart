@@ -31,9 +31,9 @@ void main() {
     clearFakeRequests();
     SharedPreferences.setMockInitialValues({});
     setFakeRoute((uri) {
-      if (uri.path == '/negotiate/chat') {
+      if (uri.path == '/zeno/assistant/turn') {
         replies++;
-        return {'role': 'broker', 'content': 'Zeno reply $replies'};
+        return {'reply': 'Zeno reply $replies', 'action': null};
       }
       if (uri.path.startsWith('/buy-agent-requests/converse')) {
         return {'reply': 'Which storage size?', 'phase': 'ASKING', 'slots': {'query': 'iphone'}, 'questions_asked': 1};
@@ -81,18 +81,18 @@ void main() {
     clearFakeRequests();
     await say(tester, 'Second question');
 
-    final sent = fakeRequests.lastWhere((r) => r.uri.path == '/negotiate/chat').json as Map;
-    expect(sent['content'], 'Second question');
+    final sent = fakeRequests.lastWhere((r) => r.uri.path == '/zeno/assistant/turn').json as Map;
+    expect(sent['message'], 'Second question');
     final history = (sent['history'] as List).cast<Map>();
     expect(history.map((h) => h['content']), ['First question', 'Zeno reply 1'],
         reason: 'the restored conversation is the context');
-    // The server appends `content` itself; sending it in history too put
+    // The server appends `message` itself; sending it in history too put
     // every message into Zeno's context twice.
     expect(history.where((h) => h['content'] == 'Second question'), isEmpty);
   });
 
   testWidgets('a long conversation sends only the recent context', (tester) async {
-    // 60 exchanges - past /negotiate/chat's 100-entry limit on history.
+    // 60 exchanges - more than the server reads (the last 40).
     SharedPreferences.setMockInitialValues({});
     await ZenoChatStore.save('assistant', ZenoConversation(
       turns: [
@@ -110,7 +110,7 @@ void main() {
     clearFakeRequests();
     await say(tester, 'And now?');
 
-    final sent = fakeRequests.lastWhere((r) => r.uri.path == '/negotiate/chat').json as Map;
+    final sent = fakeRequests.lastWhere((r) => r.uri.path == '/zeno/assistant/turn').json as Map;
     final history = sent['history'] as List;
     expect(history.length, 20);
     expect((history.last as Map)['content'], 'turn 119');
@@ -202,8 +202,8 @@ void main() {
     const long = 'A fair price for a 2014 Axio in Nairobi is between 780K and '
         '850K, depending on mileage and whether it has been locally used.';
 
-    setUp(() => setFakeRoute((uri) => uri.path == '/negotiate/chat'
-        ? {'role': 'broker', 'content': long}
+    setUp(() => setFakeRoute((uri) => uri.path == '/zeno/assistant/turn'
+        ? {'reply': long, 'action': null}
         : null));
 
     /// What the newest reply shows right now, caret and all.

@@ -30,6 +30,12 @@
 // Home's search-pill composer, instead of flat grey bars over its own
 // background.
 //
+// 2026-09-27: assistant mode became Zeno as an assistant that acts - open a
+// screen, search, hand a request to the Buying Agent, open a chat, place a
+// call after a tap - through POST /zeno/assistant/turn
+// (features/zeno_assistant/), and its microphone opens a full-screen voice
+// mode instead of the compact card. See ZENO_ACTIONS.md.
+//
 // Later the same day, the Buying Agent got motion that shows it working
 // (features/buy_agent/presentation/widgets/agent_motion.dart): an animated
 // core before the first message, what Zeno has gathered as a live "brief"
@@ -41,6 +47,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
+import '../services/realtime_stt.dart';
 import '../services/zeno_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
 import '../widgets/zeno_voice_card.dart';
@@ -60,6 +67,11 @@ import '../models/models.dart';
 import '../core/utils/result.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
+import '../features/zeno_assistant/data/zeno_assistant_repository.dart';
+import '../features/zeno_assistant/domain/zeno_action.dart';
+import '../features/zeno_assistant/presentation/zeno_action_card.dart';
+import '../features/zeno_assistant/presentation/zeno_live_overlay.dart';
+import '../features/zeno_assistant/zeno_action_runner.dart';
 import '../features/listings/domain/models/listing.dart';
 import '../theme/motion.dart';
 import '../utils/price_format.dart';
@@ -78,7 +90,10 @@ class _Turn {
 
   /// Set on a reply that never came: the message to send again.
   final String? retry;
-  const _Turn(this.message, {this.matches = const [], this.retry});
+
+  /// The assistant: what Zeno is doing, or offering to do, with this reply.
+  final ZenoAction? action;
+  const _Turn(this.message, {this.matches = const [], this.retry, this.action});
 }
 
 // ── Language definitions ──────────────────────────────────────────────────────
@@ -114,11 +129,21 @@ class ZenoScreen extends StatefulWidget {
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
 
+  /// Assistant only: open straight into voice mode - a long press on the
+  /// Zeno tab, the way holding a phone's side button wakes its assistant.
+  final bool startInVoice;
+
+  /// The speech provider voice uses. Tests pass a fake; the app leaves it
+  /// null for the real one (RealtimeSttManager).
+  final RealtimeSttProvider? voiceService;
+
   const ZenoScreen({
     super.key,
     this.mode = ZenoMode.assistant,
     this.initialQuery,
     this.animateBackground = true,
+    this.startInVoice = false,
+    @visibleForTesting this.voiceService,
   });
 
   @override
@@ -160,6 +185,21 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// When the watch was set in this visit, so its card bursts once as it
   /// turns on - and not on a conversation picked up again later.
   DateTime? _watchSetAt;
+
+  // ── The assistant's actions ────────────────────────────────────────────────
+  // Where each of Zeno's actions has got to, and which person the user
+  // picked when "call Mary" fitted more than one. Neither is saved: an
+  // action belongs to the moment it was offered, and a call confirmation
+  // coming back days later would be a trap.
+  final Map<_Turn, ZenoActionPhase> _actionPhase = Map.identity();
+  final Map<_Turn, ZenoAction> _chosen = Map.identity();
+
+  /// Goes up each time an action is taken: the voice orb's shockwave.
+  int _burst = 0;
+
+  /// How many turns there were when voice mode opened, so its captions
+  /// show only what Zeno has said since.
+  int _voiceSince = 0;
 
   bool get _isBuying => widget.mode == ZenoMode.buyingAgent;
 
@@ -203,6 +243,10 @@ class _ZenoScreenState extends State<ZenoScreen>
   // Future could not be, so a quick turn's delay fired into the NEXT turn
   // and announced a search 2.2s after the earlier message.
   Timer? _searchDelay;
+
+  /// The longest Zeno's current reply may keep voice mode "speaking" - see
+  /// _speak.
+  Timer? _speakCap;
   static const _searchPhases = [
     'Scanning Broka listings…',
     'Matching against your specs…',
@@ -296,6 +340,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     _pulseCtrl.dispose();
     _searchTicker?.cancel();
     _searchDelay?.cancel();
+    _speakCap?.cancel();
     _tts.stop();
     _voice.dispose();
     super.dispose();
@@ -333,6 +378,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     _scrollDown(animate: false);
     if (_isBuying && _watching) _checkWatchStillOn();
     if (fresh) _send(initial);
+    if (widget.startInVoice && !_isBuying) _openVoice();
   }
 
   /// "Watching" is remembered on the phone, but the watch itself lives on
@@ -423,6 +469,8 @@ class _ZenoScreenState extends State<ZenoScreen>
       _lastVerdict = null;
       _watching = false;
       _watchSetAt = null;
+      _actionPhase.clear();
+      _chosen.clear();
       // A reply still on its way belongs to the old conversation; this one
       // can start at once.
       _typing = false;
@@ -441,6 +489,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     _voice = ZenoVoiceController(
       onSubmit: _submitVoice,
       languageKey: () => _langKey,
+      service: widget.voiceService,
     );
   }
 
@@ -501,25 +550,175 @@ class _ZenoScreenState extends State<ZenoScreen>
       return;
     }
 
-    try {
-      final reply = await ApiService.zenoChat(
-        message: text,
-        history: context20,
-        language: _langKey,
-      );
-      if (!mounted || epoch != _epoch) return;
-      _history.add({'role': 'assistant', 'content': reply});
-      setState(() {
-        _addArriving(_Turn(Message(role: 'broker', content: reply)), writing: true);
-        _typing = false;
-      });
-      _persist();
-      if (_ttsEnabled) _speak(reply);
-    } catch (e) {
-      if (!mounted || epoch != _epoch) return;
-      _turnFailed(text, '⚠️ Zeno is unavailable right now. Please try again shortly.');
+    // The assistant: a reply, and maybe something to do. Typed or spoken,
+    // it is the same turn; voice only asks for a reply that reads aloud.
+    final result = await zenoAssistantRepository.turn(
+      message: text,
+      history: context20,
+      language: _langKey,
+      voice: _voice.isOpen,
+    );
+    if (!mounted || epoch != _epoch) return;
+    switch (result) {
+      case Success(:final data):
+        final reply = data.reply.isEmpty && data.action != null
+            ? ZenoActionRunner.label(data.action!)
+            : data.reply;
+        _history.add({'role': 'assistant', 'content': reply});
+        final turn = _Turn(Message(role: 'broker', content: reply), action: data.action);
+        setState(() {
+          // A reply that opens a screen is shown whole, not written out word
+          // by word: it is a confirmation, and the screen is what the user
+          // is waiting for.
+          _addArriving(turn, writing: data.action == null || !data.action!.runsByItself);
+          if (data.action != null) _actionPhase[turn] = ZenoActionPhase.pending;
+          _typing = false;
+        });
+        _persist();
+        unawaited(_afterReply(turn, epoch));
+      case Failure():
+        _turnFailed(text, '⚠️ Zeno is unavailable right now. Please try again shortly.');
     }
     _scrollDown();
+  }
+
+  // ── The assistant's actions ────────────────────────────────────────────────
+
+  ZenoAction? _actionOf(_Turn turn) => _chosen[turn] ?? turn.action;
+
+  /// After Zeno's reply is on screen: say it, and do what it said.
+  ///
+  /// The screen changes on a short beat, not when Zeno finishes the
+  /// sentence: "Opening your inbox" carries on over the inbox sliding in,
+  /// the way a phone's assistant does it. Waiting for the voice would hang
+  /// the command on the voice service - its fetch alone can take seconds.
+  /// Voice mode gets a longer beat, so the orb and the action card land
+  /// before the screen goes.
+  Future<void> _afterReply(_Turn turn, int epoch) async {
+    final voice = _voice.isOpen;
+    final action = turn.action;
+    if (_ttsEnabled && turn.message.content.isNotEmpty) unawaited(_speak(turn.message.content));
+    if (action == null || !action.runsByItself) return;
+    await Future<void>.delayed(Duration(milliseconds: voice ? 1100 : 750));
+    if (!mounted || epoch != _epoch || _actionPhase[turn] != ZenoActionPhase.pending) return;
+    await _runAction(turn);
+  }
+
+  /// Opens the screen, search or chat [turn] asked for.
+  Future<void> _runAction(_Turn turn) async {
+    final action = _actionOf(turn);
+    if (action == null) return;
+    setState(() {
+      _actionPhase[turn] = ZenoActionPhase.running;
+      _burst++;
+    });
+    // Leaving this screen: the microphone must not come along.
+    if (_voice.isOpen) {
+      await Future<void>.delayed(const Duration(milliseconds: 380));
+      await _endVoice();
+    }
+    if (!mounted) return;
+    final ok = await ZenoActionRunner.run(context, action);
+    if (!mounted) return;
+    setState(() => _actionPhase[turn] = ok ? ZenoActionPhase.done : ZenoActionPhase.dismissed);
+  }
+
+  /// The user tapped Call. The only way a call starts from Zeno.
+  Future<void> _confirmCall(_Turn turn) async {
+    final action = _actionOf(turn);
+    final who = action?.target;
+    if (action == null || who == null) return;
+    setState(() {
+      _actionPhase[turn] = ZenoActionPhase.running;
+      _burst++;
+    });
+    unawaited(_tts.stop());
+    // The call needs the microphone this session is holding.
+    if (_voice.isOpen) await _endVoice();
+    if (!mounted) return;
+    final ok = await ZenoActionRunner.call(context, who, video: action.video);
+    if (!mounted) return;
+    // Failed to start: offer it again rather than pretend it happened.
+    setState(() => _actionPhase[turn] = ok ? ZenoActionPhase.done : ZenoActionPhase.pending);
+  }
+
+  void _choose(_Turn turn, ZenoContact who) {
+    final action = turn.action;
+    if (action == null) return;
+    setState(() => _chosen[turn] = action.choose(who));
+    // A chat just opens; a call still asks.
+    if (action.type != ZenoActionType.call) _runAction(turn);
+  }
+
+  void _dismissAction(_Turn turn) =>
+      setState(() => _actionPhase[turn] = ZenoActionPhase.dismissed);
+
+  Widget _actionCard(_Turn turn, {bool large = false}) {
+    final action = _actionOf(turn)!;
+    final phase = _actionPhase[turn] ?? ZenoActionPhase.done;
+    return ZenoActionCard(
+      key: ObjectKey(action),
+      action: action,
+      phase: phase,
+      large: large,
+      onConfirm: action.type == ZenoActionType.call
+          ? () => _confirmCall(turn)
+          : () => ZenoActionRunner.run(context, action),
+      onDismiss: () => _dismissAction(turn),
+      onChoose: (who) => _choose(turn, who),
+    );
+  }
+
+  /// Voice mode's card: the newest turn's action, while it is still live.
+  Widget? _voiceActionCard() {
+    if (_turns.isEmpty || _turns.length <= _voiceSince) return null;
+    final turn = _turns.last;
+    if (_actionOf(turn) == null) return null;
+    final phase = _actionPhase[turn];
+    if (phase == null || phase == ZenoActionPhase.dismissed) return null;
+    // The big version only where there is room for it and the orb.
+    return _actionCard(turn, large: MediaQuery.sizeOf(context).height >= 700);
+  }
+
+  /// Zeno's reply, when it is the newest thing said since voice mode
+  /// opened - its captions.
+  String? get _voiceReply {
+    if (_turns.isEmpty || _turns.length <= _voiceSince) return null;
+    final last = _turns.last;
+    return last.message.isBroker ? last.message.content : null;
+  }
+
+  Future<void> _closeVoice() => _endVoice();
+
+  /// Ends the voice session before something else needs the screen or the
+  /// microphone.
+  ///
+  /// Bounded: close() clears everything on screen at once, but its socket
+  /// teardown can wait on a close handshake that never comes (a dead
+  /// socket - the controller says so), and "open my inbox" must not hang
+  /// on it. The recorder is released in close()'s first steps; a moment is
+  /// enough for it, and the rest finishes on its own.
+  Future<void> _endVoice() => _voice.close().timeout(
+        const Duration(milliseconds: 600),
+        onTimeout: () {},
+      );
+
+  /// Voice mode's keyboard button: back to typing, in the same conversation.
+  Future<void> _typeInstead() async {
+    await _endVoice();
+    if (mounted) _composerFocus.requestFocus();
+  }
+
+  /// Stop Zeno mid-sentence so the user can talk. The microphone is handed
+  /// back at once rather than when the player confirms it has stopped.
+  void _interrupt() {
+    unawaited(_tts.stop());
+    _voice.setZenoSpeaking(false);
+  }
+
+  void _toggleTts() {
+    _tts.stop();
+    setState(() => _ttsEnabled = !_ttsEnabled);
   }
 
   /// A turn whose reply never came. The error carries the message, so
@@ -644,13 +843,31 @@ class _ZenoScreenState extends State<ZenoScreen>
     // listening. The existing TTS toggle still governs whether this runs at
     // all - voice input does not force spoken replies on anyone.
     _voice.setZenoSpeaking(true);
-    await _tts.speak(text, language: _langKey);
+    // Bounded by how long the reply can take to say: while Zeno is
+    // "speaking" the microphone is ignored, and a player that never reports
+    // the end (a stuck platform channel) must not leave voice mode deaf. The
+    // cap is a Timer the screen owns, so it goes with the screen.
+    final words = text.split(RegExp(r'\s+')).length;
+    final done = Completer<void>();
+    void finish() {
+      if (!done.isCompleted) done.complete();
+    }
+    _speakCap?.cancel();
+    _speakCap = Timer(Duration(milliseconds: (6000 + 450 * words).clamp(6000, 60000)), finish);
+    unawaited(_tts.speakToEnd(text, language: _langKey).whenComplete(finish));
+    await done.future;
+    _speakCap?.cancel();
+    if (!mounted) return;
     _voice.setZenoSpeaking(false);
   }
 
   /// Opens the floating voice card. Guarded inside the controller, so a
   /// double tap cannot open two Deepgram sessions.
-  void _openVoice() => _voice.open();
+  void _openVoice() {
+    // setState: voice mode's captions start from here.
+    setState(() => _voiceSince = _turns.length);
+    _voice.open();
+  }
 
 
   /// START_NEGOTIATION for one result. The confirmation is required before
@@ -872,56 +1089,70 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: BrokaColors.bg,
-      // The same constellation as Home and every screen reached from it.
-      // The voice card floats OVER this conversation rather than replacing
-      // it: the Column below stays mounted, at its scroll position, with its
-      // history intact, and closing the card puts the user back exactly where
-      // they were (brief §33).
-      body: ZenoVoiceOverlay(
-        controller: _voice,
-        child: ConstellationBackground(
-          animate: widget.animateBackground,
-          child: DecoratedBox(
-            // Zeno's colour washing down from the top, as a category's does
-            // in its Zone - over the constellation, fading to transparent.
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment.topCenter,
-                radius: 1.2,
-                colors: [BrokaColors.neonPurple.withOpacity(0.14), Colors.transparent],
-                stops: const [0.0, 0.6],
-              ),
-            ),
-            child: SafeArea(
-              child: Stack(children: [
-                Column(children: [
-                  _buildHeader(),
-                  // What Zeno has gathered, growing in under the header as
-                  // it learns it. No AnimatedSize under reduced motion: at a
-                  // zero duration it asserts that it was mutated in its own
-                  // layout.
-                  if (_isBuying)
-                    BrokaMotion.reduced(context)
-                        ? AgentBriefStrip(slots: _slots)
-                        : AnimatedSize(
-                            duration: BrokaMotion.standard,
-                            curve: BrokaMotion.enter,
-                            alignment: Alignment.topCenter,
-                            child: AgentBriefStrip(slots: _slots),
-                          ),
-                  Expanded(child: _buildMessages()),
-                  if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
-                  if (!_restoring && !_hasConversation) _buildSuggestions(),
-                  _buildInputBar(),
-                ]),
-                Positioned.fill(child: AgentConfetti(burst: _confetti)),
-              ]),
-            ),
+    // The same constellation as Home and every screen reached from it.
+    final conversation = ConstellationBackground(
+      animate: widget.animateBackground,
+      child: DecoratedBox(
+        // Zeno's colour washing down from the top, as a category's does
+        // in its Zone - over the constellation, fading to transparent.
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topCenter,
+            radius: 1.2,
+            colors: [BrokaColors.neonPurple.withOpacity(0.14), Colors.transparent],
+            stops: const [0.0, 0.6],
           ),
         ),
+        child: SafeArea(
+          child: Stack(children: [
+            Column(children: [
+              _buildHeader(),
+              // What Zeno has gathered, growing in under the header as
+              // it learns it. No AnimatedSize under reduced motion: at a
+              // zero duration it asserts that it was mutated in its own
+              // layout.
+              if (_isBuying)
+                BrokaMotion.reduced(context)
+                    ? AgentBriefStrip(slots: _slots)
+                    : AnimatedSize(
+                        duration: BrokaMotion.standard,
+                        curve: BrokaMotion.enter,
+                        alignment: Alignment.topCenter,
+                        child: AgentBriefStrip(slots: _slots),
+                      ),
+              Expanded(child: _buildMessages()),
+              if (_typing) (_searching ? _buildSearchingIndicator() : _buildTypingIndicator()),
+              if (!_restoring && !_hasConversation) _buildSuggestions(),
+              _buildInputBar(),
+            ]),
+            Positioned.fill(child: AgentConfetti(burst: _confetti)),
+          ]),
+        ),
       ),
+    );
+    return Scaffold(
+      backgroundColor: BrokaColors.bg,
+      // Voice floats OVER the conversation rather than replacing it: the
+      // conversation stays mounted, at its scroll position, with its history
+      // intact, and closing voice puts the user back exactly where they were
+      // (brief §33). The Buying Agent keeps the compact card; the assistant
+      // gets the full-screen voice mode, where Zeno is talked to rather than
+      // dictated to.
+      body: _isBuying
+          ? ZenoVoiceOverlay(controller: _voice, child: conversation)
+          : ZenoLiveOverlay(
+              controller: _voice,
+              zenoSays: _voiceReply,
+              thinking: _typing,
+              actionCard: _voiceActionCard(),
+              burst: _burst,
+              muted: !_ttsEnabled,
+              onToggleMute: _toggleTts,
+              onClose: _closeVoice,
+              onKeyboard: _typeInstead,
+              onInterrupt: _interrupt,
+              child: conversation,
+            ),
     );
   }
 
@@ -1087,6 +1318,12 @@ class _ZenoScreenState extends State<ZenoScreen>
             bubble,
             if (turn.retry != null && isLast && !_typing) _buildRetry(turn),
             if (offerWatch) _buildWatchOffer(),
+            // What Zeno is doing, or asking to do - after it has said so.
+            if (_actionOf(turn) != null && !writing)
+              Padding(
+                padding: const EdgeInsets.only(left: 36, bottom: 14),
+                child: _actionCard(turn),
+              ),
           ]);
         }
         final exact = turn.matches.where((m) => m is Map && m['match_is_exact'] == true).length;

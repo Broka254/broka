@@ -1,3 +1,67 @@
+# Zeno, the assistant - talk to it, and it does things (2026-09-27)
+
+The Zeno tab was a chat that could only talk. It is now an assistant, one on
+one, typed or spoken, that can also act in the app:
+
+- **Open a screen** - "open my inbox", "take me to Sell", "show my deals",
+  "fungua mipangilio": Home, Inbox, Sell, Menu, Profile, Settings, Search,
+  the Buying Agent, the seller dashboard, deals, verification, market
+  insights, How BROKA works.
+- **Search** - "search for a Toyota Axio" opens the search on those words.
+- **Find it for me** - "find me a laptop under 50k" hands the request to the
+  Buying Agent, already asked.
+- **Open a chat / call someone** - "message Jane", "video call the Axio
+  seller". Only people the user already has a thread with, resolved on the
+  server from their own conversations. **A call never starts until Call is
+  tapped** - typed or spoken; "yes" said out loud is not a confirmation.
+  "Call Mary" when there are two Marys asks which one.
+- **Just talk** - prices, escrow, negotiating, anything else.
+
+How it works: `POST /zeno/assistant/turn` (`backend/api/domains/zeno_assistant/`).
+Plain commands are recognised without a model call (instant, and still
+working when every AI provider is down); everything else is one model call
+that returns a reply and at most one proposed action. The proposal is cut
+down to a closed vocabulary; the model never writes an id and never sees
+another user's name or listing title. See ZENO_ACTIONS.md.
+
+**Voice mode.** The microphone on the Zeno tab now opens a full-screen voice
+mode (`flutter_app/lib/features/zeno_assistant/presentation/`): it grows out
+of the microphone button; an orb of layered plasma swells with the user's
+voice while a spectrum ring round it dances to the microphone and particles
+are drawn in; it knots and spins with orbiting comets while Zeno thinks, and
+pulses and throws ripples while Zeno speaks; a shockwave when it acts. Live
+captions of what it hears and what it says; "try saying" examples; the call
+confirmation as a card; keyboard, stop and close. Holding the Zeno tab on
+Home opens straight into it. Reduce-motion: the same layout, still. The
+Buying Agent and the negotiation room keep the compact voice card.
+
+## Fixed on the way
+
+Each with a test that failed on the code before it.
+
+- **Zeno's own voice was sent back to Zeno as the user's.** The voice
+  session keeps the microphone open while Zeno speaks through the speaker;
+  whatever it transcribed then landed in the box and, with auto-send, went
+  to Zeno as the user's next turn. What is heard while Zeno speaks, and for
+  700ms after, is now dropped (`ZenoVoiceController`). Part of the same
+  bug: `BrokaTts.speak` returns when playback STARTS, and the Zeno screen
+  awaited it as if it returned at the end, so "speaking" ended at the first
+  syllable. `BrokaTts.speakToEnd` waits for the end (bounded, and Stop hands
+  the microphone back at once). The drop is tested; `speakToEnd` itself is
+  not - the audio plugin isn't faked in tests - and rests on audioplayers'
+  contract: `play()` sets the player's state before it returns, and the
+  state stream is broadcast.
+- Not a test-reproduced bug, but found while building this: ending a voice
+  session could wait indefinitely on the socket's close handshake (the
+  controller documents it). Nothing awaited it before; the assistant does,
+  before it navigates or calls, so that wait is bounded.
+
+Tests: `backend/tests/test_zeno_assistant.py` (20, also run on PostgreSQL),
+`flutter_app/test/zeno_assistant_test.dart` (19, including the spoken loop
+end to end over a fake Deepgram socket). `zeno_chat_test.dart` now talks to
+the new endpoint; an older server without it still gets an answer through
+`/negotiate/chat`.
+
 # The Buying Agent, in motion (2026-09-26)
 
 The Buying Agent's screen showed the agent's work as one more chat: an

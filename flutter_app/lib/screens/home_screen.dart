@@ -1005,6 +1005,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
+  Future<void> _talkToZeno() async {
+    final authed = await requireAuth(context, reason: _navReasons[3]);
+    if (!authed || !mounted) return;
+    setState(() => _navIndex = 3);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        settings: const RouteSettings(name: '/zeno'),
+        builder: (_) => const ZenoScreen(startInVoice: true),
+      ),
+    ).then((_) {
+      if (mounted) setState(() { _navIndex = 0; _feedRefreshNonce++; });
+    });
+  }
+
   // Listings only. Finding a trader is the Traders screen's search - see
   // listing_search_screen.dart's header for what the old search did wrong.
   void _openSearch() {
@@ -1540,6 +1555,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           return Expanded(
             child: GestureDetector(
               onTap: () => _onNav(i),
+              // Holding the Zeno tab opens Zeno already listening - the way
+              // holding a phone's side button wakes its assistant.
+              onLongPress: item['label'] == 'Zeno' ? _talkToZeno : null,
               behavior: HitTestBehavior.opaque,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),

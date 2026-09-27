@@ -84,6 +84,30 @@ class BrokaTts {
     await _speakCloud(clean, language);
   }
 
+  /// Like [speak], but finishes when Zeno has finished talking - or was
+  /// stopped, or could not speak at all - rather than when playback starts.
+  ///
+  /// [speak] returns as the audio starts. The Zeno screen awaited it and
+  /// then told the voice session Zeno had stopped speaking, so the session
+  /// went back to listening at the first syllable, with Zeno's voice still
+  /// coming out of the speaker into the open microphone.
+  Future<void> speakToEnd(String text, {String language = 'english'}) async {
+    await speak(text, language: language);
+    // play() sets the state before it returns; anything else means nothing
+    // is playing (no voice, no token, a failure) and there is nothing to
+    // wait for.
+    if (_player.state != PlayerState.playing) return;
+    try {
+      await _player.onPlayerStateChanged
+          .firstWhere((s) => s != PlayerState.playing)
+          // Longer than any reply takes to say: a lost completion event
+          // must not leave voice mode stuck on "Speaking".
+          .timeout(const Duration(seconds: 90));
+    } catch (_) {
+      // Timed out, or the player went away: either way, it is over.
+    }
+  }
+
   Future<void> stop() async {
     try {
       await _player.stop();
