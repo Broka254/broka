@@ -326,7 +326,14 @@ class Settings:
     rate_limit_dispute_per_hour: int = 3
 
     # ── Commission ────────────────────────────────────────────────────────────
-    commission_rate: float = 0.03
+    # BROKA's share of a sale, added to what the buyer pays. The escrow
+    # provider (E-Confirm) charges its own 1% on top, quoted by E-Confirm
+    # itself - escrow_provider_fee_rate is only for showing buyers the total:
+    # 3.49% + 1% = 4.49% on a negotiated deal, 4% + 1% = 5% on an auction.
+    # See PRICING.md. A deal keeps the rate it was agreed at (Deal.commission).
+    commission_rate: float = 0.0349
+    auction_commission_rate: float = 0.04
+    escrow_provider_fee_rate: float = 0.01
 
     # ── Fraud thresholds ──────────────────────────────────────────────────────
     fraud_new_account_days: int = 7

@@ -119,7 +119,7 @@ class TestDealFlow:
         assert resp.status_code == 201
         data = resp.json()
         assert data["agreed_price"] == 210000
-        assert data["commission"] == pytest.approx(6300, rel=0.01)  # 3%
+        assert data["commission"] == pytest.approx(7329, abs=0.01)  # 3.49%
         assert data["status"] == "agreed"
         TestDealFlow.deal_id = data["deal_id"]
 
@@ -342,9 +342,9 @@ class TestEConfirmEscrow:
         assert resp.status_code == 200
         data = resp.json()
         assert data["goods_amount"] == 300000
-        assert data["merchant_commission"] == pytest.approx(9000, rel=0.01)  # 3%
+        assert data["merchant_commission"] == pytest.approx(10470, abs=0.01)  # 3.49%
         assert data["provider_fee"] == pytest.approx(3000, rel=0.01)  # fake's 1%
-        assert data["total_to_pay"] == pytest.approx(312000, rel=0.01)
+        assert data["total_to_pay"] == pytest.approx(313470, abs=0.01)  # 4.49% all-in
 
     @pytest.mark.asyncio
     async def test_release_before_funded_rejected(self, client, tokens, fake_provider):

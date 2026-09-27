@@ -1,0 +1,209 @@
+"""Premium plans, store plans and commission - the prices, and the costs they cover.
+
+THE RULE EVERY PRICE HERE FOLLOWS
+=================================
+A monthly price is at least 1.25x what the plan costs BROKA when its holder
+uses every allowance to the last unit (max_monthly_cost). So:
+
+  * no subscriber, however heavy, is served at a loss;
+  * a typical subscriber (about a third of the allowances) leaves ~70%;
+  * a longer prepaid period may cut the price, but never below that
+    maxed-out cost.
+
+The allowances are fair-use caps, not "unlimited": voice minutes and
+auto-negotiations cost real money per use (costs.py), and an unlimited plan
+priced for the average user is a plan the heaviest users make unprofitable.
+
+tests/test_pricing.py checks the rule for every plan and period, so a price
+cut that would lose money fails CI rather than reaching users.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from api.core.config import settings
+from api.domains.pricing import costs
+
+MIN_MARGIN_MULTIPLE = 1.25
+
+# Prepaying: 3 months 8% off, 6 months 15%, 12 months 20%. Shallower than
+# the listing-fee curve on purpose: a listing's cost is fixed once it is up,
+# but a plan's allowances renew every month, so its cost grows with every
+# month prepaid.
+PLAN_PERIODS: dict[int, float] = {1: 0.0, 3: 0.08, 6: 0.15, 12: 0.20}
+
+
+def charm(amount: float) -> int:
+    """To the nearest ten, less one: 1,101 -> 1,099; 2,035 -> 2,039."""
+    return max(1, int(math.floor(amount / 10 + 0.5)) * 10 - 1)
+
+
+def period_prices(monthly: int) -> list[dict]:
+    out = []
+    for months, off in PLAN_PERIODS.items():
+        total = monthly if months == 1 else charm(monthly * months * (1 - off))
+        out.append({
+            "months": months,
+            "total": total,
+            "per_month": round(total / months, 2),
+            "saving_percent": round(100 * (1 - total / (monthly * months))),
+        })
+    return out
+
+
+# ── Premium ──────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class PremiumPlan:
+    id: str
+    name: str
+    monthly_price: int
+    pitch: str
+    voice_minutes: int              # Zeno voice mode: open-microphone minutes
+    sms_alerts: int                 # Zeno texts you: a new buyer, a match, an outbid
+    agent_watches: int              # Buying Agent: standing "find me this" requests
+    auto_negotiations: int          # Zeno negotiating a seller for you
+    showcase_images: int            # AI Showcase covers
+    auctions_hosted: int            # auctions you can run (bidding is free for all)
+    priority_support_minutes: int = 0
+
+    def max_monthly_cost(self) -> float:
+        usage = (
+            self.voice_minutes * costs.VOICE_MINUTE
+            + self.sms_alerts * costs.SMS
+            + self.agent_watches * costs.AGENT_WATCH_MONTH
+            + self.auto_negotiations * costs.AI_PER_AUTO_NEGOTIATION
+            + self.showcase_images * costs.AI_SHOWCASE_IMAGE
+            + self.auctions_hosted * costs.AUCTION_HOSTED
+            + self.priority_support_minutes * costs.SUPPORT_PER_MINUTE
+        )
+        return usage * costs.OVERHEAD + costs.mpesa_collection_cost(self.monthly_price)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "pitch": self.pitch,
+            "monthly_price": self.monthly_price,
+            "periods": period_prices(self.monthly_price),
+            "allowances": {
+                "voice_minutes": self.voice_minutes,
+                "sms_alerts": self.sms_alerts,
+                "buying_agent_watches": self.agent_watches,
+                "auto_negotiations": self.auto_negotiations,
+                "ai_showcase_images": self.showcase_images,
+                "auctions_hosted": self.auctions_hosted,
+                "priority_support_minutes": self.priority_support_minutes,
+            },
+        }
+
+
+PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
+    PremiumPlan(
+        id="plus", name="Plus", monthly_price=149,
+        pitch="Talk to Zeno, and let it text you when something happens.",
+        voice_minutes=30, sms_alerts=30, agent_watches=1, auto_negotiations=0,
+        showcase_images=3, auctions_hosted=0,
+    ),
+    PremiumPlan(
+        id="pro", name="Pro", monthly_price=399,
+        pitch="Zeno hunts and haggles for you, and you can run auctions.",
+        voice_minutes=60, sms_alerts=80, agent_watches=3, auto_negotiations=25,
+        showcase_images=5, auctions_hosted=2,
+    ),
+    PremiumPlan(
+        id="elite", name="Elite", monthly_price=999,
+        pitch="Everything, in volume - for people who buy and sell for a living.",
+        voice_minutes=120, sms_alerts=150, agent_watches=10, auto_negotiations=50,
+        showcase_images=15, auctions_hosted=5, priority_support_minutes=15,
+    ),
+)
+
+
+# ── Stores ───────────────────────────────────────────────────────────────────
+
+# Opening a store, once. Covers reviewing it and an onboarding call, and
+# puts a price on a store name so names are not squatted. Waived when the
+# first payment covers six months or more.
+STORE_SETUP_FEE = 299
+STORE_SETUP_WAIVED_FROM_MONTHS = 6
+
+# What one listing slot in a store costs at full use: a listing drawing an
+# average category's demand (one negotiation a month).
+STORE_SLOT_MONTH = costs.listing_month_cost(1.0)
+
+
+@dataclass(frozen=True)
+class StorePlan:
+    id: str
+    name: str
+    monthly_price: int
+    listings: int          # listings the plan covers - no listing fee on these
+    sms_alerts: int        # texts for new orders and new buyers
+
+    def max_monthly_cost(self) -> float:
+        return (
+            (costs.STORE_MONTH + self.sms_alerts * costs.SMS) * costs.OVERHEAD
+            + self.listings * STORE_SLOT_MONTH
+            + costs.mpesa_collection_cost(self.monthly_price)
+        )
+
+    def to_dict(self) -> dict:
+        periods = period_prices(self.monthly_price)
+        for p in periods:
+            p["setup_fee"] = 0 if p["months"] >= STORE_SETUP_WAIVED_FROM_MONTHS else STORE_SETUP_FEE
+        return {
+            "id": self.id,
+            "name": self.name,
+            "monthly_price": self.monthly_price,
+            "listings": self.listings,
+            "price_per_listing": round(self.monthly_price / self.listings, 2),
+            "sms_alerts": self.sms_alerts,
+            "periods": periods,
+        }
+
+
+STORE_PLANS: tuple[StorePlan, ...] = (
+    StorePlan(id="starter",   name="Starter",   monthly_price=249,  listings=20,  sms_alerts=20),
+    StorePlan(id="standard",  name="Standard",  monthly_price=549,  listings=50,  sms_alerts=50),
+    StorePlan(id="growth",    name="Growth",    monthly_price=1049, listings=100, sms_alerts=100),
+    StorePlan(id="business",  name="Business",  monthly_price=2549, listings=250, sms_alerts=200),
+    StorePlan(id="wholesale", name="Wholesale", monthly_price=4999, listings=500, sms_alerts=300),
+)
+
+
+# ── Commission ───────────────────────────────────────────────────────────────
+
+def commission() -> dict:
+    """What a buyer pays on top of the price, and whose it is.
+
+    The escrow provider's 1% is E-Confirm's, passed through untouched; only
+    BROKA's share is BROKA's to discount.
+    """
+    provider = settings.escrow_provider_fee_rate
+    return {
+        "negotiated": {
+            "broka_percent": round(100 * settings.commission_rate, 2),
+            "escrow_provider_percent": round(100 * provider, 2),
+            "total_percent": round(100 * (settings.commission_rate + provider), 2),
+        },
+        "auction": {
+            "broka_percent": round(100 * settings.auction_commission_rate, 2),
+            "escrow_provider_percent": round(100 * provider, 2),
+            "total_percent": round(100 * (settings.auction_commission_rate + provider), 2),
+        },
+    }
+
+
+def catalog() -> dict:
+    return {
+        "currency": "KES",
+        "premium": [p.to_dict() for p in PREMIUM_PLANS],
+        "stores": {
+            "setup_fee": STORE_SETUP_FEE,
+            "setup_fee_waived_from_months": STORE_SETUP_WAIVED_FROM_MONTHS,
+            "plans": [s.to_dict() for s in STORE_PLANS],
+        },
+        "commission": commission(),
+    }

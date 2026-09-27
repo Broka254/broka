@@ -29,7 +29,8 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from api.database import get_db, Listing, FeaturedPayment, MpesaStatus
+from api.database import get_db, Listing, FeaturedPayment, MpesaStatus, SellerTier, User
+from api.domains.pricing.service import FEATURED_NOT_FOR_LONG_TERM
 from api.security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,17 @@ async def boost_listing(
     listing = result.scalar_one_or_none()
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found or not yours.")
+
+    # Placement is sold to short-term sellers only (PRICING.md, "Featured
+    # listings"): a long-term seller's listings rank on their completion
+    # record, and selling them placement as well would let money outrank the
+    # record the listing fee rewards. Checked before the STK push, so a
+    # refused seller is never prompted for money.
+    tier = (await db.execute(
+        select(User.seller_tier).where(User.id == current_user["id"])
+    )).scalar()
+    if tier == SellerTier.long_term:
+        raise HTTPException(status_code=403, detail=FEATURED_NOT_FOR_LONG_TERM)
 
     phone = _normalize_phone(req.phone_number)
     amount = plan["price"]

@@ -755,7 +755,8 @@ async def _create_winner_deal(
     payment path: that is the one function that knows how a BROKA sale
     becomes a payable obligation - it validates the price, refuses to
     create a second deal for the same (listing, buyer), applies
-    settings.commission_rate, moves the listing to `pending` so it cannot
+    the auction commission rate (settings.auction_commission_rate - it
+    reads the listing's type), moves the listing to `pending` so it cannot
     also be sold through negotiation, writes the audit row, and publishes
     DealFinalized, which is what already drives the "tap to pay" push and
     the whole escrow lifecycle after it. An auction winner should arrive in

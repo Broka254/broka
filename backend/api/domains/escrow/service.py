@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from api.database import (
-    Deal, DealStatus, Listing, User, MpesaTransaction, MpesaStatus,
+    Deal, DealStatus, Listing, ListingType, User, MpesaTransaction, MpesaStatus,
 )
 from api.core.events import (
     publish, DealFinalized, EscrowFunded, EscrowReleased,
@@ -100,12 +100,19 @@ def validate_agreed_price(price) -> float:
     return round(p, 2)
 
 
-def _commission(price: float) -> float:
+def _commission(price: float, listing_type=None) -> float:
     # Decimal-quantized rather than round(price * rate, 2): the float
     # multiply can land a hair either side of a .005 boundary before
     # round() ever sees it, and this number is a real obligation on a real
     # person. See api/core/money.py for why the columns stay Float.
-    return pct_of(price, settings.commission_rate)
+    #
+    # An auction sale carries its own rate (5% all-in rather than 4.49%),
+    # keyed on the listing rather than on who calls finalize_deal - the
+    # auction close and a buyer tapping "finalize" on an auction listing
+    # are the same sale and must cost the same.
+    rate = (settings.auction_commission_rate if listing_type == ListingType.auction
+            else settings.commission_rate)
+    return pct_of(price, rate)
 
 
 class EscrowService:
@@ -178,7 +185,7 @@ class EscrowService:
         if existing:
             return {"deal_id": existing.id, "status": existing.status.value, "existed": True}
 
-        commission = _commission(agreed_price)
+        commission = _commission(agreed_price, listing.listing_type)
         deal = await self.deals.create(
             listing_id=listing_id,
             seller_id=seller_id,

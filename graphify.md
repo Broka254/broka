@@ -53,14 +53,14 @@ Where things usually are:
 
 ## Backend endpoints
 
-166 endpoints served by `backend/main.py`. **Auth** is read from each
+169 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 16, optional 2, public 44, token 4, user 100.
+Counts: admin 16, optional 2, public 46, token 4, user 101.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:453) |
+| GET | `/` | public | `root` (backend/main.py:455) |
 | GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:136) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:177) |
 | GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:319) |
@@ -140,13 +140,13 @@ Counts: admin 16, optional 2, public 44, token 4, user 100.
 | POST | `/escrow/confirm-delivery/{deal_id}` | user | `confirm_delivery` (backend/api/routers/escrow.py:32) |
 | POST | `/escrow/open-dispute/{deal_id}` | user | `freeze_for_dispute` (backend/api/routers/escrow.py:104) |
 | GET | `/escrow/state/{deal_id}` | user | `get_escrow_state` (backend/api/routers/escrow.py:128) |
-| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:157) |
-| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:220) |
-| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:241) |
-| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:129) |
-| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:123) |
-| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:300) |
-| GET | `/health` | public | `health` (backend/main.py:481) |
+| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:158) |
+| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:232) |
+| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:253) |
+| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:130) |
+| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:124) |
+| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:312) |
+| GET | `/health` | public | `health` (backend/main.py:483) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:179) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:237) |
 | GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:707) |
@@ -164,7 +164,7 @@ Counts: admin 16, optional 2, public 44, token 4, user 100.
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:918) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:930) |
-| GET | `/live` | public | `live` (backend/main.py:533) |
+| GET | `/live` | public | `live` (backend/main.py:535) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
@@ -192,7 +192,10 @@ Counts: admin 16, optional 2, public 44, token 4, user 100.
 | POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3480) |
 | POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3506) |
 | GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3528) |
-| GET | `/ready` | public | `ready` (backend/main.py:487) |
+| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:44) |
+| GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:21) |
+| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:38) |
+| GET | `/ready` | public | `ready` (backend/main.py:489) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:23) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:38) |
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
@@ -301,6 +304,16 @@ Counts: admin 16, optional 2, public 44, token 4, user 100.
 - `cleanup.py` — Removing uploads nothing ever used.
 - `router.py` — Image upload and serving.
 - `service.py` — Image assets: create them, turn them into URLs, check who may use them.
+
+### `backend/api/domains/pricing/`
+
+- `__init__.py` — Pricing: listing fees, premium plans, store plans and the costs behind them.
+- `categories.py` — Per-category pricing parameters - BROKA's starting guesses, to be replaced by data.
+- `costs.py` — What it costs BROKA to run things - the floor every price is built on.
+- `engine.py` — The monthly listing fee: f = C x R.
+- `plans.py` — Premium plans, store plans and commission - the prices, and the costs they cover.
+- `router.py` — Pricing router - GET /pricing/listing-fee/quote, /pricing/plans, /pricing/categories.
+- `service.py` — Gathering what a listing-fee quote needs from the database.
 
 ### `backend/api/domains/reviews/`
 
@@ -496,6 +509,7 @@ of a change.
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — nothing outside itself
+- **pricing** — domains: trust; core: config; database, security
 - **reviews** — core: audit, events; database, security
 - **showcase** — domains: media; core: config, fal_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit; database, security
@@ -542,7 +556,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-73 files in `backend/tests/`.
+74 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -593,6 +607,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_nudge_templates.py` — Tests for the system-generated availability-nudge SMS (api/core/nudge_templates.py).
 - `test_otp_sms_retriever.py` — Covers the OTP SMS body built for Android's SMS Retriever API.
 - `test_payment_races.py` — Payments that race each other.
+- `test_pricing.py` — Pricing (PRICING.md): the listing fee f = C x R, the plans, and commission.
 - `test_reconciliation_alerts.py` — Reconciliation alerts reach Sentry: once each, grouped per (kind, deal).
 - `test_redis_rate_limit.py` — The Redis sliding-window limiter - the one production actually runs.
 - `test_repo_map.py` — scripts/graphify.py - the repository map CI keeps up to date (graphify.md).
@@ -967,6 +982,7 @@ Modules:
 - `IOS_CALLING_SETUP.md` — BROKA iOS calling — what's in the repo, what still needs Xcode
 - `LISTING_OVERHAUL.md` — BROKA — Listing Flow Overhaul
 - `LISTING_POSTING_REVIEW.md` — BROKA — Listing Posting Review
+- `PRICING.md` — BROKA pricing
 - `PRIVACY.md` — Message visibility — how the audience line is enforced
 - `README.md` — BROKA — AI-Mediated P2P Marketplace for East Africa
 - `REPO_REVIEW.md` — BROKA — Repository Review

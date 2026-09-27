@@ -125,6 +125,7 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Signup, login, sessions | `backend/api/domains/auth/`, `flutter_app/lib/services/api_service.dart` |
 | Deals, escrow, payments | `backend/api/domains/escrow/`, `backend/api/routers/mpesa.py`, `ESCROW_AUDIT.md` |
 | Disputes | `backend/api/domains/disputes/`, `DISPUTE_AUDIT.md` |
+| Fees, commission, premium and store plans | `backend/api/domains/pricing/`, `PRICING.md` |
 | Auctions | `backend/api/domains/auctions/`, `AUCTIONS.md` |
 | Stores and the web storefront | `backend/api/domains/stores/`, `web/`, `STORES_PLAN.md` |
 | Images | `backend/api/domains/media/`, `backend/api/core/image_processing.py` |

@@ -363,11 +363,12 @@ The original Phase 3 plan follows.
   - **Prices always come from the server.** A total sent by the client is
     never used.
 - **Payment**: each order creates one `Deal` (`order_id` set, `listing_id`
-  NULL) for the order's subtotal with the usual 3% commission. It's funded
-  through the existing `POST /deal/{id}/fund` (one STK push), released when
-  the buyer confirms delivery, and disputable through the existing dispute
-  engine. Before this ships, the ~60 places in 11 files that read
-  `deal.listing_id` are audited and covered by tests for order deals.
+  NULL) for the order's subtotal with the usual commission (3.49%, plus
+  E-Confirm's 1% - PRICING.md). It's funded through the existing
+  `POST /deal/{id}/fund` (one STK push), released when the buyer confirms
+  delivery, and disputable through the existing dispute engine. Before
+  this ships, the ~60 places in 11 files that read `deal.listing_id` are
+  audited and covered by tests for order deals.
 - **Endpoints**:
   - `POST /orders` (`X-Idempotency-Key`; checks stock, store active,
     checkout enabled);

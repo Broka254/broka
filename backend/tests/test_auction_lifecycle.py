@@ -464,10 +464,10 @@ class TestWinnerBecomesADeal:
         deal = deals[0]
         assert deal.buyer_id == winner.id
         assert deal.seller_id == seller.id
-        # The winning price becomes the goods amount, and the existing
-        # commission model applies to it unchanged.
+        # The winning price becomes the goods amount, and the auction
+        # commission applies to it (4% + the escrow provider's 1% = 5%).
         assert deal.agreed_price == 78000
-        assert deal.commission == round(78000 * settings.commission_rate, 2)
+        assert deal.commission == round(78000 * settings.auction_commission_rate, 2)
         assert deal.status == DealStatus.agreed
 
     @pytest.mark.asyncio
@@ -1331,14 +1331,14 @@ class TestFullJourney:
         assert count == 1
         assert deal.buyer_id == bob.id and deal.seller_id == seller.id
         assert deal.agreed_price == 280000, "the winning bid IS the goods amount"
-        assert deal.commission == pct_of(280000, settings.commission_rate)
+        assert deal.commission == pct_of(280000, settings.auction_commission_rate)
         assert deal.status == DealStatus.agreed
         # The listing is locked against a competing sale.
         assert listing_row.status != ListingStatus.active
 
         # ── 10. The winner pays (provider round trip simulated) ──────────
         expected_total = add_money(deal.agreed_price, deal.commission)
-        assert expected_total == 280000 + pct_of(280000, settings.commission_rate)
+        assert expected_total == 280000 + pct_of(280000, settings.auction_commission_rate)
         async with AsyncSessionLocal() as db:
             paying = (await db.execute(
                 select(Deal).where(Deal.id == deal.id)
