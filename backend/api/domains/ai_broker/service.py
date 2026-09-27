@@ -645,10 +645,19 @@ class AIBrokerService:
         language_instruction: str,
         user_name: str = "",
         voice: bool = False,
+        facts: Optional[dict[str, str]] = None,
+        guides: Optional[dict[str, str]] = None,
+        topics: Optional[dict[str, str]] = None,
     ) -> dict:
         """One turn of Zeno as the user's assistant: talk, and - when asked -
         name ONE thing to do (open a screen, search, hand over to the Buying
-        Agent, call or open a chat with someone).
+        Agent, call or open a chat with someone, show a guide).
+
+        [facts] is what was fetched about the user for this question
+        (zeno_assistant/knowledge.py) - their own data only. [topics], when
+        given, lets the model ask for more with NEED_INFO instead of
+        guessing; the caller passes it on the first call only, so a turn is
+        never more than two calls.
 
         Returns {"reply": str, "action": dict}. The action is only a
         proposal - zeno_assistant/intents.clean_action cuts it down to the
@@ -669,6 +678,9 @@ class AIBrokerService:
             if isinstance(h, dict)
         ) or "(nothing yet - this is the start of the conversation)"
         screens = "\n".join(f"  {k}: {v}" for k, v in destinations.items())
+        known = "\n".join(f"[{k}] {v}" for k, v in (facts or {}).items())
+        guide_list = "\n".join(f"  {k}: {v}" for k, v in (guides or {}).items())
+        ask_for = "\n".join(f"  {k}: {v}" for k, v in (topics or {}).items())
         style = (
             "The user is TALKING to you and will hear your reply spoken aloud: one or two "
             "short spoken sentences, no lists, no markdown, no emoji."
@@ -696,8 +708,19 @@ class AIBrokerService:
             "(contact = who, exactly as the user referred to them, e.g. \"Jane\" or \"the "
             "Axio seller\"; call_type audio or video). The app asks them to confirm first.\n"
             "- OPEN_CHAT: open their conversation with someone (contact as above).\n"
-            "- NONE: just talk. Most turns are this.\n\n"
-            "Never claim you did something you did not do, never invent listings or prices you "
+            + (f"- GUIDE: show a step-by-step guide built for them, with buttons to the right "
+               f"screens. guide must be one of:\n{guide_list}\n  Use it when they ask how to do one of "
+               f"these, or would clearly be helped by one; your reply is then one or two sentences, "
+               f"not the steps themselves.\n" if guide_list else "")
+            + (f"- NEED_INFO: when a good answer needs THEIR OWN account data you have not been "
+               f"given below, ask for it instead of guessing: topics = list from:\n{ask_for}\n"
+               f"  You will be asked again with it. Only when needed; reply may be empty.\n"
+               if ask_for else "")
+            + "- NONE: just talk. Most turns are this.\n\n"
+            + (f"WHAT YOU KNOW ABOUT THIS USER (their own account, fetched just now - use what "
+               f"helps, don't recite it, and be honest and specific about it):\n{known}\n\n"
+               if known else "")
+            + "Never claim you did something you did not do, never invent listings or prices you "
             "have not seen, and never say you placed a call - the app does that after the user "
             "confirms. When you pick an action, the reply is a short confirmation of it "
             "(\"Opening your inbox.\", \"Calling Jane - just confirm.\").\n\n"
@@ -705,9 +728,10 @@ class AIBrokerService:
             f"LANGUAGE: {language_instruction}\n\n"
             "Respond with JSON only, no other text, no markdown fences:\n"
             '{"reply": "<what you say>", "action": {"type": "NONE" | "NAVIGATE" | "SEARCH" | '
-            '"FIND_FOR_ME" | "CALL" | "OPEN_CHAT", "destination": "<screen id or null>", '
-            '"query": "<text or null>", "contact": "<text or null>", '
-            '"call_type": "audio" | "video" | null}}'
+            '"FIND_FOR_ME" | "CALL" | "OPEN_CHAT" | "GUIDE" | "NEED_INFO", '
+            '"destination": "<screen id or null>", "query": "<text or null>", '
+            '"contact": "<text or null>", "call_type": "audio" | "video" | null, '
+            '"guide": "<guide id or null>", "topics": ["<topic>"] or null}}'
         )
 
         raw = (await self._call_ai([{"role": "user", "content": prompt}], cache_key=None) or "").strip()

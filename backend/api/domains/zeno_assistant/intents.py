@@ -43,9 +43,15 @@ DESTINATIONS: dict[str, str] = {
     "verify": "Get verified - ID and selfie",
     "market_insights": "Zeno's market insights - prices and trends",
     "how_broka_works": "How BROKA works - escrow, fees, safety",
+    "store_setup": "Store setup - open an online store (asks business questions first if needed)",
+    "my_store": "The user's own store - manage it",
+    "start_selling": "Start selling - set up as a seller or a business seller",
 }
 
-ACTION_TYPES = ("NONE", "NAVIGATE", "SEARCH", "FIND_FOR_ME", "CALL", "OPEN_CHAT")
+# GUIDE shows one of guides.GUIDES, built for the user; NEED_INFO is the
+# model asking for the user's own data (knowledge.TOPICS) before it
+# answers. Neither changes anything; see service.py for how each is used.
+ACTION_TYPES = ("NONE", "NAVIGATE", "SEARCH", "FIND_FOR_ME", "CALL", "OPEN_CHAT", "GUIDE", "NEED_INFO")
 
 MAX_QUERY_CHARS = 100
 MAX_CONTACT_CHARS = 60
@@ -63,7 +69,9 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
     "search": ("search", "search screen"),
     "buying_agent": ("buying agent", "the buying agent", "buy agent"),
     "seller_dashboard": ("seller dashboard", "dashboard", "my dashboard", "my listings",
-                         "my shop", "my sales"),
+                         "my sales", "sales dashboard"),
+    "my_store": ("my store", "my shop", "my storefront", "store page", "duka langu"),
+    "start_selling": ("start selling", "become a seller"),
     "deal_history": ("deals", "my deals", "deal history", "receipts", "my receipts",
                      "orders", "my orders", "purchases", "my purchases"),
     "verify": ("verification", "verify", "get verified", "verify me", "verify my account"),
@@ -75,8 +83,12 @@ _OPEN = (r"(?:please\s+)?(?:open|go(?:\s+to)?|goto|take\s+me(?:\s+to)?|show(?:\s
          r"navigate\s+to|switch\s+to|launch|fungua|nipeleke(?:\s+kwa)?|nionyeshe)")
 _POLITE_TAIL = r"(?:\s+(?:please|for\s+me|now|pls|tafadhali))*"
 
+# "Start a listing search for a PS5" is how people say it from the
+# dashboard, as well as "search for a PS5".
 _SEARCH = re.compile(
-    r"^(?:please\s+)?(?:search(?:\s+broka)?(?:\s+for)?|look\s+up|tafuta)\s+(?P<q>.+?)" + _POLITE_TAIL + r"$")
+    r"^(?:please\s+)?(?:(?:start|initiate|do|run|begin|launch)\s+(?:a\s+)?(?:new\s+)?(?:listings?\s+|product\s+)?"
+    r"search\s+(?:for|of)|search(?:\s+(?:broka|listings|products))?(?:\s+for)?|look\s+up|tafuta)\s+"
+    r"(?P<q>.+?)" + _POLITE_TAIL + r"$")
 _FIND = re.compile(
     r"^(?:please\s+)?(?:find\s+me|get\s+me|i(?:'m|\s+am)\s+looking\s+for|i\s+need\s+to\s+buy|"
     r"i\s+want\s+to\s+buy|help\s+me\s+(?:find|buy)|nitafutie|natafuta|nataka\s+kununua)\s+"
@@ -84,6 +96,35 @@ _FIND = re.compile(
 _CALL = re.compile(
     r"^(?:please\s+)?(?:(?P<video>video\s*call|facetime)|call|ring|phone|voice\s*call|"
     r"piga\s+simu(?:\s+kwa)?|mpigie(?:\s+simu)?|nipigie)\s+(?P<who>.+?)" + _POLITE_TAIL + r"$")
+# "How do I open a store?" - the questions a guide answers. Asked as a
+# question or a request for help, so "my store isn't getting visitors,
+# what do you think?" still goes to the model.
+_ASKING = (r"(?:how (?:do|can|should|would) i|how to|how does one|help me(?: to)?|guide me(?: to| on)?|"
+           r"show me how to|teach me(?: how)? to|i want to|i'd like to|i need to|tips? (?:on|for|to)|"
+           r"any tips (?:on|for|to)|nataka kujua jinsi ya|jinsi ya|nisaidie)")
+_GUIDE_TOPICS = (
+    ("open_store", r"(?:open|create|start|set ?up|make|build|launch|run|get|have)\s+(?:a|an|my|our)?\s*"
+                   r"(?:own\s+)?(?:online\s+)?(?:store|shop|storefront)|kufungua duka"),
+    ("sell_faster", r"sell(?:ing)?\s+(?:things?\s+|stuff\s+|my \w+\s+)?(?:faster|quicker|quickly|more|better)|"
+                    r"get (?:more )?(?:buyers|sales|customers)|make (?:more )?sales|kuuza (?:haraka|zaidi)"),
+    ("get_verified", r"(?:get|become|be)\s+verified|verify (?:my|me|myself)|get the (?:verified )?badge"),
+    ("first_listing", r"(?:sell|list|post|advertise)\s+(?:something|an item|a thing|my first|my|a|an)\b|"
+                      r"post (?:an )?ad"),
+    ("stay_safe", r"stay safe|avoid (?:being )?scam|not get scammed|spot (?:a )?(?:scam|fake)|"
+                  r"avoid (?:a )?fake|kuepuka utapeli"),
+    ("negotiate", r"negotiat|bargain|haggle"),
+    ("find_item", r"use the buying agent|get (?:the )?buying agent"),
+)
+_JUDGEMENT = r"worth|how much|price|cost|what do you think|should i|which (?:one|is)|compare|better"
+_GUIDE_DIRECT = (
+    ("open_store", r"^(?:open|create|start|set ?up|make) (?:a|an|new) (?:new )?(?:online )?(?:store|shop)$"),
+    ("sell_faster", r"^(?:tips?|advice) (?:for|on|to) sell(?:ing)? (?:faster|quicker|more)$|"
+                    r"^why (?:isn'?t|is not|aren'?t|are not) (?:my (?:\w+ )?)?(?:stuff|things|items|listings?|"
+                    r"\w+) selling$|^why (?:is|are) my (?:\w+ )?(?:stuff|things|items|listings?|\w+) not selling$"),
+    ("escrow", r"^(?:how does (?:broka(?:'s)? |the )?escrow work|what is (?:broka(?:'s)? )?escrow|"
+               r"what'?s escrow|explain (?:broka(?:'s)? )?escrow|escrow)$"),
+)
+
 _CHAT = re.compile(
     r"^(?:please\s+)?(?:message|text|dm|write\s+to|chat\s+with|open\s+(?:my\s+)?(?:chat|conversation|"
     r"thread)\s+with|mtumie\s+ujumbe|ongea\s+na)\s+(?P<who>.+?)" + _POLITE_TAIL + r"$")
@@ -146,6 +187,19 @@ def detect_fast(message: str) -> Optional[dict]:
     m = _CHAT.match(t)
     if m:
         return {"type": "OPEN_CHAT", "contact": m.group("who")}
+
+    # A how-to question gets its guide at once; one that also asks for
+    # judgement ("...what is it worth?", "should I...") goes to the model,
+    # which can still offer the guide alongside its answer.
+    if re.search(_JUDGEMENT, t) or len(t.split()) > 14:
+        return None
+    for guide, pattern in _GUIDE_DIRECT:
+        if re.search(pattern, t):
+            return {"type": "GUIDE", "guide": guide}
+    if re.search(_ASKING, t):
+        for guide, pattern in _GUIDE_TOPICS:
+            if re.search(pattern, t):
+                return {"type": "GUIDE", "guide": guide}
     return None
 
 
@@ -166,6 +220,17 @@ def clean_action(raw) -> dict:
     if kind == "NAVIGATE":
         dest = raw.get("destination")
         return {"type": kind, "destination": dest} if dest in DESTINATIONS else {"type": "NONE"}
+
+    if kind == "GUIDE":
+        from .guides import GUIDES
+        guide = raw.get("guide")
+        return {"type": kind, "guide": guide} if guide in GUIDES else {"type": "NONE"}
+
+    if kind == "NEED_INFO":
+        from .knowledge import TOPICS
+        topics = raw.get("topics")
+        topics = [t for t in topics if t in TOPICS] if isinstance(topics, list) else []
+        return {"type": kind, "topics": sorted(set(topics))} if topics else {"type": "NONE"}
 
     if kind in ("SEARCH", "FIND_FOR_ME"):
         query = raw.get("query")

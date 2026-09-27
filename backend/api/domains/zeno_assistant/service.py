@@ -1,10 +1,18 @@
 """One turn of Zeno as the user's assistant - text or voice, it is the same
 turn.
 
-    message -> FAST PATH (plain commands, no model)
-            -> or MODEL (talk, and propose at most one action)
+    message -> FAST PATH (plain commands and how-to guides, no model)
+            -> or MODEL (talk, and propose at most one action), given the
+               user's own data for the topics the question is about
+               -> if it asks for data it wasn't given (NEED_INFO): fetch it
+                  and ask once more - never more than two model calls
             -> CLEAN (closed vocabulary)  -> RESOLVE (whose conversation?)
             -> {reply, action}
+
+What costs money here is model calls and prompt size, so: commands and
+guides take none; data goes in only for the topics a question is about
+(knowledge.topics_for); and the second call happens only when the model
+asks for data the rules did not foresee.
 
 The app does what the action says: opens a screen, runs a search, hands a
 shopping request to the Buying Agent, opens a chat - and, for a CALL, puts
@@ -26,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import User
 from api.domains.ai_broker.service import AIBrokerService
-from . import contacts, intents
+from . import contacts, guides, intents, knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +55,9 @@ _SCREEN_NAMES = {
     "verify": ("verification", "uthibitisho"),
     "market_insights": ("market insights", "maarifa ya soko"),
     "how_broka_works": ("how BROKA works", "jinsi BROKA inavyofanya kazi"),
+    "store_setup": ("store setup", "kufungua duka"),
+    "my_store": ("your store", "duka lako"),
+    "start_selling": ("Start selling", "anza kuuza"),
 }
 
 
@@ -64,6 +75,9 @@ def _confirmation(action: dict, language: str) -> str:
     if kind == "SEARCH":
         q = action["query"]
         return f"Natafuta \"{q}\"." if sw else f"Searching for \"{q}\"."
+    if kind == "GUIDE":
+        title = (action.get("guide_content") or {}).get("title", "")
+        return f"{title} - hatua hizi hapa." if sw else f"{title} - here's how."
     if kind == "FIND_FOR_ME":
         return ("Nimempa Wakala wa Ununuzi - atakuuliza machache kisha atafute."
                 if sw else "Handing that to the Buying Agent - it'll ask a question or two, then go looking.")
@@ -108,8 +122,14 @@ async def _first_name(db: AsyncSession, user_id: str) -> str:
 
 
 async def _resolve(db: AsyncSession, user_id: str, action: dict) -> tuple[dict, Optional[str]]:
-    """Fill in who a CALL / OPEN_CHAT is for. Returns the action and, when
-    it cannot be done as asked, what Zeno should say instead."""
+    """Fill in who a CALL / OPEN_CHAT is for, or build a GUIDE for this
+    user. Returns the action and, when it cannot be done as asked, what
+    Zeno should say instead."""
+    if action["type"] == "GUIDE":
+        built = await guides.build(db, user_id, action["guide"])
+        if built is None:
+            return {"type": "NONE"}, "no_guide"
+        return {"type": "GUIDE", "guide": action["guide"], "guide_content": built}, None
     if action["type"] not in ("CALL", "OPEN_CHAT"):
         return action, None
     partners = await contacts.conversation_partners(db, user_id)
@@ -145,31 +165,61 @@ async def assistant_turn(
                 return {"reply": _choose(resolved["choices"], language), "action": resolved,
                         "source": "rules"}
 
-    # 2. The model: conversation, and at most one proposed action.
+    # 2. The model: conversation, and at most one proposed action - with the
+    #    user's own data for the topics the question is about.
     from api.routers.negotiate import _language_instruction  # router module; imported late
-    try:
-        turn = await AIBrokerService().assistant_turn(
+    topics = knowledge.topics_for(message)
+    facts = await knowledge.gather(db, user_id, topics) if topics else {}
+    service = AIBrokerService()
+    name = await _first_name(db, user_id)
+
+    async def ask(known: dict[str, str], may_ask: bool) -> dict:
+        return await service.assistant_turn(
             message=message,
             history=history,
             destinations=intents.DESTINATIONS,
             language_instruction=_language_instruction(language),
-            user_name=await _first_name(db, user_id),
+            user_name=name,
             voice=voice,
+            facts=known,
+            guides=guides.GUIDES,
+            topics=(knowledge.TOPIC_HELP if may_ask else None),
         )
+
+    calls = 1
+    try:
+        turn = await ask(facts, may_ask=True)
+        action = intents.clean_action(turn.get("action"))
+        # 3. The model asked for data it wasn't given: fetch it, ask once
+        #    more, and stop there - a second NEED_INFO is not honoured.
+        if action["type"] == "NEED_INFO":
+            wanted = [t for t in action["topics"] if t not in facts]
+            if wanted:
+                facts = {**facts, **await knowledge.gather(db, user_id, wanted)}
+            # Asked again even when what it wanted was already there: its
+            # first reply may be empty, and without the option to ask it
+            # answers with what it has.
+            turn = await ask(facts, may_ask=False)
+            calls = 2
+            action = intents.clean_action(turn.get("action"))
+            if action["type"] == "NEED_INFO":
+                action = {"type": "NONE"}
     except Exception as exc:
         # Every provider down must not take the assistant with it: say so,
         # and say what still works (the fast path above).
         logger.warning("[zeno_assistant] model unavailable: %s", exc)
         return {"reply": _offline(language), "action": None, "source": "fallback"}
 
-    action = intents.clean_action(turn.get("action"))
+    used = {"facts": sorted(facts), "model_calls": calls}
     reply = (turn.get("reply") or "").strip()
     if action["type"] == "NONE":
-        return {"reply": reply or _offline(language), "action": None, "source": "model"}
+        return {"reply": reply or _offline(language), "action": None, "source": "model", **used}
 
     resolved, problem = await _resolve(db, user_id, action)
     if problem == "no_match":
-        return {"reply": _no_match(action, language), "action": None, "source": "model"}
+        return {"reply": _no_match(action, language), "action": None, "source": "model", **used}
+    if problem == "no_guide":
+        return {"reply": reply or _offline(language), "action": None, "source": "model", **used}
     if problem == "choose":
-        return {"reply": _choose(resolved["choices"], language), "action": resolved, "source": "model"}
-    return {"reply": reply or _confirmation(resolved, language), "action": resolved, "source": "model"}
+        return {"reply": _choose(resolved["choices"], language), "action": resolved, "source": "model", **used}
+    return {"reply": reply or _confirmation(resolved, language), "action": resolved, "source": "model", **used}

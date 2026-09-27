@@ -43,6 +43,8 @@ import 'screens/review_screen.dart';
 import 'features/stores/presentation/my_store_screen.dart';
 import 'features/stores/presentation/setup/store_setup_screen.dart';
 import 'features/stores/presentation/store_home_screen.dart';
+import 'features/zeno_assistant/presentation/zeno_session_host.dart';
+import 'features/zeno_assistant/zeno_session.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
 import 'services/callkit_service.dart';
@@ -441,6 +443,8 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
   // which was causing a dark blank screen on some screens.
   static const _idleThreshold = Duration(minutes: 5);
 
+  final _zeno = ZenoSession();
+
   // App-wide presence heartbeat. Individual chat screens also ping this
   // endpoint while open (harmless/redundant), but WhatsApp-style presence
   // should reflect "the app is open", not "the user happens to be inside a
@@ -465,6 +469,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _heartbeatTimer?.cancel();
+    _zeno.dispose();
     super.dispose();
   }
 
@@ -520,6 +525,10 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: navigatorKey,
+      // Zeno's session lives above the Navigator, so it stays with the user
+      // from screen to screen (features/zeno_assistant/zeno_session.dart).
+      navigatorObservers: [_zeno.routes],
+      builder: (context, child) => ZenoSessionHost(session: _zeno, child: child ?? const SizedBox.shrink()),
       debugShowCheckedModeBanner: false,
       title: 'BROKA',
       theme: _buildTheme(),

@@ -54,6 +54,13 @@ class BrokaTts {
   VoidCallback? onStart;
   VoidCallback? onDone;
 
+  /// Whether anything is being said, for anyone to listen to. onStart and
+  /// onDone hold one callback each, and the screen that spoke last owns
+  /// them; Zeno's session (zeno_session.dart) listens across every screen,
+  /// so its microphone knows not to take a reply read out in the
+  /// negotiation room for the user speaking.
+  final ValueNotifier<bool> playing = ValueNotifier(false);
+
   /// Fired when Zeno can't speak a reply. At most once per reason per app
   /// session - saying "no voice for Dholuo" after every message is noise.
   void Function(TtsUnavailable reason)? onUnavailable;
@@ -67,9 +74,11 @@ class BrokaTts {
     _player.onPlayerStateChanged.listen((state) {
       if (state == PlayerState.playing) {
         _speaking = true;
+        playing.value = true;
         onStart?.call();
       } else if (state == PlayerState.completed || state == PlayerState.stopped) {
         _speaking = false;
+        playing.value = false;
         onDone?.call();
       }
     });
@@ -113,6 +122,7 @@ class BrokaTts {
       await _player.stop();
     } catch (_) {}
     _speaking = false;
+    playing.value = false;
     onDone?.call();
   }
 

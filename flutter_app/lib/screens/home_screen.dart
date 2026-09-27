@@ -29,6 +29,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import '../core/utils/result.dart';
@@ -50,6 +51,7 @@ import '../features/categories/presentation/category_zone_screen.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/presentation/auction_house_screen.dart';
 import 'zeno_screen.dart';
+import '../features/zeno_assistant/zeno_session.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/domain/models/buy_agent_request.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
@@ -1008,6 +1010,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _talkToZeno() async {
     final authed = await requireAuth(context, reason: _navReasons[3]);
     if (!authed || !mounted) return;
+    // Straight into voice, over Home, the way a phone's assistant opens
+    // over whatever is on screen: Zeno's session (zeno_session.dart), grown
+    // out of the Zeno tab. What is said lands in the Zeno tab's
+    // conversation. Without a session - never in the app - the Zeno tab
+    // opens in voice mode instead.
+    final session = ZenoSession.maybeOf(context);
+    if (session != null) {
+      HapticFeedback.mediumImpact();
+      session.start(from: const Alignment(0.4, 0.97));
+      return;
+    }
     setState(() => _navIndex = 3);
     Navigator.push(
       context,

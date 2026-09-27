@@ -1,3 +1,78 @@
+# Zeno stays with you, and guides (2026-09-27)
+
+**Zeno stays active across screens.** "Open my dashboard" used to open the
+dashboard and end the conversation. Voice mode now belongs to the app, not
+the Zeno tab (`flutter_app/lib/features/zeno_assistant/zeno_session.dart`,
+mounted above the Navigator by `ZenoSessionHost` in `main.dart`): opening a
+screen shrinks it into a pill over that screen that **keeps listening**. On
+the dashboard, "start a listing search for a PS5" searches; then "switch to
+my inbox" opens the inbox, and Zeno is still there.
+
+- A screen Zeno opened is swapped for the next one it opens, not stacked:
+  back goes to where the user was before Zeno started.
+- **The pill:**
+  - its orb and a turning ring that brightens with the voice;
+  - what it hears as it hears it, then what Zeno says;
+  - a longer reply in a bubble above it;
+  - the keyboard to type to Zeno from any screen, and X to end;
+  - tap the orb for the full view again;
+  - drag it to the top or the bottom.
+- **Holding the Zeno tab** opens voice mode over Home instead of switching
+  tabs.
+- **One conversation.** Everything said in the session lands in the Zeno
+  tab's chat, live when the tab is open and saved when it isn't.
+- **Where the microphone goes:**
+  - one voice session at a time (a voice note or the negotiation room's
+    voice card takes the mic, and the pill says "Tap to talk");
+  - a call, signing out, or the app leaving the foreground ends the session;
+  - a minute with nothing said stops the mic, because the speech provider
+    bills by the minute;
+  - handing a request to the Buying Agent ends it too, since the agent has
+    its own voice.
+
+**Guides.** "How do I open a store?", "tips to sell faster", "how do I get
+verified", "how does escrow work", "how do I spot a fake listing". Zeno
+answers with steps, each with a **Take me there** button to where it is done
+(`zeno_guide_card.dart`). In the session, the guide folds above the pill
+with its progress and goes along from screen to screen.
+
+- Steps are built on the server from the user's own account
+  (`backend/api/domains/zeno_assistant/guides.py`):
+  - whether they are a business seller yet;
+  - what their store is missing;
+  - which listing is priced 40% above the median of similar ones, has two
+    photos, or has had 3 views in 10 days.
+- Every figure is computed; none is the model's.
+- The common questions are recognised by rules and cost **no model call**.
+
+**Questions about the user's own account.** "What do you think of my
+rating?" is now answerable. The account is split into topics (profile,
+listings, sales, store, watch), and a question gets only the ones it is
+about (`knowledge.py`), picked by rules from its words at no extra cost. If
+the rules miss, the model can ask for a topic once (`NEED_INFO`): at most
+**two model calls a turn**, never more. "Hi" costs what it always did.
+
+- No other user's words enter the prompt: ratings go in as numbers and a
+  spread, never review text.
+- Each reply says which topics were read and how many model calls it took
+  (`facts`, `model_calls`).
+
+## Fixed on the way
+
+- **Opening voice again just after closing it gave a deaf "Listening".** The
+  speech provider ignores a start while its last socket is still closing,
+  and the controller went on to say it was listening. Reachable before
+  today with the voice card's X and then the mic; the pill's "Tap to talk"
+  made it common. `open()` now waits for the last close's teardown, which is
+  bounded. The test in `zeno_assistant_test.dart` fails on the old code.
+
+Tests:
+- `backend/tests/test_zeno_assistant.py`: 37, also run on PostgreSQL;
+- `flutter_app/test/zeno_assistant_test.dart`: 31, covering the
+  dashboard -> search -> inbox flow over a fake Deepgram socket, the pill,
+  guides, the microphone arbiter, the quiet timeout and the app going to the
+  background.
+
 # Zeno, the assistant - talk to it, and it does things (2026-09-27)
 
 The Zeno tab was a chat that could only talk. It is now an assistant, one on

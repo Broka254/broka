@@ -31,6 +31,7 @@ import '../models/listing.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
+import '../services/zeno_voice_controller.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
 // Extends the existing Message model with media fields.
@@ -702,6 +703,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // ── Voice notes ────────────────────────────────────────────────────────────
 
   Future<void> _startRecording() async {
+    // Zeno may be listening from its session across screens: a voice note
+    // takes the microphone from it rather than share it.
+    await ZenoVoiceController.releaseMicrophone();
     final ok = await _recorder.hasPermission();
     if (!ok) {
       if (mounted) {

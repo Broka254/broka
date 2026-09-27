@@ -6,12 +6,15 @@
 //   a person to pick                one button per person it could be
 //   a call                          who, about what, and [Not now] [Call] -
 //                                   nothing rings until Call is tapped
+//   a guide                         its steps, each with the way to where it
+//                                   is done (zeno_guide_card.dart)
 import 'package:flutter/material.dart';
 
 import '../../../main.dart' show BrokaColors;
 import '../../../theme/motion.dart';
 import '../domain/zeno_action.dart';
 import '../zeno_action_runner.dart';
+import 'zeno_guide_card.dart';
 
 enum ZenoActionPhase { pending, running, done, dismissed }
 
@@ -24,6 +27,10 @@ class ZenoActionCard extends StatelessWidget {
     this.onConfirm,
     this.onDismiss,
     this.onChoose,
+    this.onStep,
+    this.visited = const {},
+    this.folded = false,
+    this.onFold,
   });
 
   final ZenoAction action;
@@ -37,10 +44,26 @@ class ZenoActionCard extends StatelessWidget {
   final VoidCallback? onDismiss;
   final ValueChanged<ZenoContact>? onChoose;
 
+  /// A guide: one of its steps' "Take me there", and how far along it is.
+  final ValueChanged<int>? onStep;
+  final Set<int> visited;
+  final bool folded;
+  final ValueChanged<bool>? onFold;
+
   @override
   Widget build(BuildContext context) {
     final Widget body;
-    if (action.choices.isNotEmpty) {
+    if (action.type == ZenoActionType.guide && action.guide != null) {
+      body = ZenoGuideCard(
+        guide: action.guide!,
+        large: large,
+        visited: visited,
+        folded: folded,
+        onFold: onFold,
+        onDismiss: onDismiss,
+        onOpen: onStep ?? (_) {},
+      );
+    } else if (action.choices.isNotEmpty) {
       body = _Choices(action: action, large: large, onChoose: onChoose, onDismiss: onDismiss, phase: phase);
     } else if (action.type == ZenoActionType.call) {
       body = _CallConfirm(action: action, phase: phase, large: large, onConfirm: onConfirm, onDismiss: onDismiss);
@@ -65,7 +88,9 @@ BoxDecoration _glass(Color edge, {bool large = false}) => BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [edge.withOpacity(0.18), BrokaColors.bgCard.withOpacity(0.92)],
+        // Opaque: in Zeno's session the card sits over any screen, and a
+        // screen's text showing through a call confirmation is unreadable.
+        colors: [Color.alphaBlend(edge.withOpacity(0.18), BrokaColors.bgCard), BrokaColors.bgCard],
       ),
       border: Border.all(color: edge.withOpacity(0.55)),
       boxShadow: [BoxShadow(color: edge.withOpacity(0.22), blurRadius: large ? 26 : 14)],

@@ -7,6 +7,12 @@
 // place in the app that can ring a phone (ZENO_ACTIONS.md), and it is only
 // reached from a confirmation the user tapped: the assistant's screens call
 // [call] from a button, never from a reply.
+//
+// Everything here works from a NavigatorState as well as a BuildContext:
+// Zeno's session (zeno_session.dart) lives above the Navigator, where
+// there is no route context to look one up from.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../screens/listing_search_screen.dart';
@@ -30,6 +36,11 @@ class ZenoActionRunner {
     'verify': '/verify',
     'market_insights': '/zeno-insights',
     'how_broka_works': '/how-broka-works',
+    // sellerDashboardOrSetup's own gate decides what a non-business seller
+    // sees; /store-setup asks the business questions first (main.dart).
+    'store_setup': '/store-setup',
+    'my_store': '/store-manage',
+    'start_selling': '/start-selling',
   };
 
   /// What the action chip says while it happens.
@@ -43,6 +54,7 @@ class ZenoActionRunner {
         ZenoActionType.call => a.target == null
             ? 'Who should I call?'
             : '${a.video ? 'Video call' : 'Call'} ${a.target!.firstName}',
+        ZenoActionType.guide => a.guide?.title ?? 'Guide',
       };
 
   static IconData icon(ZenoAction a) => switch (a.type) {
@@ -59,19 +71,47 @@ class ZenoActionRunner {
             'deal_history' => Icons.receipt_long_rounded,
             'verify' => Icons.verified_user_rounded,
             'market_insights' => Icons.insights_rounded,
+            'store_setup' || 'my_store' => Icons.store_mall_directory_rounded,
+            'start_selling' => Icons.sell_rounded,
             _ => Icons.help_rounded,
           },
         ZenoActionType.search => Icons.search_rounded,
         ZenoActionType.findForMe => Icons.radar_rounded,
         ZenoActionType.openChat => Icons.chat_bubble_rounded,
         ZenoActionType.call => a.video ? Icons.videocam_rounded : Icons.call_rounded,
+        ZenoActionType.guide => Icons.auto_awesome_rounded,
       };
+
+  static IconData destinationIcon(String destination) =>
+      icon(ZenoAction(type: ZenoActionType.navigate, destination: destination));
 
   /// Does [action]. Returns whether anything happened.
   ///
   /// Calls are refused here: they go through [call], from a button.
-  static Future<bool> run(BuildContext context, ZenoAction action) async {
-    final nav = Navigator.of(context);
+  static Future<bool> run(BuildContext context, ZenoAction action) =>
+      runOn(Navigator.of(context), action);
+
+  /// [run], on [nav]. With [replace], the screen opened takes the place of
+  /// the top one instead of going on top of it: "open my dashboard", then
+  /// "now my inbox", is one screen swapped for another, not a stack to back
+  /// out of (zeno_session.dart decides when).
+  static Future<bool> runOn(NavigatorState nav, ZenoAction action, {bool replace = false}) async {
+    Future<void> push(Route<void> route) async {
+      if (replace) {
+        unawaited(nav.pushReplacement(route));
+      } else {
+        unawaited(nav.push(route));
+      }
+    }
+
+    Future<void> pushNamed(String name, {Object? arguments}) async {
+      if (replace) {
+        unawaited(nav.pushReplacementNamed(name, arguments: arguments));
+      } else {
+        unawaited(nav.pushNamed(name, arguments: arguments));
+      }
+    }
+
     switch (action.type) {
       case ZenoActionType.navigate:
         final dest = action.destination;
@@ -80,24 +120,22 @@ class ZenoActionRunner {
           return true;
         }
         if (dest == 'search') {
-          nav.push(MaterialPageRoute(builder: (_) => const ListingSearchScreen()));
+          await push(MaterialPageRoute(builder: (_) => const ListingSearchScreen()));
           return true;
         }
         if (dest == 'buying_agent') {
-          nav.push(MaterialPageRoute(
-              builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent)));
+          await push(MaterialPageRoute(builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent)));
           return true;
         }
         final route = routes[dest];
         if (route == null) return false;
-        nav.pushNamed(route);
+        await pushNamed(route);
         return true;
       case ZenoActionType.search:
-        nav.push(MaterialPageRoute(
-            builder: (_) => ListingSearchScreen(initialQuery: action.query)));
+        await push(MaterialPageRoute(builder: (_) => ListingSearchScreen(initialQuery: action.query)));
         return true;
       case ZenoActionType.findForMe:
-        nav.push(MaterialPageRoute(
+        await push(MaterialPageRoute(
             builder: (_) => ZenoScreen(mode: ZenoMode.buyingAgent, initialQuery: action.query)));
         return true;
       case ZenoActionType.openChat:
@@ -105,17 +143,26 @@ class ZenoActionRunner {
         if (c == null) return false;
         // The inbox's arguments, by id: the negotiation room loads the
         // listing itself (NegotiateScreen._restoreFromListingId).
-        nav.pushNamed('/negotiate',
+        await pushNamed('/negotiate',
             arguments: {'listingId': c.listingId, 'role': c.role, 'buyer_id': c.buyerId});
         return true;
       case ZenoActionType.call:
+      case ZenoActionType.guide:
         return false;
     }
   }
 
+  /// A guide step's "Take me there".
+  static Future<bool> openDestination(NavigatorState nav, String destination, {bool replace = false}) =>
+      runOn(nav, ZenoAction(type: ZenoActionType.navigate, destination: destination), replace: replace);
+
   /// Places the call the user just confirmed.
-  static Future<bool> call(BuildContext context, ZenoContact c, {required bool video}) async {
-    final messenger = ScaffoldMessenger.maybeOf(context);
+  static Future<bool> call(BuildContext context, ZenoContact c, {required bool video}) =>
+      callOn(Navigator.of(context), c, video: video);
+
+  /// [call], on [nav].
+  static Future<bool> callOn(NavigatorState nav, ZenoContact c, {required bool video}) async {
+    final messenger = ScaffoldMessenger.maybeOf(nav.context);
     final info = await ApiService.initiateCall(
       listingId: c.listingId,
       listingName: c.listingName,
@@ -124,12 +171,12 @@ class ZenoActionRunner {
       // listing's seller (calls.py initiate_call).
       calleeId: c.role == 'seller' ? c.buyerId : null,
     );
-    if (!context.mounted) return false;
+    if (!nav.mounted) return false;
     if (info == null) {
       messenger?.showSnackBar(const SnackBar(content: Text("Couldn't start the call right now.")));
       return false;
     }
-    Navigator.of(context).pushNamed('/voip-call', arguments: {
+    unawaited(nav.pushNamed('/voip-call', arguments: {
       'roomId': info['room_id'],
       'userId': ApiService.currentUserId ?? '',
       'callToken': info['call_token'],
@@ -140,7 +187,7 @@ class ZenoActionRunner {
       'buyerId': c.buyerId,
       'callerRole': c.role,
       'callType': video ? 'video' : 'audio',
-    });
+    }));
     return true;
   }
 }

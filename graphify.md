@@ -344,7 +344,9 @@ Counts: admin 16, optional 2, public 44, token 4, user 100.
 ### `backend/api/domains/zeno_assistant/`
 
 - `contacts.py` — Who "Jane" is, when the user tells Zeno to call Jane.
+- `guides.py` — Zeno's guides: "how do I open a store?", "how do I sell faster?" answered with steps built from the user's own situation, and a button on e…
 - `intents.py` — What Zeno, the assistant, may do - and the commands it understands without asking a model.
+- `knowledge.py` — What Zeno knows about the user it is talking to - fetched only when a question needs it.
 - `router.py` — Zeno as the user's assistant - POST /zeno/assistant/turn.
 - `service.py` — One turn of Zeno as the user's assistant - text or voice, it is the same turn.
 
@@ -502,7 +504,7 @@ of a change.
 - **trust** — domains: listings; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
-- **zeno_assistant** — domains: ai_broker; core: rate_limit; database, security
+- **zeno_assistant** — domains: ai_broker, buy_agent; core: rate_limit; database, security
 
 ## Background jobs
 
@@ -755,9 +757,12 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/zeno_assistant_repository.dart` — lib/features/zeno_assistant/data/zeno_assistant_repository.dart
 - `domain/zeno_action.dart` — What Zeno, the assistant, can do in the app - the app's side of the closed vocabulary in backend/api/domains/zeno_assistant/intents.py.
 - `presentation/zeno_action_card.dart` — What Zeno is doing, or asking to do, under its reply - in the typed conversation and, larger, in voice mode.
+- `presentation/zeno_guide_card.dart` — A guide from Zeno - "how do I open a store?", "tips to sell faster" - as steps to follow rather than a paragraph to remember.
 - `presentation/zeno_live_overlay.dart` — Voice mode - talking to Zeno the way one talks to Siri.
 - `presentation/zeno_orb.dart` — Zeno's orb - what the user talks to in voice mode.
+- `presentation/zeno_session_host.dart` — Where Zeno's session (zeno_session.dart) shows: above every screen.
 - `zeno_action_runner.dart` — Doing what Zeno said it would.
+- `zeno_session.dart` — Zeno, staying with the user from screen to screen.
 
 ### `flutter_app/lib/core/`
 
@@ -951,7 +956,7 @@ Modules:
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno, the assistant - talk to it, and it does things (2026-09-27)
+- `CHANGES.md` — Zeno stays with you, and guides (2026-09-27)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

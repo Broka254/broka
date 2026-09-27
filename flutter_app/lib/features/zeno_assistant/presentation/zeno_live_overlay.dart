@@ -17,6 +17,11 @@
 //
 // Like the voice card, it can't outlive the tree that opened it: an open
 // microphone behind a popped screen is exactly the failure brief §25 names.
+//
+// 2026-09-27: it is mounted once, above the Navigator, by Zeno's session
+// (zeno_session_host.dart), so that opening a screen no longer ends the
+// conversation: the view shrinks back into a pill that keeps listening
+// ([expanded] false, the microphone still open) and grows out of it again.
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -41,6 +46,9 @@ class ZenoLiveOverlay extends StatefulWidget {
     this.burst = 0,
     this.muted = false,
     this.onToggleMute,
+    this.expanded = true,
+    this.origin = const Alignment(0.82, 0.9),
+    this.onMinimize,
   });
 
   final ZenoVoiceController controller;
@@ -65,6 +73,17 @@ class ZenoLiveOverlay extends StatefulWidget {
 
   /// Stop Zeno mid-sentence and listen.
   final VoidCallback onInterrupt;
+
+  /// Whether the full view shows while the microphone is open. False is the
+  /// session docked in its pill, still listening.
+  final bool expanded;
+
+  /// Where the view grows from and shrinks back into.
+  final Alignment origin;
+
+  /// The top bar's chevron: keep Zeno on, out of the way. Without it the
+  /// chevron closes, as [onClose] does.
+  final VoidCallback? onMinimize;
 
   @override
   State<ZenoLiveOverlay> createState() => _ZenoLiveOverlayState();
@@ -97,10 +116,11 @@ class _ZenoLiveOverlayState extends State<ZenoLiveOverlay> with SingleTickerProv
       old.controller.removeListener(_onController);
       widget.controller.addListener(_onController);
     }
+    if (old.expanded != widget.expanded || old.controller != widget.controller) _onController();
   }
 
   void _onController() {
-    final open = widget.controller.isOpen;
+    final open = widget.controller.isOpen && widget.expanded;
     if (!mounted) return;
     final still = BrokaMotion.reduced(context);
     if (open && _reveal.status != AnimationStatus.forward && _reveal.value < 1) {
@@ -130,7 +150,7 @@ class _ZenoLiveOverlayState extends State<ZenoLiveOverlay> with SingleTickerProv
           if (_reveal.value == 0) return const SizedBox.shrink();
           return Positioned.fill(
             child: ClipPath(
-              clipper: _RevealClipper(_revealCurve.value, const Alignment(0.82, 0.9)),
+              clipper: _RevealClipper(_revealCurve.value, widget.origin),
               child: _LiveView(overlay: widget),
             ),
           );
@@ -230,7 +250,8 @@ class _LiveView extends StatelessWidget {
                     status: status(state, thinking: overlay.thinking, hearing: heard.isNotEmpty || c.level > 0.2),
                     muted: overlay.muted,
                     onToggleMute: overlay.onToggleMute,
-                    onClose: overlay.onClose,
+                    onClose: overlay.onMinimize ?? overlay.onClose,
+                    minimizes: overlay.onMinimize != null,
                   ),
                   Expanded(
                     child: LayoutBuilder(builder: (context, room) {
@@ -299,10 +320,17 @@ class _LiveView extends StatelessWidget {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.status, required this.muted, required this.onClose, this.onToggleMute});
+  const _TopBar({
+    required this.status,
+    required this.muted,
+    required this.onClose,
+    this.onToggleMute,
+    this.minimizes = false,
+  });
 
   final String status;
   final bool muted;
+  final bool minimizes;
   final VoidCallback? onToggleMute;
   final VoidCallback onClose;
 
@@ -311,7 +339,7 @@ class _TopBar extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
         child: Row(children: [
           IconButton(
-            tooltip: 'Close voice',
+            tooltip: minimizes ? 'Keep Zeno on while you browse' : 'Close voice',
             onPressed: onClose,
             icon: const Icon(Icons.keyboard_arrow_down_rounded, color: BrokaColors.textHigh, size: 30),
           ),
@@ -449,9 +477,11 @@ class _Hints extends StatefulWidget {
   static const examples = [
     '"Open my inbox"',
     '"Search for a Toyota Axio"',
+    '"How do I open a store?"',
     '"Find me a laptop under 50k"',
     '"Call Jane"',
-    '"What\'s a fair price for an iPhone 12?"',
+    '"Tips to sell faster"',
+    '"What do you think of my rating?"',
     '"Take me to Sell"',
   ];
 

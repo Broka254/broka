@@ -7,18 +7,28 @@
 // that a screen opens by itself, that nothing rings until Call is tapped,
 // that the spoken loop works end to end, and that Zeno's own voice is never
 // taken for the user's.
+//
+// Then Zeno stayed (zeno_session.dart): voice mode is the app's, above the
+// Navigator, and opening a screen docks it in a pill that keeps listening -
+// so the tests build the app the way main.dart does, with the session host.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/features/zeno_assistant/domain/zeno_action.dart';
+import 'package:broka/features/zeno_assistant/presentation/zeno_guide_card.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_live_overlay.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_orb.dart';
+import 'package:broka/features/zeno_assistant/presentation/zeno_session_host.dart';
+import 'package:broka/features/zeno_assistant/zeno_session.dart';
 import 'package:broka/screens/listing_search_screen.dart';
 import 'package:broka/screens/zeno_screen.dart';
 import 'package:broka/services/deepgram_stt_service.dart';
 import 'package:broka/services/realtime_stt.dart';
+import 'package:broka/services/zeno_chat_store.dart';
 import 'package:broka/services/zeno_voice_controller.dart';
 
 import 'support/fake_api.dart';
@@ -40,14 +50,22 @@ void main() {
 
   tearDown(() => setFakeRoute(null));
 
-  Widget app({Widget home = const ZenoScreen(animateBackground: false)}) => MaterialApp(
-        home: home,
-        // Where an action leads, by name, so a test can see it went there.
-        onGenerateRoute: (s) => MaterialPageRoute(
-          settings: s,
-          builder: (_) => Scaffold(body: Text('route ${s.name} ${s.arguments ?? ''}')),
-        ),
-      );
+  late ZenoSession session;
+
+  /// The app as main.dart builds it: Zeno's session above the Navigator.
+  Widget app({Widget home = const ZenoScreen(animateBackground: false)}) {
+    session = ZenoSession();
+    return MaterialApp(
+      home: home,
+      navigatorObservers: [session.routes],
+      builder: (context, child) => ZenoSessionHost(session: session, child: child!),
+      // Where an action leads, by name, so a test can see it went there.
+      onGenerateRoute: (s) => MaterialPageRoute(
+        settings: s,
+        builder: (_) => Scaffold(body: Text('route ${s.name} ${s.arguments ?? ''}')),
+      ),
+    );
+  }
 
   Future<void> run(WidgetTester tester, Duration total) async {
     final end = tester.binding.clock.now().add(total);
@@ -215,6 +233,38 @@ void main() {
       expect(find.byType(Scaffold), findsOneWidget, reason: 'nowhere to go');
     });
 
+    testWidgets('a guide in the chat: steps, each a tap from where it is done', (tester) async {
+      answer("Selling faster: your listings - here's how.", {
+        'type': 'GUIDE',
+        'guide': 'sell_faster',
+        'guide_content': {
+          'id': 'sell_faster',
+          'title': 'Selling faster: your listings',
+          'intro': 'From your own listings, the changes most likely to help:',
+          'steps': [
+            {'title': 'Check the price of "PS5 Slim"', 'detail': 'KES 90,000 is 20% above the median KES 75,000 of 6 similar Gaming listings.', 'destination': 'seller_dashboard'},
+            {'title': 'Answer the buyers of "PS5 Slim"', 'detail': '2 buyer(s) asked about it.', 'destination': 'inbox'},
+            {'title': 'Something this build has no screen for', 'destination': 'admin_panel'},
+          ],
+        },
+      });
+      await tester.pumpWidget(app());
+      await run(tester, const Duration(milliseconds: 400));
+      await type(tester, 'tips to sell faster');
+      await run(tester, const Duration(seconds: 3));
+      expect(find.text('Selling faster: your listings'), findsOneWidget);
+      expect(find.textContaining('20% above the median'), findsOneWidget);
+      // A screen this build has no route for is a step without a button.
+      expect(find.text('Take me there'), findsNWidgets(2));
+      expect(find.textContaining('route /'), findsNothing, reason: 'a guide opens nothing by itself');
+
+      await tester.ensureVisible(find.text('Take me there').last);
+      await run(tester, const Duration(milliseconds: 300));
+      await tester.tap(find.text('Take me there').last);
+      await run(tester, const Duration(seconds: 1));
+      expect(find.textContaining('route /inbox'), findsOneWidget);
+    });
+
     testWidgets('a server from before the assistant still answers, the old way', (tester) async {
       setFakeRoute((uri) {
         if (uri.path == '/zeno/assistant/turn') return const FakeResponse({'detail': 'Not Found'}, statusCode: 404);
@@ -240,14 +290,36 @@ void main() {
       await run(tester, const Duration(milliseconds: 200));
     }
 
+    /// A new socket for each connection, so the microphone can be closed
+    /// and opened again; [socket] is the live one.
     RealtimeSttProvider fakeVoice() {
       socket = FakeSocket();
       mic = FakeRecorder();
+      var first = true;
       return DeepgramSttService(
         microphone: MicrophoneSource(recorder: mic),
         fetchToken: () async => 't',
-        connect: (_, __) => socket,
+        connect: (_, __) {
+          if (!first) socket = FakeSocket();
+          first = false;
+          return socket;
+        },
       );
+    }
+
+    Future<void> say(WidgetTester tester, String words, {Duration then = const Duration(seconds: 2)}) async {
+      socket.emit(deepgramResults(words, isFinal: true, speechFinal: true));
+      await run(tester, then);
+    }
+
+    /// The assistant answering each turn in order.
+    void answers(List<Map<String, Object?>> turns) {
+      var i = 0;
+      setFakeRoute((uri) {
+        if (uri.path == '/zeno/assistant/turn') return turns[i++ % turns.length];
+        if (uri.path == '/calls/initiate') return {'room_id': 'room-1', 'call_token': 'call-tok'};
+        return null;
+      });
     }
 
     testWidgets('the microphone opens full-screen voice, and it closes back to the chat', (tester) async {
@@ -268,7 +340,7 @@ void main() {
       expect(find.byKey(const Key('zeno-composer')), findsOneWidget);
     });
 
-    testWidgets('say "open my inbox": heard, answered, and the inbox opens', (tester) async {
+    testWidgets('say "open my inbox": heard, answered, the inbox opens - and Zeno stays', (tester) async {
       answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
@@ -287,8 +359,15 @@ void main() {
 
       await run(tester, const Duration(seconds: 2));
       expect(find.textContaining('route /inbox'), findsOneWidget);
-      // The microphone did not come along.
+      // Zeno came along: docked in its pill over the inbox, still listening.
+      expect(session.docked, isTrue);
+      expect(find.byTooltip('End Zeno'), findsOneWidget);
+      expect(mic.running, isTrue);
+      expect(find.byType(ZenoOrb), findsOneWidget, reason: "the pill's orb; the full view has gone");
+
+      await tester.tap(find.byTooltip('End Zeno'));
       await letTeardownFinish(tester);
+      await run(tester, const Duration(milliseconds: 500));
       expect(mic.running, isFalse);
       expect(find.byType(ZenoOrb), findsNothing);
     });
@@ -317,6 +396,8 @@ void main() {
       expect(sent('/calls/initiate'), hasLength(1));
       await letTeardownFinish(tester);
       expect(mic.running, isFalse, reason: 'the call needs the microphone');
+      expect(session.isActive, isFalse, reason: 'and Zeno does not wait over the call');
+      expect(find.textContaining('route /voip-call'), findsOneWidget);
     });
 
     testWidgets('a conversation: Zeno answers, then hears the next thing said', (tester) async {
@@ -352,7 +433,10 @@ void main() {
       await run(tester, const Duration(seconds: 3));
       expect(find.byType(ZenoScreen, skipOffstage: false), findsNWidgets(2),
           reason: 'the Buying Agent opened on top');
+      // It has a voice of its own: Zeno hands over rather than talk over it.
+      expect(session.isActive, isFalse);
       await letTeardownFinish(tester);
+      expect(mic.running, isFalse);
     });
 
     testWidgets('holding the Zeno tab opens straight into voice', (tester) async {
@@ -384,6 +468,244 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.tap(find.byTooltip('End voice'));
       await run(tester, const Duration(milliseconds: 900));
+    });
+
+    testWidgets('Zeno stays: the dashboard, a search from there, then the inbox - one conversation', (tester) async {
+      // The request that started this: "open my dashboard", and Zeno is
+      // still there to be told to search, and then to switch to the inbox.
+      answers([
+        {'reply': 'Opening your dashboard.', 'action': {'type': 'NAVIGATE', 'destination': 'seller_dashboard'}},
+        {'reply': 'Searching for "ps5".', 'action': {'type': 'SEARCH', 'query': 'ps5'}},
+        {'reply': 'Opening your inbox.', 'action': {'type': 'NAVIGATE', 'destination': 'inbox'}},
+      ]);
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+
+      await say(tester, 'open my dashboard', then: const Duration(seconds: 3));
+      expect(find.textContaining('route /seller-dashboard'), findsOneWidget);
+      expect(session.docked && mic.running, isTrue);
+
+      await say(tester, 'search for a ps5', then: const Duration(seconds: 3));
+      expect(tester.widget<ListingSearchScreen>(find.byType(ListingSearchScreen)).initialQuery, 'ps5');
+      // Swapped for the dashboard, not piled on it: back goes to where the
+      // user was before Zeno started opening things.
+      expect(find.textContaining('route /seller-dashboard', skipOffstage: false), findsNothing);
+
+      await say(tester, 'now switch to my inbox', then: const Duration(seconds: 3));
+      expect(find.textContaining('route /inbox'), findsOneWidget);
+      expect(find.byType(ListingSearchScreen, skipOffstage: false), findsNothing);
+      expect(session.docked && mic.running, isTrue, reason: 'still listening, three screens later');
+
+      // One conversation: each turn had the ones before it.
+      final third = sent('/zeno/assistant/turn').last.json as Map;
+      expect((third['history'] as List).map((h) => (h as Map)['content']),
+          containsAll(['open my dashboard', 'Opening your dashboard.', 'search for a ps5']));
+
+      // ...and it is the Zeno tab's: back there, it is in the chat, and
+      // saved with it.
+      tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+      await run(tester, const Duration(seconds: 1));
+      expect(find.text('now switch to my inbox'), findsOneWidget);
+      final saved = await tester.runAsync(() => ZenoChatStore.load('assistant'));
+      expect(saved!.turns.map((t) => t.content), containsAllInOrder([
+        'open my dashboard', 'Opening your dashboard.',
+        'search for a ps5', 'Searching for "ps5".',
+        'now switch to my inbox', 'Opening your inbox.',
+      ]));
+
+      await tester.tap(find.byTooltip('End Zeno'));
+      await letTeardownFinish(tester);
+      expect(mic.running, isFalse);
+    });
+
+    testWidgets('the pill: type instead, and the turn goes through the same session', (tester) async {
+      answers([
+        {'reply': 'Opening your inbox.', 'action': {'type': 'NAVIGATE', 'destination': 'inbox'}},
+        {'reply': 'Opening Settings.', 'action': {'type': 'NAVIGATE', 'destination': 'settings'}},
+      ]);
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      await say(tester, 'open my inbox', then: const Duration(seconds: 3));
+
+      await tester.tap(find.byTooltip('Type to Zeno'));
+      await letTeardownFinish(tester);
+      expect(mic.running, isFalse, reason: 'it would take what is said while typing');
+      await tester.enterText(find.byKey(const Key('zeno-pill-field')), 'open settings');
+      await tester.tap(find.byTooltip('Send to Zeno'));
+      await run(tester, const Duration(seconds: 3));
+      expect((sent('/zeno/assistant/turn').last.json as Map)['message'], 'open settings');
+      expect(find.textContaining('route /settings'), findsOneWidget);
+      expect(session.isActive, isTrue);
+
+      // And back to talking.
+      await tester.tap(find.byTooltip('Talk to Zeno'));
+      // The last session's socket closes first, in real time.
+      await letTeardownFinish(tester);
+      expect(mic.running, isTrue);
+      expect(mic.startCount, 2);
+      await tester.tap(find.byTooltip('End Zeno'));
+      await letTeardownFinish(tester);
+    });
+
+    testWidgets('another voice session takes the microphone; Zeno waits with "Tap to talk"', (tester) async {
+      answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      await say(tester, 'open my inbox', then: const Duration(seconds: 3));
+      expect(mic.running, isTrue);
+
+      // A voice note in the negotiation room, say.
+      await tester.runAsync(ZenoVoiceController.releaseMicrophone);
+      await letTeardownFinish(tester);
+      expect(mic.running, isFalse);
+      expect(session.isActive, isTrue);
+      expect(find.text('TAP TO TALK'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Talk to Zeno'));
+      await run(tester, const Duration(milliseconds: 600));
+      expect(mic.running, isTrue);
+      await tester.tap(find.byTooltip('End Zeno'));
+      await letTeardownFinish(tester);
+    });
+
+    testWidgets('a minute with nothing said stops the microphone', (tester) async {
+      answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      await say(tester, 'open my inbox', then: const Duration(seconds: 3));
+
+      await tester.pump(const Duration(seconds: 30));
+      expect(mic.running, isTrue);
+      await tester.pump(ZenoSession.quietFor);
+      await letTeardownFinish(tester);
+      expect(mic.running, isFalse, reason: 'the speech provider bills by the minute');
+      expect(session.isActive, isTrue);
+      expect(find.text('TAP TO TALK'), findsOneWidget);
+      await tester.tap(find.byTooltip('End Zeno'));
+      await run(tester, const Duration(milliseconds: 600));
+    });
+
+    testWidgets('the app leaving the foreground ends it', (tester) async {
+      addTearDown(() => tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed));
+      answer('Hi!');
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      expect(mic.running, isTrue);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await letTeardownFinish(tester);
+      expect(session.isActive, isFalse);
+      expect(mic.running, isFalse, reason: 'nothing listens from the background');
+    });
+
+    testWidgets('started from anywhere, what is said lands in the Zeno tab', (tester) async {
+      answer('Hey! What can I do?');
+      final voice = fakeVoice();
+      await tester.pumpWidget(app(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: TextButton(
+                onPressed: () => ZenoSession.maybeOf(context)!.start(service: voice, muted: true),
+                child: const Text('hold the Zeno tab'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('hold the Zeno tab'));
+      await run(tester, const Duration(milliseconds: 900));
+      expect(find.byType(ZenoOrb), findsOneWidget);
+      await say(tester, 'hi zeno');
+      expect(find.text('Hey! What can I do?'), findsWidgets);
+      await tester.tap(find.byTooltip('End voice'));
+      await letTeardownFinish(tester);
+
+      // The Zeno tab, opened afterwards, has the exchange.
+      tester.state<NavigatorState>(find.byType(Navigator).first).push(
+          MaterialPageRoute<void>(builder: (_) => const ZenoScreen(animateBackground: false)));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await run(tester, const Duration(seconds: 1));
+      expect(find.text('hi zeno'), findsOneWidget);
+      expect(find.text('Hey! What can I do?'), findsOneWidget);
+    });
+
+    testWidgets('a guide in voice mode: step by step, with Zeno along', (tester) async {
+      answer("Open your online store - here's how.", {
+        'type': 'GUIDE',
+        'guide': 'open_store',
+        'guide_content': {
+          'id': 'open_store',
+          'title': 'Open your online store',
+          'intro': 'A store gives your business its own page on BROKA. Four steps:',
+          'steps': [
+            {'title': 'Open store setup', 'detail': 'It asks a few business questions first.', 'destination': 'store_setup'},
+            {'title': 'Name it and brand it', 'detail': 'A clear name and a logo.'},
+            {'title': 'Share your link', 'detail': 'broka.co.ke/store/your-name'},
+          ],
+        },
+      });
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      await say(tester, 'how do I open a store', then: const Duration(seconds: 3));
+
+      // A guide is read, not run: nothing opens until a step is tapped.
+      expect(find.byType(ZenoGuideCard), findsWidgets);
+      expect(find.text('Open store setup'), findsWidgets);
+      expect(find.textContaining('route /'), findsNothing);
+      expect(session.expanded, isTrue);
+
+      await tester.tap(find.text('Take me there').last);
+      await run(tester, const Duration(seconds: 1));
+      expect(find.textContaining('route /store-setup'), findsOneWidget);
+      // The guide comes along, folded above the pill, one step ticked.
+      expect(session.docked && mic.running, isTrue);
+      expect(find.text('Next: Name it and brand it'), findsOneWidget);
+      await tester.tap(find.text('Next: Name it and brand it'));
+      await run(tester, const Duration(milliseconds: 600));
+      expect(find.text('1 of 3 done'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byTooltip('End Zeno'));
+      await letTeardownFinish(tester);
+    });
+
+    testWidgets('the pill fits a 320dp phone at 1.3x text', (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      answer('Opening your inbox and everything in it, all of your conversations with buyers and sellers.',
+          {'type': 'NAVIGATE', 'destination': 'inbox'});
+      await tester.pumpWidget(MediaQuery(
+        data: const MediaQueryData(size: Size(320, 568), textScaler: TextScaler.linear(1.3)),
+        child: app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())),
+      ));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      await say(tester, 'open my inbox', then: const Duration(seconds: 3));
+      expect(find.byTooltip('End Zeno'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('End Zeno'));
+      await letTeardownFinish(tester);
     });
   });
 
@@ -427,6 +749,56 @@ void main() {
     });
   });
 
+  group('the microphone', () {
+    test('opened again while the last close is still finishing, it really listens', () async {
+      // The pill's "Tap to talk" a moment after its microphone stopped: the
+      // provider was still closing its socket, ignored the start, and the
+      // card said "Listening" over a microphone that never opened.
+      final mic = FakeRecorder();
+      final c = ZenoVoiceController(
+        onSubmit: (_) async {},
+        languageKey: () => 'english',
+        service: DeepgramSttService(
+          microphone: MicrophoneSource(recorder: mic),
+          fetchToken: () async => 't',
+          connect: (_, __) => FakeSocket(),
+        ),
+      );
+      await c.open();
+      expect(mic.startCount, 1);
+      unawaited(c.close());
+      await c.open();
+      expect(c.state, VoiceSessionState.listening);
+      expect(mic.startCount, 2, reason: 'a second session, not a deaf one');
+      expect(mic.running, isTrue);
+      c.dispose();
+    });
+
+    test('one voice session holds the microphone at a time', () async {
+      ZenoVoiceController make(FakeRecorder mic) => ZenoVoiceController(
+            onSubmit: (_) async {},
+            languageKey: () => 'english',
+            service: DeepgramSttService(
+              microphone: MicrophoneSource(recorder: mic),
+              fetchToken: () async => 't',
+              connect: (_, __) => FakeSocket(),
+            ),
+          );
+      final zenoMic = FakeRecorder();
+      final cardMic = FakeRecorder();
+      final zeno = make(zenoMic);
+      final card = make(cardMic);
+      await zeno.open();
+      await card.open();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(zeno.isOpen, isFalse);
+      expect(zenoMic.running, isFalse);
+      expect(cardMic.running, isTrue);
+      zeno.dispose();
+      card.dispose();
+    });
+  });
+
   group('ZenoAction', () {
     test('parses only what this build can do', () {
       expect(ZenoAction.fromJson({'type': 'NAVIGATE', 'destination': 'inbox'})?.destination, 'inbox');
@@ -436,6 +808,28 @@ void main() {
           reason: 'a call with nobody resolved to call');
       expect(ZenoAction.fromJson({'type': 'WIRE_MONEY'}), isNull);
       expect(ZenoAction.fromJson(null), isNull);
+    });
+
+    test('a guide parses its steps, and drops what it cannot show', () {
+      final a = ZenoAction.fromJson({
+        'type': 'GUIDE',
+        'guide': 'open_store',
+        'guide_content': {
+          'id': 'open_store',
+          'title': 'Open your online store',
+          'steps': [
+            {'title': 'Open store setup', 'destination': 'store_setup'},
+            {'title': 'Somewhere new', 'destination': 'hyperdrive'},
+            {'title': '   '},
+          ],
+        },
+      })!;
+      expect(a.type, ZenoActionType.guide);
+      expect(a.runsByItself, isFalse, reason: 'a guide is read, not run');
+      expect(a.guide!.steps.map((s) => s.destination), ['store_setup', null]);
+      expect(ZenoAction.fromJson({'type': 'GUIDE', 'guide': 'open_store'}), isNull,
+          reason: 'no steps, no guide');
+      expect(ZenoAction.fromJson({'type': 'NAVIGATE', 'destination': 'my_store'})?.destination, 'my_store');
     });
 
     test('a call always asks first, whatever the server says', () {

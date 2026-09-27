@@ -95,6 +95,9 @@ class ZenoVoiceController extends ChangeNotifier {
   int _session = 0;
   bool _userEdited = false;
   bool _languageUnsupported = false;
+
+  /// The last close()'s teardown, while it runs. See open().
+  Future<void>? _teardown;
   double _level = 0;
 
   /// Running for [echoTail] after Zeno stops speaking. See [_hearingZeno].
@@ -106,6 +109,24 @@ class ZenoVoiceController extends ChangeNotifier {
   /// taken to be Zeno: the provider's final text for the last words it
   /// heard arrives a few hundred milliseconds after the audio.
   static const echoTail = Duration(milliseconds: 700);
+
+  /// The session holding the microphone, if any.
+  ///
+  /// One at a time: Zeno's assistant session stays open across screens
+  /// (zeno_session.dart), so the negotiation room's voice card or the
+  /// Buying Agent's can now be opened while it listens - and two recorders
+  /// on one device is whichever started second winning it, the other's
+  /// session live and deaf. The newest open() takes it; the one before is
+  /// closed, and its owner sees that like any other close.
+  static ZenoVoiceController? _holder;
+
+  /// Closes whichever session holds the microphone - for code that records
+  /// without one (the negotiation room's voice notes).
+  static Future<void> releaseMicrophone() async {
+    final holder = _holder;
+    _holder = null;
+    if (holder != null && holder._open) await holder.close();
+  }
 
   VoiceSessionState get state => _state;
 
@@ -145,10 +166,26 @@ class ZenoVoiceController extends ChangeNotifier {
       if (_state == VoiceSessionState.error) await _retryAfterError();
       return;
     }
+    final previous = _holder;
+    _holder = this;
+    if (previous != null && !identical(previous, this) && previous._open) {
+      unawaited(previous.close());
+    }
     _open = true;
-    _session++;
+    final session = ++_session;
     _userEdited = false;
     transcript.clear();
+    // Opened again before the last close has finished - the pill's "tap to
+    // talk" a moment after its microphone was stopped. The provider ignores
+    // a start while its socket is still closing, and this card would have
+    // said "Listening" over a microphone that never opened. The close is
+    // bounded (closeSocketWithoutHanging), so this wait is too.
+    final teardown = _teardown;
+    if (teardown != null) {
+      _set(VoiceSessionState.connecting);
+      await teardown;
+      if (!_open || session != _session) return;
+    }
     await _start();
   }
 
@@ -200,6 +237,7 @@ class ZenoVoiceController extends ChangeNotifier {
   /// Close the card: stop the microphone, close the socket, drop transient
   /// state. Does NOT touch the conversation underneath.
   Future<void> close() async {
+    if (identical(_holder, this)) _holder = null;
     if (!_open && _state == VoiceSessionState.idle) return;
     // Everything the UI depends on is cleared and announced BEFORE the async
     // teardown. Tapping X should remove the card on that frame - making the
@@ -219,8 +257,16 @@ class ZenoVoiceController extends ChangeNotifier {
     _state = VoiceSessionState.idle;
     notifyListeners();
 
-    await _cancelSubs();
-    await _service.cancel();
+    final teardown = () async {
+      await _cancelSubs();
+      await _service.cancel();
+    }();
+    _teardown = teardown;
+    try {
+      await teardown;
+    } finally {
+      if (identical(_teardown, teardown)) _teardown = null;
+    }
   }
 
   /// Send whatever is in the transcript box through the screen's own path.
@@ -299,6 +345,7 @@ class ZenoVoiceController extends ChangeNotifier {
   /// timer are released - a voice session must not outlive the tree that
   /// opened it, and an awaited teardown would let it (brief §25).
   void stopForDispose() {
+    if (identical(_holder, this)) _holder = null;
     _open = false;
     _autoSendTimer?.cancel();
     _autoSendTimer = null;
@@ -315,6 +362,7 @@ class ZenoVoiceController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (identical(_holder, this)) _holder = null;
     _autoSendTimer?.cancel();
     _echoTimer?.cancel();
     unawaited(_cancelSubs());

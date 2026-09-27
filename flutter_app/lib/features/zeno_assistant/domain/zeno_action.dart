@@ -54,7 +54,50 @@ class ZenoContact {
   }
 }
 
-enum ZenoActionType { navigate, search, findForMe, call, openChat }
+enum ZenoActionType { navigate, search, findForMe, call, openChat, guide }
+
+/// One step of a guide, and the screen where it is done, if there is one.
+class ZenoGuideStep {
+  const ZenoGuideStep({required this.title, this.detail = '', this.destination});
+
+  final String title;
+  final String detail;
+
+  /// A key of [kZenoDestinations]; null for a step with nowhere to go.
+  final String? destination;
+}
+
+/// "How do I open a store?", answered: steps built on the server from the
+/// user's own account (zeno_assistant/guides.py), each with a button to
+/// the screen where it is done. Nothing in it is the model's.
+class ZenoGuide {
+  const ZenoGuide({required this.id, required this.title, this.intro = '', required this.steps});
+
+  final String id;
+  final String title;
+  final String intro;
+  final List<ZenoGuideStep> steps;
+
+  static ZenoGuide? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final id = json['id'];
+    final title = json['title'];
+    if (id is! String || title is! String || title.trim().isEmpty) return null;
+    final steps = <ZenoGuideStep>[
+      for (final s in (json['steps'] as List? ?? const []))
+        if (s is Map && s['title'] is String && (s['title'] as String).trim().isNotEmpty)
+          ZenoGuideStep(
+            title: (s['title'] as String).trim(),
+            detail: s['detail'] is String ? (s['detail'] as String).trim() : '',
+            // A screen this build has no route for is a step without a
+            // button, not a button that does nothing.
+            destination: kZenoDestinations.containsKey(s['destination']) ? s['destination'] as String : null,
+          ),
+    ];
+    if (steps.isEmpty) return null;
+    return ZenoGuide(id: id, title: title.trim(), intro: json['intro'] is String ? (json['intro'] as String).trim() : '', steps: steps);
+  }
+}
 
 /// Screen ids Zeno may open, with how Zeno names them. The routes live in
 /// ZenoActionRunner; the list mirrors intents.DESTINATIONS.
@@ -72,6 +115,9 @@ const kZenoDestinations = <String, String>{
   'verify': 'Verification',
   'market_insights': 'Market insights',
   'how_broka_works': 'How BROKA works',
+  'store_setup': 'Store setup',
+  'my_store': 'Your store',
+  'start_selling': 'Start selling',
 };
 
 class ZenoAction {
@@ -84,6 +130,7 @@ class ZenoAction {
     this.target,
     this.choices = const [],
     this.requiresConfirmation = false,
+    this.guide,
   });
 
   final ZenoActionType type;
@@ -108,10 +155,16 @@ class ZenoAction {
 
   final bool requiresConfirmation;
 
+  /// GUIDE: the steps.
+  final ZenoGuide? guide;
+
   /// Happens on its own once Zeno has said so: opening a screen, a search,
   /// a chat. A call never does - it rings someone's phone - and neither does
   /// anything that still needs the user to say which person they meant.
-  bool get runsByItself => type != ZenoActionType.call && choices.isEmpty && !requiresConfirmation;
+  /// A guide is read, not run: its steps go somewhere when the user taps
+  /// them.
+  bool get runsByItself =>
+      type != ZenoActionType.call && type != ZenoActionType.guide && choices.isEmpty && !requiresConfirmation;
 
   /// Picks one of [choices].
   ZenoAction choose(ZenoContact c) => ZenoAction(
@@ -130,6 +183,7 @@ class ZenoAction {
       'FIND_FOR_ME' => ZenoActionType.findForMe,
       'CALL' => ZenoActionType.call,
       'OPEN_CHAT' => ZenoActionType.openChat,
+      'GUIDE' => ZenoActionType.guide,
       _ => null,
     };
     if (type == null) return null;
@@ -140,6 +194,9 @@ class ZenoAction {
     }
 
     switch (type) {
+      case ZenoActionType.guide:
+        final guide = ZenoGuide.fromJson(json['guide_content']);
+        return guide == null ? null : ZenoAction(type: type, guide: guide);
       case ZenoActionType.navigate:
         final d = text('destination');
         if (d == null || !kZenoDestinations.containsKey(d)) return null;

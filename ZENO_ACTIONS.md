@@ -15,6 +15,58 @@ spoken (`POST /zeno/assistant/turn`, `api/domains/zeno_assistant/`).
 | `FIND_FOR_ME` | the Buying Agent, opened with the query | none |
 | `OPEN_CHAT` | the negotiation thread with that person | none |
 | `CALL` | `ApiService.initiateCall` -> VoIP screen | **always a tap** |
+| `GUIDE` | steps from `guides.py`, each with a button to its screen | none - it opens nothing by itself |
+| `NEED_INFO` | never reaches the app: the server fetches the topics and asks the model again | - |
+
+## Guides and the user's own data, without paying for it every turn
+
+Answering "how do I open a store?" or "what do you think of my rating?"
+well takes the user's own account, and putting all of it into every prompt
+would bill a page of numbers on every "hi". Instead:
+
+- **Guides** (`guides.py`) are built from the database, not written by a
+  model:
+  - the steps for opening a store, selling faster, getting verified,
+    escrow, a first listing, staying safe, negotiating and the Buying Agent;
+  - personalised from the account (business seller or not, what the store
+    is missing, which listing is priced above the median of 5+ similar
+    ones, has few photos, or few views).
+  - The common questions reach a guide by rules, with **no model call**.
+    The model can also pick a guide by id; an id that isn't one is dropped.
+- **The user's own data** (`knowledge.py`) is split into topics: profile,
+  listings, sales, store, watch.
+  - A turn gets only the topics its words are about, picked by rules at no
+    extra cost.
+  - When the rules miss, the model may answer `NEED_INFO` with the topics it
+    wants. The server fetches them and asks once more, this time without the
+    option to ask again, so a turn is **at most two model calls**. A second
+    `NEED_INFO` is ignored.
+  - The response says which topics were read and how many calls it took
+    (`facts`, `model_calls`).
+- **No other user's words** reach the prompt through any of it: ratings are
+  numbers and a spread, never review text; listing titles are the user's own.
+
+## Staying across screens (the app's side)
+
+Voice mode is the app's, not the Zeno tab's: `ZenoSession`
+(`flutter_app/lib/features/zeno_assistant/zeno_session.dart`), mounted
+above the Navigator. A `NAVIGATE`, `SEARCH` or `OPEN_CHAT` docks it in a pill
+that keeps listening, and the screen Zeno opened is replaced by the next one
+it opens.
+
+It ends, and releases the microphone:
+- for a call;
+- when the Buying Agent takes over (it has its own voice);
+- on signing out;
+- when the app leaves the foreground.
+
+The microphone also stops, with the session still on:
+- when another voice session takes it (`ZenoVoiceController`'s one-holder
+  rule);
+- after a minute with nothing said, since the speech provider bills by the
+  minute.
+
+A call still waits for a tap, from the pill as from anywhere.
 
 ## Safety properties, all tested
 
