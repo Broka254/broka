@@ -18,6 +18,7 @@ from api.core.config import settings
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
+from .paid import fee_applies, fee_state, is_live, live_clause
 from .validation import load_attributes
 
 
@@ -378,6 +379,13 @@ class ListingService:
             showcase_id=showcase_id,
             client_ref=client_ref or None,
         )
+        # With listing fees on, a new listing waits, hidden, for its first
+        # payment (pricing/payments.py): paid_until == created_at is how
+        # "never paid" reads (listings/paid.py). Created while fees are off,
+        # it stays free - paid_until NULL - even after they are switched on.
+        awaiting_fee = settings.listing_fees_enabled and fee_applies(listing)
+        if awaiting_fee:
+            listing.created_at = listing.paid_until = datetime.utcnow()
         self.db.add(listing)
         try:
             # Flushed for its id, then committed together with its auction
@@ -405,12 +413,16 @@ class ListingService:
             raise
         await self.db.refresh(listing)
 
-        await publish(ListingCreated(
-            listing_id=listing.id,
-            seller_id=seller_id,
-            price=data["price"],
-            category=category_name,
-        ))
+        # Only a listing buyers can see is announced: ListingCreated is what
+        # sends the Buying Agent to tell buyers about it. An unpaid one is
+        # announced when its fee is paid (pricing/payments.py).
+        if not awaiting_fee:
+            await publish(ListingCreated(
+                listing_id=listing.id,
+                seller_id=seller_id,
+                price=data["price"],
+                category=category_name,
+            ))
 
         # The authenticated creator, reading back what they just created -
         # so the owner view, reserve included.
@@ -497,7 +509,9 @@ class ListingService:
     async def get_listing(self, listing_id: str) -> dict:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))
         listing = r.scalar_one_or_none()
-        if not listing:
+        # An unpaid or lapsed listing is not there for buyers, the same as
+        # one that never existed - its seller sees it at /private.
+        if not listing or not is_live(listing):
             raise HTTPException(status_code=404, detail="Listing not found")
         # Increment view count
         listing.views = (listing.views or 0) + 1
@@ -546,7 +560,7 @@ class ListingService:
         callers (CategoryZoneScreen, TraderProfileScreen) are unaffected
         unless they ask for the new shape.
         """
-        q = select(Listing).where(Listing.status == ListingStatus.active)
+        q = select(Listing).where(Listing.status == ListingStatus.active, live_clause())
         if category:
             # FIX (buying-agent bug-hunt, 2026-09-17): case-insensitive
             # equality, not `Listing.category == category`.
@@ -794,7 +808,7 @@ class ListingService:
     ) -> dict:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))
         listing = r.scalar_one_or_none()
-        if not listing:
+        if not listing or not is_live(listing):
             raise HTTPException(status_code=404, detail="Listing not found")
         if listing.seller_id == buyer_id:
             raise HTTPException(status_code=400, detail="Cannot express interest in your own listing")
@@ -995,6 +1009,9 @@ class ListingService:
             "reserve_price": listing.reserve_price,
             # The seller's own notification choice; nothing a buyer needs.
             "sms_alerts": getattr(listing, "sms_alerts", True) is not False,
+            # Whether buyers can see it, and whether it is waiting for its
+            # fee - what the app needs to offer "Pay to publish" or "Renew".
+            "listing_fee": fee_state(listing),
         }
 
     @staticmethod

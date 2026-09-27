@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
+from api.domains.listings.paid import live_clause
 from api.domains.categories.seed import CANONICAL_CATEGORIES
 from api.models.store import Store
 from api.domains.listings.service import ListingService
@@ -285,7 +286,7 @@ class StoreService:
         rows = (await self.db.execute(
             select(Listing.store_id, func.count())
             .where(Listing.store_id.in_(store_ids),
-                   Listing.status == ListingStatus.active)
+                   Listing.status == ListingStatus.active, live_clause())
             .group_by(Listing.store_id)
         )).all()
         return {row[0]: row[1] for row in rows}
@@ -356,7 +357,8 @@ class StoreService:
             return []
         rows = (await self.db.execute(
             select(Listing.category, func.count())
-            .where(Listing.store_id == store_id, Listing.status == ListingStatus.active)
+            .where(Listing.store_id == store_id, Listing.status == ListingStatus.active,
+                   live_clause())
             .group_by(Listing.category)
         )).all()
         counts: dict[str, int] = defaultdict(int)
@@ -642,6 +644,7 @@ class StoreService:
             listing_count = (await self.db.execute(
                 select(func.count()).select_from(Listing).where(
                     Listing.store_id == store.id, Listing.status == ListingStatus.active,
+                    live_clause(),
                 )
             )).scalar_one()
         from api.domains.media.service import asset_urls, legacy_image_or_none, parse_id_list

@@ -12,6 +12,13 @@
 // Publishing is ListingPublisher (photo ids, the cover, POST /listings with
 // the draft's retry key); the draft and its kept photos are cleared once
 // the listing exists.
+//
+// The listing fee (PRICING.md). While listing fees are on, the screen says
+// up front what listing will cost ("from KES 84 a month"), and a listing
+// the server creates unpaid - hidden from buyers until paid - goes straight
+// on to the Listing fee screen. Paid, it celebrates as before; not paid, it
+// says the listing is saved and offers to pay now or later (the Seller
+// Dashboard lists it until it is paid).
 import 'dart:async';
 import 'dart:math';
 
@@ -19,6 +26,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/network/api_client.dart';
+import '../core/utils/result.dart';
+import '../features/listing_fee/data/listing_fee_repository.dart';
+import '../features/listing_fee/domain/listing_fee.dart';
+import '../features/listing_fee/presentation/listing_fee_screen.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/listing_publisher.dart';
@@ -50,7 +61,12 @@ class SellZenoAlertScreen extends StatefulWidget {
   /// For tests: the question, instead of one picked at random.
   final String? question;
 
-  const SellZenoAlertScreen({super.key, required this.data, this.publisher, this.question});
+  /// For tests: the listing-fee quote and payment.
+  final ListingFeeRepository? feeRepository;
+
+  const SellZenoAlertScreen({
+    super.key, required this.data, this.publisher, this.question, this.feeRepository,
+  });
   @override
   State<SellZenoAlertScreen> createState() => _SellZenoAlertScreenState();
 }
@@ -72,6 +88,13 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   String? _question;
   bool _questionDone = false;
 
+  // What listing will cost, shown before Go live - null while fees are off
+  // or the quote hasn't come (it is a courtesy, not a gate).
+  ListingFeeQuote? _fee;
+  // The listing Go live created but that still waits for its fee: the
+  // button now reopens the Listing fee screen instead of publishing again.
+  String? _unpaidListingId;
+
   SellWizardData get _data => widget.data;
   bool get _still => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
@@ -82,6 +105,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     _ripple = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
     _celebrate = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
     _question = widget.question;
+    _loadFee();
     if (_question == null) {
       ZenoSmsPrompts.next(sellerName: ApiService.currentUserName, itemName: _data.name)
           .then((q) {
@@ -110,6 +134,38 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     super.dispose();
   }
 
+  Future<void> _loadFee() async {
+    final price = parseKesInput(_data.price);
+    if (_data.isAuction || price == null || price <= 0) return;
+    final r = await (widget.feeRepository ?? listingFeeRepository).quoteForDraft(
+      category: _data.category,
+      price: price,
+      quantity: int.tryParse(_data.quantity) ?? 1,
+    );
+    if (!mounted) return;
+    if (r case Success(:final data) when data.feesEnabled) setState(() => _fee = data);
+  }
+
+  /// Opens the Listing fee screen for the listing just created, and
+  /// celebrates once it is paid.
+  Future<void> _payFee() async {
+    final id = _unpaidListingId;
+    if (id == null) return;
+    final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => ListingFeeScreen(
+        listingId: id, listingName: _data.name, afterCreate: true,
+        repository: widget.feeRepository,
+      ),
+    ));
+    if (!mounted || paid != true) return;
+    setState(() {
+      _unpaidListingId = null;
+      _live = true;
+    });
+    await _celebrate.forward(from: 0);
+    if (mounted) setState(() => _celebrated = true);
+  }
+
   void _choose(bool value) {
     HapticFeedback.selectionClick();
     setState(() {
@@ -123,6 +179,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     // One press at a time. The button shows a spinner while this runs, but
     // a second tap can land before that frame is drawn.
     if (_loading || _live) return;
+    if (_unpaidListingId != null) return _payFee();
     if (_data.smsAlerts == null) {
       setState(() => _error = 'Tell Zeno yes or no first.');
       return;
@@ -148,7 +205,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
       _error = null;
     });
     try {
-      await (widget.publisher ?? ListingPublisher()).publish(
+      final created = await (widget.publisher ?? ListingPublisher()).publish(
         _data,
         lat: ApiService.currentUserLat ?? -1.286389,
         lng: ApiService.currentUserLng ?? 36.817223,
@@ -156,6 +213,15 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
       if (!mounted) return;
       unawaited(SellDraftStore.clear());
       unawaited(SellPhotoStore.clear());
+      // Created, but hidden from buyers until its fee is paid.
+      if (FeeState.fromJson(created['listing_fee'])?.unpaid == true) {
+        setState(() {
+          _unpaidListingId = created['id'] as String?;
+          _loading = false;
+        });
+        await _payFee();
+        return;
+      }
       HapticFeedback.heavyImpact();
       setState(() => _live = true);
       await _celebrate.forward(from: 0);
@@ -208,6 +274,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
           key: const Key('sell-go-live'),
           loading: _loading,
           animation: _ripple,
+          label: _unpaidListingId != null ? 'PAY TO GO LIVE' : 'GO LIVE  🚀',
           onPressed: _loading ? null : _goLive,
         ),
         child: Column(children: [
@@ -262,6 +329,8 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
           ),
           const SizedBox(height: 16),
           _summary(),
+          if (_unpaidListingId != null) _savedUnpaid()
+          else if (_fee != null) _feeTeaser(_fee!),
         ]),
       ),
       if (_live)
@@ -274,6 +343,36 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
         )),
     ]);
   }
+
+  /// "Listing fee from KES 84 a month" - so the price is no surprise.
+  Widget _feeTeaser(ListingFeeQuote fee) => Padding(
+        key: const Key('sell-fee-teaser'),
+        padding: const EdgeInsets.only(top: 10),
+        child: Text(
+          'Listing fee KES ${formatKesAmount(fee.monthlyFee)} a month'
+          '${fee.discountPercent > 0 ? ' (${fee.discountPercent}% off)' : ''}'
+          ' - choose 1 to 6 months next.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5),
+        ),
+      );
+
+  /// Created, not paid: where it is, and the way back to paying later.
+  Widget _savedUnpaid() => Padding(
+        key: const Key('sell-saved-unpaid'),
+        padding: const EdgeInsets.only(top: 14),
+        child: Column(children: [
+          const Text('Your listing is saved. Buyers see it once the listing fee is paid.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w700)),
+          TextButton(
+            key: const Key('sell-pay-later'),
+            onPressed: () => _leave(toDashboard: true),
+            child: const Text('Pay later - it waits in your Seller Dashboard',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+          ),
+        ]),
+      );
 
   Widget _summary() {
     final amount = parseKesInput(_data.price);
@@ -368,15 +467,19 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
 }
 
 class _LaunchButton extends StatelessWidget {
-  const _LaunchButton({super.key, required this.loading, required this.animation, required this.onPressed});
+  const _LaunchButton({
+    super.key, required this.loading, required this.animation, required this.onPressed,
+    required this.label,
+  });
   final bool loading;
   final Animation<double> animation;
   final VoidCallback? onPressed;
+  final String label;
 
   @override
   Widget build(BuildContext context) => Semantics(
         button: true,
-        label: 'Go live',
+        label: label,
         child: GestureDetector(
           onTap: onPressed,
           child: AnimatedBuilder(
@@ -395,7 +498,7 @@ class _LaunchButton extends StatelessWidget {
               child: loading
                   ? const SizedBox(width: 22, height: 22,
                       child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
-                  : const Text('GO LIVE  🚀', style: TextStyle(color: Colors.white,
+                  : Text(label, style: const TextStyle(color: Colors.white,
                       fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 1)),
             ),
           ),

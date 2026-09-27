@@ -335,6 +335,21 @@ class Settings:
     auction_commission_rate: float = 0.04
     escrow_provider_fee_rate: float = 0.01
 
+    # ── Listing fees (PRICING.md) ─────────────────────────────────────────────
+    # Off until the app build with the Listing fee screen is the one sellers
+    # have. On, a new listing stays hidden from buyers until its fee is paid
+    # - so an older build, which cannot pay, would post listings nobody can
+    # see. Listings created while this is off are never charged.
+    listing_fees_enabled: bool = field(default_factory=lambda: os.getenv(
+        "LISTING_FEES_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    # Where Safaricom posts the result of a listing-fee STK push. Unset, it is
+    # derived from MPESA_CALLBACK_SECRET (pricing/payments.py), the same way
+    # mpesa.py derives its own - so the secret-protected route is the default.
+    mpesa_listing_fee_callback_url: str = field(default_factory=lambda: os.getenv(
+        "MPESA_LISTING_FEE_CALLBACK_URL", ""
+    ).strip())
+
     # ── Fraud thresholds ──────────────────────────────────────────────────────
     fraud_new_account_days: int = 7
     fraud_rapid_tx_window_hours: int = 24

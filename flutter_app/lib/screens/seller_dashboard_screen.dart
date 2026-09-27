@@ -23,6 +23,7 @@ import '../theme/motion.dart';
 import '../services/api_service.dart';
 import '../widgets/particle_field.dart';
 import '../models/listing.dart';
+import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
 
 class SellerDashboardScreen extends StatefulWidget {
   const SellerDashboardScreen({super.key, this.animateBackground = true});
@@ -102,8 +103,11 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   }
 
   // ── Data loaders ─────────────────────────────────────────────────────────────
+  // Bumped on every refresh, so the waiting-for-payment panel reloads too.
+  int _feeReload = 0;
+
   Future<void> _load() async {
-    if (mounted) setState(() { _loading = true; _dealsTabLoaded = false; });
+    if (mounted) setState(() { _loading = true; _dealsTabLoaded = false; _feeReload++; });
     try {
       final uid = ApiService.currentUserId;
       if (uid == null) { if (mounted) setState(() => _loading = false); return; }
@@ -868,6 +872,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     // anyone waiting for it - the stagger caps at 8, so the tail of the page
     // is never held back behind an animation the user has not scrolled to.
     final sections = <Widget>[
+      // First: a listing buyers can't see is the one thing here that is
+      // costing the seller sales right now.
+      AwaitingPaymentPanel(reloadSignal: _feeReload),
       _buildCommandHeader(),
       _buildRadialStatCards(),
       _buildRevenueChart(),

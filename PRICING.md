@@ -2,10 +2,12 @@
 
 What BROKA charges, what it costs BROKA to run, and how one follows from the
 other. Every price here comes out of the code in `backend/api/domains/pricing/`
-(`costs.py`, `categories.py`, `engine.py`, `plans.py`); change a cost there and
-the prices move with it. `tests/test_pricing.py` holds the promises below to
-the code: a proven seller pays less than a new one, the fee never goes under
-cost, and no plan loses money on its heaviest user.
+(`costs.py`, `categories.py`, `engine.py`, `plans.py`; the payment is
+`payments.py`); change a cost there and the prices move with it.
+`tests/test_pricing.py` and `tests/test_listing_fee_payment.py` hold the
+promises below to the code: a proven seller pays less than a new one, the fee
+never goes under cost, no plan loses money on its heaviest user, and a
+payment is applied once, for the amount asked.
 
 Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 2026). Provider prices were checked in September 2026; sources are at the end.
@@ -29,7 +31,7 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 
 Everything BROKA pays for, per unit, and how BROKA uses it. Usage figures
 marked *assumption* are estimates until the app logs the real numbers (see
-§9).
+§10).
 
 ### Per use
 
@@ -317,7 +319,9 @@ A **long-term seller** gets no featured placement. Their visibility is earned:
 their record lowers their fee and lifts their ranking, and a store is their
 shop window. Selling them placement too would let money outrank the record
 the whole fee system rewards. `POST /featured/boost` now refuses them (403)
-before any M-Pesa prompt, and the listing-fee quote tells them why.
+before any M-Pesa prompt, and the listing-fee quote tells them why. It also
+refuses a listing buyers can't see (409): featuring an unpaid listing would
+take the money and show nothing.
 
 **Later:** the flat 99/350 ignores what a placement is worth: a shirt seller
 will not pay 350 to feature a KES 300 item, and a land seller gets a bargain.
@@ -427,7 +431,12 @@ them the fee is most of what BROKA earns from the listing.
 
 | Endpoint | Auth | What |
 |---|---|---|
-| `GET /pricing/listing-fee/quote?category=&price=&quantity=` | signed in | The caller's monthly fee, list price, discount (record and launch parts), R and what went into it, 1-6 month options with the recommended one marked, and featured options if the caller is a short-term seller |
+| `GET /pricing/listing-fee/quote?category=&price=&quantity=` | signed in | The caller's monthly fee for a listing not yet made: list price, discount (record and launch parts), R and what went into it, 1-6 month options with the recommended one marked, featured options for short-term sellers, and `fees_enabled` |
+| `GET /pricing/listing-fee/listings/{id}/quote` | owner | The same for one of the caller's listings, with only the months that still fit under six ahead (`months_available`) and where its paid time stands (`listing_fee`) |
+| `POST /pricing/listing-fee/pay` | owner | `{listing_id, months, phone_number, featured_plan?}`: sends the M-Pesa prompt for the server's total. Takes `X-Idempotency-Key` |
+| `GET /pricing/listing-fee/payments/{id}` | owner | pending / success / failed; asks Safaricom itself when the callback is late |
+| `GET /pricing/listing-fee/mine` | signed in | The caller's listings buyers can't see until paid, or won't within a week |
+| `POST /pricing/listing-fee/callback/{MPESA_CALLBACK_SECRET}` | Safaricom | The prompt's result |
 | `GET /pricing/plans` | public | Plus / Pro / Elite with allowances and prepaid prices, store plans, commission |
 | `GET /pricing/categories` | public | The category table above |
 
@@ -435,34 +444,96 @@ them the fee is most of what BROKA earns from the listing.
 
 ---
 
-## 8. What is not built yet
+## 8. Paying the listing fee
 
-This round prices things; it does not charge for them yet. Next, in order:
+**Switched off until the app can pay.** `LISTING_FEES_ENABLED` (default
+`false`) decides everything. Off, listings go live as they always have and
+the app shows no fee. On, a new listing is created **hidden** and waits for
+its first payment - so switch it on only once the app build with the Listing
+fee screen is the one sellers must have: an older build posts listings it
+has no way to pay for.
 
-1. **Charge the listing fee.** A `listing_payments` table and STK push on the
-   pattern of `routers/featured.py`; `Listing.paid_until`; a listing is live
-   while paid. Then renewals, and what happens to unused months when an item
-   sells (credit toward the next listing is the friendliest answer).
-2. **The sell screen.** After the price step: the list price crossed out,
-   today's price, why ("your 95% completion rate"), months 1-6 with the
-   recommendation, and featured for short-term sellers.
-3. **Plans and entitlements.** A `subscriptions` table; `User.is_premium`
+**How a listing is paid for.** One column, `Listing.paid_until`
+(`api/domains/listings/paid.py` reads it for everyone):
+
+| `paid_until` | Meaning | Buyers see it? |
+|---|---|---|
+| empty | No fee applies: posted before fees were on, or an auction | yes |
+| = the listing's creation time | Never paid - "pay to publish" | no |
+| in the future | Paid until then | yes |
+| in the past | Its paid time ran out | no |
+
+Every public read - the feed, search, a listing's own page, "I'm
+interested", trending, store catalogues and counts, the Buying Agent -
+skips a listing that isn't live. Its seller still sees it: its private page
+says where its fee stands, and the Seller Dashboard lists it under "Listings
+buyers can't see" with **Pay** or **Renew**.
+
+**The payment** (`api/domains/pricing/payments.py`):
+
+- The amount is the server's quote at the moment of paying, never the app's.
+  Featured placement (short-term sellers only) can ride on the same prompt.
+- Paid months are added **from the end of the time already paid**, so
+  renewing early loses nothing - and never past six months ahead.
+- A new listing is announced to the Buying Agent (`ListingCreated`) when it
+  is first paid for, not when it was created: buyers are never told about a
+  listing they can't open.
+- Settled once. Safaricom's callback and the app's status poll (which asks
+  Safaricom itself after 20 seconds) both settle under a row lock; whichever
+  is second finds the payment done. A callback reporting a different amount
+  settles nothing, and raises a reconciliation alert.
+- A payment is never written off for being slow - a late callback must still
+  be able to land.
+- Money for a listing sold or withdrawn while its prompt was open is kept on
+  record, and a person is told (audit log + reconciliation alert) to refund
+  it.
+- One prompt per listing at a time; at most three prompts per seller a
+  minute (the number is the payer's to type, so without a limit it is a way
+  to pester someone else's phone).
+
+**The app.** Go live says what listing will cost before the seller presses
+it ("Listing fee KES 84 a month (44% off) - choose 1 to 6 months next"). A
+listing created unpaid goes straight to the **Listing fee** screen: the list
+price crossed out, the seller's price and why, the recommended months
+already chosen, featured for short-term sellers, and Pay with M-Pesa. Paid,
+Go live celebrates as before; left unpaid, the listing is saved and waits in
+the Seller Dashboard. The same screen renews a listing that is ending.
+
+**Decide before switching on:**
+
+- **Listings posted before fees stay free** (`paid_until` empty). To start
+  charging them too, give them a grace period first, e.g.
+  `UPDATE listings SET paid_until = <switch-on date + 14 days> WHERE status =
+  'active' AND paid_until IS NULL AND listing_type <> 'auction'` - and tell
+  those sellers before it bites.
+- **Store listings pay the listing fee for now.** Once store plans are
+  billed (below), listings in a paid-up store should be exempt.
+- **Unused months when an item sells** are not refunded automatically.
+  Credit toward the seller's next listing is the friendliest answer.
+- **No reminder is sent before paid time runs out** yet; the dashboard shows
+  "ending" a week ahead. A push three days before would save renewals.
+
+## 9. What is not built yet
+
+1. **Plans and entitlements.** A `subscriptions` table; `User.is_premium`
    (today a bare flag) set from it; allowances counted per month; the
    features gated: voice mode, SMS nudges (`Listing.sms_alerts`), Buying
    Agent watches and auto-negotiation, auction hosting,
    `SHOWCASE_AI_REQUIRE_PREMIUM`.
-4. **Store billing** on the same subscriptions table, with store listings
+2. **Store billing** on the same subscriptions table, with store listings
    exempt from the listing fee.
-5. **Anti-farming before big discounts.** The design journal (Part XVI) wants
+3. **Anti-farming before big discounts.** The design journal (Part XVI) wants
    device, M-Pesa and location clustering before completion-rate discounts go
    live. The quality factor already discounts one-buyer and under-KES-500
    farms; clustering closes multi-account farms.
-6. **The legacy M-Pesa paths** (`routers/negotiate.py`, `domains/disputes/`,
+4. **The legacy M-Pesa paths** (`routers/negotiate.py`, `domains/disputes/`,
    `core/workers.py`) still compute payouts with a hard-coded 3%. Correct for
    the old deals that use them (they were agreed at 3%), but they should read
    `Deal.commission` instead.
+5. **Listing-fee revenue in the admin summary.** Payments are in
+   `listing_payments`; nothing sums them for the admin screens yet.
 
-## 9. Assumptions to replace with data
+## 10. Assumptions to replace with data
 
 | Assumption | Used for | Replace with |
 |---|---|---|
@@ -474,7 +545,7 @@ This round prices things; it does not charge for them yet. Next, in order:
 | 20,000 listings / 15,000 users | Infra per listing | Re-run at each order of magnitude |
 | A third of allowances used | Plan margins | Allowance use per plan |
 
-## 10. What was kept from the design journal, and what was not
+## 11. What was kept from the design journal, and what was not
 
 **Kept:** the Bayesian completion rate (§3.2), with Part XVI's ten-deal bar as
 the prior weight; the confidence factor against farming (§3.3, Part XVI

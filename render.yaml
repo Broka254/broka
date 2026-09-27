@@ -86,6 +86,12 @@ services:
         value: "30"
       - key: BUY_AGENT_WATCH_DAYS
         value: "30"          # Days a Zeno watch runs before it ends by itself.
+      - key: LISTING_FEES_ENABLED
+        value: "false"       # true: a new listing is hidden until its monthly fee is paid
+                             # (PRICING.md). Only once the app build that can pay is required -
+                             # an older build would post listings nobody can see.
+      - key: MPESA_LISTING_FEE_CALLBACK_URL
+        sync: false          # Optional. Unset = /pricing/listing-fee/callback/<MPESA_CALLBACK_SECRET>
       - key: JSON_LOGS
         value: "true"        # v4.0: structured JSON logs for Render log viewer
       - key: ENV

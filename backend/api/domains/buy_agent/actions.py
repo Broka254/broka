@@ -679,7 +679,8 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
     # listing was still live, so Zeno would happily open a negotiation on
     # something already sold or withdrawn - and the buyer would be told
     # SUCCESS for a conversation that can go nowhere (§27).
-    if listing.status is not None and listing.status != ListingStatus.active:
+    from api.domains.listings.paid import is_live
+    if (listing.status is not None and listing.status != ListingStatus.active) or not is_live(listing):
         raise ZenoActionError("LISTING_UNAVAILABLE", "That listing is no longer available.")
 
     # FIX (buying-agent bug-hunt, 2026-09-17): this action wrote a new

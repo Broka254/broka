@@ -208,6 +208,10 @@ def _listing_satisfies_request(listing: Listing, req: BuyAgentRequest) -> bool:
     # re-read from a fresh session, so it can legitimately have moved on.
     if listing.status is not None and listing.status != ListingStatus.active:
         return False
+    # Nor is one buyers cannot see because its fee is unpaid or ran out.
+    from api.domains.listings.paid import is_live
+    if not is_live(listing):
+        return False
 
     # Not a preference either - a user who both buys and sells must not have
     # Zeno open a negotiation with them about their own item.

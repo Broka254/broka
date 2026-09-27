@@ -12,6 +12,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Listing, Interest, Category, User
+from api.domains.listings.paid import live_clause
 from api.domains.listings.service import ListingService
 
 HALF_LIFE_HOURS = 36.0
@@ -32,7 +33,8 @@ class TrendingService:
         )
         interest_counts = dict(interest_rows.all())
 
-        query = select(Listing).where(Listing.created_at >= cutoff)
+        # Unpaid listings are not there for buyers (listings/paid.py).
+        query = select(Listing).where(Listing.created_at >= cutoff, live_clause())
         if category_id:
             # Match the Phase 1 category system (Listing.subcategory_id,
             # which may point at this category or one of its children) -

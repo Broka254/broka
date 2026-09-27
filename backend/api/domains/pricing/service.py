@@ -11,6 +11,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.database import Deal, Listing, SellerTier, User
 from api.domains.pricing import engine
 from api.domains.pricing.categories import (
@@ -126,6 +127,9 @@ async def listing_fee_quote(
     tier = (await db.execute(select(User.seller_tier).where(User.id == user_id))).scalar()
     result = engine.quote(category, unit_price, quantity, record, in_category)
     result["featured"] = featured_options(tier)
+    # Whether sellers are charged yet (LISTING_FEES_ENABLED). Off, the app
+    # shows no fee step and listings go live as they always have.
+    result["fees_enabled"] = settings.listing_fees_enabled
     return result
 
 

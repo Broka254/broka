@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-169 endpoints served by `backend/main.py`. **Auth** is read from each
+175 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 16, optional 2, public 46, token 4, user 101.
+Counts: admin 16, optional 2, public 48, token 4, user 105.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -140,12 +140,12 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 | POST | `/escrow/confirm-delivery/{deal_id}` | user | `confirm_delivery` (backend/api/routers/escrow.py:32) |
 | POST | `/escrow/open-dispute/{deal_id}` | user | `freeze_for_dispute` (backend/api/routers/escrow.py:104) |
 | GET | `/escrow/state/{deal_id}` | user | `get_escrow_state` (backend/api/routers/escrow.py:128) |
-| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:158) |
-| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:232) |
-| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:253) |
-| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:130) |
-| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:124) |
-| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:312) |
+| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:159) |
+| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:240) |
+| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:261) |
+| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:131) |
+| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:125) |
+| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:320) |
 | GET | `/health` | public | `health` (backend/main.py:483) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:179) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:237) |
@@ -192,9 +192,15 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 | POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3480) |
 | POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3506) |
 | GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3528) |
-| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:44) |
-| GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:21) |
-| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:38) |
+| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:145) |
+| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:122) |
+| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:132) |
+| GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:53) |
+| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:103) |
+| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:72) |
+| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:94) |
+| GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:36) |
+| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:139) |
 | GET | `/ready` | public | `ready` (backend/main.py:489) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:23) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:38) |
@@ -293,6 +299,7 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 ### `backend/api/domains/listings/`
 
 - `location.py` — Where a listing sits on the map, and the county it is filed under.
+- `paid.py` — Whether buyers can see a listing: while it is paid for.
 - `router.py` — Listings Router v3.0
 - `sell_probability.py` — Probability that a listing sells — and what is holding it back.
 - `service.py` — Listings Service v3.0
@@ -311,8 +318,9 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 - `categories.py` — Per-category pricing parameters - BROKA's starting guesses, to be replaced by data.
 - `costs.py` — What it costs BROKA to run things - the floor every price is built on.
 - `engine.py` — The monthly listing fee: f = C x R.
+- `payments.py` — Paying for a listing: the M-Pesa prompt, its result, and what a paid month buys.
 - `plans.py` — Premium plans, store plans and commission - the prices, and the costs they cover.
-- `router.py` — Pricing router - GET /pricing/listing-fee/quote, /pricing/plans, /pricing/categories.
+- `router.py` — Pricing router.
 - `service.py` — Gathering what a listing-fee quote needs from the database.
 
 ### `backend/api/domains/reviews/`
@@ -391,6 +399,7 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 - `media_storage.py` — Where image bytes live: Cloudflare R2, or the database as a fallback.
 - `migrations_guide.py` — ⚠️ STATUS AS OF THIS HARDENING PASS (2026-09) — READ THIS FIRST ⚠️
 - `money.py` — Monetary arithmetic that does not drift.
+- `mpesa_stk.py` — M-Pesa Express (STK push) for money that is BROKA's own: listing fees.
 - `negotiation_actions.py` — Zeno structured actions for the negotiation engine.
 - `nudge_templates.py` — BROKA — availability-nudge SMS composition.
 - `observability.py` — BROKA v3.0 - Observability Scaffold (issue #13 / #14)
@@ -420,6 +429,7 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 - `escrow_ledger.py` — LedgerEntry model — moved here for domain consistency.
 - `external_escrow.py` — ExternalEscrow model - tracks E-Confirm's side of a marketplace deal.
 - `listing.py` — Listing, Interest, Bid models — re-exported from api.database.
+- `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
 - `media.py` — Image assets - one uploaded image, stored as a few resized WebP files.
 - `payment.py` — FeaturedPayment and VerificationPayment models — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `review.py` — Review model — re-exported from api.database (duplicate-table fix, see models/user.py).
@@ -450,43 +460,44 @@ Counts: admin 16, optional 2, public 46, token 4, user 101.
 
 | Table | Model | Defined at |
 |---|---|---|
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:540 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1049 |
-| `bids` | `Bid` | backend/api/database.py:529 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:647 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:552 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1061 |
+| `bids` | `Bid` | backend/api/database.py:541 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:659 |
 | `categories` | `Category` | backend/api/database.py:295 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:303 |
-| `deals` | `Deal` | backend/api/database.py:699 |
+| `deals` | `Deal` | backend/api/database.py:711 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:989 |
+| `disputes` | `Dispute` | backend/api/database.py:1001 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:272 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:67 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1016 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1068 |
-| `interests` | `Interest` | backend/api/database.py:427 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1028 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1080 |
+| `interests` | `Interest` | backend/api/database.py:439 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:908 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:884 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:920 |
+| `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:896 |
 | `listings` | `Listing` | backend/api/database.py:312 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:66 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:100 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:943 |
-| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:450 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:955 |
+| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:462 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:253 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:963 |
-| `reviews` | `Review` | backend/api/database.py:1004 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:834 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:813 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:975 |
+| `reviews` | `Review` | backend/api/database.py:1016 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:846 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:825 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:494 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:632 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:506 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:644 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1032 |
-| `wishlists` | `Wishlist` | backend/api/database.py:620 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1044 |
+| `wishlists` | `Wishlist` | backend/api/database.py:632 |
 
 ## Backend dependencies between domains
 
@@ -509,7 +520,7 @@ of a change.
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — nothing outside itself
-- **pricing** — domains: trust; core: config; database, security
+- **pricing** — domains: listings, trust; core: audit, config, events, idempotency, mpesa_stk, rate_limit, reconciliation; database, security
 - **reviews** — core: audit, events; database, security
 - **showcase** — domains: media; core: config, fal_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit; database, security
@@ -552,11 +563,11 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FAL_KEY`, `FAL_SHOWCASE_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SHOWCASE_AI_REQUIRE_PREMIUM`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FAL_KEY`, `FAL_SHOWCASE_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SHOWCASE_AI_REQUIRE_PREMIUM`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`
 
 ## Backend tests
 
-74 files in `backend/tests/`.
+75 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -594,6 +605,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_fraud.py` — BROKA - Fraud Engine Unit Tests (v3.0) Tests trust score computation and trust band classification.
 - `test_idempotency.py` — Tests for the idempotency key guard.
 - `test_interest_nudges.py` — BROKA - Interest Availability Nudge Tests (v6.2) Run: pytest backend/tests/test_interest_nudges.py -v
+- `test_listing_fee_payment.py` — Paying the listing fee (PRICING.md; api/domains/pricing/payments.py).
 - `test_listing_overhaul.py` — The 2026-09-25 listing overhaul (LISTING_OVERHAUL.md): the category taxonomy, what a listing must and may now say about itself, the seller'…
 - `test_listing_posting.py` — Posting a listing: what POST /listings, PATCH /listings/{id} and the interest endpoint accept, and what a listing publishes about its selle…
 - `test_listings.py` — BROKA - Listings Endpoint Tests Run: pytest backend/tests/test_listings.py -v
@@ -725,6 +737,13 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/repositories/escrow_repository.dart` — BROKA v3.0 - Escrow / Deal Repository
 - `presentation/deal_status_screen.dart` — BROKA v3.0 - Deal Status Screen Full screen view of a deal with live WebSocket status, escrow timeline, action buttons (confirm delivery /…
 - `presentation/deal_status_widget.dart` — BROKA v3.0 - Real-time Deal Status Widget Drop this into any screen that shows a deal.
+
+### `flutter_app/lib/features/listing_fee/`
+
+- `data/listing_fee_repository.dart` — BROKA - Listing fee: quotes, the M-Pesa payment and its progress (backend/api/domains/pricing/router.py).
+- `domain/listing_fee.dart` — The monthly listing fee, as the server quotes it (PRICING.md, GET /pricing/listing-fee/...).
+- `presentation/awaiting_payment_panel.dart` — The Seller Dashboard's "waiting for payment" list: listings buyers can't see until they are paid for, or soon won't.
+- `presentation/listing_fee_screen.dart` — BROKA - Listing fee: choose how long to list, and pay with M-Pesa.
 
 ### `flutter_app/lib/features/listings/`
 
@@ -889,6 +908,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
 - `inbox_screen_test.dart` — The Inbox on Home's visual system (2026-09-26): the constellation, the collapsing header the Menu next to it uses, and cards like Home's in…
 - `incoming_call_notification_test.dart` — The incoming-call notification's Accept and Decline.
+- `listing_fee_test.dart` — The listing fee in the app (PRICING.md): the quote as the server sends it, the Listing fee screen, and Go live handing an unpaid listing to…
 - `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
 - `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.

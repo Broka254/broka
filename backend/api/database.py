@@ -415,6 +415,18 @@ class Listing(Base):
     delivery_available = Column(Boolean, nullable=True)
     delivery_note      = Column(String(120), nullable=True)
     sms_alerts         = Column(Boolean, nullable=False, default=True)
+    # The listing fee (PRICING.md; api/domains/listings/paid.py). Buyers see
+    # a listing while it is paid for:
+    #   NULL       no fee applies - listings from before fees were switched
+    #              on, and auctions. Live as long as status says so.
+    #   <= now     not live. Equal to created_at: never paid ("pay to
+    #              publish"); later than created_at: its paid time ran out.
+    #   > now      live until then.
+    # One column rather than a new ListingStatus: status is a native enum on
+    # PostgreSQL, and adding a value to it needs ALTER TYPE, which init_db's
+    # migrations cannot run safely. It also keeps "sold" and "unpaid" apart -
+    # a listing can be paid for and sold, or unsold and unpaid.
+    paid_until         = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("uq_listings_seller_client_ref", "seller_id", "client_ref", unique=True),
@@ -1158,6 +1170,7 @@ async def init_db():
         ("api.models.store", ("Store", "StoreDailyCount")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
+        ("api.models.listing_payment", ("ListingPayment",)),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))
@@ -1341,6 +1354,10 @@ async def init_db():
             "ALTER TABLE listings ADD COLUMN delivery_available BOOLEAN",
             "ALTER TABLE listings ADD COLUMN delivery_note VARCHAR(120)",
             "ALTER TABLE listings ADD COLUMN sms_alerts BOOLEAN NOT NULL DEFAULT TRUE",
+            # The listing fee (Listing.paid_until). TIMESTAMP, not DATETIME:
+            # PostgreSQL has no DATETIME, and a failure here is swallowed.
+            # NULL on every existing row: listings from before fees are free.
+            "ALTER TABLE listings ADD COLUMN paid_until TIMESTAMP",
             # Data repair, not schema. Listings used to accept NaN and
             # Infinity (api/domains/listings/validation.py); PostgreSQL
             # stores them and every response containing such a row fails,

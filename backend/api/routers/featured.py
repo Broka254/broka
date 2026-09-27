@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api.database import get_db, Listing, FeaturedPayment, MpesaStatus, SellerTier, User
+from api.domains.listings.paid import is_live
 from api.domains.pricing.service import FEATURED_NOT_FOR_LONG_TERM
 from api.security import get_current_user
 
@@ -187,6 +188,13 @@ async def boost_listing(
     )).scalar()
     if tier == SellerTier.long_term:
         raise HTTPException(status_code=403, detail=FEATURED_NOT_FOR_LONG_TERM)
+    # Featuring a listing buyers can't see - its fee unpaid, or its paid
+    # time over - would take the money and show nothing.
+    if not is_live(listing):
+        raise HTTPException(
+            status_code=409,
+            detail="Pay this listing's fee first - buyers can't see it yet.",
+        )
 
     phone = _normalize_phone(req.phone_number)
     amount = plan["price"]
