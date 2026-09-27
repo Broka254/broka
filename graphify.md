@@ -1018,6 +1018,7 @@ Modules:
 - `AI_AUDIT.md` — AI integration audit + cost controls (2026-09-14)
 - `ARCHITECTURE.md` — BROKA v4.0 — Architecture Guide
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
+- `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
 - `CHANGES.md` — Zeno stays with you, and guides (2026-09-27)
 - `CLAUDE.md` — BROKA
