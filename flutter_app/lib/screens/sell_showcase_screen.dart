@@ -24,6 +24,11 @@
 //   * The look was a free-text box. It is now a choice of six, each shown
 //     as a picture of the look (cover_theme_art.dart), with the one most
 //     sellers of this category would pick marked as Zeno's pick.
+//
+// AI covers are a premium feature (PRICING.md section 4): a few free tries,
+// then a plan's monthly tries. The step says how many are left, and once
+// they are gone the button leads to the plans instead of a refusal. A cover
+// from the gallery stays free.
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
@@ -33,6 +38,10 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../core/network/api_client.dart';
+import '../core/utils/result.dart';
+import '../features/premium/data/premium_repository.dart';
+import '../features/premium/domain/premium.dart';
+import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_photo_store.dart';
@@ -49,8 +58,9 @@ class SellShowcaseScreen extends StatefulWidget {
 
   /// For tests.
   final ShowcaseGenerator? generator;
+  final PremiumRepository? premium;
 
-  const SellShowcaseScreen({super.key, required this.data, this.generator});
+  const SellShowcaseScreen({super.key, required this.data, this.generator, this.premium});
   @override
   State<SellShowcaseScreen> createState() => _SellShowcaseScreenState();
 }
@@ -70,6 +80,10 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
   bool _pickingGallery = false;
   String? _error;
 
+  // What the seller's plan leaves of AI covers; null until known, and then
+  // the step behaves as before (the server still decides).
+  PremiumStatus? _premium;
+
   // A result awaiting "Use this cover" - not in the draft yet.
   GeneratedCover? _result;
   String? _resultTheme;
@@ -87,6 +101,49 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
     super.initState();
     _ambient = AnimationController(vsync: this, duration: const Duration(seconds: 8));
     _theme = _data.showcaseTheme ?? ShowcaseGenerator.recommendedFor(_data.category);
+    _loadPremium();
+  }
+
+  Future<void> _loadPremium() async {
+    final r = await (widget.premium ?? premiumRepository).me();
+    if (mounted && r is Success<PremiumStatus>) setState(() => _premium = r.data);
+  }
+
+  /// No AI cover tries left, as far as the app knows.
+  bool get _coversLocked => !(_premium?.canUse(PremiumFeature.aiCovers) ?? true);
+
+  /// "3 of 20 AI cover tries left this month" - or nothing while premium
+  /// is off or unknown.
+  String? get _coversLeftText {
+    final p = _premium;
+    if (p == null || !p.enabled) return null;
+    final left = p.left(PremiumFeature.aiCovers);
+    if (p.hasPlan) {
+      final all = p.usage[PremiumFeature.aiCovers]?.allowance ?? 0;
+      return '$left of $all AI cover tries left this month';
+    }
+    if (left == 0) return null;
+    return left == 1 ? '1 free AI cover try left' : '$left free AI cover tries left';
+  }
+
+  /// The plans, when the tries are gone - in the words the server would use.
+  Future<void> _offerPlans(String message, {String? upgradeTo}) async {
+    final opened = await showPremiumUpsell(context, message: message, upgradeTo: upgradeTo);
+    if (opened && mounted) {
+      setState(() => _error = null);
+      await _loadPremium();
+    }
+  }
+
+  void _lockedTap() {
+    final p = _premium!;
+    final renews = p.renewsAt;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final message = p.hasPlan
+        ? "You've used this month's AI cover tries on BROKA ${p.planName}"
+            '${renews == null ? '.' : '. They renew on ${renews.day} ${months[renews.month - 1]}.'}'
+        : "You've used your free AI cover tries. A BROKA plan gives you more every month.";
+    _offerPlans('$message You can still upload a cover from your gallery, free.');
   }
 
   @override
@@ -135,12 +192,22 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
         _result = cover;
         _resultTheme = _theme;
       });
+      // A try was spent: keep the count honest.
+      if (_premium?.enabled ?? false) _loadPremium();
     } on PhotoUploadIncomplete {
       if (mounted && request == _request) {
         setState(() => _error = "Your photo hasn't finished uploading. Check your connection and try again.");
       }
     } on ApiException catch (e) {
-      if (mounted && request == _request) setState(() => _error = e.message);
+      if (!mounted || request != _request) return;
+      setState(() => _error = e.message);
+      if (isPlanRefusal(e.statusCode)) {
+        // The app's count was behind the server's (another phone, or a
+        // month that just turned): show the server's reason and the plans.
+        setState(() => _generating = false);
+        await _loadPremium();
+        if (mounted) await _offerPlans(e.message, upgradeTo: upgradeToOf(e));
+      }
     } on TimeoutException {
       if (mounted && request == _request) {
         setState(() => _error = 'That took too long - your connection may be slow. Please try again.');
@@ -242,10 +309,20 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
                   const SizedBox(height: 16),
                   _MagicButton(
                     key: const Key('showcase-generate'),
-                    label: '✨  Create my ${_themeInfo.name} cover',
+                    label: _coversLocked ? '🔒  Get more AI covers' : '✨  Create my ${_themeInfo.name} cover',
                     animation: _ambient,
-                    onPressed: _generating ? null : _generate,
+                    onPressed: _generating ? null : (_coversLocked ? _lockedTap : _generate),
                   ),
+                  if (_coversLeftText != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Center(
+                        child: Text(_coversLeftText!,
+                            key: const Key('showcase-tries-left'),
+                            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                    ),
                   const SizedBox(height: 18),
                   Row(children: [
                     Expanded(child: Divider(color: BrokaColors.border.withOpacity(0.9))),
@@ -357,7 +434,7 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
           )),
           const SizedBox(width: 10),
           Expanded(child: OutlinedButton.icon(
-            onPressed: _generating ? null : _generate,
+            onPressed: _generating ? null : (_coversLocked ? _lockedTap : _generate),
             icon: const Icon(Icons.refresh_rounded, size: 18, color: BrokaColors.textHigh),
             label: const Text('Regenerate', style: TextStyle(color: BrokaColors.textHigh,
                 fontWeight: FontWeight.w700)),

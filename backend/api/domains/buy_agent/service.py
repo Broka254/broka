@@ -135,6 +135,13 @@ async def lock_buyer(db: AsyncSession, buyer_id: str) -> None:
     await db.execute(select(User.id).where(User.id == buyer_id).with_for_update())
 
 
+def _cap_message(cap: int) -> str:
+    if cap == 1:
+        return "You already have an active buy request. Cancel it before creating a new one."
+    return (f"You already have {cap} active buy requests - the most your plan runs at once. "
+            "Cancel one before creating a new one.")
+
+
 class BuyAgentService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -162,15 +169,17 @@ class BuyAgentService:
         condition = clean_condition(condition)
 
         await lock_buyer(self.db, buyer_id)
-        # Cap is settings.buy_agent_max_active (BUY_AGENT_MAX_ACTIVE, default
-        # 1 — Appendix C). count()-based rather than an existence check so
-        # the env var has real effect; at the documented default of 1 this
-        # is exactly equivalent to the old "any active request blocks" check.
-        if await self._active_count(buyer_id) >= settings.buy_agent_max_active:
-            raise HTTPException(
-                status_code=409,
-                detail="You already have an active buy request. Cancel it before creating a new one.",
-            )
+        # How many watches may run at once. With premium off, it is
+        # settings.buy_agent_max_active (BUY_AGENT_MAX_ACTIVE, default 1 —
+        # Appendix C); with it on, the plan's (PRICING.md): none without one,
+        # which is a 402 the app turns into "see plans". count()-based rather
+        # than an existence check so the cap has real effect.
+        from api.domains.premium import entitlements
+        cap = await entitlements.watch_cap(self.db, buyer_id)
+        if cap <= 0:
+            raise entitlements.watches_refusal()
+        if await self._active_count(buyer_id) >= cap:
+            raise HTTPException(status_code=409, detail=_cap_message(cap))
 
         # A renamed category's old name ("Vehicles", from an older app build)
         # is stored under the current one ("Automobiles"): matching compares
@@ -213,12 +222,9 @@ class BuyAgentService:
         # re-count does see its row and turns the race into the same honest
         # 409 a serial caller would have got.
         await self.db.flush()
-        if await self._active_count(buyer_id) > settings.buy_agent_max_active:
+        if await self._active_count(buyer_id) > cap:
             await self.db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="You already have an active buy request. Cancel it before creating a new one.",
-            )
+            raise HTTPException(status_code=409, detail=_cap_message(cap))
 
         await self.db.commit()
         return self._dict(req)

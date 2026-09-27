@@ -577,6 +577,32 @@ void main() {
       await letTeardownFinish(tester);
     });
 
+    testWidgets('voice without a plan: Zeno says why in words, and stops listening', (tester) async {
+      // The server refuses a spoken turn with a 402 (premium/entitlements.py).
+      // It used to read as "I couldn't reach Zeno", and the microphone
+      // stayed open for every next sentence to be refused the same way.
+      setFakeRoute((uri) => uri.path == '/zeno/assistant/turn'
+          ? const FakeResponse({'detail': {
+              'code': 'PREMIUM_REQUIRED', 'feature': 'voice_requests', 'plan': null, 'upgrade_to': 'plus',
+              'message': 'Talking to Zeno in voice mode is part of BROKA Plus - from KES 169 a month.'}},
+              statusCode: 402)
+          : null);
+      await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
+      await run(tester, const Duration(milliseconds: 400));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 600));
+      await say(tester, 'open my inbox');
+      await letTeardownFinish(tester);
+
+      expect(find.textContaining('part of BROKA Plus'), findsWidgets);
+      expect(find.textContaining("couldn't reach Zeno"), findsNothing);
+      expect(mic.running, isFalse);
+      expect(session.isActive, isTrue, reason: 'the answer stays on screen to read');
+      await tester.tap(find.byTooltip('End Zeno'));
+      await run(tester, const Duration(milliseconds: 600));
+    });
+
     testWidgets('a minute with nothing said stops the microphone', (tester) async {
       answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));

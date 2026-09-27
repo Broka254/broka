@@ -386,6 +386,13 @@ class ListingService:
         awaiting_fee = settings.listing_fees_enabled and fee_applies(listing)
         if awaiting_fee:
             listing.created_at = listing.paid_until = datetime.utcnow()
+        # Hosting an auction is premium (PRICING.md): one of the seller's
+        # plan's auctions, spent last - every check that could refuse the
+        # listing has already run - and given back below if this turns out
+        # to be a retry of a create that already happened.
+        if auction_terms is not None:
+            from api.domains.premium import entitlements
+            await entitlements.consume(self.db, seller_id, entitlements.Feature.AUCTION)
         self.db.add(listing)
         try:
             # Flushed for its id, then committed together with its auction
@@ -406,6 +413,9 @@ class ListingService:
             # connection): both missed the check above, the unique index on
             # (seller_id, client_ref) let one in. The other returns it.
             await self.db.rollback()
+            if auction_terms is not None:
+                from api.domains.premium import entitlements
+                await entitlements.release(self.db, seller_id, entitlements.Feature.AUCTION)
             if client_ref:
                 replay = await self._created_with_ref(seller_id, client_ref)
                 if replay is not None:

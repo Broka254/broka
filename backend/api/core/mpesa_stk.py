@@ -1,4 +1,5 @@
-"""M-Pesa Express (STK push) for money that is BROKA's own: listing fees.
+"""M-Pesa Express (STK push) for money that is BROKA's own: listing fees and
+premium plans.
 
 Deal money goes through E-Confirm, not here. The older routers
 (routers/mpesa.py, verify.py, featured.py) each carry their own copy of
@@ -15,6 +16,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -129,3 +131,49 @@ async def stk_query(checkout_request_id: str) -> dict:
         raise
     except Exception as exc:
         raise MpesaUnavailable(f"STK query failed: {type(exc).__name__}") from exc
+
+
+@dataclass(frozen=True)
+class StkResult:
+    """What a Safaricom STK callback says. Its amount is a claim, not a
+    fact: the unprotected shape of the webhook means callers must compare
+    it with what they asked for before believing it."""
+    checkout_request_id: Optional[str]
+    succeeded: bool
+    description: str
+    amount: Optional[float]
+    receipt: Optional[str]
+
+
+def parse_callback(payload: Optional[dict]) -> StkResult:
+    stk = (payload or {}).get("Body", {}).get("stkCallback", {}) or {}
+    items = {i.get("Name"): i.get("Value") for i in (stk.get("CallbackMetadata") or {}).get("Item", [])}
+    try:
+        amount = float(items.get("Amount"))
+    except (TypeError, ValueError):
+        amount = None
+    return StkResult(
+        checkout_request_id=stk.get("CheckoutRequestID") or None,
+        succeeded=str(stk.get("ResultCode")) == "0",
+        description=stk.get("ResultDesc") or "not completed",
+        amount=amount,
+        receipt=str(items.get("MpesaReceiptNumber") or "") or None,
+    )
+
+
+def amount_matches(result: StkResult, expected: float) -> bool:
+    return result.amount is not None and abs(result.amount - float(expected)) < 0.01
+
+
+def query_outcome(answer: Optional[dict]) -> Optional[bool]:
+    """stk_query's answer: True paid, False ended unpaid, None still open.
+
+    ResultCode is only there once the prompt has ended; while it is still
+    on the phone Daraja answers with an errorCode instead - and so does a
+    query that failed, which must read as "don't know yet", never "failed".
+    """
+    code = (answer or {}).get("ResultCode")
+    if code is None or str(code) == "":
+        return None
+    return str(code) == "0"
+

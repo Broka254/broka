@@ -71,6 +71,13 @@ async def assistant_turn(
     (/negotiate/chat): most turns are a model call.
     """
     await zeno_chat_limiter.check_and_record(current_user["id"])
+    if body.mode == "voice":
+        # Voice mode is premium (PRICING.md). The microphone streams from
+        # the phone straight to the speech provider, where BROKA cannot
+        # count it; each spoken turn reaches this endpoint, so the turn is
+        # what the plan's voice requests count. Typed turns stay free.
+        from api.domains.premium import entitlements
+        await entitlements.consume(db, current_user["id"], entitlements.Feature.VOICE)
     return await service.assistant_turn(
         db=db,
         user_id=current_user["id"],

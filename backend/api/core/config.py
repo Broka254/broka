@@ -104,15 +104,9 @@ class Settings:
     fal_showcase_model: str = field(default_factory=lambda: os.getenv(
         "FAL_SHOWCASE_MODEL", "fal-ai/flux-pro/kontext"
     ))
-    # Debugging/testing phase (2026-08-29): AI showcase generation is NOT
-    # gated behind is_premium yet, per explicit instruction - everyone can
-    # try it while the feature is being shaken out. The full check
-    # (ownership + this flag) already runs in showcase/service.py, so
-    # turning real premium enforcement on later is just flipping this to
-    # true - no further code change needed.
-    showcase_ai_require_premium: bool = field(default_factory=lambda: os.getenv(
-        "SHOWCASE_AI_REQUIRE_PREMIUM", "false"
-    ).strip().lower() in ("1", "true", "yes", "on"))
+    # Whether AI covers are premium is PREMIUM_ENABLED's business now (the
+    # premium domain), not a flag of the showcase's own - it replaced
+    # SHOWCASE_AI_REQUIRE_PREMIUM.
 
     # ── M-Pesa ────────────────────────────────────────────────────────────────
     mpesa_env: str = field(default_factory=lambda: os.getenv("MPESA_ENV", "sandbox"))
@@ -348,6 +342,22 @@ class Settings:
     # mpesa.py derives its own - so the secret-protected route is the default.
     mpesa_listing_fee_callback_url: str = field(default_factory=lambda: os.getenv(
         "MPESA_LISTING_FEE_CALLBACK_URL", ""
+    ).strip())
+
+    # ── Premium plans (PRICING.md) ────────────────────────────────────────────
+    # Off: voice mode, Zeno's SMS, the Buying Agent, AI covers and hosting
+    # auctions stay free for everyone, as they are today, and plans cannot be
+    # bought. On: they need a plan (AI covers: two free tries first) and plans
+    # are sold. Same rule as listing fees - only once the app build with the
+    # Premium screen is the one users must have, or an older build hits a
+    # wall it has no way past.
+    premium_enabled: bool = field(default_factory=lambda: os.getenv(
+        "PREMIUM_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    # Where Safaricom posts a plan payment's result. Unset, derived from
+    # MPESA_CALLBACK_SECRET (premium/payments.py).
+    mpesa_premium_callback_url: str = field(default_factory=lambda: os.getenv(
+        "MPESA_PREMIUM_CALLBACK_URL", ""
     ).strip())
 
     # ── Fraud thresholds ──────────────────────────────────────────────────────

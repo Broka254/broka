@@ -74,6 +74,7 @@ import '../models/models.dart';
 import '../core/utils/result.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
+import '../features/premium/presentation/premium_upsell.dart';
 import '../features/zeno_assistant/data/zeno_assistant_repository.dart';
 import '../features/zeno_assistant/domain/zeno_action.dart';
 import '../features/zeno_assistant/presentation/zeno_action_card.dart';
@@ -599,6 +600,17 @@ class _ZenoScreenState extends State<ZenoScreen>
         });
         _persist();
         unawaited(_afterReply(turn, epoch));
+      case Failure(:final message, statusCode: 402):
+        // Voice mode needs a plan, or this month's voice requests are used.
+        // Not a retry: the same sentence would be refused again. The
+        // microphone closes, and the plans are one tap away.
+        setState(() {
+          _addArriving(_Turn(Message(role: 'broker', content: message)));
+          _typing = false;
+        });
+        _history.removeLast();
+        await _endVoice();
+        if (mounted) await showPremiumUpsell(context, message: message);
       case Failure():
         _turnFailed(text, '⚠️ Zeno is unavailable right now. Please try again shortly.');
     }
@@ -952,8 +964,11 @@ class _ZenoScreenState extends State<ZenoScreen>
           ));
         }
       },
-      onFailure: (msg, __) => ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg))),
+      // Zeno negotiating for a buyer is part of a plan: the refusal says
+      // which, and the plans are one tap away.
+      onFailure: (msg, code) => isPlanRefusal(code)
+          ? showPremiumUpsell(context, message: msg)
+          : ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg))),
     );
   }
 
@@ -1015,11 +1030,14 @@ class _ZenoScreenState extends State<ZenoScreen>
           // the only one a buyer would ever get. Offer the swap right here.
           _offerToReplaceWatch();
         } else {
-          setState(() => _addArriving(_Turn(Message(
-            role: 'broker',
-            content: data['message'] as String? ?? "I couldn't set that watch up just now.",
-          ))));
+          final message = data['message'] as String? ?? "I couldn't set that watch up just now.";
+          setState(() => _addArriving(_Turn(Message(role: 'broker', content: message))));
           _scrollDown();
+          // Watches come with a plan (the action's FAILED shape carries the
+          // plan refusal's code).
+          if (data['error_code'] == 'PREMIUM_REQUIRED' || data['error_code'] == 'ALLOWANCE_USED') {
+            showPremiumUpsell(context, message: message);
+          }
         }
       },
       onFailure: (msg, __) => ScaffoldMessenger.of(context)

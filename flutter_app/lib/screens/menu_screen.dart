@@ -200,6 +200,13 @@ class _MenuScreenState extends State<MenuScreen> {
       const MenuSectionLabel('Account'),
       MenuGroup(children: [
         MenuTile(
+          icon: Icons.workspace_premium_rounded,
+          tint: BrokaColors.gold,
+          title: 'BROKA Premium',
+          subtitle: 'Voice mode, the Buying Agent, AI covers and your plan',
+          onTap: () => _open('/premium'),
+        ),
+        MenuTile(
           icon: Icons.settings_rounded,
           tint: BrokaColors.neonBlue,
           title: 'Settings',

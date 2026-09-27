@@ -87,6 +87,7 @@ from api.domains.auction_ws.router import router as auction_ws_router
 from api.domains.buy_agent.router  import router as buy_agent_router
 from api.domains.zeno_assistant.router import router as zeno_assistant_router
 from api.domains.pricing.router  import router as pricing_router
+from api.domains.premium.router  import router as premium_router
 from api.domains.escrow.router     import router as escrow_router
 from api.domains.disputes.router   import router as disputes_router
 # v5.0 dispute engine — same router file, /disputes/v2/* endpoints auto-registered
@@ -224,6 +225,7 @@ app.include_router(auction_ws_router, prefix="/auction-ws", tags=["Auction WS"])
 app.include_router(buy_agent_router,  prefix="/buy-agent-requests", tags=["Buy-Agent"])
 app.include_router(zeno_assistant_router, prefix="/zeno", tags=["Zeno Assistant"])
 app.include_router(pricing_router,    prefix="/pricing",    tags=["Pricing"])
+app.include_router(premium_router,    prefix="/premium",    tags=["Premium"])
 app.include_router(escrow_router,     prefix="/deal",       tags=["Escrow/Deal v3"])
 app.include_router(disputes_router,   prefix="/disputes",   tags=["Disputes v5"])
 app.include_router(reviews_router,    prefix="/reviews",    tags=["Reviews v3"])

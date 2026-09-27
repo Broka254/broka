@@ -3,11 +3,13 @@
 What BROKA charges, what it costs BROKA to run, and how one follows from the
 other. Every price here comes out of the code in `backend/api/domains/pricing/`
 (`costs.py`, `categories.py`, `engine.py`, `plans.py`; the payment is
-`payments.py`); change a cost there and the prices move with it.
-`tests/test_pricing.py` and `tests/test_listing_fee_payment.py` hold the
-promises below to the code: a proven seller pays less than a new one, the fee
-never goes under cost, no plan loses money on its heaviest user, and a
-payment is applied once, for the amount asked.
+`payments.py`); change a cost there and the prices move with it. Plans are
+bought and counted in `backend/api/domains/premium/`.
+`tests/test_pricing.py`, `tests/test_listing_fee_payment.py` and
+`tests/test_premium.py` hold the promises below to the code: a proven seller
+pays less than a new one, the fee never goes under cost, no plan loses money
+on its heaviest user, a payment is applied once, for the amount asked, and a
+premium feature is paid for before it costs BROKA anything.
 
 Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 2026). Provider prices were checked in September 2026; sources are at the end.
@@ -20,9 +22,10 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 | **Commission**, auction | Buyer pays **5%**: BROKA 4% + E-Confirm 1% |
 | **Listing fee** | Monthly, per listing: `f = C × R`. KES 8–1,500 a month depending on category, value, quantity and the seller's record. 1 to 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
-| **Plus** | KES 149 / month: voice mode, Zeno's SMS alerts, a Buying Agent watch |
-| **Pro** | KES 399 / month: Buying Agent with auto-negotiation, hosting auctions, more of everything |
-| **Elite** | KES 999 / month: volume allowances and priority support |
+| **Plus** | KES 169 / month: voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
+| **Pro** | KES 499 / month: Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
+| **Elite** | KES 1,249 / month: volume allowances, AI covers for ~20 listings, priority support |
+| **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus 2 AI cover tries |
 | **Store** | KES 299 to open (waived on 6+ months), then KES 249 (20 listings) to KES 4,999 (500 listings) a month; store listings pay no listing fee |
 
 ---
@@ -46,9 +49,9 @@ marked *assumption* are estimates until the app logs the real numbers (see
 | **Push (FCM)** | Free | Every routine notification | 0 |
 | **Speech to text** | Deepgram Nova-3 streaming $0.0077/min (a $0.0048 promotion is running); AssemblyAI Universal-Streaming $0.15/hour | Voice mode. Costed at Deepgram's regular rate so switching providers never makes a plan lose money | 1.00 per minute |
 | **Text to speech** | Microsoft Edge TTS: free, but an unofficial endpoint. A paid neural voice is ~$16 / 1M characters | Zeno speaking. A reserve is kept in case the free voice goes away | 0.93 per minute (reserve) |
-| **Voice mode, all in** | STT + ~3 Zeno turns + TTS reserve | | **2.14 per minute** |
+| **Voice mode, all in** | STT + ~3 Zeno turns + TTS reserve | Counted per thing said to Zeno (a *voice request*): the server sees each spoken turn, not the microphone's minutes | **2.14 per minute**, 0.71 per request |
 | **Calls (TURN)** | Cloudflare Realtime $0.05/GB after 1,000 GB free a month | Relayed voice ~0.6 MB/min, video ~9 MB/min. The free 1,000 GB is ~110,000 video minutes | < 0.06 per video minute - not priced |
-| **AI Showcase image** | fal.ai FLUX.1 Kontext [pro], $0.04 an image | AI cover images | **5.18 per image** |
+| **AI Showcase image** | fal.ai FLUX.1 Kontext [pro], $0.04 an image | AI cover images, made while posting a listing. ~3 tries per listing (*assumption*: a seller tries a look or two before keeping one) | **5.18 per try**, ~15.5 per listing |
 | **Email** | Resend: free for 3,000 a month | Email OTPs | 0 |
 | **M-Pesa, collecting a fee** | Tariff of 7 Aug 2026: free to KES 100, KES 3 to 500, KES 5 to 1,000, capped at KES 54 | Charging listing fees and plans | 0-54 per payment |
 | **E-Confirm** | 1% of the deal | Holds the buyer's money in escrow and pays the seller | Passed through to the buyer |
@@ -335,46 +338,110 @@ days (minimum KES 150, maximum 3,000) and a third of that for 7 days
 ## 4. Premium: Plus, Pro, Elite
 
 **What is premium.** The features that cost BROKA money every time they are
-used, or that are worth real money to the user: voice mode, Zeno's SMS
-alerts, the Buying Agent's watches and auto-negotiation, AI Showcase images,
-and hosting auctions. **Bidding on auctions stays free for everyone** -
-buyers are an auction's liquidity, and gating them would starve the sellers
-who pay.
+used, or that are worth real money to the user: voice mode, texts from Zeno,
+the Buying Agent's watches and Zeno negotiating for a buyer, **AI cover
+images while posting a listing**, and hosting auctions. **Bidding on auctions
+stays free for everyone** - buyers are an auction's liquidity, and gating
+them would starve the sellers who pay. Typing to Zeno, negotiating yourself,
+dictating a message, and uploading your own cover photo stay free.
 
 **How the prices were set.** Each plan's price is at least **1.25× what it
 costs BROKA when its holder uses every allowance to the last unit**. No
 subscriber, however heavy, is served at a loss; a typical subscriber (about a
-third of the allowances) leaves ~70%. The allowances are fair-use caps, not
-"unlimited": voice minutes and auto-negotiations cost money per use, and an
-unlimited plan priced for the average user is one the heaviest users make
-unprofitable.
+third of the allowances) leaves ~74%. The allowances are fair-use caps, not
+"unlimited": voice and AI covers cost money per use, and an unlimited plan
+priced for the average user is one the heaviest users make unprofitable.
 
 | | **Plus** | **Pro** | **Elite** |
 |---|---|---|---|
-| **Price / month** | **KES 149** | **KES 399** | **KES 999** |
-| For | Buyers who want Zeno on their side | People who buy or sell every week | People who trade for a living |
-| Voice mode (minutes) | 30 | 60 | 120 |
-| Zeno SMS alerts (new buyer, match found, outbid) | 30 | 80 | 150 |
-| Buying Agent watches | 1 | 3 | 10 |
-| Auto-negotiations | - | 25 | 50 |
-| AI Showcase images | 3 | 5 | 15 |
+| **Price / month** | **KES 169** | **KES 499** | **KES 1,249** |
+| For | Buyers who want Zeno on their side, occasional sellers | People who buy or sell every week | People who trade for a living |
+| AI cover tries (≈ listings) | 6 (≈ 2) | 20 (≈ 7) | 60 (≈ 20) |
+| Voice requests (≈ minutes) | 90 (≈ 30) | 180 (≈ 60) | 360 (≈ 120) |
+| Texts from Zeno (a buyer waiting, a message you asked it to send) | 30 | 80 | 150 |
+| Buying Agent watches, at once | 1 | 3 | 10 |
+| Negotiations Zeno opens for you | - | 25 | 50 |
 | Auctions hosted | - | 2 | 5 |
 | Priority support | - | - | 15 minutes |
-| Cost to BROKA, every allowance used | 112 | 305 | 718 |
-| Cost to BROKA, typical use | 41 | 109 | 254 |
-| Margin, typical use | 72% | 73% | 75% |
+| Cost to BROKA, every allowance used | 130 | 394 | 988 |
+| Cost to BROKA, typical use | 43 | 131 | 329 |
+| Margin, typical use | 74% | 74% | 74% |
 
-Voice minutes are the most expensive allowance (KES 2.14 a minute, KES 0.93
-of it the text-to-speech reserve). If the free voice keeps working, the
-minutes can go up ~75% at the same price.
+**Why the prices went up from 149 / 399 / 999: AI covers.** The first
+version of this table forgot that the cover image made while posting a
+listing is a premium feature. It is the most expensive allowance per use
+after a support minute (KES 5.18 a try), and a seller rarely keeps the first
+try. Sized in listings - about three tries each - covers for a week of
+listings on Pro alone cost ~KES 104 at full use. At the old prices the 1.25×
+rule left room for only **4 / 7 / 28 tries** (one or two listings on Pro),
+which is not a feature a weekly seller can use. The alternative, if the old
+prices matter more than the covers, is to keep 149 / 399 / 999 with those
+4 / 7 / 28 tries; every other allowance is unchanged either way. Prepaying a
+year brings the new prices back to **135 / 399 / 999 a month**.
 
-**Prepaying:** 3 months 8% off, 6 months 15%, 12 months 20% (Pro: 1,099 /
-2,029 / 3,829). Shallower than the listing-fee curve on purpose: a plan's
+**Free tries.** Someone without a plan gets **2 AI cover tries, once** -
+about KES 10, an acquisition cost, and the only way a seller learns what a
+cover does to a listing before paying for more. Nothing else is on trial.
+
+Voice requests are the next most expensive (KES 0.71 each, a third of it the
+text-to-speech reserve). If the free voice keeps working, they can go up
+~75% at the same price.
+
+**Prepaying:** 3 months 8% off, 6 months 15%, 12 months 20% (Pro: 1,379 /
+2,539 / 4,789). Shallower than the listing-fee curve on purpose: a plan's
 allowances renew every month, so its cost grows with every month prepaid.
 Even 12 months prepaid never goes below the maxed-out cost.
 
 Premium does **not** lower the listing fee. The listing fee rewards a seller's
 record; letting money buy that discount would undo it.
+
+### How a plan is bought and counted
+
+**Switched off until the app can sell it.** `PREMIUM_ENABLED` (default
+`false`). Off, every premium feature is free and uncounted, as before plans
+existed, `GET /premium/me` says `enabled: false`, and nothing can be bought.
+It replaced `SHOWCASE_AI_REQUIRE_PREMIUM`. Turn it on once an app build with
+the Premium screen has shipped: older builds show the refusals' words but
+have no way to buy.
+
+**Buying** is the listing fee's M-Pesa flow (§8) on its own tables
+(`subscriptions`, `subscription_payments`): `POST /premium/subscribe` sends a
+prompt for the catalogue price of the plan and months - never an amount the
+app sends - and the callback or the status poll settles it once, under a row
+lock. A callback claiming another amount buys nothing and raises a
+reconciliation alert. What a payment does:
+
+| Paying for... | ...while | does |
+|---|---|---|
+| any plan | no plan runs | starts it now; its months count from now |
+| the same plan | it runs | extends it from where it ends - renewing early loses nothing. Up to a year ahead |
+| a dearer plan | a cheaper one runs | upgrades now: the unused days become days of the new plan at the ratio of the prices (10 Plus days ≈ 3.4 Pro days), then the months bought are added. Allowances start afresh |
+| a cheaper plan | a dearer one runs | refused (409) until it ends. If one is paid anyway (the plan changed while the prompt was open), the money becomes time on the plan in force, at the same ratio |
+
+**Counting.** Allowances are per plan month: month *n* runs from the start +
+*n* × 30 days (`feature_usage`, one row per user, feature and month). Every
+feature spends before it does the costly thing, with one guarded `UPDATE`
+(`used + n <= allowance`) so two requests racing for the last try cannot both
+get it, and gives it back if the thing did not happen - a cover the model
+failed to make, a text that did not send, a negotiation already open.
+
+**Refusing.** A 402 with `{code, message, feature, plan, upgrade_to}`:
+`PREMIUM_REQUIRED` when no plan includes it, `ALLOWANCE_USED` when this
+month's is spent. The message says what to do in words, because older app
+builds show it as it is. Background work has nobody to show a 402 to:
+
+| Feature | Refused in the app | Refused in the background |
+|---|---|---|
+| AI cover | The cover step says how many tries are left and, with none, offers the plans; the gallery stays free | - |
+| Voice mode | Zeno says why, stops listening, offers the plans; typing still works | - |
+| Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |
+| Zeno negotiating for you | 402 and the plans | The automatic opener on a new match skips the buyer |
+| Text from Zeno | Go live says, before "SMS me", that texts need a plan | The availability nudge is cancelled for that buyer; the in-app notification still goes |
+| Hosting an auction | 402 when the auction listing is created | - |
+
+**In the app:** Menu → BROKA Premium (`/premium`): the plan, what is left
+this month, and Plus / Pro / Elite with 1, 3, 6 or 12 months. Any refusal's
+"See plans" opens it with the suggested plan picked.
 
 ---
 
@@ -437,7 +504,11 @@ them the fee is most of what BROKA earns from the listing.
 | `GET /pricing/listing-fee/payments/{id}` | owner | pending / success / failed; asks Safaricom itself when the callback is late |
 | `GET /pricing/listing-fee/mine` | signed in | The caller's listings buyers can't see until paid, or won't within a week |
 | `POST /pricing/listing-fee/callback/{MPESA_CALLBACK_SECRET}` | Safaricom | The prompt's result |
-| `GET /pricing/plans` | public | Plus / Pro / Elite with allowances and prepaid prices, store plans, commission |
+| `GET /pricing/plans` | public | Plus / Pro / Elite with allowances and prepaid prices, the free trial, store plans, commission |
+| `GET /premium/me` | signed in | `enabled`; the plan, paid until, when this month's allowances renew; per feature `{allowance, used, left}`; free tries left |
+| `POST /premium/subscribe` | signed in | `{plan_id, months, phone_number}`: sends the M-Pesa prompt for the catalogue price. Takes `X-Idempotency-Key` |
+| `GET /premium/payments/{id}` | owner | pending / success / failed, and `paid_until`; asks Safaricom itself when the callback is late |
+| `POST /premium/callback/{MPESA_CALLBACK_SECRET}` | Safaricom | The prompt's result (`MPESA_PREMIUM_CALLBACK_URL` overrides the address) |
 | `GET /pricing/categories` | public | The category table above |
 
 `price` is the price of one unit; `quantity` the units in the listing.
@@ -515,13 +586,11 @@ the Seller Dashboard. The same screen renews a listing that is ending.
 
 ## 9. What is not built yet
 
-1. **Plans and entitlements.** A `subscriptions` table; `User.is_premium`
-   (today a bare flag) set from it; allowances counted per month; the
-   features gated: voice mode, SMS nudges (`Listing.sms_alerts`), Buying
-   Agent watches and auto-negotiation, auction hosting,
-   `SHOWCASE_AI_REQUIRE_PREMIUM`.
-2. **Store billing** on the same subscriptions table, with store listings
+1. **Store billing**, on the premium payment flow, with store listings
    exempt from the listing fee.
+2. **Premium revenue and reminders.** Nothing sums `subscription_payments`
+   for the admin screens, and nothing reminds a subscriber before their plan
+   ends; a push three days before would save renewals.
 3. **Anti-farming before big discounts.** The design journal (Part XVI) wants
    device, M-Pesa and location clustering before completion-rate discounts go
    live. The quality factor already discounts one-buyer and under-KES-500
@@ -544,6 +613,7 @@ the Seller Dashboard. The same screen renews a listing that is ending.
 | Days to sell, typical prices | Recommendation | Median listing-to-deal time per category |
 | 20,000 listings / 15,000 users | Infra per listing | Re-run at each order of magnitude |
 | A third of allowances used | Plan margins | Allowance use per plan |
+| ~3 AI cover tries per listing; ~3 voice requests a minute | Sizing cover and voice allowances | `feature_usage` per plan month, against listings posted |
 
 ## 11. What was kept from the design journal, and what was not
 

@@ -56,29 +56,34 @@ def period_prices(monthly: int) -> list[dict]:
 
 @dataclass(frozen=True)
 class PremiumPlan:
+    """A plan's monthly allowances. Each counts a thing that costs BROKA
+    money every time it happens, so each is a number, not "unlimited"."""
     id: str
     name: str
     monthly_price: int
     pitch: str
-    voice_minutes: int              # Zeno voice mode: open-microphone minutes
-    sms_alerts: int                 # Zeno texts you: a new buyer, a match, an outbid
-    agent_watches: int              # Buying Agent: standing "find me this" requests
-    auto_negotiations: int          # Zeno negotiating a seller for you
-    showcase_images: int            # AI Showcase covers
-    auctions_hosted: int            # auctions you can run (bidding is free for all)
+    voice_requests: int             # things said to Zeno in voice mode
+    sms_alerts: int                 # texts Zeno sends: a buyer waiting, a message you asked it to send
+    agent_watches: int              # Buying Agent watches running at once (not a monthly count)
+    auto_negotiations: int          # sellers Zeno opens a negotiation with for you
+    ai_covers: int                  # AI cover tries while posting listings
+    auctions_hosted: int            # auctions you start (bidding is free for everyone)
     priority_support_minutes: int = 0
 
     def max_monthly_cost(self) -> float:
         usage = (
-            self.voice_minutes * costs.VOICE_MINUTE
+            self.voice_requests * costs.VOICE_REQUEST
             + self.sms_alerts * costs.SMS
             + self.agent_watches * costs.AGENT_WATCH_MONTH
             + self.auto_negotiations * costs.AI_PER_AUTO_NEGOTIATION
-            + self.showcase_images * costs.AI_SHOWCASE_IMAGE
+            + self.ai_covers * costs.AI_SHOWCASE_IMAGE
             + self.auctions_hosted * costs.AUCTION_HOSTED
             + self.priority_support_minutes * costs.SUPPORT_PER_MINUTE
         )
         return usage * costs.OVERHEAD + costs.mpesa_collection_cost(self.monthly_price)
+
+    def allowance(self, feature: str) -> int:
+        return int(getattr(self, feature))
 
     def to_dict(self) -> dict:
         return {
@@ -88,37 +93,56 @@ class PremiumPlan:
             "monthly_price": self.monthly_price,
             "periods": period_prices(self.monthly_price),
             "allowances": {
-                "voice_minutes": self.voice_minutes,
+                "voice_requests": self.voice_requests,
                 "sms_alerts": self.sms_alerts,
-                "buying_agent_watches": self.agent_watches,
+                "agent_watches": self.agent_watches,
                 "auto_negotiations": self.auto_negotiations,
-                "ai_showcase_images": self.showcase_images,
+                "ai_covers": self.ai_covers,
+                # What the tries come to in listings: a seller thinks in
+                # "covers for how many listings", not in model calls. Rounded,
+                # not floored: the app says "about", and 20 tries are nearer
+                # 7 listings than 6.
+                "ai_cover_listings": round(self.ai_covers / costs.AI_COVER_TRIES_PER_LISTING),
                 "auctions_hosted": self.auctions_hosted,
                 "priority_support_minutes": self.priority_support_minutes,
             },
         }
 
 
+# AI covers are made while posting, a few tries per listing, at KES 5.18 a
+# try - the most expensive allowance per use after a support minute. They
+# are sized in listings (AI_COVER_TRIES_PER_LISTING tries each): Plus about
+# 2 listings a month, Pro about 7, Elite about 20. That, not the other
+# allowances, is what moved the prices from 149 / 399 / 999: at those prices
+# the 1.25x rule leaves room for 4 / 7 / 28 tries - one or two listings'
+# covers on Pro, which is not a feature a weekly seller can use. A year
+# prepaid (20% off) comes back to 135 / 399 / 999 a month.
 PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
     PremiumPlan(
-        id="plus", name="Plus", monthly_price=149,
-        pitch="Talk to Zeno, and let it text you when something happens.",
-        voice_minutes=30, sms_alerts=30, agent_watches=1, auto_negotiations=0,
-        showcase_images=3, auctions_hosted=0,
+        id="plus", name="Plus", monthly_price=169,
+        pitch="Talk to Zeno, let it text you when a buyer is waiting, and give your listings AI covers.",
+        voice_requests=90, sms_alerts=30, agent_watches=1, auto_negotiations=0,
+        ai_covers=6, auctions_hosted=0,
     ),
     PremiumPlan(
-        id="pro", name="Pro", monthly_price=399,
-        pitch="Zeno hunts and haggles for you, and you can run auctions.",
-        voice_minutes=60, sms_alerts=80, agent_watches=3, auto_negotiations=25,
-        showcase_images=5, auctions_hosted=2,
+        id="pro", name="Pro", monthly_price=499,
+        pitch="Zeno hunts and haggles for you, covers for a week of listings, and your own auctions.",
+        voice_requests=180, sms_alerts=80, agent_watches=3, auto_negotiations=25,
+        ai_covers=20, auctions_hosted=2,
     ),
     PremiumPlan(
-        id="elite", name="Elite", monthly_price=999,
+        id="elite", name="Elite", monthly_price=1249,
         pitch="Everything, in volume - for people who buy and sell for a living.",
-        voice_minutes=120, sms_alerts=150, agent_watches=10, auto_negotiations=50,
-        showcase_images=15, auctions_hosted=5, priority_support_minutes=15,
+        voice_requests=360, sms_alerts=150, agent_watches=10, auto_negotiations=50,
+        ai_covers=60, auctions_hosted=5, priority_support_minutes=15,
     ),
 )
+PREMIUM_BY_ID: dict[str, PremiumPlan] = {p.id: p for p in PREMIUM_PLANS}
+
+# What someone without a plan may try before being asked to subscribe: two
+# AI covers, once. About KES 10 each - an acquisition cost, and the only way
+# a seller learns what a cover does to a listing before paying for more.
+FREE_TRIAL: dict[str, int] = {"ai_covers": 2}
 
 
 # ── Stores ───────────────────────────────────────────────────────────────────
@@ -200,6 +224,7 @@ def catalog() -> dict:
     return {
         "currency": "KES",
         "premium": [p.to_dict() for p in PREMIUM_PLANS],
+        "free_trial": FREE_TRIAL,
         "stores": {
             "setup_fee": STORE_SETUP_FEE,
             "setup_fee_waived_from_months": STORE_SETUP_WAIVED_FROM_MONTHS,

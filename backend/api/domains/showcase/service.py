@@ -4,7 +4,7 @@ BROKA - AI Showcase/Cover Image Service
 Orchestrates the showcase image feature end to end. The actual fal.ai HTTP
 mechanics live in api/core/fal_client.py (reusable technical client,
 mirrors api/core/sms.py); this file is the business logic: ownership,
-the (currently disabled) premium gate, prompt construction, and the
+the premium allowance, prompt construction, and the
 generate -> download -> persist pipeline.
 
 Two image concepts, kept strictly separate (never conflate them):
@@ -36,9 +36,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.database import Listing, User
+from api.database import Listing
 from api.core import fal_client
-from api.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -189,21 +188,25 @@ async def _get_owned_listing(db: AsyncSession, listing_id: str, user_id: str) ->
     return listing
 
 
-async def _require_premium_if_enabled(db: AsyncSession, user_id: str) -> None:
-    """Debugging/testing phase: SHOWCASE_AI_REQUIRE_PREMIUM defaults off
-    (see config.py), so this is currently a no-op for everyone. Re-checks
-    is_premium fresh from the DB rather than trusting anything cached in
-    the JWT, since entitlement can change after a token is issued."""
-    if not settings.showcase_ai_require_premium:
-        return
-    r = await db.execute(select(User.is_premium).where(User.id == user_id))
-    is_premium = r.scalar_one_or_none()
-    if not is_premium:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "premium_required",
-                    "message": "AI showcase generation is a Premium feature."},
-        )
+async def _spend_a_cover(db: AsyncSession, user_id: str) -> None:
+    """An AI cover is premium (PRICING.md): each try spends one of the
+    plan's monthly AI covers, or one of the two free ones. Checked fresh
+    from the database every time, never from anything cached in the token -
+    a plan can start or end after the token was issued. A no-op while
+    PREMIUM_ENABLED is off.
+
+    Called once the request is one that will reach fal.ai: a missing photo
+    or a bad theme must not use up a try. _run_generation gives it back if
+    fal.ai then fails.
+    """
+    from api.domains.premium import entitlements
+    await entitlements.consume(db, user_id, entitlements.Feature.AI_COVER)
+
+
+async def _give_the_cover_back(db: AsyncSession, user_id: str) -> None:
+    """No cover reached the seller, so no try was used."""
+    from api.domains.premium import entitlements
+    await entitlements.release(db, user_id, entitlements.Feature.AI_COVER)
 
 
 async def _check_generation_rate(user_id: str) -> None:
@@ -320,6 +323,7 @@ async def _run_generation(
         fal_url = await fal_client.generate_showcase_image_url(prompt, photo_data_uri)
         image_bytes, mime = await fal_client.download_generated_image(fal_url)
     except fal_client.FalGenerationError as exc:
+        await _give_the_cover_back(db, user_id)
         raise _failure(exc)
 
     if not as_asset:
@@ -334,6 +338,8 @@ async def _run_generation(
         asset = await create_image_asset(db, user_id, MediaPurpose.LISTING_SHOWCASE, image_bytes)
         await db.commit()
     except ImageRejected as exc:
+        await db.rollback()
+        await _give_the_cover_back(db, user_id)
         raise _failure(fal_client.FalGenerationError(f"unreadable result: {exc}"))
     return {"asset": asset_urls(asset), "prompt_used": prompt}
 
@@ -355,10 +361,10 @@ async def generate_showcase_preview(
     seller previews it and calls set_showcase_image() to actually use it,
     or discards it by simply not calling that."""
     listing = await _get_owned_listing(db, listing_id, user_id)
-    await _require_premium_if_enabled(db, user_id)
     theme = _theme_or_400(theme)
     image_ref = await _first_actual_photo_data_uri(db, listing)
     await _check_generation_rate(user_id)
+    await _spend_a_cover(db, user_id)
     prompt = _build_prompt(listing, description, theme)
     return await _run_generation(db, user_id, prompt, image_ref, as_asset)
 
@@ -381,7 +387,6 @@ async def generate_showcase_preview_standalone(
     The photo is `photo_id` - the seller's first photo, already uploaded
     when it was taken, so nothing is sent twice - or, from older builds,
     `photo_data_uri`, the photo itself."""
-    await _require_premium_if_enabled(db, user_id)
     theme = _theme_or_400(theme)
     if photo_id:
         photo = await _photo_from_asset(db, user_id, photo_id)
@@ -390,6 +395,7 @@ async def generate_showcase_preview_standalone(
     # Counted only once the request is one that will reach fal.ai: a
     # missing photo shouldn't use up a seller's allowance.
     await _check_generation_rate(user_id)
+    await _spend_a_cover(db, user_id)
     prompt = _build_prompt_from_facts(name, category, condition, price, description, theme)
     return await _run_generation(db, user_id, prompt, photo, as_asset)
 

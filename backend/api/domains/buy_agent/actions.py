@@ -539,6 +539,10 @@ async def _create_buying_request(
             negotiation_authorized=params.negotiation_authorized,
         )
     except HTTPException as e:
+        # A plan refusal (402) keeps its own code and sentence: its detail is
+        # a dict, and str() of it reached the buyer as Python's repr.
+        if e.status_code == 402 and isinstance(e.detail, dict):
+            raise ZenoActionError(e.detail["code"], e.detail["message"])
         # BuyAgentService raises 409 for the cap and 422 for the price
         # rules; mapping both onto ACTIVE_REQUEST_EXISTS would tell a buyer
         # with a bad budget to go cancel a request they don't have.
@@ -698,6 +702,13 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
     # also why tests/test_message_visibility_guard.py is satisfied by the
     # recipient_role constraint rather than by a justification marker.
     #
+    # Zeno negotiating for a buyer is premium (PRICING.md). Spent BEFORE the
+    # lock below, because spending commits - and committing would let go of
+    # the lock the duplicate check needs. Given back if the thread turns out
+    # to be open already: a repeat tap opens nothing.
+    from api.domains.premium import entitlements
+    await entitlements.consume(db, buyer_id, entitlements.Feature.AUTO_NEGOTIATION)
+
     # Taken under the buyer's lock (buy_agent/service.py lock_buyer): two
     # taps landing together both found no opener and both wrote one.
     await lock_buyer(db, buyer_id)
@@ -711,6 +722,7 @@ async def _start_negotiation(db: AsyncSession, buyer_id: str, params: StartNegot
         ).order_by(NegotiationMessage.created_at.asc()).limit(1)
     )).scalar_one_or_none()
     if existing_id is not None:
+        await entitlements.release(db, buyer_id, entitlements.Feature.AUTO_NEGOTIATION)
         return {
             "action": "START_NEGOTIATION",
             "status": "SUCCESS",

@@ -156,6 +156,7 @@ from api.core.text_search import search_terms
 from api.database import (
     AsyncSessionLocal, BuyAgentRequest, ListingStatus, NegotiationMessage, Listing, User,
 )
+from api.domains.premium import entitlements
 from api.domains.buy_agent.matching import states_a_shortfall
 from api.domains.buy_agent.service import not_expired
 from api.domains.listings.validation import load_attributes
@@ -406,7 +407,12 @@ async def on_listing_created_match_buy_agents(envelope: EventEnvelope) -> None:
             if counted.rowcount != 1:
                 continue
 
-            if req.negotiation_authorized:
+            # Zeno opening a negotiation is premium (PRICING.md): each opener
+            # spends one of the buyer's plan's negotiations. Without one the
+            # match is still made and the buyer told - they can ask Zeno to
+            # negotiate from the match, which asks for a plan then.
+            if req.negotiation_authorized and await entitlements.try_consume(
+                    db, req.buyer_id, entitlements.Feature.AUTO_NEGOTIATION):
                 # Deliberately says nothing about req.max_price: telling a
                 # seller the buyer's ceiling before negotiating gives away
                 # the buyer's whole position (fix 1 in the module

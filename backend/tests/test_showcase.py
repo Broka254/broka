@@ -1,8 +1,8 @@
 """
 BROKA - AI Showcase/Cover Image Tests
 Covers: location_name derivation from county/subcounty, ownership checks,
-the SHOWCASE_AI_REQUIRE_PREMIUM toggle (off by default during the
-debugging/testing phase), and the set/remove/generate flows.
+AI covers as a premium allowance (free while PREMIUM_ENABLED is off; two
+free tries, then a plan's, when it is on), and the set/remove/generate flows.
 fal.ai itself is mocked at the api.core.fal_client boundary - the fal.ai
 HTTP/polling contract is covered separately and directly against the real
 module in verify_fal.py, since httpx isn't installable in the sandbox this
@@ -11,7 +11,6 @@ was written in.
 Run: pytest backend/tests/test_showcase.py -v
 """
 import itertools
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -123,39 +122,95 @@ async def test_get_owned_listing_succeeds_for_actual_seller():
         assert result.id == listing.id
 
 
-@pytest.mark.asyncio
-async def test_premium_gate_is_off_by_default():
-    """Debugging/testing phase (config.py): SHOWCASE_AI_REQUIRE_PREMIUM
-    defaults false, so a non-premium user must NOT be blocked."""
-    async with AsyncSessionLocal() as db:
-        seller = await _make_user(db, "Non Premium Seller", is_premium=False)
-        await db.commit()
-        # settings is a frozen dataclass singleton - patch.object() on a
-        # single attribute raises FrozenInstanceError (setattr under the
-        # hood), so the whole name is swapped for a stand-in instead, same
-        # technique as tests/test_sms.py.
-        with patch("api.domains.showcase.service.settings", SimpleNamespace(showcase_ai_require_premium=False)):
-            await showcase_service._require_premium_if_enabled(db, seller.id)  # must not raise
+# AI covers are premium (PRICING.md): the showcase spends one of the seller's
+# AI cover tries per generation, through api/domains/premium/entitlements.
+
+def _premium_on():
+    import dataclasses
+    from api.core.config import settings
+    return patch("api.domains.premium.entitlements.settings",
+                 dataclasses.replace(settings, premium_enabled=True))
+
+
+def _fal_ok():
+    return (patch("api.domains.showcase.service.fal_client.generate_showcase_image_url",
+                  return_value="https://cdn.fal.ai/fake.png"),
+            patch("api.domains.showcase.service.fal_client.download_generated_image",
+                  return_value=(b"RAWBYTES", "image/jpeg")))
+
+
+async def _generate(db, seller_id):
+    return await showcase_service.generate_showcase_preview_standalone(
+        db, seller_id, _jpeg_data_uri(), "Sofa", "Home & Furniture", None, None, None,
+    )
 
 
 @pytest.mark.asyncio
-async def test_premium_gate_blocks_non_premium_when_enabled():
+async def test_ai_covers_are_free_for_everyone_while_premium_is_off():
     async with AsyncSessionLocal() as db:
-        seller = await _make_user(db, "Non Premium Seller 2", is_premium=False)
+        seller = await _make_user(db, "Free Seller")
         await db.commit()
-        with patch("api.domains.showcase.service.settings", SimpleNamespace(showcase_ai_require_premium=True)):
+        gen, dl = _fal_ok()
+        with gen, dl:
+            for _ in range(4):
+                await _generate(db, seller.id)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_two_free_tries_then_a_plan_is_needed():
+    async with AsyncSessionLocal() as db:
+        seller = await _make_user(db, "Trial Seller")
+        await db.commit()
+        gen, dl = _fal_ok()
+        with _premium_on(), gen, dl:
+            await _generate(db, seller.id)
+            await _generate(db, seller.id)
             with pytest.raises(HTTPException) as exc:
-                await showcase_service._require_premium_if_enabled(db, seller.id)
-            assert exc.value.status_code == 403
+                await _generate(db, seller.id)
+        assert exc.value.status_code == 402
+        assert exc.value.detail["code"] == "ALLOWANCE_USED"
+        assert exc.value.detail["upgrade_to"] == "plus"
+        assert "gallery" in exc.value.detail["message"]
 
 
 @pytest.mark.asyncio
-async def test_premium_gate_allows_premium_when_enabled():
+async def test_a_plan_gives_its_months_tries():
+    from datetime import datetime, timedelta
+    from api.domains.pricing.plans import PREMIUM_BY_ID
+    from api.models.subscription import Subscription
     async with AsyncSessionLocal() as db:
-        seller = await _make_user(db, "Premium Seller", is_premium=True)
+        seller = await _make_user(db, "Plus Seller")
+        now = datetime.utcnow()
+        db.add(Subscription(user_id=seller.id, plan_id="plus", started_at=now,
+                            paid_until=now + timedelta(days=30)))
         await db.commit()
-        with patch("api.domains.showcase.service.settings", SimpleNamespace(showcase_ai_require_premium=True)):
-            await showcase_service._require_premium_if_enabled(db, seller.id)  # must not raise
+        gen, dl = _fal_ok()
+        with _premium_on(), gen, dl:
+            for _ in range(PREMIUM_BY_ID["plus"].ai_covers):
+                await _generate(db, seller.id)
+            with pytest.raises(HTTPException) as exc:
+                await _generate(db, seller.id)
+        assert exc.value.status_code == 402
+        assert exc.value.detail["plan"] == "plus" and exc.value.detail["upgrade_to"] == "pro"
+
+
+@pytest.mark.asyncio
+async def test_a_cover_the_model_failed_to_make_does_not_use_a_try():
+    async with AsyncSessionLocal() as db:
+        seller = await _make_user(db, "Unlucky Seller")
+        await db.commit()
+        failing = patch("api.domains.showcase.service.fal_client.generate_showcase_image_url",
+                        side_effect=fal_client.FalGenerationError("model down", code="failed"))
+        with _premium_on():
+            with failing:
+                for _ in range(3):
+                    with pytest.raises(HTTPException) as exc:
+                        await _generate(db, seller.id)
+                    assert exc.value.status_code == 502
+            gen, dl = _fal_ok()
+            with gen, dl:
+                await _generate(db, seller.id)
+                await _generate(db, seller.id)  # both free tries still there
 
 
 # ── set / remove ──────────────────────────────────────────────────────────────
@@ -300,19 +355,6 @@ async def test_standalone_generate_requires_a_photo():
                 db, seller.id, "", "iPhone 12", "Electronics", None, None, None,
             )
         assert exc.value.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_standalone_generate_respects_premium_gate_when_enabled():
-    async with AsyncSessionLocal() as db:
-        seller = await _make_user(db, "Wizard Non Premium", is_premium=False)
-        await db.commit()
-        with patch("api.domains.showcase.service.settings", SimpleNamespace(showcase_ai_require_premium=True)):
-            with pytest.raises(HTTPException) as exc:
-                await showcase_service.generate_showcase_preview_standalone(
-                    db, seller.id, "data:image/jpeg;base64,AAAA", "Sofa", "Furniture", None, None, None,
-                )
-            assert exc.value.status_code == 403
 
 
 # ── create_listing: showcase fields set at creation time ───────────────────

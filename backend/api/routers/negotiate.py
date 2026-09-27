@@ -3153,13 +3153,19 @@ async def zeno_draft_sms(
     from api.core.rate_limit import zeno_sms_limiter
     await zeno_sms_limiter.check_and_record(current["id"])
 
+    # A text Zeno sends is premium (PRICING.md): one of the sender's plan's
+    # SMS alerts, given back if it does not go.
+    from api.domains.premium import entitlements
+    await entitlements.consume(db, current["id"], entitlements.Feature.SMS)
+
     from api.core.sms import get_sms_provider
     try:
         ok = bool(await get_sms_provider().send(other.phone, body))
     except Exception as exc:
         logger.error("[negotiate] zeno SMS send failed listing=%s: %s", data.listing_id, exc)
-        raise HTTPException(status_code=502, detail="Could not send the message right now.")
+        ok = False
     if not ok:
+        await entitlements.release(db, current["id"], entitlements.Feature.SMS)
         raise HTTPException(status_code=502, detail="Could not send the message right now.")
 
     logger.info("[negotiate] ZENO_SMS_SENT listing=%s from=%s to=%s",

@@ -207,8 +207,8 @@ class TestPlans:
         tiers = plans.PREMIUM_PLANS
         for lower, upper in zip(tiers, tiers[1:]):
             assert upper.monthly_price > lower.monthly_price
-            for field in ("voice_minutes", "sms_alerts", "agent_watches", "auto_negotiations",
-                          "showcase_images", "auctions_hosted", "priority_support_minutes"):
+            for field in ("voice_requests", "sms_alerts", "agent_watches", "auto_negotiations",
+                          "ai_covers", "auctions_hosted", "priority_support_minutes"):
                 assert getattr(upper, field) >= getattr(lower, field), field
 
     def test_bigger_stores_pay_less_per_listing(self):
@@ -219,6 +219,13 @@ class TestPlans:
         """The store is the considerate price for long-term sellers."""
         alone = _fee(NEW, ELECTRONICS, 20_000)["monthly_fee"]
         assert max(s.monthly_price / s.listings for s in plans.STORE_PLANS) < alone / 2
+
+    def test_ai_covers_come_in_listings_worth_of_tries(self):
+        """Covers are made while posting, a few tries per listing: an
+        allowance under one listing's worth is not a feature (PRICING.md)."""
+        for plan in plans.PREMIUM_PLANS:
+            assert plan.ai_covers >= 2 * costs.AI_COVER_TRIES_PER_LISTING
+        assert 0 < plans.FREE_TRIAL["ai_covers"] < costs.AI_COVER_TRIES_PER_LISTING
 
     def test_the_setup_fee_covers_setting_a_store_up(self):
         assert plans.STORE_SETUP_FEE >= costs.STORE_SETUP * costs.OVERHEAD

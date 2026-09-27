@@ -102,6 +102,11 @@ VOICE_TURNS_PER_MINUTE = 3
 # characters a minute) would add about KES 0.93/min; plans leave room for it.
 TTS_RESERVE_PER_MINUTE = usd(16 * 450 / 1_000_000)
 VOICE_MINUTE = STT_PER_MINUTE + VOICE_TURNS_PER_MINUTE * AI_PER_ASSISTANT_TURN + TTS_RESERVE_PER_MINUTE
+# What voice mode is metered in: one thing said to Zeno - about twenty
+# seconds of open microphone, one reply, spoken back. The microphone time is
+# spent on the phone, straight to the speech provider, where BROKA cannot
+# count it; the turn reaches BROKA, so the turn is what is counted.
+VOICE_REQUEST = VOICE_MINUTE / VOICE_TURNS_PER_MINUTE
 
 # Calls: Cloudflare Realtime TURN is $0.05/GB after 1,000 GB free each
 # month. A relayed voice call moves ~0.6 MB a minute, video ~9 MB. Even
@@ -113,6 +118,10 @@ CALL_VIDEO_MINUTE = usd(0.05 * 9 / 1024)
 # ── Images ───────────────────────────────────────────────────────────────────
 # AI Showcase covers: fal.ai FLUX.1 Kontext [pro], $0.04 an image.
 AI_SHOWCASE_IMAGE = usd(0.04)
+# Covers are made while a listing is posted, and a seller rarely keeps the
+# first one: a look, then another look or a retry. Assumption until the
+# app's cover step is measured.
+AI_COVER_TRIES_PER_LISTING = 3
 
 
 # ── Platform infrastructure at planning scale ────────────────────────────────

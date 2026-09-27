@@ -40,6 +40,7 @@ import 'screens/dispute_screen.dart';
 import 'screens/verification_screen.dart';
 import 'screens/boost_screen.dart';
 import 'screens/review_screen.dart';
+import 'features/premium/presentation/premium_screen.dart';
 import 'features/stores/presentation/my_store_screen.dart';
 import 'features/stores/presentation/setup/store_setup_screen.dart';
 import 'features/stores/presentation/store_home_screen.dart';
@@ -569,6 +570,10 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/dispute':          (_) => const DisputeScreen(),
         '/verify':           (_) => const VerificationScreen(),
         '/boost':            (_) => const BoostScreen(),
+        // Arguments: the plan to pick first (a refused feature's upgrade_to).
+        '/premium':          (ctx) => PremiumScreen(
+              highlight: ModalRoute.of(ctx)?.settings.arguments as String?,
+            ),
         '/review':           (_) => const ReviewScreen(),
         '/store-setup':      (_) => const StoreSetupScreen(),
         // The old name of the store-setup route; kept so any link to it

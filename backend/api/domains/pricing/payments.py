@@ -263,40 +263,33 @@ async def _fail(db: AsyncSession, payment: ListingPayment, reason: str) -> None:
 
 
 async def process_callback(db: AsyncSession, payload: dict) -> None:
-    stk = (payload or {}).get("Body", {}).get("stkCallback", {})
-    checkout_id = stk.get("CheckoutRequestID")
-    if not checkout_id:
+    result = mpesa_stk.parse_callback(payload)
+    if not result.checkout_request_id:
         return
-    payment = await _locked_payment(db, ListingPayment.checkout_request_id == checkout_id)
+    payment = await _locked_payment(db, ListingPayment.checkout_request_id == result.checkout_request_id)
     if payment is None:
-        logger.warning("[listing_fee] callback for unknown checkout %s", checkout_id)
+        logger.warning("[listing_fee] callback for unknown checkout %s", result.checkout_request_id)
         return
     if payment.processed:
         await db.rollback()
         return
 
-    if str(stk.get("ResultCode")) != "0":
-        await _fail(db, payment, stk.get("ResultDesc") or "not completed")
+    if not result.succeeded:
+        await _fail(db, payment, result.description)
         return
 
-    items = {i.get("Name"): i.get("Value") for i in stk.get("CallbackMetadata", {}).get("Item", [])}
-    try:
-        reported = float(items.get("Amount"))
-    except (TypeError, ValueError):
-        reported = None
-    receipt = str(items.get("MpesaReceiptNumber") or "") or None
-    if reported is None or abs(reported - payment.amount) >= 0.01:
+    if not mpesa_stk.amount_matches(result, payment.amount):
         # The amount asked for is the authority; a callback's figure is a
         # claim. A forged callback claiming KES 1 must not buy six months.
-        reason = (f"Listing fee callback for payment {payment.id} reported {reported}, "
-                  f"expected {payment.amount} (receipt {receipt}) - not applied")
+        reason = (f"Listing fee callback for payment {payment.id} reported {result.amount}, "
+                  f"expected {payment.amount} (receipt {result.receipt}) - not applied")
         logger.error("[listing_fee] AMOUNT_MISMATCH %s", reason)
         await record_audit(db, "system", "listing_fee_amount_mismatch", "listing", payment.listing_id, reason)
         from api.core.reconciliation import report_reconciliation
         report_reconciliation("listing_fee_amount_mismatch", deal_id=None, reason=reason)
         await _fail(db, payment, "amount_mismatch")
         return
-    await _settle(db, payment, receipt)
+    await _settle(db, payment, result.receipt)
 
 
 def _payment_dict(payment: ListingPayment, listing: Optional[Listing]) -> dict:
@@ -329,13 +322,11 @@ async def payment_status(db: AsyncSession, user_id: str, payment_id: str) -> dic
             answer = await mpesa_stk.stk_query(payment.checkout_request_id)
         except mpesa_stk.MpesaUnavailable:
             answer = {}
-        # ResultCode is only there once the prompt has ended; while it is
-        # still open Daraja answers with an errorCode instead.
-        code = answer.get("ResultCode")
-        if code is not None and str(code) != "":
+        outcome = mpesa_stk.query_outcome(answer)
+        if outcome is not None:
             locked = await _locked_payment(db, ListingPayment.id == payment.id)
             if locked is not None and not locked.processed:
-                if str(code) == "0":
+                if outcome:
                     # Our own authenticated question about our own prompt,
                     # whose amount the payer cannot change.
                     await _settle(db, locked, None)

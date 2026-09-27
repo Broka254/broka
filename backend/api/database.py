@@ -206,19 +206,11 @@ class User(Base):
     apns_voip_token    = Column(String, nullable=True)
     is_admin           = Column(Boolean, default=False, nullable=False)
     last_seen          = Column(DateTime, nullable=True)  # updated by /auth/heartbeat
-    # NEW 2026-08-29: minimal seam for the AI Showcase premium gate. There
-    # is no subscription/billing system anywhere in this codebase yet (the
-    # closest thing, verify_tier "basic"/"gold" above, is a paid one-time
-    # SELLER VERIFICATION, not a recurring feature-access plan - a
-    # different concept) and the showcase spec is explicit that one must
-    # not be built for this feature. This is deliberately just a bare
-    # boolean, not a plan/expiry/billing model - the smallest thing an
-    # entitlement check can look at now, and a real subscription system
-    # can set later without a schema change. Currently irrelevant in
-    # practice: SHOWCASE_AI_REQUIRE_PREMIUM defaults off during the
-    # debugging/testing phase (see api/core/config.py), so
-    # is_premium_user() lets everyone through regardless of this value
-    # until that's flipped on.
+    # NEW 2026-08-29: was the AI Showcase's premium seam, a bare flag for a
+    # subscription system that did not exist yet. Nothing reads it now:
+    # plans are the subscriptions table (api/models/subscription.py) and
+    # api/domains/premium/entitlements.py decides what a user may do. Kept
+    # only because production has the column.
     is_premium         = Column(Boolean, default=False, nullable=False)
     # NEW v3.0: trust score (0-100) computed by fraud engine
     trust_score        = Column(Integer, default=100, nullable=True)
@@ -1171,6 +1163,7 @@ async def init_db():
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
         ("api.models.listing_payment", ("ListingPayment",)),
+        ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))

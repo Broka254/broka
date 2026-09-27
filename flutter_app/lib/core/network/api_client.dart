@@ -17,7 +17,11 @@ class ApiException implements Exception {
   /// ({"code": "AUCTION_TERMS_LOCKED", "message": ...}).
   final String? code;
 
-  const ApiException(this.statusCode, this.message, {this.code});
+  /// The rest of a structured `detail`, when there is one - a 402 from a
+  /// premium feature says which plan would include it ("upgrade_to").
+  final Map<String, dynamic>? details;
+
+  const ApiException(this.statusCode, this.message, {this.code, this.details});
   @override
   String toString() => 'ApiException($statusCode): $message';
 }
@@ -210,6 +214,7 @@ class ApiClient {
 
     String message = 'Request failed';
     String? code = response.headers['x-error-code'];
+    Map<String, dynamic>? details;
     try {
       final decoded = jsonDecode(response.body);
       final detail = decoded is Map ? (decoded['detail'] ?? decoded['message']) : null;
@@ -221,6 +226,7 @@ class ApiClient {
       } else if (detail is Map) {
         message = detail['message'] as String? ?? message;
         code ??= detail['code'] as String?;
+        details = detail.cast<String, dynamic>();
       } else if (detail is List && detail.isNotEmpty) {
         message = validationMessage(detail.first);
       }
@@ -228,7 +234,7 @@ class ApiClient {
       message = response.body.isNotEmpty ? response.body : message;
     }
 
-    throw ApiException(response.statusCode, message, code: code);
+    throw ApiException(response.statusCode, message, code: code, details: details);
   }
 
   /// One of FastAPI's 422 errors ({"loc": ["body", "price"], "msg": ...})

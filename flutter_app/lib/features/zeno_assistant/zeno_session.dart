@@ -397,12 +397,20 @@ class ZenoSession extends ChangeNotifier {
         _guideFolded = false;
         notifyListeners();
         _afterReply(epoch);
-      case Failure():
+      case Failure(:final message, :final statusCode):
         _history.removeLast();
         if (identical(_chat, chat)) chat?.sessionFailed(text);
         if (epoch != _epoch) return;
         _thinking = false;
-        _reply = "I couldn't reach Zeno just now. Try again in a moment.";
+        if (statusCode == 402) {
+          // Voice mode needs a plan (or this month's requests are used):
+          // say so in the server's words, and stop listening - every
+          // further sentence would be refused the same way.
+          _reply = message;
+          pauseMic();
+        } else {
+          _reply = "I couldn't reach Zeno just now. Try again in a moment.";
+        }
         notifyListeners();
     }
   }

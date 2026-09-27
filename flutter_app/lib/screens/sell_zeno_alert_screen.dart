@@ -19,6 +19,11 @@
 // on to the Listing fee screen. Paid, it celebrates as before; not paid, it
 // says the listing is saved and offers to pay now or later (the Seller
 // Dashboard lists it until it is paid).
+//
+// Texts from Zeno are premium (PRICING.md section 4). While plans are on,
+// a seller whose plan has no texts left is told before answering that the
+// alert will come as a notification in BROKA instead - the sweep skips the
+// SMS for them - and where the plans are.
 import 'dart:async';
 import 'dart:math';
 
@@ -30,6 +35,8 @@ import '../core/utils/result.dart';
 import '../features/listing_fee/data/listing_fee_repository.dart';
 import '../features/listing_fee/domain/listing_fee.dart';
 import '../features/listing_fee/presentation/listing_fee_screen.dart';
+import '../features/premium/data/premium_repository.dart';
+import '../features/premium/domain/premium.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/listing_publisher.dart';
@@ -64,8 +71,12 @@ class SellZenoAlertScreen extends StatefulWidget {
   /// For tests: the listing-fee quote and payment.
   final ListingFeeRepository? feeRepository;
 
+  /// For tests: what the seller's plan leaves of texts.
+  final PremiumRepository? premiumRepository;
+
   const SellZenoAlertScreen({
     super.key, required this.data, this.publisher, this.question, this.feeRepository,
+    this.premiumRepository,
   });
   @override
   State<SellZenoAlertScreen> createState() => _SellZenoAlertScreenState();
@@ -91,6 +102,10 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   // What listing will cost, shown before Go live - null while fees are off
   // or the quote hasn't come (it is a courtesy, not a gate).
   ListingFeeQuote? _fee;
+  // Plans are on and the seller's has no texts left: "yes" would bring a
+  // notification, not an SMS, and the screen says so.
+  bool _smsNeedsPlan = false;
+
   // The listing Go live created but that still waits for its fee: the
   // button now reopens the Listing fee screen instead of publishing again.
   String? _unpaidListingId;
@@ -106,6 +121,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     _celebrate = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
     _question = widget.question;
     _loadFee();
+    _loadPlan();
     if (_question == null) {
       ZenoSmsPrompts.next(sellerName: ApiService.currentUserName, itemName: _data.name)
           .then((q) {
@@ -144,6 +160,19 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     );
     if (!mounted) return;
     if (r case Success(:final data) when data.feesEnabled) setState(() => _fee = data);
+  }
+
+  Future<void> _loadPlan() async {
+    final r = await (widget.premiumRepository ?? premiumRepository).me();
+    if (!mounted) return;
+    if (r case Success(:final data)) {
+      setState(() => _smsNeedsPlan = !data.canUse(PremiumFeature.sms));
+    }
+  }
+
+  Future<void> _seePlans() async {
+    await Navigator.of(context).pushNamed('/premium', arguments: 'plus');
+    if (mounted) _loadPlan();
   }
 
   /// Opens the Listing fee screen for the listing just created, and
@@ -307,7 +336,9 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               key: const Key('sell-sms-yes'),
               emoji: '📲',
               title: 'Yes, SMS me',
-              subtitle: 'One text per buyer, only if you haven\'t replied - never at night.',
+              subtitle: _smsNeedsPlan
+                  ? 'Texts come with a BROKA plan. Without one, Zeno tells you in BROKA instead.'
+                  : 'One text per buyer, only if you haven\'t replied - never at night.',
               selected: _data.smsAlerts == true,
               accent: BrokaColors.neonGreen,
               onTap: () => _choose(true),
@@ -327,6 +358,18 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               onTap: () => _choose(false),
             ),
           ),
+          if (_smsNeedsPlan)
+            _AfterQuestion(
+              visible: _questionDone,
+              index: 3,
+              child: TextButton.icon(
+                key: const Key('sell-sms-plans'),
+                onPressed: _seePlans,
+                icon: const Icon(Icons.workspace_premium_rounded, color: BrokaColors.gold, size: 16),
+                label: const Text('See plans with texts', style: TextStyle(
+                    color: BrokaColors.gold, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              ),
+            ),
           const SizedBox(height: 16),
           _summary(),
           if (_unpaidListingId != null) _savedUnpaid()
