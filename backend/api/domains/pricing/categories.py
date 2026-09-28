@@ -50,9 +50,12 @@ class CategoryPricing:
 
 _TABLE = [
     #               name                  prior  chats   max  days     typical  memory
-    CategoryPricing("Automobiles",          0.45,  2.5, 1500,   60,    800_000, 360),
-    CategoryPricing("Property",             0.40,  2.5, 1500,   75,  3_000_000, 360),
-    CategoryPricing("Land",                 0.35,  2.0, 1500,  120,  1_500_000, 360),
+    # Land, cars and property cap at KES 3,000 a month: at 1,500 the square
+    # root of the price hit the cap at KES 2.25M, so a KES 20M house paid
+    # what a KES 2.25M plot did. Nothing under KES 2.25M is affected.
+    CategoryPricing("Automobiles",          0.45,  2.5, 3000,   60,    800_000, 360),
+    CategoryPricing("Property",             0.40,  2.5, 3000,   75,  3_000_000, 360),
+    CategoryPricing("Land",                 0.35,  2.0, 3000,  120,  1_500_000, 360),
     CategoryPricing("Electronics",          0.80,  1.5,  400,   14,     20_000),
     CategoryPricing("Fashion",              0.70,  0.8,  100,   10,      1_500),
     CategoryPricing("Agriculture",          0.50,  1.2,  600,   21,     10_000),

@@ -97,6 +97,14 @@ class TestListPrice:
         for c in CATEGORIES.values():
             assert engine.list_price(c, 10**9) <= c.max_fee + 1e-9
 
+    def test_a_dearer_house_pays_more_than_a_cheap_plot(self):
+        """At a KES 1,500 cap the square root reached it at KES 2.25M, so a
+        KES 20M house paid what a KES 2.25M one did."""
+        property_ = CATEGORIES["Property"]
+        assert engine.list_price(property_, 20_000_000) > engine.list_price(property_, 2_250_000)
+        # Nothing under KES 2.25M moved.
+        assert engine.list_price(LAND, 1_500_000) < 1_500
+
     def test_quantity_raises_the_fee_gently(self):
         one = engine.list_price(ELECTRONICS, 15_000, 1)
         ten = engine.list_price(ELECTRONICS, 15_000, 10)
@@ -106,24 +114,26 @@ class TestListPrice:
 
     def test_cheap_items_pay_at_most_five_percent_of_their_value(self):
         assert engine.list_price(FASHION, 300) == pytest.approx(0.05 * 300)
-        # ...unless that is under cost: then cost.
+        # ...unless that is under cost: then cost, with the VAT on it.
         assert engine.list_price(FASHION, 50) == pytest.approx(
-            costs.listing_month_cost(FASHION.chats_per_month))
+            costs.with_vat(costs.listing_month_cost(FASHION.chats_per_month)))
 
     def test_never_below_what_the_listing_costs(self):
-        """The best record plus the full launch offer still covers the cost.
+        """The best record plus the full launch offer still covers the cost -
+        with what BROKA keeps once VAT is taken out.
 
         Regression: a fee sitting on the floor (KES 7.12) rounded to the
-        nearest shilling came out at KES 7 - under cost.
+        nearest shilling came out at KES 7 - under cost. With VAT the floor
+        is 7.12 x 1.16 = 8.26, so 9.
         """
         best = engine.SellerRecord(completed_weight=500, completed_deals=500)
         for c in CATEGORIES.values():
             for price in (10, 300, 5_000, 2_000_000):
                 q = engine.quote(c, price, 1, best, 0)
                 cost = costs.listing_month_cost(c.chats_per_month)
-                assert q["monthly_fee"] >= cost
-                assert all(o["total"] >= o["months"] * cost for o in q["options"])
-        assert engine.monthly_fee(15, 0.4, 0.3, 7.12) == 8
+                assert costs.net_of_vat(q["monthly_fee"]) >= cost
+                assert all(costs.net_of_vat(o["total"]) >= o["months"] * cost for o in q["options"])
+        assert engine.monthly_fee(15, 0.4, 0.3, 7.12) == 9
 
     def test_the_fee_never_exceeds_the_list_price(self):
         worst = engine.SellerRecord(leaked_weight=50, leaked_deals=50)
@@ -198,10 +208,11 @@ ALL_PLANS = list(plans.PREMIUM_PLANS) + list(plans.STORE_PLANS)
 class TestPlans:
     @pytest.mark.parametrize("plan", ALL_PLANS, ids=lambda p: p.id)
     def test_no_plan_loses_money_on_its_heaviest_user(self, plan):
+        """Prices include VAT, so the rule is checked on what BROKA keeps."""
         worst = plan.max_monthly_cost()
-        assert plan.monthly_price >= plans.MIN_MARGIN_MULTIPLE * worst
+        assert costs.net_of_vat(plan.monthly_price) >= plans.MIN_MARGIN_MULTIPLE * worst
         for period in plans.period_prices(plan.monthly_price):
-            assert period["total"] / period["months"] >= worst, period
+            assert costs.net_of_vat(period["total"] / period["months"]) >= worst, period
 
     def test_each_premium_tier_gives_at_least_as_much_as_the_one_below(self):
         tiers = plans.PREMIUM_PLANS
@@ -228,12 +239,12 @@ class TestPlans:
         assert 0 < plans.FREE_TRIAL["ai_covers"] < costs.AI_COVER_TRIES_PER_LISTING
 
     def test_the_setup_fee_covers_setting_a_store_up(self):
-        assert plans.STORE_SETUP_FEE >= costs.STORE_SETUP * costs.OVERHEAD
+        assert costs.net_of_vat(plans.STORE_SETUP_FEE) >= costs.STORE_SETUP * costs.OVERHEAD
 
     def test_commission(self):
         c = plans.commission()
-        assert c["negotiated"] == {"broka_percent": 3.49, "escrow_provider_percent": 1.0,
-                                   "total_percent": 4.49}
+        assert c["negotiated"] == {"broka_percent": 3.49, "broka_minimum_kes": 20.0,
+                                   "escrow_provider_percent": 1.0, "total_percent": 4.49}
         assert c["auction"]["total_percent"] == 5.0
 
 
@@ -440,3 +451,26 @@ class TestDealCommission:
                 current_user_id=buyer.id)
         assert result["commission"] == pytest.approx(100_000 * rate)
         assert settings.commission_rate + settings.escrow_provider_fee_rate == pytest.approx(0.0449)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("listing_type, price, expected", [
+        (ListingType.direct, 300, 20.0), (ListingType.direct, 573, 20.0),
+        (ListingType.direct, 1_500, 52.35),
+        (ListingType.auction, 300, 20.0), (ListingType.auction, 1_500, 60.0)])
+    async def test_never_under_the_minimum(self, listing_type, price, expected):
+        """3.49% of a KES 300 item is KES 10.47 - less than the deal costs
+        BROKA to carry. Above ~KES 573 the percentage is more than the
+        minimum and nothing changes."""
+        from api.domains.escrow.service import EscrowService
+
+        seller, _ = await _user(SellerTier.short_term)
+        buyer, _ = await _user()
+        async with AsyncSessionLocal() as db:
+            listing = Listing(seller_id=seller.id, name="Item", category="Fashion",
+                              price=price, lat=-1.28, lng=36.82, listing_type=listing_type)
+            db.add(listing)
+            await db.commit()
+            result = await EscrowService(db).finalize_deal(
+                listing_id=listing.id, buyer_id=buyer.id, agreed_price=price,
+                current_user_id=buyer.id)
+        assert result["commission"] == pytest.approx(expected)

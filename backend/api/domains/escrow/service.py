@@ -110,9 +110,12 @@ def _commission(price: float, listing_type=None) -> float:
     # keyed on the listing rather than on who calls finalize_deal - the
     # auction close and a buyer tapping "finalize" on an auction listing
     # are the same sale and must cost the same.
+    #
+    # Never under settings.commission_minimum_kes: on a KES 300 item 3.49%
+    # is KES 10.47, less than the deal costs BROKA to carry.
     rate = (settings.auction_commission_rate if listing_type == ListingType.auction
             else settings.commission_rate)
-    return pct_of(price, rate)
+    return max(money(settings.commission_minimum_kes), pct_of(price, rate))
 
 
 class EscrowService:

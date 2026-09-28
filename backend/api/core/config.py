@@ -328,6 +328,11 @@ class Settings:
     commission_rate: float = 0.0349
     auction_commission_rate: float = 0.04
     escrow_provider_fee_rate: float = 0.01
+    # BROKA's share is never less than this, in KES. A deal costs BROKA about
+    # KES 13 to carry (Zeno's negotiation, a share of disputes, texts), so
+    # 3.49% on an item under ~KES 440 would be carried at a loss once VAT is
+    # taken out. Only items under ~KES 573 are affected.
+    commission_minimum_kes: float = 20.0
 
     # ── Listing fees (PRICING.md) ─────────────────────────────────────────────
     # Off until the app build with the Listing fee screen is the one sellers

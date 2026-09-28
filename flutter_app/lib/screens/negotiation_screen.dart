@@ -977,9 +977,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           Text('Price: ${listing.formattedPrice}',
               style: const TextStyle(color: BrokaColors.neonGreen, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          // Negotiated deals: BROKA's 3.49% plus the escrow provider's 1%
-          // (PRICING.md). The payment screen shows the exact amounts.
-          const Text('BROKA fee 3.49% + escrow 1%',
+          // Negotiated deals: BROKA's 3.49% (never under KES 20) plus the
+          // escrow provider's 1% (PRICING.md). The payment screen shows the
+          // exact amounts.
+          const Text('BROKA fee 3.49% (min. KES 20) + escrow 1%',
               style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
         ]),
         actions: [

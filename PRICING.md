@@ -13,20 +13,21 @@ premium feature is paid for before it costs BROKA anything.
 
 Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 2026). Provider prices were checked in September 2026; sources are at the end.
+**Every price BROKA charges includes VAT** (§1, "VAT").
 
 ## The prices at a glance
 
 | What | Price |
 |---|---|
-| **Commission**, negotiated deal | Buyer pays **4.49%** on top of the price: BROKA 3.49% + E-Confirm 1% |
-| **Commission**, auction | Buyer pays **5%**: BROKA 4% + E-Confirm 1% |
-| **Listing fee** | Monthly, per listing: `f = C × R`. KES 8–1,500 a month depending on category, value, quantity and the seller's record. 1 to 6 months at a time; longer is cheaper per month |
+| **Commission**, negotiated deal | Buyer pays **4.49%** on top of the price: BROKA 3.49% (never under KES 20) + E-Confirm 1% |
+| **Commission**, auction | Buyer pays **5%**: BROKA 4% (never under KES 20) + E-Confirm 1% |
+| **Listing fee** | Monthly, per listing: `f = C × R`. KES 9–3,000 a month depending on category, value, quantity and the seller's record. **Charged from day one, 30% off at launch** (the launch offer, §2). 1 to 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
-| **Plus** | KES 169 / month: voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
-| **Pro** | KES 499 / month: Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
-| **Elite** | KES 1,249 / month: volume allowances, AI covers for ~20 listings, priority support |
+| **Plus** | KES 199 / month: voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
+| **Pro** | KES 599 / month: Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
+| **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
 | **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus 2 AI cover tries |
-| **Store** | KES 299 to open (waived on 6+ months), then KES 249 (20 listings) to KES 4,999 (500 listings) a month; store listings pay no listing fee |
+| **Store** | KES 299 to open (waived on 6+ months), then KES 499 (20 listings) to KES 6,999 (500 listings) a month; store listings pay no listing fee |
 
 ---
 
@@ -45,7 +46,7 @@ marked *assumption* are estimates until the app logs the real numbers (see
 | | | Zeno as assistant / Buying Agent: ~3,000 in, 250 out | 0.07 per turn |
 | | | Posting a listing: price help, description help, scam check | 0.21 per listing |
 | | | Auto-negotiating one seller for a buyer: ~10 exchanges | 1.92 each |
-| **SMS** | KES 0.25-0.80 a message in Kenya's bulk market; Mobitech does not publish its rate | Seller nudges, match alerts, OTPs | **0.50** |
+| **SMS** | Mobitech: KES 0.35 a message, whatever its length (Kenya's bulk market runs KES 0.25-0.80) | Seller nudges, match alerts, OTPs | **0.35** |
 | **Push (FCM)** | Free | Every routine notification | 0 |
 | **Speech to text** | Deepgram Nova-3 streaming $0.0077/min (a $0.0048 promotion is running); AssemblyAI Universal-Streaming $0.15/hour | Voice mode. Costed at Deepgram's regular rate so switching providers never makes a plan lose money | 1.00 per minute |
 | **Text to speech** | Microsoft Edge TTS: free, but an unofficial endpoint. A paid neural voice is ~$16 / 1M characters | Zeno speaking. A reserve is kept in case the free voice goes away | 0.93 per minute (reserve) |
@@ -64,57 +65,78 @@ reach, not today's.
 
 | Cost | Rate | Sizing | KES / month |
 |---|---|---|---|
-| **Google Cloud Run**, africa-south1 (Johannesburg, the nearest region; Tier 2 pricing) | $0.0000336 / vCPU-s, $0.0000035 / GiB-s, $0.40 / 1M requests, after a free 180,000 vCPU-s, 360,000 GiB-s, 2M requests | Two always-warm instances of 1 vCPU / 1 GiB: call signalling sockets and the 5-minute sweep need a live process. ~1,500 requests per user a month | 25,368 |
-| **Cloud SQL (PostgreSQL)** | db-custom-1-3840 ~$49/month in us-central1, SSD $0.22/GB; +30% for Africa (AWS's Cape Town premium over Virginia) | 1 vCPU, 3.75 GB, 50 GB SSD, backups | 10,670 |
-| **Redis** | Upstash: $0.20 per 100K commands pay-as-you-go (~$90 at this traffic), so a fixed plan | Rate limits, pub/sub, caches | 2,590 |
+| **Azure Container Apps**, South Africa North (the nearest Azure region) | $0.000024 / vCPU-s and $0.000003 / GiB-s while active, $0.40 / 1M requests, after a free 180,000 vCPU-s, 360,000 GiB-s, 2M requests. East US rates, +25% for South Africa North (*assumption*, near AWS's 31% for Cape Town) | Two always-on replicas of 1 vCPU / 2 GiB: call-signalling sockets and the 5-minute sweep need a live process, and an open socket keeps a replica billed as active. ~1,500 requests per user a month | 25,978 |
+| **Container Registry** | Basic, ~$5 | The images Container Apps runs | 648 |
+| **Azure Database for PostgreSQL** (flexible server) | General Purpose D2ds_v5 ~$125/month + storage ~$0.115/GiB, +25% region | 2 vCores, 8 GiB, 64 GiB storage; backups included | 21,426 |
+| **Azure Cache for Redis** | Basic C1 ~$40/month, +25% region | Rate limits, pub/sub, idempotency keys, call state | 6,475 |
+| **Log Analytics** | ~$2.30/GB after 5 GB free | Container Apps logs, ~10 GB, with headroom | 1,943 |
 | **Cloudflare R2** | $0.015/GB-month after 10 GB free; no egress fees | ~25 GB of listing images | 159 |
-| **Internet egress** | $0.12/GB (Premium Tier) | API and sockets, ~20 MB per user; images come from R2 | 4,553 |
+| **Internet egress** | Azure Zone 3 (Africa): $0.181/GB after 100 GB free | API and sockets, ~20 MB per user; images come from R2 | 4,523 |
 | **Vercel Pro** ($20), **Sentry Team** ($26), logging headroom ($10) | | The web storefront (Hobby forbids commercial use); error tracking | 7,252 |
 | **App stores and domain** | Apple $99/year, Google Play $25 once, broka.co.ke ~KES 1,500/year | | 1,328 |
-| **Infrastructure total** | | | **51,919** |
+| **Infrastructure total** | | | **69,730** |
 | **Support and moderation** | One person, KES 40,000 | Reports, listing fixes, seller questions. Disputes are paid for by commission | 40,000 |
 
-Per active listing that is **KES 2.60 of infrastructure and KES 2.00 of
-support a month**.
+Per active listing that is **KES 3.49 of infrastructure and KES 2.00 of
+support a month**. (The first version of this page costed Google Cloud Run
+and Cloud SQL at KES 51,919; the API moved to Azure Container Apps.)
 
-**AWS instead of Google Cloud** comes out about the same: Fargate ~$29.55 per
-vCPU-month, RDS db.t4g.micro $15.33/month in Cape Town (31% over Virginia).
-Cloud Run is the better start because of its monthly free tier and
-scale-to-zero for batch jobs. (AWS App Runner stopped taking new customers
-in April 2026.)
+**Azure credits.** Microsoft for Startups gives $1,000 of Azure credit for 90
+days, then $4,000 for 180 days once the business is verified, with no
+investor needed (with a partner's referral, up to ~$100,000). At launch
+that covers the Azure part of the bill for about nine months. Credits are
+not in the prices: they end, and a price that needs them is a price that
+has to rise.
 
 ### The cost of one listing for a month
 
 ```
-cost = (AI to post it + chats x 14 messages x KES 0.12 + KES 2.60 infra + KES 2.00 support) x 1.15
+cost = (AI to post it + chats x 14 messages x KES 0.12 + KES 3.49 infra + KES 2.00 support) x 1.135
 ```
 
-The **1.15** is a 3% reserve for Turnover Tax (3% of gross receipts between
-KES 1M and 25M - confirm with an accountant) and 12% for what averages miss:
-fallback models dearer than DeepSeek, failed payments, refunds, spikes.
+The **1.135** is a 1.5% reserve for Turnover Tax (Kenya's rate on gross
+receipts since December 2024; it was 3% - confirm with an accountant) and
+12% for what averages miss: fallback models dearer than DeepSeek, failed
+payments, refunds, spikes.
 
-That gives **KES 6.50 to 10.50 per listing per month**, depending on how many
-buyers a category's listings draw. This is the floor: no listing is ever
-charged less, whatever its discounts.
+That gives **KES 7.45 to 11.36 per listing per month**, depending on how many
+buyers a category's listings draw. No listing is ever charged less than that
+plus VAT, whatever its discounts.
+
+### VAT
+
+Past the VAT threshold (KES 5M-8M of turnover a year - sources disagree;
+confirm with KRA) BROKA owes **16%** of every listing fee, plan and
+commission it sells. Every price here **includes VAT** from the start, and
+every "never under cost" rule is checked on what BROKA keeps once VAT is
+taken out (`costs.VAT_RATE`, `with_vat`, `net_of_vat`). So crossing the
+threshold never forces a price rise; before registration, the difference is
+margin.
 
 ### The cold-start gap
 
-At launch - say 2,000 listings and 1,500 users - the bill is about
-**KES 22,800 a month** (one Cloud Run instance KES 11,700, a small Cloud SQL
-KES 5,500, Vercel KES 2,600, the rest KES 3,000), or **KES 11.40 per
-listing**: four times the planning-scale cost. Charging early sellers that
-would price BROKA out of the market while it needs supply most, so fees are
-set at planning scale and the difference is a launch budget line, not a fee.
+At launch - say 2,000 listings and 1,500 users - the Azure bill is about
+**KES 33,200 a month** (one Container Apps replica KES 11,900, a Burstable
+B2s PostgreSQL, ~$50, KES 8,700, Redis Basic C0 KES 2,600, Vercel, Sentry and R2
+KES 7,400, the rest KES 2,600), or **KES 16.60 per listing**: nearly five
+times the planning-scale cost. Charging early sellers that would price
+BROKA out of the market while it needs supply most, so fees are set at
+planning scale and the difference is a launch budget line, not a fee.
 
-It is recovered quickly. At launch the bill is covered by any one of:
+That is why the listing fee is charged **from day one**: it is the income
+that arrives the moment a seller posts, before any deal has completed. At
+launch the bill is covered by any one of (before VAT registration, which
+launch-scale turnover is far below):
 
-- ~450 paid listings at a typical fee (~KES 50 above cost each), or
-- ~80 Pro subscribers, or
-- ~33 completed KES 20,000 phone deals a month (KES 698 commission each).
+- ~590 phone listings a month at the day-one fee (KES 59, launch offer
+  included; each costs ~KES 3 of Zeno), or
+- ~71 Pro subscribers at typical use, or
+- ~48 completed KES 20,000 phone deals a month (KES 698 commission each,
+  ~KES 13 to carry).
 
-To shrink the gap: run one instance with `min-instances=1` only in waking
-hours, or start in a Tier 1 region (europe-west1: ~30% cheaper, but further
-from Kenya) and move to Johannesburg with traffic.
+With the Azure credits (above) paying for Azure, what is left - Vercel,
+Sentry, R2, the domain and the app stores, ~KES 8,700 - is ~155 day-one
+phone listings.
 
 ### Languages
 
@@ -143,9 +165,11 @@ C = min(category maximum, cost + √price) × quantity factor
   fee by 41%. It is also where Zeno's longer negotiations, fraud screening
   and support on expensive items are paid for.
 - **Category maximum**: the most one item in the category ever pays a month
-  (Fashion KES 100, Electronics 400, Land/Automobiles/Property 1,500).
-  Land and cars land in the KES 800-1,500 band the design journal (Part XVI)
-  settled on.
+  (Fashion KES 100, Electronics 400, Land/Automobiles/Property 3,000).
+  Typical cars and plots still land in the KES 800-1,500 band the design
+  journal (Part XVI) settled on; the cap is 3,000, not 1,500, because at
+  1,500 the square root reached it at KES 2.25M and a KES 20M house paid
+  what a KES 2.25M plot did.
 - **Quantity factor** `1 + 0.5 × ln(units)`: 2 units ×1.35, 10 units ×2.15,
   100 units ×3.30, 200 units ×3.65. Two hundred phones cost 3.65 times one
   phone, not 200 times. It stops growing at 1,000 units; that seller wants a
@@ -205,7 +229,7 @@ Three refinements:
 ### The list price and today's price
 
 The seller sees C as the list price, crossed out, and C × R as today's price:
-"~~KES 150~~ **KES 84** - 44% off". The list price does not move from day to
+"~~KES 150~~ **KES 85** - 43% off". The list price does not move from day to
 day; the discount is the seller's record at work. A seller at KES 60 on a
 KES 100 list knows they are getting 40% off, not that the fee "changed to 60".
 
@@ -245,9 +269,11 @@ costs 26% less per month than renewing."*
 
 ### The launch offer (kept from the design journal)
 
-Until a category has real trade, every listing in it is cheaper: 30% off at
+The listing fee is charged **from day one** - it is the income BROKA has
+before any deal completes (§1, "The cold-start gap") - but at a discount:
+until a category has real trade, every listing in it is cheaper, 30% off at
 the start, fading as the category completes deals (18% after 50, 11% after
-100, gone after ~340). This is the journal's cold-start subsidy (Parts
+100, gone after ~340). The "Day one" columns below are these prices. This is the journal's cold-start subsidy (Parts
 XV-XVI) applied, as Part XVI corrected, to the listing fee - it answers "why
 pay when Jiji is free" while BROKA has no track record, without giving the
 first sellers a free ride or setting a cutoff date to rush toward. Set
@@ -255,25 +281,27 @@ first sellers a free ride or setting a cutoff date to rush toward. Set
 
 ### Worked examples
 
-After the launch offer has faded. "Proven" is 60 completed and 1 leaked;
-"leaky" is 10 completed and 10 leaked.
+"Day one" is the monthly fee with the full launch offer; the other columns
+are after it has faded. "Proven" is 60 completed and 1 leaked; "leaky" is 10
+completed and 10 leaked.
 
-| Listing | Seller | List price | R | Monthly | 3 months | 6 months | Recommended |
-|---|---|---|---|---|---|---|---|
-| Shirt, KES 300 | new | 15 | 0.70 | 11 | 27 | 49 | 1 month |
-| Shirt, KES 300 | proven | 15 | 0.45 | 8 | 22 | 43 | 1 month |
-| Dress, KES 1,500 | new | 46 | 0.70 | 32 | 80 | 140 | 1 month |
-| Phone, KES 20,000 | new | 150 | 0.56 | 84 | 210 | 370 | 1 month |
-| Phone, KES 20,000 | proven | 150 | 0.45 | 67 | 165 | 295 | 1 month |
-| Phone, KES 20,000 | leaky | 150 | 0.84 | 125 | 310 | 555 | 1 month |
-| 200 phones, KES 15,000 each | new | 480 | 0.56 | 270 | 670 | 1,190 | 4 months |
-| Sofa, KES 25,000 | new | 165 | 0.81 | 135 | 335 | 595 | 2 months |
-| Sofa, KES 25,000 | proven | 165 | 0.46 | 76 | 190 | 335 | 2 months |
-| Car, KES 800,000 | new | 905 | 0.95 | 865 | 2,150 | 3,830 | 3 months |
-| Car, KES 800,000 | proven | 905 | 0.48 | 430 | 1,070 | 1,900 | 3 months |
-| Plot, KES 1.5M | new | 1,230 | 0.98 | 1,210 | 3,010 | 5,350 | 5 months |
-| Plot, KES 1.5M | proven | 1,230 | 0.49 | 600 | 1,490 | 2,650 | 5 months |
-| House to let, KES 30,000/month | new | 185 | 0.97 | 180 | 450 | 795 | 1 month |
+| Listing | Seller | List price | R | Day one | Monthly | 3 months | 6 months | Recommended |
+|---|---|---|---|---|---|---|---|---|
+| Shirt, KES 300 | new | 15 | 0.70 | 10 | 11 | 28 | 56 | 1 month |
+| Shirt, KES 300 | proven | 15 | 0.45 | 10 | 10 | 28 | 56 | 1 month |
+| Dress, KES 1,500 | new | 47 | 0.70 | 23 | 33 | 82 | 145 | 1 month |
+| Phone, KES 20,000 | new | 150 | 0.56 | 59 | 85 | 210 | 375 | 1 month |
+| Phone, KES 20,000 | proven | 150 | 0.44 | 47 | 67 | 165 | 295 | 1 month |
+| Phone, KES 20,000 | leaky | 150 | 0.84 | 89 | 125 | 310 | 555 | 1 month |
+| 200 phones, KES 15,000 each | new | 480 | 0.56 | 190 | 270 | 670 | 1,190 | 4 months |
+| Sofa, KES 25,000 | new | 165 | 0.81 | 95 | 135 | 335 | 595 | 2 months |
+| Sofa, KES 25,000 | proven | 165 | 0.45 | 53 | 76 | 190 | 335 | 2 months |
+| Car, KES 800,000 | new | 905 | 0.95 | 605 | 865 | 2,150 | 3,830 | 3 months |
+| Car, KES 800,000 | proven | 905 | 0.47 | 295 | 420 | 1,050 | 1,860 | 3 months |
+| Plot, KES 1.5M | new | 1,240 | 0.98 | 850 | 1,210 | 3,010 | 5,350 | 5 months |
+| Plot, KES 1.5M | proven | 1,240 | 0.47 | 410 | 585 | 1,460 | 2,590 | 5 months |
+| House, KES 10M | new | 3,000 | 0.97 | 2,040 | 2,910 | 7,240 | 12,880 | 5 months |
+| House to let, KES 30,000/month | new | 185 | 0.97 | 125 | 180 | 450 | 795 | 1 month |
 
 ### The category table: a risk coefficient for every category
 
@@ -281,29 +309,29 @@ There are no completed deals yet, so each category's completion rate is a
 starting guess, written down with its reason. It is what a new seller is
 priced on, and what every seller's record is smoothed toward.
 
-| Category | Completion rate (guess) | New seller's R | Cost / month | Max fee | Typical price | New seller pays | Why |
-|---|---|---|---|---|---|---|---|
-| Electronics | 80% | 0.56 | 8.50 | 400 | 20,000 | 84 | Phones are Nairobi's most-scammed item online; escrow answers a real fear |
-| Gaming | 80% | 0.56 | 7.91 | 300 | 15,000 | 73 | Same buyers, same fear |
-| Baby & Kids | 72% | 0.67 | 7.12 | 150 | 3,000 | 41 | Small, shippable, bought from strangers |
-| Sports & Fitness | 72% | 0.67 | 7.12 | 200 | 5,000 | 52 | |
-| Books & Education | 72% | 0.67 | 6.52 | 100 | 1,000 | 26 | |
-| Music & Instruments | 72% | 0.67 | 7.12 | 300 | 15,000 | 87 | |
-| Arts & Crafts | 72% | 0.67 | 6.72 | 150 | 3,000 | 41 | |
-| Fashion | 70% | 0.70 | 7.12 | 100 | 1,500 | 32 | Low value; cash on delivery is common |
-| Beauty & Personal Care | 70% | 0.70 | 6.72 | 100 | 1,500 | 32 | |
-| Health & Medical | 68% | 0.73 | 6.72 | 200 | 3,000 | 45 | |
-| Other | 65% | 0.77 | 7.12 | 200 | 3,000 | 48 | Middle of the range |
-| Home & Furniture | 62% | 0.81 | 7.51 | 300 | 15,000 | 105 | Bulky; buyers inspect and pay on delivery |
-| Food & Beverages | 55% | 0.89 | 7.12 | 100 | 1,000 | 34 | Perishable, local, cash |
-| Construction | 55% | 0.89 | 7.51 | 600 | 20,000 | 135 | Site deliveries, paid on arrival |
-| Business & Industrial | 55% | 0.89 | 7.51 | 800 | 100,000 | 290 | Invoices and bank transfers |
-| Pets & Animals | 55% | 0.89 | 7.51 | 400 | 10,000 | 96 | Seen and paid in person |
-| Agriculture | 50% | 0.93 | 7.91 | 600 | 10,000 | 100 | Farm-gate and market-day cash |
-| Automobiles | 45% | 0.95 | 10.49 | 1,500 | 800,000 | 865 | Inspection, logbook transfer, bank payment |
-| Services | 45% | 0.95 | 7.51 | 300 | 3,000 | 59 | Paid after the job |
-| Property | 40% | 0.97 | 10.49 | 1,500 | 3,000,000 | 1,460 | Agents; rent paid straight to landlords |
-| Land | 35% | 0.98 | 9.50 | 1,500 | 1,500,000 | 1,210 | Closes through advocates after a title search |
+| Category | Completion rate (guess) | New seller's R | Cost / month | Max fee | Typical price | New seller, day one | New seller pays | Why |
+|---|---|---|---|---|---|---|---|---|
+| Electronics | 80% | 0.56 | 9.40 | 400 | 20,000 | 59 | 85 | Phones are Nairobi's most-scammed item online; escrow answers a real fear |
+| Gaming | 80% | 0.56 | 8.82 | 300 | 15,000 | 52 | 74 | Same buyers, same fear |
+| Baby & Kids | 72% | 0.67 | 8.03 | 150 | 3,000 | 29 | 42 | Small, shippable, bought from strangers |
+| Sports & Fitness | 72% | 0.67 | 8.03 | 200 | 5,000 | 37 | 53 |  |
+| Books & Education | 72% | 0.67 | 7.45 | 100 | 1,000 | 18 | 26 |  |
+| Music & Instruments | 72% | 0.67 | 8.03 | 300 | 15,000 | 61 | 87 |  |
+| Arts & Crafts | 72% | 0.67 | 7.64 | 150 | 3,000 | 29 | 42 |  |
+| Fashion | 70% | 0.70 | 8.03 | 100 | 1,500 | 23 | 33 | Low value; cash on delivery is common |
+| Beauty & Personal Care | 70% | 0.70 | 7.64 | 100 | 1,500 | 23 | 32 |  |
+| Health & Medical | 68% | 0.73 | 7.64 | 200 | 3,000 | 32 | 46 |  |
+| Other | 65% | 0.77 | 8.03 | 200 | 3,000 | 34 | 49 | Middle of the range |
+| Home & Furniture | 62% | 0.81 | 8.43 | 300 | 15,000 | 75 | 105 | Bulky; buyers inspect and pay on delivery |
+| Food & Beverages | 55% | 0.89 | 8.03 | 100 | 1,000 | 25 | 35 | Perishable, local, cash |
+| Construction | 55% | 0.89 | 8.43 | 600 | 20,000 | 93 | 135 | Site deliveries, paid on arrival |
+| Business & Industrial | 55% | 0.89 | 8.43 | 800 | 100,000 | 200 | 290 | Invoices and bank transfers |
+| Pets & Animals | 55% | 0.89 | 8.43 | 400 | 10,000 | 68 | 97 | Seen and paid in person |
+| Agriculture | 50% | 0.93 | 8.82 | 600 | 10,000 | 71 | 100 | Farm-gate and market-day cash |
+| Automobiles | 45% | 0.95 | 11.36 | 3,000 | 800,000 | 605 | 865 | Inspection, logbook transfer, bank payment |
+| Services | 45% | 0.95 | 8.43 | 300 | 3,000 | 42 | 60 | Paid after the job |
+| Property | 40% | 0.97 | 11.36 | 3,000 | 3,000,000 | 1,190 | 1,690 | Agents; rent paid straight to landlords |
+| Land | 35% | 0.98 | 10.38 | 3,000 | 1,500,000 | 850 | 1,210 | Closes through advocates after a title search |
 
 `GET /pricing/categories` serves this table. **Replace a guess with the
 measured rate once a category has about 200 completed deals** - one line in
@@ -345,16 +373,27 @@ stays free for everyone** - buyers are an auction's liquidity, and gating
 them would starve the sellers who pay. Typing to Zeno, negotiating yourself,
 dictating a message, and uploading your own cover photo stay free.
 
-**How the prices were set.** Each plan's price is at least **1.25× what it
-costs BROKA when its holder uses every allowance to the last unit**. No
-subscriber, however heavy, is served at a loss; a typical subscriber (about a
-third of the allowances) leaves ~74%. The allowances are fair-use caps, not
-"unlimited": voice and AI covers cost money per use, and an unlimited plan
-priced for the average user is one the heaviest users make unprofitable.
+**How the prices were set.** Two tests, in this order:
+
+1. **The floor (cost).** What BROKA keeps of the price once VAT is taken out
+   is at least **1.25× what the plan costs when its holder uses every
+   allowance to the last unit**. No subscriber, however heavy, is served at
+   a loss, before or after VAT registration; a typical subscriber (about a
+   third of the allowances) leaves ~75%. The allowances are fair-use caps,
+   not "unlimited": voice and AI covers cost money per use, and an
+   unlimited plan priced for the average user is one the heaviest users make
+   unprofitable.
+2. **The price (value).** Above the floor, a price is set by what the
+   feature is worth and by what Kenyans already pay for a monthly digital
+   service: Netflix Kenya KES 200 (Mobile) to 1,100 (Premium), Spotify
+   KES 419. Plus sits at a Netflix Mobile, Pro between Spotify and
+   Netflix Standard, Elite below Netflix Premium. Pro's worth to a buyer:
+   one negotiation Zeno wins (5% off a KES 20,000 phone is KES 1,000) pays
+   for the month.
 
 | | **Plus** | **Pro** | **Elite** |
 |---|---|---|---|
-| **Price / month** | **KES 169** | **KES 499** | **KES 1,249** |
+| **Price / month** (VAT included) | **KES 199** | **KES 599** | **KES 1,499** |
 | For | Buyers who want Zeno on their side, occasional sellers | People who buy or sell every week | People who trade for a living |
 | AI cover tries (≈ listings) | 6 (≈ 2) | 20 (≈ 7) | 60 (≈ 20) |
 | Voice requests (≈ minutes) | 90 (≈ 30) | 180 (≈ 60) | 360 (≈ 120) |
@@ -363,21 +402,20 @@ priced for the average user is one the heaviest users make unprofitable.
 | Negotiations Zeno opens for you | - | 25 | 50 |
 | Auctions hosted | - | 2 | 5 |
 | Priority support | - | - | 15 minutes |
-| Cost to BROKA, every allowance used | 130 | 394 | 988 |
-| Cost to BROKA, typical use | 43 | 131 | 329 |
-| Margin, typical use | 74% | 74% | 74% |
+| Kept after VAT | 172 | 516 | 1,292 |
+| Cost to BROKA, every allowance used | 124 | 377 | 950 |
+| Cost to BROKA, typical use | 43 | 129 | 323 |
+| Margin after VAT, typical use | 75% | 75% | 75% |
 
-**Why the prices went up from 149 / 399 / 999: AI covers.** The first
-version of this table forgot that the cover image made while posting a
-listing is a premium feature. It is the most expensive allowance per use
-after a support minute (KES 5.18 a try), and a seller rarely keeps the first
-try. Sized in listings - about three tries each - covers for a week of
-listings on Pro alone cost ~KES 104 at full use. At the old prices the 1.25×
-rule left room for only **4 / 7 / 28 tries** (one or two listings on Pro),
-which is not a feature a weekly seller can use. The alternative, if the old
-prices matter more than the covers, is to keep 149 / 399 / 999 with those
-4 / 7 / 28 tries; every other allowance is unchanged either way. Prepaying a
-year brings the new prices back to **135 / 399 / 999 a month**.
+**How the prices got here.** 149 / 399 / 999 at first; the first version of
+this table forgot the AI cover made while posting a listing, the most
+expensive allowance per use after a support minute (KES 5.18 a try, ~3 tries
+a listing - covers for a week of listings on Pro cost ~KES 104 at full use),
+which moved them to 169 / 499 / 1,249. Those did not count VAT: once BROKA
+registers, a maxed-out subscriber at 169 / 499 / 1,249 would cost about
+what they pay (1.1×). **199 / 599 / 1,499 include VAT**, keep the floor
+after it, and sit at the value anchors above. Prepaying a year brings them
+to **159 / 479 / 1,199 a month**.
 
 **Free tries.** Someone without a plan gets **2 AI cover tries, once** -
 about KES 10, an acquisition cost, and the only way a seller learns what a
@@ -387,10 +425,10 @@ Voice requests are the next most expensive (KES 0.71 each, a third of it the
 text-to-speech reserve). If the free voice keeps working, they can go up
 ~75% at the same price.
 
-**Prepaying:** 3 months 8% off, 6 months 15%, 12 months 20% (Pro: 1,379 /
-2,539 / 4,789). Shallower than the listing-fee curve on purpose: a plan's
+**Prepaying:** 3 months 8% off, 6 months 15%, 12 months 20% (Pro: 1,649 /
+3,049 / 5,749). Shallower than the listing-fee curve on purpose: a plan's
 allowances renew every month, so its cost grows with every month prepaid.
-Even 12 months prepaid never goes below the maxed-out cost.
+Even 12 months prepaid, after VAT, never goes below the maxed-out cost.
 
 Premium does **not** lower the listing fee. The listing fee rewards a seller's
 record; letting money buy that discount would undo it.
@@ -458,18 +496,22 @@ store holds - and **listings in the store pay no listing fee**.
   so names are not squatted. **Waived** when the first payment covers 6
   months or more.
 
-| Plan | Listings | SMS alerts | Price / month | Per listing | Cost at full use |
+| Plan | Listings | SMS alerts | Price / month (VAT included) | Per listing | Cost at full use |
 |---|---|---|---|---|---|
-| Starter | 20 | 20 | **KES 249** | 12.45 | 189 |
-| Standard | 50 | 50 | **KES 549** | 10.98 | 433 |
-| Growth | 100 | 100 | **KES 1,049** | 10.49 | 839 |
-| Business | 250 | 200 | **KES 2,549** | 10.20 | 2,032 |
-| Wholesale | 500 | 300 | **KES 4,999** | 10.00 | 3,981 |
+| Starter | 20 | 20 | **KES 499** | 24.95 | 203 |
+| Standard | 50 | 50 | **KES 999** | 19.98 | 470 |
+| Growth | 100 | 100 | **KES 1,799** | 17.99 | 916 |
+| Business | 250 | 200 | **KES 3,999** | 16.00 | 2,232 |
+| Wholesale | 500 | 300 | **KES 6,999** | 14.00 | 4,395 |
 
 Prepaying uses the premium discounts (8% / 15% / 20%). A store listing costs
-**KES 10-12.50 a month**, against KES 84 for a new seller listing one phone
-on its own - the considerate price that makes a long-term seller choose a
-store. "Cost at full use" assumes every slot filled and drawing a negotiation
+**KES 14-25 a month**, against KES 85 for a new seller listing one phone on
+its own - still the considerate price that makes a long-term seller choose a
+store. It was KES 249-4,999 (KES 10-12.50 a listing, barely above cost):
+too little for what a store is - a shop on the web at
+`broka.co.ke/store/<name>`, BROKA's buyers, escrow, and Zeno selling for the
+owner around the clock - when a website alone costs KES 499 a month
+(Lacesse Duka) and Shopify Basic ~KES 3,770. "Cost at full use" assumes every slot filled and drawing a negotiation
 a month; most stores will sit well under it. Beyond 500 listings, price it
 by hand.
 
@@ -479,12 +521,21 @@ by hand.
 
 | Deal | Buyer pays on top | BROKA | E-Confirm |
 |---|---|---|---|
-| Negotiated | **4.49%** | 3.49% | 1% |
-| Auction | **5%** | 4% | 1% |
+| Negotiated | **4.49%** | 3.49%, never under KES 20 | 1% |
+| Auction | **5%** | 4%, never under KES 20 | 1% |
 
 `settings.commission_rate` is now 0.0349 and `settings.auction_commission_rate`
 0.04; a deal on an auction listing takes the auction rate whichever way it is
-finalised. E-Confirm quotes its own 1%, so it is never computed by BROKA and
+finalised. **The KES 20 minimum** (`settings.commission_minimum_kes`): a deal costs BROKA about KES 13 to carry - Zeno's
+negotiation (~KES 5 across the threads that lead to one), a share of
+disputes (~KES 6), texts - so 3.49% of an item under ~KES 440 would be
+carried at a loss once VAT is taken out. It only touches items under
+~KES 573 (KES 500 at auction); a KES 300 shirt pays KES 20 instead of
+KES 10.47.
+
+The total is at the market rate for buyer protection: eBay UK charges
+private sales' buyers ~4.5% on a £150 item, Vinted ~5% plus a fixed charge,
+Depop up to 5% plus up to £1; Jumia Kenya takes ~6% from phone sellers. E-Confirm quotes its own 1%, so it is never computed by BROKA and
 never discounted. A deal keeps the rate it was agreed at (`Deal.commission`).
 
 On a KES 20,000 phone BROKA earns KES 698; on a KES 800,000 car sold at
@@ -563,7 +614,7 @@ buyers can't see" with **Pay** or **Renew**.
   to pester someone else's phone).
 
 **The app.** Go live says what listing will cost before the seller presses
-it ("Listing fee KES 84 a month (44% off) - choose 1 to 6 months next"). A
+it ("Listing fee KES 85 a month (43% off) - choose 1 to 6 months next"). A
 listing created unpaid goes straight to the **Listing fee** screen: the list
 price crossed out, the seller's price and why, the recommended months
 already chosen, featured for short-term sellers, and Pay with M-Pesa. Paid,
@@ -608,7 +659,8 @@ the Seller Dashboard. The same screen renews a listing that is ending.
 |---|---|---|
 | ~5,900 input / 380 output tokens a message, half cached, 40% at peak | AI cost | Log tokens per call from week one |
 | 14 messages a thread; 0.5-2.5 threads per listing a month | Listing cost | Count them per category |
-| KES 0.50 an SMS | Plans | Mobitech's invoice |
+| Azure South Africa North at East US + 25% | Infra per listing | The Azure invoice |
+| VAT threshold (KES 5M-8M) | When VAT applies | KRA / an accountant |
 | Category completion rates | R for new sellers | Measured rates at ~200 completed deals per category |
 | Days to sell, typical prices | Recommendation | Median listing-to-deal time per category |
 | 20,000 listings / 15,000 users | Infra per listing | Re-run at each order of magnitude |
@@ -641,11 +693,14 @@ before BROKA has a few thousand deals.
 ## Sources (checked September 2026)
 
 - DeepSeek V4.1 Flash rates and peak hours: [DeepSeek API docs](https://api-docs.deepseek.com/quick_start/pricing/), [aipricing.guru](https://www.aipricing.guru/deepseek-pricing/), [BenchLM](https://benchlm.ai/deepseek/api-pricing)
-- Cloud Run rates, tiers, free tier, africa-south1: [Cloud Run pricing](https://cloud.google.com/run/pricing), [Cloud Run locations](https://docs.cloud.google.com/run/docs/locations)
-- Cloud SQL: [Cloud SQL pricing](https://cloud.google.com/sql/pricing), [Bytebase comparison](https://www.bytebase.com/blog/postgres-hosting-options-pricing-comparison/)
-- Google Cloud egress: [Network Service Tiers pricing](https://cloud.google.com/network-tiers/pricing)
-- AWS: [Fargate pricing](https://aws.amazon.com/fargate/pricing/), [RDS db.t4g.micro](https://instances.vantage.sh/aws/rds/db.t4g.micro), [App Runner successor](https://tech-insider.org/aws-app-runner-vs-cloud-run-vs-container-apps-2026/)
-- Upstash Redis: [pricing](https://upstash.com/pricing/redis)
+- Azure Container Apps rates and free grant: [Azure pricing](https://azure.microsoft.com/en-us/pricing/details/container-apps/), [idle vs active billing](https://techcommunity.microsoft.com/blog/appsonazureblog/understanding-idle-usage-in-azure-container-apps/4419197)
+- Azure Database for PostgreSQL flexible server: [pricing](https://azure.microsoft.com/en-us/pricing/details/postgresql/flexible-server/), [D2ds_v5](https://www.bytebase.com/dbcost/azure-flexible/instance/D2ds_v5/), [B1ms](https://www.bytebase.com/dbcost/azure-flexible/instance/B1ms/)
+- Azure Cache for Redis: [pricing](https://azure.microsoft.com/en-us/pricing/details/cache/), [tiers](https://cloudpricecheck.com/azure/cache-for-redis-pricing)
+- Azure egress zones (South Africa North is Zone 3): [bandwidth pricing](https://azure.microsoft.com/en-us/pricing/details/bandwidth/), [zones explained](https://egresscost.com/azure/zones-explained/)
+- Microsoft for Startups credits: [overview](https://www.microsoft.com/en-us/startups), [2026 guide](https://creditforstartups.com/resources/microsoft-azure-startup-credits)
+- Kenyan tax: [VAT threshold](https://smartvatkenya.co.ke/resources/vat-threshold-kenya/), [VAT guide](https://afrotools.com/blog/kenya-vat-guide-2026/)
+- Subscription anchors: [Spotify Kenya 2026](https://tech-ish.com/2026/02/02/spotify-increases-premium-prices-in-kenya/), [Netflix Kenya](https://www.jitimu.com/2025/06/netflix-packages-kenya-subscription-charges/)
+- Buyer-protection fees: [eBay UK](https://www.ebay.co.uk/help/buying/paying-items/buyer-protection-fee?id=5594), [Depop](https://news.depop.com/company-news/evolving-our-fee-structure-with-zero-selling-fees-on-depop/), [Vinted](https://blog.vinta.app/blog/vinted-fees-explained-what-sellers-actually-pay), [Jumia Kenya commissions](https://vendorhub.jumia.co.ke/commissions-2026-sheet/)
 - Cloudflare R2: [pricing](https://developers.cloudflare.com/r2/pricing/); Cloudflare Realtime TURN/SFU: [pricing](https://developers.cloudflare.com/realtime/sfu/pricing)
 - Deepgram Nova-3: [pricing guide](https://brasstranscripts.com/blog/deepgram-pricing-per-minute-2025-real-time-vs-batch); AssemblyAI Universal-Streaming: [pricing](https://www.assemblyai.com/pricing)
 - fal.ai FLUX.1 Kontext [pro]: [fal.ai](https://fal.ai/models/fal-ai/flux-pro/kontext)

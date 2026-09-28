@@ -11,9 +11,10 @@
      toward their category's (Bayesian smoothing - see completion_estimate).
 
 The fee never goes below what the listing costs to serve, whatever the
-discount. Paying for several months at once costs less per month
-(bundle_total), and the rate is fixed for the period paid - a seller is
-never surprised by a fee that moved mid-listing.
+discount - counting only what BROKA keeps after VAT. Paying for several
+months at once costs less per month (bundle_total), and the rate is fixed
+for the period paid - a seller is never surprised by a fee that moved
+mid-listing.
 
 Pure functions only: no database, no I/O. service.py gathers the inputs.
 Every constant is argued for in PRICING.md.
@@ -62,7 +63,7 @@ def list_price(category: CategoryPricing, unit_price: float, quantity: int = 1) 
     per_unit = min(category.max_fee, cost + value_component(unit_price))
     full = per_unit * quantity_factor(quantity)
     affordable = AFFORDABILITY_SHARE * max(unit_price, 0.0) * max(int(quantity or 1), 1)
-    return max(cost, min(full, affordable))
+    return max(costs.with_vat(cost), min(full, affordable))
 
 
 # ── R: the risk coefficient ──────────────────────────────────────────────────
@@ -155,14 +156,18 @@ def round_kes(amount: float) -> int:
 
 
 def monthly_fee(list_price_: float, risk: float, launch: float, cost: float) -> int:
-    """This seller's price for one month: list x R x launch offer, never under cost."""
+    """This seller's price for one month: list x R x launch offer, never under cost.
+
+    "Under cost" is judged on what BROKA keeps once VAT is taken out
+    (costs.VAT_RATE), so the floor holds after VAT registration too.
+    """
     discounted = list_price_ * risk * (1.0 - launch)
     # The floor is rounded UP and applied after rounding: rounding a fee
     # that sits on the floor to the nearest shilling would otherwise land
     # it under cost (7.12 -> 7).
-    floor = math.ceil(cost + costs.mpesa_collection_cost(discounted))
+    floor = math.ceil(costs.with_vat(cost + costs.mpesa_collection_cost(discounted)))
     fee = max(round_kes(discounted), floor)
-    return min(fee, max(round_kes(list_price_), math.ceil(cost)))
+    return min(fee, max(round_kes(list_price_), math.ceil(costs.with_vat(cost))))
 
 
 # Paying for months together: the total grows as months^0.83, so 2 months
@@ -175,7 +180,7 @@ BUNDLE_EXPONENT = 0.83
 
 def bundle_total(monthly: int, months: int, cost: float) -> int:
     total = round_kes(monthly * months ** BUNDLE_EXPONENT)
-    floor = math.ceil(months * cost + costs.mpesa_collection_cost(total))
+    floor = math.ceil(costs.with_vat(months * cost + costs.mpesa_collection_cost(total)))
     return max(total, floor)
 
 
@@ -234,7 +239,7 @@ def quote(
     quantity = min(max(int(quantity or 1), 1), QUANTITY_CAP)
     cost = costs.listing_month_cost(category.chats_per_month)
     full = list_price(category, unit_price, quantity)
-    list_kes = max(round_kes(full), math.ceil(cost))
+    list_kes = max(round_kes(full), math.ceil(costs.with_vat(cost)))
 
     rate = completion_estimate(category.prior_completion, record.completed_weight,
                                record.leaked_weight, record.quality)

@@ -151,7 +151,8 @@ class TestSubscribing:
     async def test_a_plan_is_bought_at_its_price_and_starts_now(self, client, premium_on, mpesa):
         user, h = await _user()
         started = await _pay(client, h, "pro", 3)
-        assert started["amount"] == next(p["total"] for p in period_prices(499) if p["months"] == 3)
+        pro = PREMIUM_BY_ID["pro"].monthly_price
+        assert started["amount"] == next(p["total"] for p in period_prices(pro) if p["months"] == 3)
         assert mpesa.prompts[0]["amount"] == started["amount"]
         assert mpesa.prompts[0]["callback_url"].endswith(f"/premium/callback/{SECRET}")
         me = (await client.get("/premium/me", headers=h)).json()
@@ -201,7 +202,8 @@ class TestSubscribing:
         sub = await _sub(user.id)
         assert sub.plan_id == "pro"
         credit = sub.paid_until - datetime.utcnow() - MONTH
-        assert abs(credit - timedelta(days=30) * 169 / 499) < timedelta(minutes=1)
+        ratio = PREMIUM_BY_ID["plus"].monthly_price / PREMIUM_BY_ID["pro"].monthly_price
+        assert abs(credit - timedelta(days=30) * ratio) < timedelta(minutes=1)
 
     @pytest.mark.asyncio
     async def test_a_downgrade_waits_for_the_dearer_plan_to_end(self, client, premium_on, mpesa):

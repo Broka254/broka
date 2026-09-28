@@ -80,10 +80,9 @@ AI_PER_AUTO_NEGOTIATION = 10 * (AI_PER_NEGOTIATION_MESSAGE + AI_PER_ASSISTANT_TU
 
 
 # ── Messaging ────────────────────────────────────────────────────────────────
-# Kenyan bulk SMS costs KES 0.25-0.80 a message depending on volume
-# (Safaricom's own tariff runs KES 1.06 down to 0.11). Mobitech does not
-# publish its rate; 0.50 is the middle of the market at startup volumes.
-SMS = 0.50
+# Mobitech, BROKA's SMS provider, charges KES 0.35 a message, whatever its
+# length. (Kenya's bulk market runs KES 0.25-0.80 a message.)
+SMS = 0.35
 # FCM push: free.
 PUSH = 0.0
 
@@ -135,32 +134,46 @@ PLANNING_MONTHLY_ACTIVE_USERS = 15_000
 
 _SECONDS_PER_MONTH = 730 * 3600
 
-# Google Cloud Run in africa-south1 (Johannesburg, the nearest region) is a
-# Tier 2 region: $0.0000336/vCPU-s, $0.0000035/GiB-s, $0.40 per million
-# requests, after a monthly free 180,000 vCPU-s, 360,000 GiB-s and 2M
-# requests. Two instances of 1 vCPU / 1 GiB kept warm, because the call
-# signalling WebSockets and the 5-minute sweep need a live process.
-# ~1,500 API requests per active user a month.
-_RUN_INSTANCE_SECONDS = 2 * _SECONDS_PER_MONTH
-CLOUD_RUN_MONTHLY = usd(
-    max(0, _RUN_INSTANCE_SECONDS - 180_000) * 0.0000336
-    + max(0, _RUN_INSTANCE_SECONDS - 360_000) * 0.0000035
+# BROKA's API runs on Azure Container Apps in South Africa North (the
+# nearest Azure region; AZURE_MIGRATION_AUDIT.md). Azure publishes its rates
+# for East US; South Africa North is taken as 25% dearer - an assumption,
+# near the 31% AWS charges for Cape Town over Virginia - until the Azure
+# invoice replaces it.
+AZURE_REGION_PREMIUM = 1.25
+
+# Container Apps, consumption plan: $0.000024/vCPU-s and $0.000003/GiB-s
+# while active, $0.40 per million requests, after a monthly free 180,000
+# vCPU-s, 360,000 GiB-s and 2M requests. Two replicas of 1 vCPU / 2 GiB,
+# always on: the call-signalling WebSockets and the 5-minute sweep need a
+# live process, and an open socket keeps a replica billed as active. (One
+# replica today - the audit's process-local state must be fixed before a
+# second - but planning scale needs two.) ~1,500 API requests per active
+# user a month.
+_REPLICA_SECONDS = 2 * _SECONDS_PER_MONTH
+CONTAINER_APPS_MONTHLY = usd(AZURE_REGION_PREMIUM * (
+    max(0, _REPLICA_SECONDS * 1 - 180_000) * 0.000024
+    + max(0, _REPLICA_SECONDS * 2 - 360_000) * 0.000003
     + max(0, PLANNING_MONTHLY_ACTIVE_USERS * 1_500 - 2_000_000) / 1_000_000 * 0.40
-)
-# Cloud SQL for PostgreSQL, 1 vCPU / 3.75 GB (db-custom-1-3840, ~$49/month in
-# us-central1) with 50 GB SSD at $0.22/GB and backups, plus 30% for the
-# African region - the premium AWS charges for Cape Town over Virginia.
-CLOUD_SQL_MONTHLY = usd((49.3 + 50 * 0.22) * 1.30 + 4.0)
-# Redis for rate limits, pub/sub and caches. Upstash pay-as-you-go
-# ($0.20 per 100K commands) would be ~$90 at this traffic, so a fixed
-# Upstash plan with headroom.
-REDIS_MONTHLY = usd(20.0)
+))
+# Container Registry, Basic tier, for the images Container Apps runs.
+CONTAINER_REGISTRY_MONTHLY = usd(5.0)
+# Azure Database for PostgreSQL flexible server, General Purpose D2ds_v5
+# (2 vCores, 8 GiB, ~$125/month) with 64 GiB of storage (~$0.115/GiB);
+# backups up to the storage size are included.
+POSTGRES_MONTHLY = usd(AZURE_REGION_PREMIUM * (125.0 + 64 * 0.115))
+# Redis for rate limits, pub/sub, idempotency keys and call state: Azure
+# Cache for Redis Basic C1 (1 GB, ~$40/month).
+REDIS_MONTHLY = usd(AZURE_REGION_PREMIUM * 40.0)
+# Log Analytics for the Container Apps logs: ~10 GB a month at ~$2.30/GB
+# after 5 GB free, with headroom.
+LOGS_MONTHLY = usd(15.0)
 # Cloudflare R2 for images: $0.015/GB-month after 10 GB free, egress free.
 # 20,000 listings x 5 photos x ~250 KB across the resized copies = ~25 GB.
 R2_MONTHLY = usd(max(0, 25 - 10) * 0.015 + 1.0)
-# Internet egress from Cloud Run: $0.12/GB (Premium Tier, first TB). Images
-# come from R2, so this is API JSON and sockets: ~20 MB per active user.
-EGRESS_MONTHLY = usd(PLANNING_MONTHLY_ACTIVE_USERS * 20 / 1024 * 0.12)
+# Internet egress from South Africa North (Azure's Zone 3): $0.181/GB after
+# 100 GB free a month. Images come from R2, so this is API JSON and
+# sockets: ~20 MB per active user.
+EGRESS_MONTHLY = usd(max(0, PLANNING_MONTHLY_ACTIVE_USERS * 20 / 1024 - 100) * 0.181)
 # The web storefront on Vercel Pro ($20; Hobby forbids commercial use),
 # Sentry Team ($26), logging headroom ($10).
 WEB_AND_MONITORING_MONTHLY = usd(20 + 26 + 10)
@@ -168,8 +181,9 @@ WEB_AND_MONITORING_MONTHLY = usd(20 + 26 + 10)
 # ($25 once, spread over two years).
 STORES_AND_DOMAIN_MONTHLY = 1_500 / 12 + usd(99 / 12) + usd(25 / 24)
 
-INFRA_MONTHLY = (CLOUD_RUN_MONTHLY + CLOUD_SQL_MONTHLY + REDIS_MONTHLY + R2_MONTHLY
-                 + EGRESS_MONTHLY + WEB_AND_MONITORING_MONTHLY + STORES_AND_DOMAIN_MONTHLY)
+INFRA_MONTHLY = (CONTAINER_APPS_MONTHLY + CONTAINER_REGISTRY_MONTHLY + POSTGRES_MONTHLY
+                 + REDIS_MONTHLY + LOGS_MONTHLY + R2_MONTHLY + EGRESS_MONTHLY
+                 + WEB_AND_MONITORING_MONTHLY + STORES_AND_DOMAIN_MONTHLY)
 INFRA_PER_LISTING_MONTH = INFRA_MONTHLY / PLANNING_ACTIVE_LISTINGS
 
 # ── People ───────────────────────────────────────────────────────────────────
@@ -183,11 +197,29 @@ SUPPORT_PER_LISTING_MONTH = SUPPORT_MONTHLY_SALARY / PLANNING_ACTIVE_LISTINGS
 SUPPORT_PER_MINUTE = SUPPORT_MONTHLY_SALARY / (160 * 60)
 
 # ── Overhead ─────────────────────────────────────────────────────────────────
-# On top of every cost: a 3% turnover-tax reserve (Kenya's Turnover Tax on
-# gross receipts between KES 1M and 25M - confirm with an accountant) and
-# 12% for what the averages miss: fallback models dearer than DeepSeek,
-# failed payments, refunds, traffic spikes.
-OVERHEAD = 1.15
+# On top of every cost: a 1.5% Turnover Tax reserve (Kenya's rate on gross
+# receipts since December 2024; it was 3%) and 12% for what the averages
+# miss: fallback models dearer than DeepSeek, failed payments, refunds,
+# traffic spikes.
+OVERHEAD = 1.135
+
+# ── VAT ──────────────────────────────────────────────────────────────────────
+# Past the VAT threshold (KES 5M-8M of turnover a year; confirm with KRA)
+# BROKA owes 16% of every fee and plan it sells. Prices are set VAT-included
+# from the start, so crossing the threshold never forces a price rise: the
+# floors below are checked on what is left once VAT is taken out. Before
+# registration the difference is margin.
+VAT_RATE = 0.16
+
+
+def with_vat(amount: float) -> float:
+    """What must be charged for `amount` to be left after VAT."""
+    return amount * (1 + VAT_RATE)
+
+
+def net_of_vat(price: float) -> float:
+    """What BROKA keeps of a VAT-included price."""
+    return price / (1 + VAT_RATE)
 
 
 # ── Premium features ─────────────────────────────────────────────────────────
