@@ -68,3 +68,6 @@ Thumbs.db
 
 # ── Node (if reintroduced later) ────────────────────────────────────
 node_modules/
+
+# ── Rust (backend/native) ───────────────────────────────────────────
+backend/native/target/

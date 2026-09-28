@@ -21,7 +21,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from api.database import get_db, Deal, DealStatus, User, MpesaTransaction, MpesaStatus
-from api.security import get_current_user, verify_password
+from api.security import get_current_user, verify_password_async
 from api.core.events import publish, EscrowFunded, MpesaCallbackReceived
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ async def initiate_stk_push(
     user = user_result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if not verify_password(data.password, user.password_hash):
+    if not await verify_password_async(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect password")
 
     # 2. Load and validate deal

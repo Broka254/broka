@@ -78,8 +78,8 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:108) |
 | GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:254) |
 | WS | `/auction-ws/ws/{listing_id}` | token | `auction_ws` (backend/api/domains/auction_ws/router.py:15) |
-| POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:56) |
-| GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:119) |
+| POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:50) |
+| GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:113) |
 | GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:23) |
 | GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:140) |
 | PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:56) |
@@ -164,7 +164,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:918) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:930) |
-| GET | `/live` | public | `live` (backend/main.py:537) |
+| GET | `/live` | public | `live` (backend/main.py:541) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
@@ -175,23 +175,23 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:212) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:484) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:118) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:3956) |
-| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1677) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:3976) |
+| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1667) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:3872) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3192) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:3892) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3203) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3583) |
-| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1729) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3603) |
+| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1742) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:3920) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3071) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3250) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3501) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3527) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3549) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:3940) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3082) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3270) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3521) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3547) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3569) |
 | POST | `/premium/callback` | public | `premium_callback` (backend/api/domains/premium/router.py:80) |
 | POST | `/premium/callback/{secret}` | public | `premium_callback_secured` (backend/api/domains/premium/router.py:88) |
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
@@ -405,6 +405,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 - `events.py` — BROKA v4.0 - Durable Event Bus
 - `fal_client.py` — BROKA - fal.ai Client (AI Showcase/Cover Image generation)
 - `fraud.py` — BROKA - Fraud Engine & Trust Score System Computes a Trust Score (0-100) for every user based on behavioural signals.
+- `geo.py` — Great-circle distance, for "near me" filters and "3.2 km away" labels.
 - `idempotency.py` — BROKA v4.0 - Idempotency Key Middleware
 - `image_processing.py` — Turn an uploaded image into the WebP sizes BROKA serves.
 - `interest_arming.py` — Arms the seller availability nudge from the buyer's own messages.
@@ -413,6 +414,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 - `migrations_guide.py` — ⚠️ STATUS AS OF THIS HARDENING PASS (2026-09) — READ THIS FIRST ⚠️
 - `money.py` — Monetary arithmetic that does not drift.
 - `mpesa_stk.py` — M-Pesa Express (STK push) for money that is BROKA's own: listing fees and premium plans.
+- `native.py` — The Rust extension (backend/native), and whether this process uses it.
 - `negotiation_actions.py` — Zeno structured actions for the negotiation engine.
 - `nudge_templates.py` — BROKA — availability-nudge SMS composition.
 - `observability.py` — BROKA v3.0 - Observability Scaffold (issue #13 / #14)
@@ -425,6 +427,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 - `secrets_crypto.py` — BROKA — At-Rest Secret Encryption
 - `sms.py` — BROKA v6.2 - SMS Provider (phone OTP delivery)
 - `stats_cache.py` — BROKA - Generic Stats Cache
+- `text_guard.py` — Contact-leak scanning: does a chat message try to take a deal off BROKA?
 - `text_search.py` — What a typed search box means to a query.
 - `timeutil.py` — One rule for timestamps that come from outside: store them as naive UTC.
 - `tracing.py` — BROKA Platform - Distributed Tracing ════════════════════════════════════════════════════════════════════════════════ OpenTelemetry-based d…
@@ -526,14 +529,14 @@ of a change.
 - **ai_broker** — domains: categories, listings; core: circuit_breaker, config, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
-- **auth** — domains: media; core: client_ip, config, email, events, fraud, nudge_templates, presence, rate_limit, sms, text_search; database, security
+- **auth** — domains: media; core: client_ip, config, email, events, fraud, geo, nudge_templates, presence, rate_limit, sms, text_search; database, security
 - **buy_agent** — domains: ai_broker, categories, listings, premium; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, ledger, workers; database, security
 - **escrow** — core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, reconciliation, secrets_crypto; database, security
-- **listings** — domains: auctions, categories, escrow, media, premium, trust; core: config, events, rate_limit, text_search, timeutil; database, security
+- **listings** — domains: auctions, categories, escrow, media, premium, trust; core: config, events, geo, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — nothing outside itself
@@ -542,7 +545,7 @@ of a change.
 - **reviews** — core: audit, events; database, security
 - **showcase** — domains: media, premium; core: fal_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit, text_search; database, security
-- **traders** — core: text_search; database
+- **traders** — core: geo, text_search; database
 - **trending** — domains: listings; database
 - **trust** — domains: listings; database
 - **users** — nothing outside itself
@@ -581,16 +584,17 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FAL_KEY`, `FAL_SHOWCASE_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FAL_KEY`, `FAL_SHOWCASE_MODEL`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`
 
 ## Backend tests
 
-77 files in `backend/tests/`.
+81 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
 - `test_ai_cost.py` — Tests for the AI cost controls (api/core/ai_cost.py).
 - `test_assemblyai_token.py` — BROKA - /stt/assemblyai-token tests Run: pytest backend/tests/test_assemblyai_token.py -v
+- `test_auction_leaderboard.py` — GET /auction/{listing_id}/leaderboard - the list the auction screen shows.
 - `test_auction_lifecycle.py` — BROKA - Auction lifecycle tests Run: pytest backend/tests/test_auction_lifecycle.py -v
 - `test_auctions.py` — BROKA - Auction Tests Run: pytest backend/tests/test_auctions.py -v
 - `test_auth.py` — BROKA - Auth Endpoint Tests Run: pytest backend/tests/test_auth.py -v
@@ -631,11 +635,13 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
 - `test_media_hardening.py` — Image processing and the media backfill under hostile or broken input.
 - `test_message_visibility_guard.py` — Structural guard: no NegotiationMessage read may leak across the audience line.
+- `test_native_parity.py` — The Rust extension and the Python reference agree, and the loader only hands out an extension it can trust.
 - `test_negotiate_deepseek.py` — Tests for DeepSeek V4 Flash in api/routers/negotiate.py's own (separate from ai_broker/service.py) AI-provider fallback chain.
 - `test_negotiate_fallback_providers.py` — The text-only fallback providers in routers/negotiate.py must actually run.
 - `test_negotiation_actions.py` — Tests for Zeno's negotiation action vocabulary (api/core/negotiation_actions.py).
 - `test_nudge_templates.py` — Tests for the system-generated availability-nudge SMS (api/core/nudge_templates.py).
 - `test_otp_sms_retriever.py` — Covers the OTP SMS body built for Android's SMS Retriever API.
+- `test_password_hashing.py` — Password hashing: what bcrypt is given, and what it costs the event loop.
 - `test_payment_races.py` — Payments that race each other.
 - `test_premium.py` — Premium plans (PRICING.md section 4; api/domains/premium/).
 - `test_pricing.py` — Pricing (PRICING.md): the listing fee f = C x R, the plans, and commission.
@@ -655,6 +661,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
 - `test_stores.py` — BROKA - Store Feature Tests Run: pytest backend/tests/test_stores.py -v
 - `test_stores_hardening.py` — Regression tests for the Store implementation audit (2026-09-14).
+- `test_text_guard.py` — Contact-leak scanning (api/core/text_guard.py) and where its findings go.
 - `test_thread_privacy.py` — Regression tests for the cross-party leak found in the communications audit (2026-09-14).
 - `test_timestamps.py` — Client timestamps are stored as naive UTC - converted, never just stripped.
 - `test_traders.py` — BROKA - Traders Endpoint Tests Run: pytest backend/tests/test_traders.py -v
@@ -1009,6 +1016,7 @@ Modules:
 
 | Workflow | Job | Name |
 |---|---|---|
+| `.github/workflows/build.yml` | `native` | Rust extension (backend/native) |
 | `.github/workflows/build.yml` | `backend-test` | Backend Tests (Python 3.11) |
 | `.github/workflows/build.yml` | `backend-test-postgres` | Backend Tests (PostgreSQL 16) |
 | `.github/workflows/build.yml` | `web` | Web Storefront (Next.js) |
@@ -1023,7 +1031,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — My Store: every product, and what needs the owner (2026-09-28)
+- `CHANGES.md` — Rust in the backend, and password hashing off the event loop (2026-09-28)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

@@ -129,6 +129,30 @@ class TestContainerCommand:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestRustExtensionInTheImage:
+    """The deployed image carries the Rust extension (backend/native) and
+    refuses to run without it; both Dockerfiles build it the same way."""
+
+    def test_every_dockerfile_builds_installs_and_requires_it(self):
+        for name, text in _dockerfiles().items():
+            assert "maturin build --release --locked" in text, name
+            assert "pip install --no-cache-dir --no-index /tmp/wheels/*.whl" in text, name
+            assert re.search(r"^ENV BROKA_NATIVE=required$", text, re.M), name
+
+    def test_dockerfiles_pin_the_same_verified_rustup(self):
+        pins = {
+            name: (re.search(r"RUSTUP_VERSION=(\S+)", text).group(1),
+                   sorted(re.findall(r"sha256=([0-9a-f]{64})", text)))
+            for name, text in _dockerfiles().items()
+        }
+        assert len({repr(pin) for pin in pins.values()}) == 1, pins
+        assert all(len(hashes) == 2 for _, hashes in pins.values()), pins
+
+    def test_local_build_output_stays_out_of_the_image(self):
+        assert "native/target/" in (BACKEND / ".dockerignore").read_text()
+        assert "backend/native/target/" in (REPO_ROOT / ".dockerignore").read_text()
+
+
 class TestRenderConfig:
     def test_render_deploys_the_backend_dockerfile(self):
         cfg = yaml.safe_load((REPO_ROOT / "render.yaml").read_text())

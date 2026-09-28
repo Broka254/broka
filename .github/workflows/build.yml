@@ -9,7 +9,52 @@ on:
 
 jobs:
 
+  # ── Rust extension (backend/native) ─────────────────────────────
+  # The crate's own gate: formatting, clippy with warnings denied (with and
+  # without the Python bindings), and its unit tests - plain Rust, no
+  # interpreter. Its Python face is exercised by backend-test, which builds
+  # the extension and runs the whole suite on it.
+  native:
+    name: Rust extension (backend/native)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend/native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the pinned Rust toolchain
+        # The version is rust-toolchain.toml's - the same one the Docker
+        # image builds with.
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/native
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --features python -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
   # ── Backend Tests (v4.0 addition) ───────────────────────────────
+  # Runs on the Rust extension, as production does: it is built and
+  # installed here, and BROKA_NATIVE=required fails the run if it didn't
+  # load. The PostgreSQL job below runs the same suite on the Python
+  # fallback, so both engines are covered end to end.
   backend-test:
     name: Backend Tests (Python 3.11)
     runs-on: ubuntu-latest
@@ -35,11 +80,20 @@ jobs:
           cache: 'pip'
           cache-dependency-path: backend/requirements.txt
 
+      - name: Install the pinned Rust toolchain
+        working-directory: backend/native
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/native
+
       - name: Install dependencies
         run: |
           cd backend
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install ./native
 
       - name: Run tests with coverage
         env:
@@ -47,6 +101,7 @@ jobs:
           SECRET_KEY: ci-test-secret-key-long-enough-for-testing-purposes
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           REDIS_URL: redis://localhost:6379/0
+          BROKA_NATIVE: required
         run: |
           cd backend
           pytest tests/ -v \
@@ -121,6 +176,10 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           POSTGRES_TEST_URL: "postgresql+asyncpg://broka:broka@localhost:5432/broka_test"
           REDIS_URL: redis://localhost:6379/0
+          # The extension isn't built in this job: the whole suite runs on
+          # the Python fallback (api/core/native.py), which is what a
+          # BROKA_NATIVE=off deploy would run.
+          BROKA_NATIVE: "off"
         # python -m pytest, not the pytest command: the plugin is imported
         # as tests.postgres_plugin, which needs backend/ on the import path,
         # and only `python -m` puts the working directory there.

@@ -10,7 +10,7 @@ broker; money moves through escrow. Three deployables:
 
 | Part | Stack | Deploys to |
 |---|---|---|
-| `backend/` | FastAPI, async SQLAlchemy, Python 3.11 | Render: PostgreSQL + Redis |
+| `backend/` | FastAPI, async SQLAlchemy, Python 3.11; a Rust extension in `backend/native/` (PyO3) | Render: PostgreSQL + Redis |
 | `flutter_app/` | Flutter 3.24.5 (pinned in CI) | APK from GitHub releases |
 | `web/` | Next.js 16, TypeScript: the store pages at `broka.co.ke/store/<name>` | Vercel |
 
@@ -32,6 +32,8 @@ ENV=test SECRET_KEY=<32+ characters> DATABASE_URL="sqlite+aiosqlite:///:memory:"
 ```
 
 With `REDIS_URL=redis://localhost:6379/0` the Redis-only tests run too.
+Without the Rust extension installed the suite runs on its Python fallback
+and the Rust-vs-Python parity tests skip; CI runs it both ways.
 **Anything touching the schema, datetimes or transactions must also pass on
 PostgreSQL**, which production runs and SQLite does not imitate (foreign
 keys, timezone-aware values):
@@ -40,6 +42,12 @@ keys, timezone-aware values):
 POSTGRES_TEST_URL=postgresql+asyncpg://user:pass@localhost:5432/db \
   python -m pytest tests/ -q -o addopts="" -p tests.postgres_plugin
 ```
+
+**Rust extension** (from `backend/native/`, when you touched it or its
+`rules/`): `cargo fmt --check`,
+`cargo clippy --locked --all-targets --features python -- -D warnings`,
+`cargo test --locked`; then, from `backend/`, `pip install ./native` and run
+the backend suite with `BROKA_NATIVE=required`.
 
 **Web** (from `web/`): `npm ci`, then `npm run typecheck`, `npm run lint`,
 `npm test`, `npm run build`.
@@ -107,6 +115,16 @@ You don't have to: CI regenerates and commits it on every push to `main`.
   `check_legacy_images`: inline images or the user's own BROKA image URLs,
   never links elsewhere.
 
+**Rust extension** (`backend/native/`, read its README first)
+- Every function in it has a Python reference implementation with identical
+  output, used when the extension isn't loaded; `tests/test_native_parity.py`
+  holds the two together. Change one, change the other.
+- Only `api/core/native.py` imports `broka_native`. Bump `API_VERSION` there
+  and in `native/src/python.rs` together when a signature changes.
+- Contact-leak rules live in `native/rules/contact_leaks.json`, read by both
+  engines. A finding lowers the seller's rank (it marks the deal as leaked),
+  so a rule must be precise; add its near misses to `tests/test_text_guard.py`.
+
 **Settings**: add them to `backend/api/core/config.py`, `.env.example` and
 `render.yaml` (or `web/.env.example`). Secrets used by the web storefront's
 server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
@@ -133,3 +151,4 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Zeno as the assistant (the Zeno tab, voice mode, the pill across screens, guides) | `backend/api/domains/zeno_assistant/`, `flutter_app/lib/features/zeno_assistant/` (`zeno_session.dart`), `ZENO_ACTIONS.md` |
 | Calls | `backend/api/routers/calls.py`, `CALLING.md` |
 | Scheduled work | `backend/api/core/workers.py` (the 5-minute sweep) |
+| The Rust extension, chat contact-leak scanning, distances | `backend/native/README.md`, `backend/api/core/native.py`, `text_guard.py`, `geo.py` |

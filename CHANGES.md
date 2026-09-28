@@ -1,3 +1,54 @@
+# Rust in the backend, and password hashing off the event loop (2026-09-28)
+
+**A Rust extension, `backend/native/`** (PyO3, built with maturin), for the
+jobs Python is the wrong tool for. The backend stays Python; the reasoning,
+measurements and what was deliberately left alone are in
+`backend/native/README.md`.
+
+- **Chat scanning for off-platform contact details** (`api/core/text_guard.py`).
+  Every message is scanned for phone numbers, WhatsApp/Telegram, emails,
+  M-Pesa tills and "pay me directly". It used to be five regexes that
+  matched only "0712345678" written plainly; the text is now normalized
+  first, so "0712 345 678", "+254 (0) 712...", "zero seven one two...",
+  "sifuri saba...", a Cyrillic "о" or a zero-width space inside "whatsapp"
+  are caught too. It runs on Rust's linear-time regex engine: Python's
+  backtracks, and one careless rule could hold the event loop for seconds on
+  a crafted message. The rules are data (`native/rules/contact_leaks.json`),
+  read by both engines. Everything the five old patterns caught is still
+  caught (`tests/test_text_guard.py`).
+- **Direct chat is scanned too.** Only messages sent through Zeno were;
+  switching AI assist off to talk directly is exactly where a number gets
+  passed. The audit row records which kinds were found, never the number.
+  These rows mark a deal as leaked (`domains/trust/completion_rate.py`), so
+  the rules are kept precise and their near misses are tested.
+- **One distance function** (`api/core/geo.py`) instead of six copies in two
+  variants; the "near me" filter computes a whole candidate list in one call.
+- Every function has a **Python fallback** with identical output, held to it
+  by `tests/test_native_parity.py` (thousands of generated messages, every
+  assigned BMP character). `BROKA_NATIVE`: `auto` (default), `required`
+  (what the Docker image sets: no extension, no start) or `off` (the kill
+  switch). `GET /ready` reports `"native": "rust"` or `"python"`.
+- The Docker images compile it in a build stage (rustup pinned and
+  checksum-verified, `Cargo.lock` enforced); the runtime image has no
+  compiler. CI gains a Rust job (fmt, clippy, tests); the SQLite job runs
+  the suite on the extension and the PostgreSQL job on the fallback.
+- The auction leaderboard's hook for a C++ engine (`broka_engine`), which
+  was never built, is gone; the database does the ordering.
+
+**Password hashing** (`api/security.py`):
+- Passwords were cut at 72 characters, but bcrypt reads 72 bytes and
+  bcrypt 5 raises past that: signing up with a long non-ASCII password was a
+  500. The cut is in bytes now; every stored hash still verifies.
+- Each hash (~250 ms of CPU) ran on the event loop, stalling every other
+  request on the worker during every login. It runs in a thread now.
+- A login for a phone with no account answered in a millisecond and a wrong
+  password in 250 ms, which told anyone which numbers have accounts. Both
+  now cost one bcrypt check.
+
+Tests: `test_text_guard.py`, `test_native_parity.py`,
+`test_password_hashing.py`, `test_auction_leaderboard.py`, and the Rust
+unit tests (`cargo test` in `backend/native`).
+
 # My Store: every product, and what needs the owner (2026-09-28)
 
 **The Products tab shows every product in the store.** It listed them

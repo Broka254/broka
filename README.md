@@ -7,7 +7,7 @@ commission** on each deal.
 
 | Part | Stack |
 |---|---|
-| `backend/` | FastAPI (Python 3.11) + async SQLAlchemy. PostgreSQL in production, SQLite in dev and tests |
+| `backend/` | FastAPI (Python 3.11) + async SQLAlchemy. PostgreSQL in production, SQLite in dev and tests. A Rust extension (`backend/native/`, PyO3) scans chat for off-platform contact details and does distance math, with a Python fallback |
 | `flutter_app/` | Flutter 3.24.5 (the version CI pins), `provider` for state |
 | `web/` | The web storefront at `broka.co.ke/store/<name>`: Next.js 16 (App Router) + TypeScript on Vercel |
 
@@ -296,6 +296,20 @@ ENV=test SECRET_KEY=ci-test-secret-key-long-enough-for-testing-purposes \
 ```
 
 Leave out `REDIS_URL` to skip the handful of tests that need a real Redis.
+
+The Rust extension (`backend/native/README.md`) is optional locally: without
+it the backend and its tests run on the Python fallback. To build it (needs
+the Rust toolchain in `backend/native/rust-toolchain.toml`) and run the
+suite on it, as CI and production do:
+
+```bash
+cd backend
+pip install ./native
+BROKA_NATIVE=required ENV=test \
+  SECRET_KEY=ci-test-secret-key-long-enough-for-testing-purposes \
+  DATABASE_URL="sqlite+aiosqlite:///:memory:" \
+  python -m pytest tests/
+```
 
 The same suite on PostgreSQL, as CI also runs it (production is Postgres,
 and SQLite neither enforces foreign keys nor refuses timezone-aware

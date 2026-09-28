@@ -33,6 +33,9 @@ broka-v2/
 │   │   │   ├── rate_limit.py         # Redis sliding-window rate limiter
 │   │   │   ├── audit.py              # Immutable audit log writer
 │   │   │   ├── fraud.py              # 6-signal fraud engine + trust score
+│   │   │   ├── native.py             # Loads the Rust extension (or not) - see backend/native/
+│   │   │   ├── text_guard.py         # Chat contact-leak scanning (Rust, Python fallback)
+│   │   │   ├── geo.py                # Great-circle distance (Rust, Python fallback)
 │   │   │   ├── ledger.py             # Double-entry escrow ledger
 │   │   │   ├── observability.py      # Sentry, Prometheus, request ID middleware
 │   │   │   ├── deal_hub.py           # WebSocket deal status hub
@@ -154,6 +157,22 @@ Monolithic `database.py` supplemented with a proper `api/models/` package — on
 ### 7. Two-Stage CI (`build.yml`)
 
 Backend tests now run first (with Redis service). APK build only proceeds if tests pass. Coverage uploaded to Codecov.
+
+---
+
+## Rust Extension (`backend/native/`)
+
+A small PyO3 extension, `broka_native`, for the jobs Python is the wrong
+tool for: scanning every chat message for off-platform contact details with
+a regex engine that can't backtrack (Python's `re` can be made to take
+seconds on a crafted message), and distance math over whole candidate
+lists. Each function has a Python reference implementation with identical
+output; `api/core/native.py` picks the engine at startup (`BROKA_NATIVE`:
+`auto`, `required` - what the Docker image sets - or `off`, the kill
+switch), and `tests/test_native_parity.py` holds the two together. The
+Docker image compiles it in a build stage, so the runtime image carries no
+compiler. `backend/native/README.md` has the measurements and what was
+deliberately left in Python.
 
 ---
 

@@ -179,32 +179,25 @@ def trust_band(score: int) -> str:
 
 # ── Off-platform solicitation detection (Volume 2 §2.2) ────────────────────────
 #
-# Lightweight regex/keyword pass, intentionally not perfect on day one - this
-# seeds Chapter 4's leakage-risk classifier later. Deliberately NOT wired into
-# compute_trust_score above: a single trigger must never move trust score or
-# visibility on its own (false positives are easy - "call me" alone is weak
-# signal). Callers are responsible for audit-logging triggers for analytics.
-import re as _re
-
-OFF_PLATFORM_PATTERNS = [
-    r"\b0[71]\d{8}\b",              # Kenyan phone number pattern
-    r"\bwhat\s*s?app\b",
-    r"\bcall me\b",
-    r"\bsend\s+(cash|money)\s+direct\b",
-    r"\bpay\s+me\s+(directly|outside)\b",
-]
-_OFF_PLATFORM_RE = [_re.compile(p, _re.IGNORECASE) for p in OFF_PLATFORM_PATTERNS]
+# Deliberately NOT wired into compute_trust_score above: a single trigger
+# must never move trust score on its own. Callers audit-log triggers, and
+# completion_rate.py reads those rows as a sign the deal leaked.
+#
+# The scanning is api/core/text_guard.py (Rust when the extension is
+# loaded): it undoes the usual disguises - spaced or spelled-out digits,
+# look-alike letters, invisible characters - before matching. The five
+# patterns this used to be ("0[71]" + 8 digits, "whatsapp", "call me",
+# "send cash/money direct", "pay me directly/outside") all still match;
+# tests/test_text_guard.py keeps them.
+from api.core import text_guard
 
 
 def detect_off_platform_solicitation(message_text: str) -> bool:
     """
     True if message_text looks like it's soliciting payment/contact outside
-    BROKA escrow. First version - keyword/regex only, no ML.
+    BROKA escrow. `text_guard.scan` says what was found.
     """
-    if not message_text:
-        return False
-    text = message_text.lower()
-    return any(p.search(text) for p in _OFF_PLATFORM_RE)
+    return bool(text_guard.scan(message_text))
 
 
 # ── Seller deal stats (Volume 2 §2.4) ───────────────────────────────────────────

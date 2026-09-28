@@ -127,6 +127,11 @@ services:
                                   # shared by every user. Per-IP rate limits (login, signup,
                                   # OTP) read the caller from this header. Check it with
                                   # GET /admin/diagnostics/client-ip. See api/core/client_ip.py.
+      - key: BROKA_NATIVE
+        value: "required"    # The Rust extension (backend/native) must load or the service
+                             # refuses to start - the image is built with it. "off" is the
+                             # kill switch: the Python fallback, same results, slower.
+                             # GET /ready reports which is in use.
       - key: STOREFRONT_API_KEY
         sync: false          # 32+ random characters, the SAME value as in the web project
                              # (Vercel). Lets the storefront pass on which visitor a store

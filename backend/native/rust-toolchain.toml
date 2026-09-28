@@ -1,0 +1,5 @@
+# One compiler for CI, the Docker image and local builds. Bump deliberately:
+# a new release can add clippy lints that CI denies.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

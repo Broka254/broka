@@ -304,6 +304,16 @@ class Settings:
     # Above the biggest legitimate upload: 25 MB of audio for transcription.
     max_request_body_mb: int = field(default_factory=lambda: max(1, int(os.getenv("MAX_REQUEST_BODY_MB", "32") or 32)))
 
+    # ── Rust extension (backend/native, api/core/native.py) ──────────────────
+    # BROKA_NATIVE: "auto" (default) uses the broka_native extension when it
+    #   is installed and was built from this checkout, else the Python
+    #   reference code - same results, slower, and on Python's backtracking
+    #   regex engine. "required" refuses to start without it; the Docker image
+    #   sets that, so a deploy can't lose the extension without anyone
+    #   noticing. "off" never loads it: the kill switch if it misbehaves.
+    #   Anything else refuses to start (validate_startup).
+    native_mode: str = field(default_factory=lambda: os.getenv("BROKA_NATIVE", "auto").strip().lower() or "auto")
+
     # ── Redis (for rate-limiting, pub/sub, and distributed workers) ───────────
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
 
@@ -668,6 +678,25 @@ def validate_startup() -> None:
             "is the proxy, shared by every user. Check GET "
             "/admin/diagnostics/client-ip."
         )
+
+    # Imported here, not at the top: api.core.native reads `settings`.
+    from api.core import native
+    if s.native_mode not in native.MODES:
+        # A typo in the kill switch must not quietly mean "auto".
+        raise RuntimeError(
+            f"FATAL: BROKA_NATIVE={s.native_mode!r} - use one of {', '.join(native.MODES)}."
+        )
+    if s.native_mode == "required" and not native.AVAILABLE:
+        raise RuntimeError(
+            f"FATAL: BROKA_NATIVE=required but the Rust extension is unusable: "
+            f"{native.REASON}. Rebuild it (pip install ./native from backend/) "
+            f"or set BROKA_NATIVE=off to run on the Python fallback."
+        )
+    if native.AVAILABLE:
+        logger.info("[startup] ✓ Rust extension active: %s", native.REASON)
+    else:
+        logger.warning("[startup] ⚠  Rust extension not in use (%s) — running the "
+                       "Python fallback.", native.REASON)
 
     if s.is_production and s.allowed_origins_raw in ("*", ""):
         logger.warning(

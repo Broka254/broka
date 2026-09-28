@@ -517,6 +517,7 @@ async def ready():
 
     from api.core.workflow import CURRENT_VERSION, all_versions
     from api.core.event_catalog import handler_count
+    from api.core import native
 
     status_code = 200 if db_ok else 503
     return JSONResponse(
@@ -529,6 +530,9 @@ async def ready():
             "workflow_current": CURRENT_VERSION,
             "workflow_all":     all_versions(),
             "event_handlers":   handler_count(),
+            # "rust" when the broka_native extension is in use, else "python"
+            # (api/core/native.py) - how to confirm a deploy carries it.
+            "native":           native.BACKEND,
         },
     )
 

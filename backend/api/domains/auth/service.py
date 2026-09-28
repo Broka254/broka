@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import math
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -22,27 +21,19 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.security import (
-    hash_password, verify_password, create_access_token,
+    hash_password_async, verify_login_password, create_access_token,
     create_phone_verify_token, decode_phone_verify_token, create_email_verify_token,
     decode_email_verify_token,
 )
 from api.core.events import publish, UserRegistered, UserLoggedIn
 from api.core.config import settings
+from api.core.geo import haversine_km
 from api.core.sms import get_sms_provider
 from api.core.email import get_email_provider, build_otp_email
 from api.database import AccountType, OtpPurpose, SellerMetrics, SellerTier
 from .repository import UserRepository
 
 logger = logging.getLogger(__name__)
-
-
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _hash_otp(code: str) -> str:
@@ -378,7 +369,7 @@ class AuthService:
                     "business_display_name": generate_business_display_name(b_name, b_cat, b_loc),
                 }
 
-        pw_hash = hash_password(password)
+        pw_hash = await hash_password_async(password)
 
         # Only a PROVEN address may claim the bootstrap admin seat. Matching a
         # typed email was enough before email verification existed, which
@@ -437,7 +428,9 @@ class AuthService:
     async def login(self, phone: str, password: str) -> dict:
         phone = _normalize_phone(phone)
         user = await self.repo.get_by_phone(phone)
-        if not user or not verify_password(password, user.password_hash):
+        # Checked even when there is no such account - see verify_login_password.
+        password_ok = await verify_login_password(password, user.password_hash if user else None)
+        if not user or not password_ok:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid phone number or password",
@@ -611,7 +604,7 @@ class AuthService:
         if own:
             d = self._user_dict(user)
             if viewer_lat is not None and viewer_lng is not None and user.lat and user.lng:
-                d["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, user.lat, user.lng), 1)
+                d["distance_km"] = round(haversine_km(viewer_lat, viewer_lng, user.lat, user.lng), 1)
         else:
             d = self._public_user_dict(user)
             distance = self._public_distance_km(user, viewer_lat, viewer_lng)
@@ -662,7 +655,7 @@ class AuthService:
         point = cls._approx_point(user)
         if point is None or viewer_lat is None or viewer_lng is None:
             return None
-        return round(_haversine_km(viewer_lat, viewer_lng, point[0], point[1]), 1)
+        return round(haversine_km(viewer_lat, viewer_lng, point[0], point[1]), 1)
 
     @classmethod
     def _public_user_dict(cls, user) -> dict:

@@ -39,7 +39,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import httpx
 import os
-import math
 import logging
 import re
 import json
@@ -47,7 +46,8 @@ import time
 
 from api.database import get_db, NegotiationMessage, Listing, User, Deal, DealStatus, ThreadReadState
 from api.routers.auth import _approx_location
-from api.core.fraud import detect_off_platform_solicitation
+from api.core import text_guard
+from api.core.geo import haversine_km
 from api.core.audit import record_audit
 from api.core.circuit_breaker import deepseek_breaker, gemini_breaker, CircuitOpenError
 from datetime import datetime as _dt, timedelta as _timedelta
@@ -1001,16 +1001,6 @@ def _compute_deal_probability(history: List[NegotiationMessage], latest_content:
     return max(5, min(95, int(prob)))
 
 
-def _haversine_km(lat1, lng1, lat2, lng2):
-    R    = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlng = math.radians(lng2 - lng1)
-    a    = (math.sin(dlat / 2) ** 2
-            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
-            * math.sin(dlng / 2) ** 2)
-    return R * 2 * math.asin(math.sqrt(a))
-
-
 def _selling_terms(listing) -> str:
     """The seller's own answers from the sell wizard (2026-09-25): what the
     price is per, how many they have, whether it's negotiable, whether they
@@ -1725,6 +1715,29 @@ async def free_chat(
     return MessageOut(role="broker", content=reply)
 
 
+async def _audit_off_platform_solicitation(
+    db: AsyncSession, *, sender_id: str, message_id: str, listing_id: str, role: str, content: Optional[str],
+) -> bool:
+    """Add an `off_platform_solicitation_detected` audit row if `content`
+    carries off-platform contact details (api/core/text_guard.py); True if
+    it did. Doesn't commit - the caller decides the transaction.
+
+    completion_rate.py reads these rows as a sign the thread's deal leaked,
+    so they are written for every chat path a user types into. The row
+    records which KINDS were found, never the matched text: that would copy
+    a phone number into the audit log.
+    """
+    findings = text_guard.scan(content or "")
+    if not findings:
+        return False
+    await record_audit(
+        db, sender_id, "off_platform_solicitation_detected",
+        "negotiation_message", str(message_id),
+        f"listing_id={listing_id} role={role} kinds={','.join(text_guard.kinds_of(findings))}",
+    )
+    return True
+
+
 @router.post("/message", response_model=MessageOut)
 async def send_message(
     data: MessageIn,
@@ -1787,7 +1800,7 @@ async def send_message(
 
     dist_str = ""
     if b_lat and b_lng and seller.lat and seller.lng:
-        km       = _haversine_km(b_lat, b_lng, seller.lat, seller.lng)
+        km       = haversine_km(b_lat, b_lng, seller.lat, seller.lng)
         dist_str = f"- Distance between them: {km:.1f} km\n"
 
     lang = data.language
@@ -2833,13 +2846,11 @@ async def send_message(
     # Analytics only - logged for 3.1's leakage detection and 4.2's churn
     # model. Deliberately does NOT touch trust_score or visibility here; a
     # single trigger is weak signal on its own (see fraud.py docstring).
-    off_platform_detected = detect_off_platform_solicitation(data.content)
+    off_platform_detected = await _audit_off_platform_solicitation(
+        db, sender_id=data.sender_id, message_id=new_msg.id,
+        listing_id=data.listing_id, role=data.sender_role, content=data.content,
+    )
     if off_platform_detected:
-        await record_audit(
-            db, data.sender_id, "off_platform_solicitation_detected",
-            "negotiation_message", str(new_msg.id),
-            f"listing_id={data.listing_id} role={data.sender_role}",
-        )
         await db.commit()
 
     # ── Delivery-date extraction (narrow, structured, backend-validated) ────
@@ -3229,6 +3240,15 @@ async def direct_message(
         msg_type="text",
     )
     db.add(direct_msg)
+    # Scanned here too, not only on the Zeno path: switching AI assist off
+    # to talk directly is exactly where a number or a till gets passed. Same
+    # transaction as the message (flush assigns its id), so a failed audit
+    # write can't leave a stored message behind a 500 that invites a retry.
+    await db.flush()
+    await _audit_off_platform_solicitation(
+        db, sender_id=authenticated_uid, message_id=direct_msg.id,
+        listing_id=data.listing_id, role=actual_role, content=data.content,
+    )
     await db.commit()
     await db.refresh(direct_msg)
     # Broadcast via WebSocket

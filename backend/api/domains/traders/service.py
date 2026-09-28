@@ -3,21 +3,12 @@ Not a new identity model (Design Journal Volume 6, Ch.5): Trader == User.
 """
 from __future__ import annotations
 
-import math
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.geo import haversine_km
 from api.core.text_search import matches_all_terms, search_terms
 from api.database import User, UserSpecialization, Listing, Category
-
-
-def _haversine_km(lat1, lng1, lat2, lng2) -> float:
-    R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 class TradersService:
@@ -152,5 +143,5 @@ class TradersService:
             viewer_lat is not None and viewer_lng is not None
             and u.lat is not None and u.lng is not None and u.location_visible
         ):
-            out["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, u.lat, u.lng), 1)
+            out["distance_km"] = round(haversine_km(viewer_lat, viewer_lng, u.lat, u.lng), 1)
         return out

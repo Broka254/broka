@@ -1,0 +1,13 @@
+# Build context for the root-context Dockerfile, which copies backend/ only.
+.git/
+flutter_app/
+web/
+**/node_modules/
+backend/native/target/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/htmlcov/
+**/*.db
+**/.env
+**/.env.*

@@ -28,12 +28,6 @@ from api.domains.auctions import events as auction_events
 from api.domains.auctions import lifecycle
 from api.domains.auctions.lifecycle import AuctionError
 
-try:
-    import broka_engine as engine
-    CPP_ENGINE_AVAILABLE = True
-except ImportError:
-    CPP_ENGINE_AVAILABLE = False
-
 router = APIRouter()
 
 
@@ -117,7 +111,21 @@ async def place_bid(
 
 @router.get("/{listing_id}/leaderboard", response_model=List[BidOut])
 async def get_leaderboard(listing_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Bid).where(Bid.listing_id == listing_id))
+    """Every bid on the listing, highest first; the earlier of two equal bids
+    ranks higher, since it was there first.
+
+    This used to try a C++ ranking engine (`broka_engine`) before falling
+    back to a sort in Python. No such module was ever built or installed,
+    so only the fallback ever ran - and the C++ branch, had it run, would
+    have shown a missing bidder's user id as their name and "-" for every
+    time. The database does the ordering now; the extension that does exist
+    (backend/native) has nothing to add to a sort SQL already does.
+    """
+    result = await db.execute(
+        select(Bid)
+        .where(Bid.listing_id == listing_id)
+        .order_by(Bid.amount.desc(), Bid.created_at.asc(), Bid.id.asc())
+    )
     bids = result.scalars().all()
     if not bids:
         return []
@@ -126,41 +134,22 @@ async def get_leaderboard(listing_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.id.in_(bidder_ids)))
     users = {u.id: u.name for u in result.scalars().all()}
 
+    now = datetime.utcnow()
+
     def _time_ago(created_at: datetime) -> str:
-        age_s = (datetime.utcnow() - created_at).total_seconds()
+        age_s = (now - created_at).total_seconds()
         if age_s < 60:
             return "just now"
         if age_s < 3600:
             return f"{int(age_s // 60)}m ago"
         return f"{int(age_s // 3600)}h ago"
 
-    if CPP_ENGINE_AVAILABLE:
-        cpp_bids = []
-        for b in bids:
-            cb = engine.Bid()
-            cb.bidder_id   = b.bidder_id
-            cb.bidder_name = users.get(b.bidder_id, b.bidder_id)
-            cb.amount      = b.amount
-            cb.timestamp   = int(b.created_at.timestamp() * 1000)
-            cpp_bids.append(cb)
-        ranked = engine.rank_bids(cpp_bids)
-        return [
-            BidOut(
-                rank=i + 1,
-                bidder_name=b.bidder_name,
-                amount=b.amount,
-                time_ago="-",
-            )
-            for i, b in enumerate(ranked)
-        ]
-    else:
-        sorted_bids = sorted(bids, key=lambda b: (-b.amount, b.created_at))
-        return [
-            BidOut(
-                rank=i + 1,
-                bidder_name=users.get(b.bidder_id, "Bidder"),
-                amount=b.amount,
-                time_ago=_time_ago(b.created_at),
-            )
-            for i, b in enumerate(sorted_bids)
-        ]
+    return [
+        BidOut(
+            rank=i + 1,
+            bidder_name=users.get(b.bidder_id, "Bidder"),
+            amount=b.amount,
+            time_ago=_time_ago(b.created_at),
+        )
+        for i, b in enumerate(bids)
+    ]

@@ -8,6 +8,8 @@ BROKA v3.0 - Auth & Security
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import os
 import secrets
 import logging
@@ -60,13 +62,70 @@ def validate_secret_key() -> None:
 
 
 # ── Password hashing ──────────────────────────────────────────────────────────
+#
+# bcrypt reads at most 72 BYTES of a password. This used to cut passwords at
+# 72 characters, which is more than 72 bytes once a password has anything
+# beyond ASCII - and bcrypt 5 raises ValueError rather than truncating, so
+# signing up or logging in with such a password was a 500. The cut is now in
+# bytes. Every hash already stored was made from these same bytes (ASCII
+# passwords are unchanged; bcrypt before 5 truncated to 72 bytes itself), so
+# they all still verify.
+#
+# A hash takes ~250 ms of CPU. Called straight from an async handler, that is
+# 250 ms in which the event loop serves nobody - every login stalls every
+# other request on the worker. Handlers use the *_async forms, which run in a
+# thread; bcrypt releases the GIL, so they run in parallel with the loop.
+
+_BCRYPT_MAX_BYTES = 72
+
+
+def _bcrypt_input(plain: str) -> bytes:
+    # 72 characters are always at least 72 bytes, so encoding only those is
+    # the same cut - and a pasted megabyte "password" costs nothing.
+    # surrogatepass: a JSON string may carry a lone surrogate.
+    return plain[:_BCRYPT_MAX_BYTES].encode("utf-8", "surrogatepass")[:_BCRYPT_MAX_BYTES]
+
 
 def hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain[:72].encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(_bcrypt_input(plain), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain[:72].encode(), hashed.encode())
+    """False for a wrong password, and for a stored hash bcrypt can't read -
+    a damaged row is a failed login, not a 500."""
+    try:
+        return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+    except (ValueError, TypeError, AttributeError):
+        logger.warning("[security] unreadable password hash; treated as a mismatch")
+        return False
+
+
+async def hash_password_async(plain: str) -> str:
+    return await asyncio.to_thread(hash_password, plain)
+
+
+async def verify_password_async(plain: str, hashed: str) -> bool:
+    return await asyncio.to_thread(verify_password, plain, hashed)
+
+
+@functools.cache
+def _no_account_hash() -> str:
+    # Made with the same gensalt() as real hashes, so checking against it
+    # costs exactly what checking a real account costs.
+    return hash_password(secrets.token_urlsafe(16))
+
+
+async def verify_login_password(plain: str, hashed: str | None) -> bool:
+    """`verify_password_async`, for a login where the account may not exist
+    (`hashed` is None). Without an account there is still a bcrypt check,
+    against a throwaway hash: answering "wrong phone" in 1 ms and "wrong
+    password" in 250 ms told anyone with a list of numbers which of them
+    have BROKA accounts."""
+    if hashed is None:
+        # _no_account_hash() inside the thread: its first call hashes too.
+        await asyncio.to_thread(lambda: verify_password(plain, _no_account_hash()))
+        return False
+    return await verify_password_async(plain, hashed)
 
 
 # ── Access token (15 min) ─────────────────────────────────────────────────────

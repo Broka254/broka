@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import HTTPException
@@ -15,20 +14,12 @@ from api.database import Listing, ListingStatus, ListingType, User, Interest, De
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
+from api.core.geo import distances_km, haversine_km
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
 from .paid import fee_applies, fee_state, is_live, live_clause
 from .validation import load_attributes
-
-
-def _haversine_km(lat1, lng1, lat2, lng2) -> float:
-    R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _coerce_dt(value) -> Optional[datetime]:
@@ -734,10 +725,10 @@ class ListingService:
             if attributes:
                 pool = [c for c in pool if self._matches_attributes(c, attributes)]
             if max_km is not None and viewer_lat is not None and viewer_lng is not None:
-                pool = [
-                    c for c in pool
-                    if _haversine_km(viewer_lat, viewer_lng, c.lat, c.lng) <= max_km
-                ]
+                # One call for the whole window (Rust when loaded), not one
+                # interpreted formula per candidate.
+                distances = distances_km(viewer_lat, viewer_lng, [(c.lat, c.lng) for c in pool])
+                pool = [c for c, km in zip(pool, distances) if km is not None and km <= max_km]
             total = len(pool) if with_total else None
             candidates = pool[offset: offset + limit]
 
@@ -774,7 +765,7 @@ class ListingService:
                 assets=assets, card=True,
             )
             if viewer_lat is not None and viewer_lng is not None:
-                d["distance_km"] = round(_haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng), 1)
+                d["distance_km"] = round(haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng), 1)
             # Auto-expire featured
             if listing.is_featured and listing.featured_until and listing.featured_until < now:
                 listing.is_featured = False
