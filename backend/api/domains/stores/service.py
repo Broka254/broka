@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
+from api.core.text_search import term_matches
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import live_clause
 from api.domains.categories.seed import CANONICAL_CATEGORIES
@@ -247,8 +248,10 @@ class StoreService:
         """Browse active stores. A paused store is left out of the
         directory, though its own link still resolves."""
         q = select(Store).where(Store.is_active == True)  # noqa: E712
-        if search:
-            q = q.where(Store.name.ilike(f"%{search.strip()}%"))
+        if search and search.strip():
+            # term_matches escapes LIKE's own wildcards: a bare ILIKE of the
+            # text made "_" or "%" match every store in the directory.
+            q = q.where(term_matches(search.strip(), (Store.name,)))
         if category:
             # Old stores' categories are filled in at startup
             # (categories.backfill_store_categories).
@@ -338,12 +341,22 @@ class StoreService:
             return {"items": [], "total": 0} if with_total else []
 
         listing_category = None
+        outside_categories = None
         if category:
             listing_category = store_categories.canonical(category)
             if listing_category is None:
                 raise HTTPException(status_code=400, detail="Unknown category")
+            if listing_category == store_categories.OTHER:
+                # The rail (list_categories) counts every listing whose
+                # category isn't one of BROKA's named ones as "Other" - free
+                # text from older app builds and API clients. Filtering on
+                # the word itself found only listings literally filed as
+                # "Other", so tapping "Other · 3" showed "No products".
+                listing_category = None
+                outside_categories = store_categories.named_listing_categories()
         return await ListingService(self.db).list_listings(
-            store_id=store_id, category=listing_category, search=(search or "").strip() or None,
+            store_id=store_id, category=listing_category,
+            outside_categories=outside_categories, search=(search or "").strip() or None,
             sort=CATALOGUE_SORTS.get(sort or "featured"),
             limit=limit, offset=offset, with_total=with_total,
         )

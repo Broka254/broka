@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.client_ip import client_ip
@@ -93,8 +93,11 @@ class EmailVerifyIn(BaseModel):
 
 
 class VisitIn(BaseModel):
-    # The ?via= tag of the link that opened the store, if any.
-    via: Optional[str] = Field(default=None, max_length=32)
+    # The ?via= tag of the link that opened the store, if any. Shortened,
+    # not refused: the app passes on the tag of whatever link opened it,
+    # and a longer one made the whole visit a 422 that was never counted.
+    # An unknown tag counts as "other" either way (stats.visit_source).
+    via: Optional[str] = Field(default=None, max_length=512)
     # "web": the web storefront, reporting from the visitor's browser.
     surface: Literal["app", "web"] = "app"
     # The web page's document.referrer, where visitors came from when the
@@ -104,6 +107,11 @@ class VisitIn(BaseModel):
     # visitor is recognised without relying on IP addresses (behind the
     # hosting proxy, many visitors can share one).
     visitor: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
+
+    @field_validator("via")
+    @classmethod
+    def _short_via(cls, v: Optional[str]) -> Optional[str]:
+        return store_stats.short_via(v)
 
 
 class ShareIn(BaseModel):

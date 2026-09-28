@@ -12,7 +12,11 @@ from typing import Optional
 
 from sqlalchemy import select, update
 
-from api.domains.categories.seed import CANONICAL_CATEGORIES, canonical_category_name
+from api.domains.categories.seed import (
+    CANONICAL_CATEGORIES, RENAMED_CATEGORIES, canonical_category_name,
+)
+
+OTHER = "Other"
 
 _CANONICAL_BY_LOWER = {c.lower(): c for c in CANONICAL_CATEGORIES}
 
@@ -54,7 +58,17 @@ def for_listing(value: Optional[str]) -> str:
     """The top-level category a listing counts under in a store's
     category rail. Listing.category is canonical for anything posted
     through the current sell flow; older free text lands in "Other"."""
-    return canonical(value) or "Other"
+    return canonical(value) or OTHER
+
+
+def named_listing_categories() -> list[str]:
+    """Every lower-cased Listing.category that for_listing() files under a
+    category of its own, not under "Other": the canonical names and the old
+    names of renamed ones. A store's "Other" shelf is every listing outside
+    this list - exactly what the category rail counts as "Other"."""
+    names = {c.lower() for c in CANONICAL_CATEGORIES if c != OTHER}
+    names.update(old.lower() for old, new in RENAMED_CATEGORIES.items() if new != OTHER)
+    return sorted(names)
 
 
 async def backfill_store_categories() -> int:

@@ -243,7 +243,9 @@ def render_not_found_page(slug: str) -> str:
 async def store_public_page(
     slug: str,
     request: Request,
-    via: Optional[str] = Query(None, max_length=32),
+    # 512, not 32: a longer tag made an old link a JSON 422 instead of
+    # this page (or the redirect below). Shortened where it's counted.
+    via: Optional[str] = Query(None, max_length=512),
     db: AsyncSession = Depends(get_db),
 ):
     """{STORE_LINK_BASE}/{slug} - the public storefront. Public,
@@ -276,7 +278,7 @@ async def store_public_page(
         ip = client_ip(request)
         await store_stats.record_visit(
             db, store["id"], "web",
-            store_stats.visit_source(via, request.headers.get("referer")),
+            store_stats.visit_source(store_stats.short_via(via), request.headers.get("referer")),
             store_stats.anonymous_visitor_key(ip, user_agent),
             client=f"ip:{ip}",
         )

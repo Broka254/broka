@@ -98,6 +98,15 @@ def today() -> date:
     return datetime.now(KENYA).date()
 
 
+MAX_VIA_LENGTH = 32
+
+
+def short_via(via: Optional[str]) -> Optional[str]:
+    """A link's ?via= tag cut to MAX_VIA_LENGTH. Callers shorten rather
+    than refuse: a long tag is still a visit, counted as "other"."""
+    return via[:MAX_VIA_LENGTH] if via else via
+
+
 def visit_source(via: Optional[str], referer: Optional[str] = None) -> str:
     tag = (via or "").strip().lower()
     if tag:

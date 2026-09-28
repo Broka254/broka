@@ -456,6 +456,41 @@ class TestCatalogue:
                                   params={"with_total": True, "limit": 2})).json()
         assert paged["total"] == 5 and len(paged["items"]) == 2
 
+    async def test_the_other_shelf_holds_what_the_rail_counts_there(self, client):
+        # The rail counts free-text categories as "Other"; tapping "Other"
+        # filtered on the literal word, so it showed only "Odd Thing".
+        _, headers = await _register(client)
+        store = await _store(client, headers)
+        sid = store["id"]
+        await _listing(client, headers, sid, "Phone", category="Electronics")
+        await _listing(client, headers, sid, "Mystery Item", category="random stuff")
+        await _listing(client, headers, sid, "Odd Thing", category="Other")
+
+        cats = (await client.get(f"/stores/{sid}/categories")).json()
+        assert {"name": "Other", "count": 2} in cats
+        r = await client.get(f"/stores/{sid}/listings",
+                             params={"category": "other", "with_total": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["total"] == 2
+        assert {item["name"] for item in r.json()["items"]} == {"Mystery Item", "Odd Thing"}
+
+    async def test_directory_search_matches_the_text_not_wildcards(self, client):
+        # "_" and "%" were LIKE wildcards: searching "_" listed every store.
+        _, a = await _register(client)
+        await _store(client, a, name="Plain Name Shop")
+        _, b = await _register(client)
+        await _store(client, b, name="Under_score Shop")
+
+        async def found(text):
+            r = await client.get("/stores", params={"search": text, "limit": 100})
+            assert r.status_code == 200, r.text
+            return {s["name"] for s in r.json()}
+
+        assert "Under_score Shop" in await found("_")
+        assert "Plain Name Shop" not in await found("_")
+        assert "Plain Name Shop" not in await found("%")
+        assert "Plain Name Shop" in await found("plain name")
+
     async def test_a_paused_store_has_no_categories(self, client):
         _, headers = await _register(client)
         store = await _store(client, headers)
@@ -514,6 +549,26 @@ class TestVisitsAndStats:
         assert stats["visits"]["by_source"]["whatsapp"] == 1
         assert stats["visits"]["by_source"]["tiktok"] == 1
         assert stats["visits"]["by_surface"] == {"app": 2, "web": 0}
+
+    async def test_a_long_link_tag_is_still_a_visit(self, client):
+        # The app passes on the ?via= of whatever link opened it. A tag over
+        # 32 characters was a 422, so the visit was silently never counted;
+        # on the API's own store page it was a JSON error, not the page.
+        _, owner = await _register(client)
+        store = await _store(client, owner, slug="long-tags")
+        _, buyer = await _register(client, tier=None)
+        tag = "whatsapp-status-from-the-church-group-2026"
+        r = await client.post(f"/stores/{store['id']}/visit", json={"via": tag}, headers=buyer)
+        assert r.status_code == 202, r.text
+        assert r.json()["counted"] is True
+        stats = (await client.get(f"/stores/{store['id']}/stats", headers=owner)).json()
+        assert stats["visits"]["by_source"]["other"] == 1
+
+        page = await client.get(f"/store/long-tags?via={tag}", headers={
+            **ON_LINK_HOST, "user-agent": "Mozilla/5.0 (Linux; Android 13) Chrome/120.0 Mobile"})
+        assert page.status_code == 200
+        away = await client.get(f"/store/long-tags?via={tag}", follow_redirects=False)
+        assert away.status_code == 302
 
     async def test_web_page_visits_are_counted_with_their_source(self, client):
         _, owner = await _register(client)

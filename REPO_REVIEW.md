@@ -8,6 +8,9 @@
 **Later the same day:** the listing-posting flow was reviewed on its own —
 findings, fixes and what is still open are in `LISTING_POSTING_REVIEW.md`.
 
+**2026-09-28:** online stores (phases 1–3) were reviewed on their own —
+see `STORES_REVIEW.md`.
+
 This review does two things. It rechecks what the 2026-09-23 review left
 open, and it reviews the 21 commits since then (~30k lines): the fix pass,
 image storage on R2, online stores phase 2 (backend and app), the Next.js

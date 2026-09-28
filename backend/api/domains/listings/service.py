@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic_core import PydanticCustomError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, case
+from sqlalchemy import select, func, desc, case, or_
 
 from api.database import Listing, ListingStatus, ListingType, User, Interest, Deal, DealStatus, Category, SellerMetrics
 from api.models.store import Store
@@ -553,6 +553,9 @@ class ListingService:
         limit: int = 20,
         offset: int = 0,
         with_total: bool = False,
+        # Listings filed under none of these names (any case): a store's
+        # "Other" shelf (StoreService.list_store_listings).
+        outside_categories: Optional[List[str]] = None,
     ):
         """Phase 3 (broka_mockup_actualization_spec.md §7): "Filters must
         affect actual backend results. Do not implement fake UI-only
@@ -598,6 +601,14 @@ class ListingService:
             # An old app build asking for "Vehicles" means "Automobiles".
             from api.domains.categories.seed import canonical_category_name
             q = q.where(func.lower(Listing.category) == canonical_category_name(category).strip().lower())
+        if outside_categories:
+            # lower() on both sides, like the equality above. NOT IN is
+            # never true for NULL, so a listing with no category is added
+            # back explicitly: it is "Other" too.
+            q = q.where(or_(
+                Listing.category.is_(None),
+                func.lower(Listing.category).not_in([c.lower() for c in outside_categories]),
+            ))
         if subcategory_id:
             # Most specific filter wins outright.
             q = q.where(Listing.subcategory_id == subcategory_id)
