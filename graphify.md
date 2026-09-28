@@ -212,21 +212,21 @@ Counts: admin 16, optional 2, public 50, token 4, user 108.
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:54) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
-| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:137) |
-| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:124) |
-| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:177) |
-| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:196) |
-| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:156) |
-| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:165) |
-| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:213) |
-| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:218) |
-| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:223) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:265) |
-| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:247) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:310) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:329) |
-| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:237) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:271) |
+| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:145) |
+| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:132) |
+| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:185) |
+| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:204) |
+| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:164) |
+| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:173) |
+| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:221) |
+| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:226) |
+| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:231) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:273) |
+| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:255) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:318) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:337) |
+| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:245) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:279) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -540,7 +540,7 @@ of a change.
 - **pricing** — domains: listings, trust; core: audit, config, events, idempotency, mpesa_stk, rate_limit, reconciliation; database, security
 - **reviews** — core: audit, events; database, security
 - **showcase** — domains: media, premium; core: fal_client, image_processing, rate_limit; database, security
-- **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit; database, security
+- **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit, text_search; database, security
 - **traders** — core: text_search; database
 - **trending** — domains: listings; database
 - **trust** — domains: listings; database
@@ -1037,4 +1037,5 @@ Modules:
 - `REPO_REVIEW.md` — BROKA — Repository Review
 - `SELLER_METRICS.md` — Seller metrics — phased build
 - `STORES_PLAN.md` — Online Stores — build plan (2026-09-23)
+- `STORES_REVIEW.md` — BROKA — Online Stores Review
 - `ZENO_ACTIONS.md` — Zeno as the user's assistant (2026-09-27)
