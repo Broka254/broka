@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-180 endpoints served by `backend/main.py`. **Auth** is read from each
+181 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 16, optional 2, public 50, token 4, user 108.
+Counts: admin 16, optional 2, public 50, token 4, user 109.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -221,12 +221,13 @@ Counts: admin 16, optional 2, public 50, token 4, user 108.
 | GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:221) |
 | GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:226) |
 | PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:231) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:273) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:290) |
 | GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:255) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:318) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:337) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:273) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:335) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:354) |
 | POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:245) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:279) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:296) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -787,6 +788,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/store_share.dart` — Sharing a store's link.
 - `domain/kenya_locations.dart` — Kenya's 47 counties and their subcounties, for location pickers.
 - `domain/models/store.dart` — BROKA — Store domain model
+- `domain/models/store_product.dart` — A product in the owner's own store, as My Store manages it (GET /stores/{id}/manage/listings): the listing, whether buyers can see it, and…
 - `domain/store_categories.dart` — A store's category is one of BROKA's top-level categories (the home screen's category rail).
 - `presentation/my_store_screen.dart` — My Store - the owner's dashboard.
 - `presentation/setup/store_setup_controller.dart` — State behind the store setup wizard and the store's settings pages.
@@ -1020,7 +1022,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno stays with you, and guides (2026-09-27)
+- `CHANGES.md` — My Store: every product, and what needs the owner (2026-09-28)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
@@ -1038,4 +1040,5 @@ Modules:
 - `SELLER_METRICS.md` — Seller metrics — phased build
 - `STORES_PLAN.md` — Online Stores — build plan (2026-09-23)
 - `STORES_REVIEW.md` — BROKA — Online Stores Review
+- `STORES_UI_REVIEW.md` — BROKA — Online Stores UI Review
 - `ZENO_ACTIONS.md` — Zeno as the user's assistant (2026-09-27)
