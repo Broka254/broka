@@ -121,6 +121,26 @@ class StoreShare {
     }
   }
 
+  /// One product's link through the system share sheet (WhatsApp, a
+  /// status, SMS...), tagged and counted like the store's own link. Sellers
+  /// post single products far more often than whole stores.
+  Future<ShareOutcome> shareProduct(Store store,
+      {required String listingId, required String name, required String price}) async {
+    const to = ShareDestination.more;
+    final link = store.productUrl(listingId, via: to.channel);
+    _repo.recordShare(store.id, to.channel);
+    if (await _invoke('shareText', {
+          'text': '$name, $price at ${store.name}: $link',
+          'subject': name,
+          'title': 'Share $name',
+        }) ==
+        'shared') {
+      return ShareOutcome.shared;
+    }
+    await _copy(link);
+    return ShareOutcome.failed;
+  }
+
   /// The QR code was opened (to screenshot or print): counted as a share.
   void countQrShown(Store store) => _repo.recordShare(store.id, 'qr');
 

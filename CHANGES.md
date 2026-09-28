@@ -1,3 +1,39 @@
+# My Store: every product, and what needs the owner (2026-09-28)
+
+**The Products tab shows every product in the store.** It listed them
+through the public feed, which shows only what buyers can see, so a product
+left its owner's screen the moment it went into a deal, sold, or waited for
+its listing fee (`STORES_REVIEW.md`, open item 2). A new owner-only
+endpoint, `GET /stores/{id}/manage/listings`, returns them all, each with
+its state (live, hidden until its fee is paid, in a deal, sold) and listing
+fee, plus how many are in each state.
+
+- Filter chips with those counts, and a search.
+- Each product says what its state means ("Not paid for yet, so buyers
+  can't see it", "Listing time ends 2 Oct"), with **Pay** or **Renew**
+  beside it.
+- Tapping a product: pay or renew; change the price (the dialog states the
+  two-a-week limit, and the server's refusals are shown as they are);
+  share the product's own link; see how it's doing; see it as buyers do;
+  take it out of the store.
+
+**The Overview:**
+- **Needs your attention:** products hidden from buyers and products in a
+  deal, each opening the Products tab on them.
+- **Finish setting up your store:** logo, cover photo, description, three
+  products and a business email, each a tap from the page that does it;
+  gone once all are done.
+
+**Fixed on the way:**
+- Taking a product out of the store reloaded the whole screen and put the
+  owner back on Overview. Changes made inside My Store now fetch the store
+  again without replacing the dashboard.
+- Once the header had collapsed, the top of every tab (Add product, the
+  search) sat under the pinned bar and tabs, out of reach.
+
+Tests: `backend/tests/test_store_setup.py` (`TestOwnerProducts`),
+`flutter_app/test/store_setup_test.dart` (9 more).
+
 # Zeno stays with you, and guides (2026-09-27)
 
 **Zeno stays active across screens.** "Open my dashboard" used to open the

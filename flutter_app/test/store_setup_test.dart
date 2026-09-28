@@ -14,6 +14,7 @@ import 'package:broka/features/stores/data/repositories/stores_repository.dart';
 import 'package:broka/features/stores/data/store_share.dart';
 import 'package:broka/features/stores/domain/kenya_locations.dart';
 import 'package:broka/features/stores/domain/models/store.dart';
+import 'package:broka/features/stores/domain/models/store_product.dart';
 import 'package:broka/features/stores/domain/store_categories.dart';
 import 'package:broka/features/stores/presentation/my_store_screen.dart';
 import 'package:broka/features/stores/presentation/setup/store_setup_controller.dart';
@@ -99,6 +100,72 @@ Map<String, dynamic> _stats() => {
       },
       'shares': {'total': 4, 'by_channel': {'whatsapp': 4}},
     };
+
+/// One product as GET /stores/{id}/manage/listings returns it.
+Map<String, dynamic> _product(
+  String id,
+  String name,
+  String state, {
+  String fee = 'free',
+  bool needsPayment = false,
+  String? paidUntil,
+  double price = 1000,
+}) =>
+    {
+      'id': id,
+      'seller_id': 'u1',
+      'name': name,
+      'category': 'Electronics',
+      'price': price,
+      'lat': -1.28,
+      'lng': 36.8,
+      'listing_type': 'direct',
+      'status': switch (state) { 'in_deal' => 'pending', 'sold' => 'completed', _ => 'active' },
+      'photos': [],
+      'cover': null,
+      'store_id': 's1',
+      'store_slug': 'clanix',
+      'store_name': 'Clanix Electronics',
+      'store_state': state,
+      'listing_fee': {
+        'status': fee,
+        'live': state == 'live',
+        'paid_until': paidUntil,
+        'needs_payment': needsPayment,
+      },
+    };
+
+/// A product in every state.
+List<Map<String, dynamic>> _mixedProducts() => [
+      _product('l1', 'Samsung A15', 'live', price: 18000),
+      _product('l2', 'Oraimo charger', 'hidden', fee: 'unpaid', needsPayment: true,
+          paidUntil: '2026-09-20T10:00:00'),
+      _product('l3', 'iPhone 12', 'in_deal'),
+      _product('l4', 'HP EliteBook', 'sold'),
+    ];
+
+/// The owner's product list, filtered like the backend does: counts for
+/// the search, items for the search and the state.
+http.Response _manage(http.Request r, List<Map<String, dynamic>> all) {
+  final state = r.url.queryParameters['state'];
+  final search = r.url.queryParameters['search']?.toLowerCase();
+  final matching = [
+    for (final p in all)
+      if (search == null || (p['name'] as String).toLowerCase().contains(search)) p,
+  ];
+  final counts = {
+    for (final s in ['live', 'hidden', 'in_deal', 'sold'])
+      s: matching.where((p) => p['store_state'] == s).length,
+  };
+  return _json({
+    'items': [for (final p in matching) if (state == null || p['store_state'] == state) p],
+    'counts': {...counts, 'all': matching.length},
+  });
+}
+
+// A 1x1 PNG, so a store can have a logo and cover without the network.
+const _pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42'
+    'mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
 /// A backend: [routes] maps "METHOD /path" to a handler. Every request is
 /// recorded.
@@ -204,6 +271,34 @@ void main() {
       expect(s.visitsByDay, hasLength(7));
       expect(s.visitsBySource['whatsapp'], 6);
       expect(s.sharesByChannel['whatsapp'], 4);
+    });
+
+    test('product links are the web storefront\'s', () {
+      final s = Store.fromJson(_storeJson());
+      expect(s.productUrl('l1'), 'https://broka.co.ke/store/clanix/p/l1');
+      expect(s.productUrl('l1', via: 'qr'), 'https://broka.co.ke/store/clanix/p/l1?via=qr');
+    });
+
+    test("an owner's product: its state, fee and what can be done with it", () {
+      final hidden = StoreProduct.fromJson(_product('l2', 'Charger', 'hidden',
+          fee: 'unpaid', needsPayment: true));
+      expect(hidden.state, StoreProductState.hidden);
+      expect(hidden.needsPayment, isTrue);
+      expect(hidden.priceEditable, isTrue);
+
+      final ending = StoreProduct.fromJson(_product('l5', 'Cable', 'live',
+          fee: 'ending', needsPayment: true, paidUntil: '2026-10-02T09:00:00'));
+      expect(ending.endingSoon, isTrue);
+      // The backend's naive timestamps are UTC.
+      expect(ending.paidUntil, DateTime.utc(2026, 10, 2, 9));
+
+      expect(StoreProduct.fromJson(_product('l3', 'Phone', 'in_deal')).priceEditable, isFalse);
+      expect(StoreProduct.fromJson(_product('l4', 'Laptop', 'sold')).priceEditable, isFalse);
+
+      final counts = StoreProductCounts.fromJson(
+          {'all': 4, 'live': 1, 'hidden': 1, 'in_deal': 1, 'sold': 1});
+      expect(counts.of(null), 4);
+      expect(counts.of(StoreProductState.inDeal), 1);
     });
   });
 
@@ -551,6 +646,20 @@ void main() {
       expect(copied, 'https://broka.co.ke/store/clanix?via=tiktok');
       expect(calls.single.method, 'openApp');
     });
+
+    test('a product goes out through the share sheet with its own tagged link', () async {
+      final backend = FakeBackend({'POST /stores/s1/share': (_) => _json({}, 202)});
+      answers['shareText'] = 'shared';
+      final outcome = await make(backend, []).shareProduct(Store.fromJson(_storeJson()),
+          listingId: 'l1', name: 'Samsung A15', price: 'KES 18,000');
+      expect(outcome, ShareOutcome.shared);
+      final args = calls.single.arguments as Map;
+      expect(args['package'], isNull);
+      expect(args['text'],
+          'Samsung A15, KES 18,000 at Clanix Electronics: https://broka.co.ke/store/clanix/p/l1?via=other');
+      await pumpEventQueue();
+      expect(backend.bodiesFor('POST', '/stores/s1/share').single, {'channel': 'other'});
+    });
   });
 
   group('Screens', () {
@@ -619,7 +728,7 @@ void main() {
         'GET /stores/s1/stats': (_) => _json(_stats()),
         'POST /stores/s1/status': (r) =>
             _json(_storeJson(active: (jsonDecode(r.body) as Map)['is_active'] as bool)),
-        'GET /listings/': (_) => _json([]),
+        'GET /stores/s1/manage/listings': (r) => _manage(r, []),
       });
       await tester.pumpWidget(MaterialApp(
           home: MyStoreScreen(repository: backend.repo,
@@ -630,10 +739,16 @@ void main() {
       expect(find.byType(StoreShareCard), findsOneWidget);
       expect(find.byKey(const Key('store-link-text')), findsOneWidget);
       expect(find.text('broka.co.ke/store/clanix'), findsOneWidget);
-      expect(find.byKey(const Key('visits-total')), findsOneWidget);
-      expect(find.text('9'), findsOneWidget);
       expect(find.text('WhatsApp'), findsWidgets);
       expect(find.text('Your store is open'), findsOneWidget);
+      // The week's numbers are further down, under what's left to set up.
+      final overview = find.byKey(const Key('overview-list'));
+      await tester.dragUntilVisible(
+          find.byKey(const Key('visits-total')), overview, const Offset(0, -200));
+      expect(find.text('9'), findsOneWidget);
+      await tester.dragUntilVisible(
+          find.byKey(const Key('store-open-switch')), overview, const Offset(0, 200));
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('store-open-switch')));
       await tester.pumpAndSettle();
@@ -646,6 +761,192 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Store link'), findsOneWidget);
       expect(find.byIcon(Icons.lock_outline_rounded), findsOneWidget);
+    });
+
+    Future<FakeBackend> openMyStore(WidgetTester tester, {
+      Map<String, dynamic>? store,
+      List<Map<String, dynamic>>? products,
+      Map<String, FutureOr<http.Response> Function(http.Request)> more = const {},
+    }) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      final all = products ?? _mixedProducts();
+      final backend = FakeBackend({
+        'GET /stores/mine': (_) => _json(store ?? _storeJson()),
+        'GET /stores/s1/stats': (_) => _json(_stats()),
+        'GET /stores/s1/manage/listings': (r) => _manage(r, all),
+        ...more,
+      });
+      await tester.pumpWidget(MaterialApp(
+          home: MyStoreScreen(key: UniqueKey(), repository: backend.repo,
+              listings: ListingsRepository(client: backend.client), animateBackground: false)));
+      await tester.pumpAndSettle();
+      return backend;
+    }
+
+    Future<void> openProducts(WidgetTester tester) async {
+      await tester.tap(find.text('Products'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Products lists every product with its state, by state and by search',
+        (tester) async {
+      final backend = await openMyStore(tester);
+      await openProducts(tester);
+
+      for (final name in ['Samsung A15', 'Oraimo charger', 'iPhone 12', 'HP EliteBook']) {
+        expect(find.text(name), findsOneWidget);
+      }
+      expect(find.text("Not paid for yet, so buyers can't see it"), findsOneWidget);
+      expect(find.text('A buyer agreed a deal on it'), findsOneWidget);
+      // Pay sits beside the hidden product, and only there.
+      expect(find.byKey(const Key('pay-l2')), findsOneWidget);
+      expect(find.byKey(const Key('pay-l1')), findsNothing);
+
+      final hiddenChip = find.byKey(const Key('product-filter-hidden'));
+      expect(find.descendant(of: hiddenChip, matching: find.text('1')), findsOneWidget);
+      await tester.tap(hiddenChip);
+      await tester.pumpAndSettle();
+      expect(backend.requests.last.url.queryParameters['state'], 'hidden');
+      expect(find.text('Oraimo charger'), findsOneWidget);
+      expect(find.text('Samsung A15'), findsNothing);
+
+      // The chips scroll sideways on a phone.
+      await tester.ensureVisible(find.byKey(const Key('product-filter-sold')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-filter-sold')));
+      await tester.pumpAndSettle();
+      expect(find.text('HP EliteBook'), findsOneWidget);
+      expect(find.text('Oraimo charger'), findsNothing);
+
+      await tester.ensureVisible(find.byKey(const Key('product-filter-all')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-filter-all')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('product-search')), 'iphone');
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pumpAndSettle();
+      expect(backend.requests.last.url.queryParameters['search'], 'iphone');
+      expect(find.text('iPhone 12'), findsOneWidget);
+      expect(find.text('Samsung A15'), findsNothing);
+    });
+
+    testWidgets('the tabs start below the header, even once it has collapsed', (tester) async {
+      await openMyStore(tester);
+      // Scrolling the Overview collapses the header to the bar and tabs.
+      await tester.drag(find.byKey(const Key('overview-list')), const Offset(0, -600));
+      await tester.pumpAndSettle();
+      await openProducts(tester);
+      final tabsBottom = tester.getBottomLeft(find.byType(TabBar)).dy;
+      // Add product and the search used to sit under the collapsed header,
+      // out of reach.
+      expect(tester.getTopLeft(find.byKey(const Key('add-product'))).dy,
+          greaterThanOrEqualTo(tabsBottom));
+      expect(tester.getTopLeft(find.byKey(const Key('product-search'))).dy,
+          greaterThanOrEqualTo(tabsBottom));
+    });
+
+    testWidgets('the Overview points at hidden products and opens them', (tester) async {
+      await openMyStore(tester);
+      expect(find.text('1 product hidden from buyers'), findsOneWidget);
+      expect(find.text('1 product in a deal'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('attention-hidden')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('product-search')), findsOneWidget);
+      expect(find.text('Oraimo charger'), findsOneWidget);
+      expect(find.text('Samsung A15'), findsNothing);
+    });
+
+    testWidgets('the setup checklist shows what is left, and goes once it is all done',
+        (tester) async {
+      await openMyStore(tester);
+      // Described, and 4 products: done. No logo, cover or email yet.
+      expect(find.byKey(const Key('setup-checklist')), findsOneWidget);
+      expect(find.text('2 of 5 done'), findsOneWidget);
+      expect(find.text('Add your logo'), findsOneWidget);
+      expect(find.text('Add a business email'), findsOneWidget);
+
+      await openMyStore(tester, store: {
+        ..._storeJson(email: 'sales@clanix.co.ke', emailVerified: true),
+        'logo_url': _pixel,
+        'photos': [_pixel],
+      });
+      expect(find.byKey(const Key('setup-checklist')), findsNothing);
+    });
+
+    testWidgets("changing a price sends it, and the server's refusal is shown as it is",
+        (tester) async {
+      final backend = await openMyStore(tester, more: {
+        'PATCH /listings/l1': (_) => _json({'price_changes_remaining': 1}),
+        'PATCH /listings/l2': (_) => _json({'detail': 'You have used both price changes '
+            'for this listing this week.'}, 429),
+      });
+      await openProducts(tester);
+
+      Future<void> reprice(String id, String price) async {
+        await tester.tap(find.byKey(Key('store-product-$id')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('product-action-price')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('price-field')), price);
+        await tester.tap(find.byKey(const Key('save-price')));
+        await tester.pumpAndSettle();
+      }
+
+      await reprice('l1', '17500');
+      expect(backend.bodiesFor('PATCH', '/listings/l1').single, {'price': 17500.0});
+      expect(find.text('Price updated. You can change it once more this week.'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+
+      await reprice('l2', '900');
+      expect(find.text('You have used both price changes for this listing this week.'),
+          findsOneWidget);
+
+      // Nothing to reprice on a product in a deal.
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('store-product-l3')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('product-action-price')), findsNothing);
+      expect(find.byKey(const Key('product-action-remove')), findsOneWidget);
+    });
+
+    testWidgets('taking a product out keeps the owner on the Products tab', (tester) async {
+      final products = _mixedProducts();
+      final backend = await openMyStore(tester, products: products, more: {
+        // As slow as a real network, so a reload that swaps the dashboard
+        // for a spinner actually draws the spinner.
+        'GET /stores/mine': (_) async {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          return _json(_storeJson());
+        },
+        'DELETE /listings/l1/store': (_) {
+          final p = products.firstWhere((p) => p['id'] == 'l1');
+          products.remove(p);
+          return _json({...p, 'store_id': null});
+        },
+      });
+      await openProducts(tester);
+
+      await tester.tap(find.byKey(const Key('store-product-l1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-action-remove')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Take out'));
+      // Frame by frame, as a phone draws them while the store loads again.
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('Samsung A15'), findsNothing);
+      // Still on Products: the store was fetched again without replacing
+      // the dashboard, which used to put the owner back on Overview.
+      expect(find.byKey(const Key('product-search')), findsOneWidget);
+      expect(backend.requests.where((r) => r.url.path == '/stores/mine'), hasLength(2));
     });
 
     testWidgets('the QR code carries the tagged link', (tester) async {
@@ -669,7 +970,12 @@ void main() {
               'suggestion': 'clanix-electronics-2'}),
           'GET /stores/mine': (_) => _json(_storeJson()),
           'GET /stores/s1/stats': (_) => _json(_stats()),
-          'GET /listings/': (_) => _json([]),
+          'GET /stores/s1/manage/listings': (r) => _manage(r, [
+                ..._mixedProducts(),
+                _product('l9', 'A product name long enough to wrap onto two lines and more',
+                    'live', fee: 'ending', needsPayment: true, paidUntil: '2026-10-02T09:00:00',
+                    price: 1250000),
+              ]),
         });
         final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
         await c.load();
@@ -718,6 +1024,11 @@ void main() {
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull, reason: 'My Store $tab at $size');
         }
+        await tester.tap(find.text('Products'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('store-product-l2')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'product actions at $size');
         c.dispose();
       });
     }

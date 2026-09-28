@@ -13,7 +13,7 @@ Online Stores phase 2: setting a store up, and what its owner sees.
 Same fixture shape as test_stores.py.
 """
 import itertools
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -497,6 +497,113 @@ class TestCatalogue:
         await _listing(client, headers, store["id"], "Thing")
         await client.post(f"/stores/{store['id']}/status", json={"is_active": False}, headers=headers)
         assert (await client.get(f"/stores/{store['id']}/categories")).json() == []
+
+
+# ── My Store: the owner's product list ───────────────────────────────────────
+
+async def _set_listing(listing_id: str, **fields) -> None:
+    """Puts a listing into a state the API reaches through deals and fees."""
+    from api.database import Listing
+    async with AsyncSessionLocal() as db:
+        row = await db.get(Listing, listing_id)
+        for name, value in fields.items():
+            setattr(row, name, value(row) if callable(value) else value)
+        await db.commit()
+
+
+@pytest.mark.asyncio
+class TestOwnerProducts:
+    async def _stocked_store(self, client, headers) -> tuple[str, dict]:
+        """A store with a product in every state, plus a deleted one."""
+        from api.database import ListingStatus
+        sid = (await _store(client, headers))["id"]
+        made = {name: (await _listing(client, headers, sid, name))["id"] for name in (
+            "Live phone", "Unpaid charger", "Expired cable", "Phone in a deal",
+            "Sold laptop", "Deleted case")}
+        now = datetime.utcnow()
+        # Never paid: paid_until no later than it was listed.
+        await _set_listing(made["Unpaid charger"], paid_until=lambda row: row.created_at)
+        await _set_listing(made["Expired cable"], created_at=now - timedelta(days=40),
+                           paid_until=now - timedelta(days=1))
+        await _set_listing(made["Phone in a deal"], status=ListingStatus.pending)
+        await _set_listing(made["Sold laptop"], status=ListingStatus.completed)
+        await _set_listing(made["Deleted case"], status=ListingStatus.cancelled)
+        return sid, made
+
+    async def test_the_owner_sees_every_product_the_public_catalogue_hides(self, client):
+        _, headers = await _register(client)
+        sid, _ = await self._stocked_store(client, headers)
+
+        public = (await client.get(f"/stores/{sid}/listings")).json()
+        assert [p["name"] for p in public] == ["Live phone"]
+
+        r = await client.get(f"/stores/{sid}/manage/listings", headers=headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        states = {p["name"]: p["store_state"] for p in body["items"]}
+        assert states == {
+            "Live phone": "live", "Unpaid charger": "hidden", "Expired cable": "hidden",
+            "Phone in a deal": "in_deal", "Sold laptop": "sold",
+        }
+        assert body["counts"] == {"live": 1, "hidden": 2, "in_deal": 1, "sold": 1, "all": 5}
+        fees = {p["name"]: p["listing_fee"]["status"] for p in body["items"]}
+        assert fees["Unpaid charger"] == "unpaid" and fees["Expired cable"] == "expired"
+        assert all(p["listing_fee"]["needs_payment"] for p in body["items"]
+                   if p["store_state"] == "hidden")
+
+    async def test_filtering_by_state_and_search(self, client):
+        _, headers = await _register(client)
+        sid, _ = await self._stocked_store(client, headers)
+
+        async def get(**params):
+            r = await client.get(f"/stores/{sid}/manage/listings", params=params, headers=headers)
+            assert r.status_code == 200, r.text
+            return r.json()
+
+        hidden = await get(state="hidden")
+        assert {p["name"] for p in hidden["items"]} == {"Unpaid charger", "Expired cable"}
+        # The counts are for every state, whichever one is shown.
+        assert hidden["counts"]["all"] == 5
+
+        phones = await get(search="phone")
+        assert {p["name"] for p in phones["items"]} == {"Live phone", "Phone in a deal"}
+        assert phones["counts"] == {"live": 1, "hidden": 0, "in_deal": 1, "sold": 0, "all": 2}
+
+        # "_" is text, not a wildcard (api/core/text_search.py).
+        assert (await get(search="_"))["counts"]["all"] == 0
+
+        first = await get(limit=2)
+        second = await get(limit=2, offset=2)
+        assert len(first["items"]) == 2 and len(second["items"]) == 2
+        assert not {p["id"] for p in first["items"]} & {p["id"] for p in second["items"]}
+
+        r = await client.get(f"/stores/{sid}/manage/listings", params={"state": "deleted"},
+                             headers=headers)
+        assert r.status_code == 422
+
+    async def test_a_paused_store_still_shows_its_owner_everything(self, client):
+        _, headers = await _register(client)
+        sid = (await _store(client, headers))["id"]
+        await _listing(client, headers, sid, "Kept for later")
+        await client.post(f"/stores/{sid}/status", json={"is_active": False}, headers=headers)
+        assert (await client.get(f"/stores/{sid}/listings")).json() == []
+        body = (await client.get(f"/stores/{sid}/manage/listings", headers=headers)).json()
+        assert [p["name"] for p in body["items"]] == ["Kept for later"]
+
+    async def test_only_the_owner_and_only_their_store(self, client):
+        _, owner = await _register(client)
+        _, other = await _register(client)
+        sid = (await _store(client, owner))["id"]
+        other_sid = (await _store(client, other))["id"]
+        await _listing(client, owner, sid, "Mine")
+        await _listing(client, other, other_sid, "Theirs")
+
+        path = f"/stores/{sid}/manage/listings"
+        assert (await client.get(path)).status_code == 401
+        assert (await client.get(path, headers=other)).status_code == 403
+        assert (await client.get("/stores/missing/manage/listings", headers=owner)).status_code == 404
+        names = [p["name"] for p in (await client.get(path, headers=owner)).json()["items"]]
+        assert names == ["Mine"]
 
 
 # ── Visits, shares and stats ─────────────────────────────────────────────────

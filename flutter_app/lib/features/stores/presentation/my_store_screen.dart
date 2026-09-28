@@ -1,19 +1,28 @@
 // My Store - the owner's dashboard.
 //
-//   Overview  open/paused switch, the link with QR and share buttons, and
-//             the last 7 days of visits (and where they came from)
-//   Products  the store's catalogue: add a new product straight into the
-//             store, move existing listings in, take one out
+//   Overview  open/paused switch, what needs the owner (products hidden
+//             until their fee is paid, products in a deal), what's left
+//             to set up, the link with QR and share buttons, and the last
+//             7 days of visits (and where they came from)
+//   Products  every product in the store, whatever its state (live,
+//             hidden, in a deal, sold), with search and a filter per
+//             state; each one can be paid for, repriced, shared, checked
+//             on, or taken out. New products go straight into the store,
+//             existing listings can be moved in
 //   Settings  every part of the store, edited with the setup wizard's own
 //             pages; the link is shown but fixed
 //
 // Only real numbers are shown: visits and shares are counted by the
 // backend (api/domains/stores/stats.py). Orders and revenue appear once
 // checkout exists - not before, and never as placeholders.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart' show BrokaColors;
+import '../../../models/listing.dart' as listing_model show Listing;
 import '../../../screens/sell_photos_screen.dart';
 import '../../../services/api_service.dart';
 import '../../../widgets/broka_image.dart';
@@ -21,11 +30,13 @@ import '../../../widgets/constellation_background.dart';
 import '../../../widgets/gradient_button.dart';
 import '../../../widgets/wizard_scaffold.dart';
 import '../../categories/domain/category_visual.dart';
+import '../../listing_fee/presentation/listing_fee_screen.dart';
 import '../../listings/data/repositories/listings_repository.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/stores_repository.dart';
 import '../data/store_share.dart';
 import '../domain/models/store.dart';
+import '../domain/models/store_product.dart';
 import 'setup/store_setup_controller.dart';
 import 'store_edit_screen.dart';
 import 'widgets/store_share_card.dart';
@@ -56,10 +67,20 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
   String? _error;
   bool _hasDraft = false;
 
+  /// Which products the Products tab shows (null: all). Kept here so the
+  /// Overview can open the tab on, say, the hidden ones.
+  final _productFilter = ValueNotifier<StoreProductState?>(null);
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _productFilter.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -76,6 +97,16 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
   }
 
   void _replaceStore(Store store) => setState(() => _store = store);
+
+  /// The store again after a change made inside the dashboard, without
+  /// the full-screen spinner. Reloading with _load replaced the whole
+  /// dashboard, so taking a product out of the store dropped the owner
+  /// back on the Overview tab.
+  Future<void> _refreshStore() async {
+    final result = await _repo.getMyStore();
+    if (!mounted) return;
+    if (result case Success(:final data?)) _replaceStore(data);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -99,8 +130,9 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
         repo: _repo,
         listings: widget.listings ?? listingsRepository,
         share: widget.share,
+        productFilter: _productFilter,
         onStoreChanged: _replaceStore,
-        onRefresh: _load,
+        onRefresh: _refreshStore,
       );
     }
     return Scaffold(
@@ -228,12 +260,22 @@ class _Message extends StatelessWidget {
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
+/// Opens one part of the store in the setup wizard's own page, and passes
+/// the saved store on.
+Future<void> _editStore(BuildContext context, Store store, StoreSetupStep step,
+    ValueChanged<Store> onStoreChanged) async {
+  final updated = await Navigator.of(context).push<Store>(MaterialPageRoute(
+      builder: (_) => StoreEditScreen(store: store, step: step)));
+  if (updated != null) onStoreChanged(updated);
+}
+
 class _Dashboard extends StatelessWidget {
   const _Dashboard({
     required this.store,
     required this.repo,
     required this.listings,
     required this.share,
+    required this.productFilter,
     required this.onStoreChanged,
     required this.onRefresh,
   });
@@ -242,7 +284,10 @@ class _Dashboard extends StatelessWidget {
   final StoresRepository repo;
   final ListingsRepository listings;
   final StoreShare? share;
+  final ValueNotifier<StoreProductState?> productFilter;
   final ValueChanged<Store> onStoreChanged;
+
+  /// Fetches the store again, quietly.
   final Future<void> Function() onRefresh;
 
   @override
@@ -251,40 +296,46 @@ class _Dashboard extends StatelessWidget {
       length: 3,
       child: NestedScrollView(
         headerSliverBuilder: (context, _) => [
-          SliverAppBar(
-            pinned: true,
-            expandedHeight: 230,
-            backgroundColor: BrokaColors.bg.withOpacity(0.92),
-            iconTheme: const IconThemeData(color: Colors.white),
-            title: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: BrokaColors.textHigh,
-                    fontWeight: FontWeight.w800, fontSize: 17)),
-            actions: [
-              IconButton(
-                tooltip: 'View as a buyer',
-                icon: const Icon(Icons.visibility_outlined),
-                onPressed: () => Navigator.of(context).pushNamed('/store-view',
-                    arguments: {'storeId': store.id}),
+          // With _tabList's injector, keeps each tab's content below the
+          // pinned bar and tabs. Without it the top of every tab (Add
+          // product, the search) slid under them once the header collapsed.
+          SliverOverlapAbsorber(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            sliver: SliverAppBar(
+              pinned: true,
+              expandedHeight: 230,
+              backgroundColor: BrokaColors.bg.withOpacity(0.92),
+              iconTheme: const IconThemeData(color: Colors.white),
+              title: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh,
+                      fontWeight: FontWeight.w800, fontSize: 17)),
+              actions: [
+                IconButton(
+                  tooltip: 'View as a buyer',
+                  icon: const Icon(Icons.visibility_outlined),
+                  onPressed: () => Navigator.of(context).pushNamed('/store-view',
+                      arguments: {'storeId': store.id}),
+                ),
+              ],
+              flexibleSpace: FlexibleSpaceBar(
+                collapseMode: CollapseMode.parallax,
+                background: _Header(store: store),
               ),
-            ],
-            flexibleSpace: FlexibleSpaceBar(
-              collapseMode: CollapseMode.parallax,
-              background: _Header(store: store),
-            ),
-            bottom: const TabBar(
-              indicatorColor: BrokaColors.gold,
-              labelColor: BrokaColors.textHigh,
-              unselectedLabelColor: BrokaColors.textMid,
-              labelStyle: TextStyle(fontWeight: FontWeight.w700),
-              tabs: [Tab(text: 'Overview'), Tab(text: 'Products'), Tab(text: 'Settings')],
+              bottom: const TabBar(
+                indicatorColor: BrokaColors.gold,
+                labelColor: BrokaColors.textHigh,
+                unselectedLabelColor: BrokaColors.textMid,
+                labelStyle: TextStyle(fontWeight: FontWeight.w700),
+                tabs: [Tab(text: 'Overview'), Tab(text: 'Products'), Tab(text: 'Settings')],
+              ),
             ),
           ),
         ],
         body: TabBarView(children: [
-          _OverviewTab(store: store, repo: repo, share: share,
+          _OverviewTab(store: store, repo: repo, share: share, productFilter: productFilter,
               onStoreChanged: onStoreChanged, onRefresh: onRefresh),
-          _ProductsTab(store: store, repo: repo, listings: listings,
-              onCountChanged: onRefresh),
+          _ProductsTab(store: store, repo: repo, listings: listings, share: share,
+              filter: productFilter, onProductsChanged: onRefresh),
           _SettingsTab(store: store, onStoreChanged: onStoreChanged),
         ]),
       ),
@@ -394,6 +445,17 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
+/// A tab's scrolling content, starting below the dashboard's pinned header
+/// (see the SliverOverlapAbsorber in _Dashboard).
+Widget _tabList(BuildContext context, {Key? key, required List<Widget> children}) =>
+    CustomScrollView(key: key, slivers: [
+      SliverOverlapInjector(handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context)),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        sliver: SliverList(delegate: SliverChildListDelegate(children)),
+      ),
+    ]);
+
 Widget _card({required Widget child, EdgeInsets padding = const EdgeInsets.all(16)}) => Container(
       padding: padding,
       decoration: BoxDecoration(
@@ -417,6 +479,7 @@ class _OverviewTab extends StatefulWidget {
     required this.store,
     required this.repo,
     required this.share,
+    required this.productFilter,
     required this.onStoreChanged,
     required this.onRefresh,
   });
@@ -424,6 +487,9 @@ class _OverviewTab extends StatefulWidget {
   final Store store;
   final StoresRepository repo;
   final StoreShare? share;
+
+  /// Set before switching to the Products tab, to open it on one state.
+  final ValueNotifier<StoreProductState?> productFilter;
   final ValueChanged<Store> onStoreChanged;
   final Future<void> Function() onRefresh;
 
@@ -436,10 +502,40 @@ class _OverviewTabState extends State<_OverviewTab> {
   String? _statsError;
   bool _toggling = false;
 
+  /// How many products are in each state. Null until loaded (or if that
+  /// failed): the cards that need it just don't show.
+  StoreProductCounts? _counts;
+
   @override
   void initState() {
     super.initState();
     _loadStats();
+    _loadCounts();
+  }
+
+  @override
+  void didUpdateWidget(_OverviewTab old) {
+    super.didUpdateWidget(old);
+    // A new store object means something changed - a product added, paid
+    // for or taken out, or the store edited.
+    if (!identical(old.store, widget.store)) _loadCounts();
+  }
+
+  Future<void> _loadCounts() async {
+    final result = await widget.repo.getOwnerProducts(widget.store.id, limit: 1);
+    if (!mounted) return;
+    if (result case Success(:final data)) setState(() => _counts = data.counts);
+  }
+
+  void _showProducts(StoreProductState state) {
+    widget.productFilter.value = state;
+    DefaultTabController.of(context).animateTo(1);
+  }
+
+  Future<void> _addProduct() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SellPhotosScreen(presetStoreId: widget.store.id)));
+    if (mounted) await widget.onRefresh();
   }
 
   Future<void> _loadStats() async {
@@ -491,12 +587,13 @@ class _OverviewTabState extends State<_OverviewTab> {
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
+    final counts = _counts;
     return RefreshIndicator(
       color: BrokaColors.gold,
       onRefresh: () async {
-        await Future.wait([_loadStats(), widget.onRefresh()]);
+        await Future.wait([_loadStats(), _loadCounts(), widget.onRefresh()]);
       },
-      child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
+      child: _tabList(context, key: const Key('overview-list'), children: [
         _card(
           padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
           child: Row(children: [
@@ -523,6 +620,16 @@ class _OverviewTabState extends State<_OverviewTab> {
                   ),
           ]),
         ),
+        if (counts != null && (counts.hidden > 0 || counts.inDeal > 0)) ...[
+          const SizedBox(height: 14),
+          _NeedsAttention(counts: counts, onShow: _showProducts),
+        ],
+        _SetupChecklist(
+          store: store,
+          productCount: counts?.all ?? store.listingCount,
+          onEdit: (step) => _editStore(context, store, step, widget.onStoreChanged),
+          onAddProduct: _addProduct,
+        ),
         const SizedBox(height: 14),
         StoreShareCard(store: store, share: widget.share),
         const SizedBox(height: 22),
@@ -534,8 +641,7 @@ class _OverviewTabState extends State<_OverviewTab> {
           Expanded(child: _QuickAction(
             icon: Icons.add_box_outlined,
             label: 'Add a product',
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => SellPhotosScreen(presetStoreId: store.id))),
+            onTap: _addProduct,
           )),
           const SizedBox(width: 12),
           Expanded(child: _QuickAction(
@@ -580,6 +686,173 @@ class _QuickAction extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// Products that need the owner: hidden until their fee is paid, and in a
+/// deal. Each row opens the Products tab on those products.
+class _NeedsAttention extends StatelessWidget {
+  const _NeedsAttention({required this.counts, required this.onShow});
+  final StoreProductCounts counts;
+  final ValueChanged<StoreProductState> onShow;
+
+  @override
+  Widget build(BuildContext context) {
+    String products(int n) => '$n product${n == 1 ? '' : 's'}';
+    final rows = [
+      if (counts.hidden > 0)
+        (
+          state: StoreProductState.hidden,
+          icon: Icons.visibility_off_rounded,
+          title: '${products(counts.hidden)} hidden from buyers',
+          body: counts.hidden == 1
+              ? 'Its listing fee is unpaid or ran out. Pay to show it again.'
+              : 'Their listing fee is unpaid or ran out. Pay to show them again.',
+        ),
+      if (counts.inDeal > 0)
+        (
+          state: StoreProductState.inDeal,
+          icon: Icons.handshake_outlined,
+          title: '${products(counts.inDeal)} in a deal',
+          body: 'Off your store until the deal is done.',
+        ),
+    ];
+    return _card(
+      padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _sectionLabel('Needs your attention'),
+        for (final r in rows)
+          InkWell(
+            key: Key('attention-${r.state.value}'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => onShow(r.state),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(children: [
+                Icon(r.icon, color: _stateColor(r.state)),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(r.title, style: const TextStyle(color: BrokaColors.textHigh,
+                      fontWeight: FontWeight.w700, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text(r.body, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+                ])),
+                const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid),
+              ]),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// What's left to make the store look finished, each a tap away from the
+/// page that does it. Gone once everything is done.
+class _SetupChecklist extends StatelessWidget {
+  const _SetupChecklist({
+    required this.store,
+    required this.productCount,
+    required this.onEdit,
+    required this.onAddProduct,
+  });
+
+  final Store store;
+  final int productCount;
+  final ValueChanged<StoreSetupStep> onEdit;
+  final VoidCallback onAddProduct;
+
+  static const minProducts = 3;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [
+      (
+        key: 'logo',
+        done: store.logoSource != null,
+        title: 'Add your logo',
+        hint: 'It sits at the top of your store and on every link you share',
+        onTap: () => onEdit(StoreSetupStep.logo),
+      ),
+      (
+        key: 'cover',
+        done: store.coverSource != null,
+        title: 'Add a cover photo',
+        hint: 'A wide photo across the top of your store',
+        onTap: () => onEdit(StoreSetupStep.photos),
+      ),
+      (
+        key: 'about',
+        done: (store.description ?? '').trim().isNotEmpty,
+        title: 'Say what you sell',
+        hint: "A line or two under your store's name",
+        onTap: () => onEdit(StoreSetupStep.category),
+      ),
+      (
+        key: 'products',
+        done: productCount >= minProducts,
+        title: 'Add at least $minProducts products',
+        hint: productCount == 0
+            ? 'So buyers have something to browse'
+            : '$productCount so far',
+        onTap: onAddProduct,
+      ),
+      (
+        key: 'email',
+        done: store.businessEmail != null && store.businessEmailVerified,
+        title: 'Add a business email',
+        hint: 'Where order updates will go',
+        onTap: () => onEdit(StoreSetupStep.email),
+      ),
+    ];
+    final done = items.where((i) => i.done).length;
+    if (done == items.length) return const SizedBox.shrink();
+
+    return Padding(
+      key: const Key('setup-checklist'),
+      padding: const EdgeInsets.only(top: 14),
+      child: _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Expanded(child: Text('Finish setting up your store', style: TextStyle(
+              color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 15))),
+          const SizedBox(width: 8),
+          Text('$done of ${items.length} done', style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 12.5, fontWeight: FontWeight.w600)),
+        ]),
+        const SizedBox(height: 10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: done / items.length,
+            minHeight: 6,
+            backgroundColor: BrokaColors.border,
+            valueColor: const AlwaysStoppedAnimation(BrokaColors.success),
+          ),
+        ),
+        const SizedBox(height: 6),
+        // Only what's left: the bar above says how much is done.
+        for (final i in items.where((i) => !i.done))
+          InkWell(
+            key: Key('checklist-${i.key}'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: i.onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(children: [
+                const Icon(Icons.radio_button_unchecked_rounded,
+                    color: BrokaColors.textMid, size: 22),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(i.title, style: const TextStyle(color: BrokaColors.textHigh,
+                      fontWeight: FontWeight.w600, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text(i.hint, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+                ])),
+                const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid),
+              ]),
+            ),
+          ),
+      ])),
+    );
+  }
 }
 
 class _StatsCard extends StatelessWidget {
@@ -702,17 +975,47 @@ class _StatsCard extends StatelessWidget {
 
 // ── Products ─────────────────────────────────────────────────────────────────
 
+/// A product's state, in the colour it's shown in.
+Color _stateColor(StoreProductState state) => switch (state) {
+      StoreProductState.live => BrokaColors.success,
+      StoreProductState.hidden => BrokaColors.warning,
+      StoreProductState.inDeal => BrokaColors.neonBlue,
+      StoreProductState.sold => BrokaColors.textMid,
+    };
+
+// BrokaColors.gold is under 4:1 on a card; this lighter violet reads at 7:1
+// (the web storefront's price colour).
+const _priceColor = Color(0xFFB69CFF);
+
+const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+String _shortDate(DateTime utc) {
+  final d = utc.toLocal();
+  return '${d.day} ${_months[d.month - 1]}';
+}
+
+enum _ProductAction { pay, price, share, insights, view, remove }
+
 class _ProductsTab extends StatefulWidget {
   const _ProductsTab({
     required this.store,
     required this.repo,
     required this.listings,
-    required this.onCountChanged,
+    required this.share,
+    required this.filter,
+    required this.onProductsChanged,
   });
   final Store store;
   final StoresRepository repo;
   final ListingsRepository listings;
-  final Future<void> Function() onCountChanged;
+  final StoreShare? share;
+
+  /// The state shown (null: all). The filter chips set it, and so does the
+  /// Overview's "needs your attention" card.
+  final ValueNotifier<StoreProductState?> filter;
+
+  /// A product was added, paid for, moved in or taken out.
+  final Future<void> Function() onProductsChanged;
 
   @override
   State<_ProductsTab> createState() => _ProductsTabState();
@@ -720,50 +1023,186 @@ class _ProductsTab extends StatefulWidget {
 
 class _ProductsTabState extends State<_ProductsTab> {
   static const _pageSize = 20;
-  final List<BrokaListing> _items = [];
+  final List<StoreProduct> _items = [];
+  StoreProductCounts? _counts;
   bool _loading = false;
   bool _hasMore = true;
   String? _error;
+  String _search = '';
+  Timer? _searchDebounce;
+  final _searchCtrl = TextEditingController();
+
+  // Bumped whenever the filter or the search changes, so a page that
+  // arrives for the old one is dropped instead of mixed into the new list.
+  int _generation = 0;
+
+  StoreProductState? get _state => widget.filter.value;
 
   @override
   void initState() {
     super.initState();
+    widget.filter.addListener(_reload);
     _loadMore();
   }
 
+  @override
+  void didUpdateWidget(_ProductsTab old) {
+    super.didUpdateWidget(old);
+    if (old.filter != widget.filter) {
+      old.filter.removeListener(_reload);
+      widget.filter.addListener(_reload);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.filter.removeListener(_reload);
+    _searchDebounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _reload() async {
-    setState(() { _items.clear(); _hasMore = true; _error = null; });
+    _generation++;
+    setState(() {
+      _items.clear();
+      _hasMore = true;
+      _loading = false;
+      _error = null;
+    });
     await _loadMore();
   }
 
   Future<void> _loadMore() async {
     if (_loading || !_hasMore) return;
+    final generation = _generation;
     setState(() { _loading = true; _error = null; });
-    // A paused store's public catalogue is empty; its owner still sees
-    // their products, straight from the listings API.
-    final result = await widget.listings.getListings(
-        storeId: widget.store.id, limit: _pageSize, offset: _items.length);
-    if (!mounted) return;
+    // Every product in the store, whatever its state. The public catalogue
+    // (GET /listings?store_id=) showed only live ones, so a product left
+    // the owner's list the moment it went into a deal, sold, or waited for
+    // its listing fee.
+    final result = await widget.repo.getOwnerProducts(widget.store.id,
+        state: _state, search: _search, limit: _pageSize, offset: _items.length);
+    if (!mounted || generation != _generation) return;
     setState(() {
       _loading = false;
       switch (result) {
         case Success(:final data):
-          final seen = _items.map((l) => l.id).toSet();
-          _items.addAll(data.where((l) => !seen.contains(l.id)));
-          _hasMore = data.length == _pageSize;
+          final seen = _items.map((p) => p.id).toSet();
+          _items.addAll(data.items.where((p) => !seen.contains(p.id)));
+          _hasMore = data.items.length == _pageSize;
+          _counts = data.counts;
         case Failure(:final message):
           _error = message;
       }
     });
   }
 
-  Future<void> _remove(BrokaListing listing) async {
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () => _setSearch(value));
+  }
+
+  void _setSearch(String value) {
+    _searchDebounce?.cancel();
+    if (!mounted || value.trim() == _search) return;
+    _search = value.trim();
+    _reload();
+  }
+
+  /// After a change to the store's products: this list, and the store
+  /// (its product count) with the Overview's numbers.
+  Future<void> _changed() => Future.wait([_reload(), widget.onProductsChanged()]);
+
+  Future<void> _addNew() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SellPhotosScreen(presetStoreId: widget.store.id)));
+    if (mounted) await _changed();
+  }
+
+  Future<void> _moveIn() async {
+    final moved = await showAddExistingListings(context, widget.store);
+    if (moved > 0 && mounted) await _changed();
+  }
+
+  Future<void> _openActions(StoreProduct product) async {
+    final action = await showModalBottomSheet<_ProductAction>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: BrokaColors.bgMid,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (_) => _ProductActionsSheet(product: product),
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case _ProductAction.pay:
+        await _pay(product);
+      case _ProductAction.price:
+        await _changePrice(product);
+      case _ProductAction.share:
+        await _shareProduct(product);
+      case _ProductAction.insights:
+        Navigator.of(context).pushNamed('/listing-insights',
+            arguments: listing_model.Listing.fromJson(product.json));
+      case _ProductAction.view:
+        Navigator.of(context).pushNamed('/product', arguments: {'listingId': product.id});
+      case _ProductAction.remove:
+        await _remove(product);
+    }
+  }
+
+  Future<void> _pay(StoreProduct product) async {
+    await Navigator.of(context).push(MaterialPageRoute<bool>(
+        builder: (_) => ListingFeeScreen(
+            listingId: product.id, listingName: product.listing.name)));
+    // Reloaded whether or not it says paid: an M-Pesa payment can be
+    // confirmed after the owner has left the payment screen.
+    if (mounted) await _changed();
+  }
+
+  Future<void> _changePrice(StoreProduct product) async {
+    final price = await showDialog<double>(
+        context: context, builder: (_) => _PriceDialog(product: product));
+    if (price == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await widget.listings.changePrice(product.id, price);
+    if (!mounted) return;
+    switch (result) {
+      case Success(:final data):
+        messenger.showSnackBar(SnackBar(content: Text(switch (data) {
+          null => 'Price updated',
+          0 => "Price updated. That was this week's last price change.",
+          1 => 'Price updated. You can change it once more this week.',
+          final n => 'Price updated. You can change it $n more times this week.',
+        })));
+        await _reload();
+      case Failure(:final message):
+        // The server's own words: they say which limit applies and when
+        // it lifts.
+        messenger.showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> _shareProduct(StoreProduct product) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final outcome = await (widget.share ?? StoreShare(repository: widget.repo)).shareProduct(
+        widget.store,
+        listingId: product.id,
+        name: product.listing.name,
+        price: product.listing.priceFormatted);
+    if (outcome != ShareOutcome.shared) {
+      messenger.showSnackBar(const SnackBar(content: Text('Product link copied')));
+    }
+  }
+
+  Future<void> _remove(StoreProduct product) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (d) => AlertDialog(
         backgroundColor: BrokaColors.bgMid,
         title: const Text('Take out of your store?', style: TextStyle(color: BrokaColors.textHigh)),
-        content: Text('"${listing.name}" stays on BROKA as your own listing; '
+        content: Text('"${product.listing.name}" stays on BROKA as your own listing; '
             'it just won\'t appear in your store.',
             style: const TextStyle(color: BrokaColors.textMid)),
         actions: [
@@ -772,43 +1211,30 @@ class _ProductsTabState extends State<_ProductsTab> {
         ],
       ),
     );
-    if (ok != true) return;
-    final result = await widget.listings.removeListingStore(listing.id);
+    if (ok != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await widget.listings.removeListingStore(product.id);
     if (!mounted) return;
     switch (result) {
       case Success():
-        setState(() => _items.removeWhere((l) => l.id == listing.id));
-        widget.onCountChanged();
+        await _changed();
       case Failure(:final message):
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  Future<void> _addNew() async {
-    await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => SellPhotosScreen(presetStoreId: widget.store.id)));
-    if (mounted) await _reload();
-  }
-
-  Future<void> _moveIn() async {
-    final moved = await showAddExistingListings(context, widget.store);
-    if (moved > 0 && mounted) {
-      await _reload();
-      await widget.onCountChanged();
+        messenger.showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final counts = _counts;
     return RefreshIndicator(
       color: BrokaColors.gold,
-      onRefresh: _reload,
+      onRefresh: _changed,
       child: NotificationListener<ScrollNotification>(
         onNotification: (n) {
           if (n.metrics.pixels > n.metrics.maxScrollExtent - 300) _loadMore();
           return false;
         },
-        child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
+        child: _tabList(context, key: const Key('products-list'), children: [
           Row(children: [
             Expanded(child: FilledButton.icon(
               key: const Key('add-product'),
@@ -835,19 +1261,18 @@ class _ProductsTabState extends State<_ProductsTab> {
               ),
             )),
           ]),
-          const SizedBox(height: 16),
-          if (_items.isEmpty && !_loading && _error == null)
-            _card(child: const Column(children: [
-              Icon(Icons.inventory_2_outlined, color: BrokaColors.textMid, size: 36),
-              SizedBox(height: 10),
-              Text('No products yet', style: TextStyle(color: BrokaColors.textHigh,
-                  fontWeight: FontWeight.w700)),
-              SizedBox(height: 4),
-              Text('Add a new product, or move listings you already have into your store.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
-            ])),
-          for (final l in _items) _ProductRow(listing: l, onRemove: () => _remove(l)),
+          const SizedBox(height: 14),
+          _searchField(),
+          const SizedBox(height: 10),
+          _filterChips(counts),
+          const SizedBox(height: 12),
+          if (_items.isEmpty && !_loading && _error == null) _empty(counts),
+          for (final p in _items)
+            _ProductRow(
+              product: p,
+              onTap: () => _openActions(p),
+              onPay: p.needsPayment && p.priceEditable ? () => _pay(p) : null,
+            ),
           if (_loading)
             const Padding(padding: EdgeInsets.all(20),
                 child: Center(child: CircularProgressIndicator(color: BrokaColors.gold))),
@@ -864,6 +1289,191 @@ class _ProductsTabState extends State<_ProductsTab> {
       ),
     );
   }
+
+  Widget _searchField() => TextField(
+        key: const Key('product-search'),
+        controller: _searchCtrl,
+        onChanged: (v) {
+          _onSearchChanged(v);
+          setState(() {});
+        },
+        textInputAction: TextInputAction.search,
+        onSubmitted: _setSearch,
+        style: const TextStyle(color: BrokaColors.textHigh),
+        decoration: InputDecoration(
+          hintText: 'Search your products',
+          hintStyle: const TextStyle(color: BrokaColors.textMid),
+          isDense: true,
+          filled: true,
+          fillColor: BrokaColors.bgCard.withOpacity(0.6),
+          prefixIcon: const Icon(Icons.search_rounded, color: BrokaColors.textMid),
+          suffixIcon: _searchCtrl.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Clear',
+                  icon: const Icon(Icons.close_rounded, color: BrokaColors.textMid, size: 18),
+                  onPressed: () {
+                    _searchCtrl.clear();
+                    _setSearch('');
+                    setState(() {});
+                  },
+                ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: BrokaColors.border)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: BrokaColors.border)),
+        ),
+      );
+
+  Widget _filterChips(StoreProductCounts? counts) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final state in <StoreProductState?>[null, ...StoreProductState.values])
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _FilterChip(
+                key: Key('product-filter-${state?.value ?? 'all'}'),
+                label: state?.label ?? 'All',
+                count: counts?.of(state),
+                color: state == null ? BrokaColors.gold : _stateColor(state),
+                selected: state == _state,
+                onTap: () => widget.filter.value = state,
+              ),
+            ),
+        ]),
+      );
+
+  Widget _empty(StoreProductCounts? counts) {
+    final (IconData icon, String title, String body) = switch (_state) {
+      _ when (counts?.all ?? 0) == 0 && _search.isEmpty && _state == null => (
+          Icons.inventory_2_outlined,
+          'No products yet',
+          'Add a new product, or move listings you already have into your store.'),
+      _ when _search.isNotEmpty => (
+          Icons.search_off_rounded,
+          'No products match "$_search"',
+          'Try another word, or clear the search.'),
+      StoreProductState.hidden => (
+          Icons.visibility_rounded,
+          'Nothing hidden',
+          'Every product in your store is showing to buyers.'),
+      StoreProductState.inDeal => (
+          Icons.handshake_outlined,
+          'No deals in progress',
+          'A product shows here while a buyer\'s deal on it is open.'),
+      StoreProductState.sold => (
+          Icons.sell_outlined,
+          'Nothing sold yet',
+          'Products show here once their deal is complete.'),
+      _ => (
+          Icons.storefront_outlined,
+          'Nothing live right now',
+          'Products show here while buyers can see them.'),
+    };
+    return _card(child: Column(children: [
+      Icon(icon, color: BrokaColors.textMid, size: 36),
+      const SizedBox(height: 10),
+      Text(title, textAlign: TextAlign.center,
+          style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 4),
+      Text(body, textAlign: TextAlign.center,
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+    ]));
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final int? count;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected ? color.withOpacity(0.18) : BrokaColors.bgCard.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: selected ? color : BrokaColors.border),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(label, style: TextStyle(
+                  color: selected ? BrokaColors.textHigh : BrokaColors.textMid,
+                  fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w600)),
+              if (count != null) ...[
+                const SizedBox(width: 6),
+                Text('$count', style: TextStyle(
+                    color: selected ? color : BrokaColors.textMid,
+                    fontSize: 12, fontWeight: FontWeight.w800)),
+              ],
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatePill extends StatelessWidget {
+  const _StatePill({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.16),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.6)),
+        ),
+        child: Text(label, style: TextStyle(color: color, fontSize: 11,
+            fontWeight: FontWeight.w700)),
+      );
+}
+
+/// The line under a product's state that says what it means for the owner.
+String? _stateNote(StoreProduct p) => switch (p.state) {
+      StoreProductState.hidden => p.feeStatus == 'expired'
+          ? "Its listing time ran out, so buyers can't see it"
+          : "Not paid for yet, so buyers can't see it",
+      StoreProductState.inDeal => 'A buyer agreed a deal on it',
+      StoreProductState.live when p.endingSoon && p.paidUntil != null =>
+        'Listing time ends ${_shortDate(p.paidUntil!)}',
+      _ => null,
+    };
+
+Widget _productThumb(StoreProduct p, double size) {
+  final thumb = listingThumb(p.listing);
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(10),
+    child: SizedBox(
+      width: size, height: size,
+      child: thumb != null
+          ? BrokaImage(thumb, fit: BoxFit.cover)
+          : Container(color: BrokaColors.bgMid, alignment: Alignment.center,
+              child: Text(CategoryVisuals.emojiFor(p.listing.category),
+                  style: TextStyle(fontSize: size * 0.4))),
+    ),
+  );
 }
 
 String? listingThumb(BrokaListing l) {
@@ -875,63 +1485,221 @@ String? listingThumb(BrokaListing l) {
 }
 
 class _ProductRow extends StatelessWidget {
-  const _ProductRow({required this.listing, required this.onRemove});
-  final BrokaListing listing;
-  final VoidCallback onRemove;
+  const _ProductRow({required this.product, required this.onTap, this.onPay});
+  final StoreProduct product;
+  final VoidCallback onTap;
+
+  /// "Pay" or "Renew" beside the product, when its fee needs paying.
+  final VoidCallback? onPay;
 
   @override
   Widget build(BuildContext context) {
-    final thumb = listingThumb(listing);
+    final p = product;
+    final note = _stateNote(p);
+    final color = _stateColor(p.state);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
         color: BrokaColors.bgCard.withOpacity(0.6),
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
+          key: Key('store-product-${p.id}'),
           borderRadius: BorderRadius.circular(14),
-          onTap: () => Navigator.of(context).pushNamed('/product',
-              arguments: {'listingId': listing.id}),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              // A hidden product is the one to act on: its edge says so.
+              border: Border.all(color: p.state == StoreProductState.hidden
+                  ? BrokaColors.warning.withOpacity(0.45)
+                  : BrokaColors.border.withOpacity(0.6)),
+            ),
             child: Row(children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  width: 62, height: 62,
-                  child: thumb != null
-                      ? BrokaImage(thumb, fit: BoxFit.cover)
-                      : Container(color: BrokaColors.bgMid, alignment: Alignment.center,
-                          child: Text(CategoryVisuals.emojiFor(listing.category),
-                              style: const TextStyle(fontSize: 24))),
-                ),
+              Opacity(
+                opacity: p.state == StoreProductState.sold ? 0.55 : 1,
+                child: _productThumb(p, 62),
               ),
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                Text(p.listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: BrokaColors.textHigh,
                         fontWeight: FontWeight.w600, fontSize: 14)),
-                const SizedBox(height: 4),
-                Text(listing.priceFormatted, style: const TextStyle(
-                    color: BrokaColors.gold, fontWeight: FontWeight.w700, fontSize: 13)),
-                if (listing.status != 'active')
-                  Text(listing.status[0].toUpperCase() + listing.status.substring(1),
-                      style: const TextStyle(color: BrokaColors.warning, fontSize: 11)),
+                const SizedBox(height: 3),
+                Text(p.listing.priceFormatted, style: const TextStyle(
+                    color: _priceColor, fontWeight: FontWeight.w700, fontSize: 13)),
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  _StatePill(label: p.state.label, color: color),
+                  if (note != null)
+                    Text(note, style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+                ]),
               ])),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert_rounded, color: BrokaColors.textMid),
-                color: BrokaColors.bgMid,
-                onSelected: (v) {
-                  if (v == 'remove') onRemove();
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'remove', child: Text('Take out of store',
-                      style: TextStyle(color: BrokaColors.textHigh))),
-                ],
-              ),
+              if (onPay != null)
+                TextButton(
+                  key: Key('pay-${p.id}'),
+                  onPressed: onPay,
+                  style: TextButton.styleFrom(
+                    foregroundColor: BrokaColors.warning,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    minimumSize: const Size(48, 40),
+                  ),
+                  child: Text(p.state == StoreProductState.hidden ? 'Pay' : 'Renew',
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                ),
+              const Icon(Icons.more_vert_rounded, color: BrokaColors.textMid),
             ]),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// What the owner can do with one product, depending on its state.
+class _ProductActionsSheet extends StatelessWidget {
+  const _ProductActionsSheet({required this.product});
+  final StoreProduct product;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = product;
+    final hidden = p.state == StoreProductState.hidden;
+    Widget tile(_ProductAction action, IconData icon, String title,
+            {String? subtitle, Color? color}) =>
+        ListTile(
+          key: Key('product-action-${action.name}'),
+          leading: Icon(icon, color: color ?? BrokaColors.gold),
+          title: Text(title, style: TextStyle(
+              color: color ?? BrokaColors.textHigh, fontWeight: FontWeight.w600)),
+          subtitle: subtitle == null
+              ? null
+              : Text(subtitle, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+          onTap: () => Navigator.pop(context, action),
+        );
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 10),
+          Container(width: 40, height: 4, decoration: BoxDecoration(
+              color: BrokaColors.border, borderRadius: BorderRadius.circular(2))),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Row(children: [
+              _productThumb(p, 48),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(p.listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                Row(children: [
+                  Flexible(child: Text(p.listing.priceFormatted, maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _priceColor, fontWeight: FontWeight.w700))),
+                  const SizedBox(width: 8),
+                  _StatePill(label: p.state.label, color: _stateColor(p.state)),
+                ]),
+              ])),
+            ]),
+          ),
+          const Divider(color: BrokaColors.border, height: 1),
+          if (p.needsPayment && p.priceEditable)
+            tile(_ProductAction.pay,
+                hidden ? Icons.visibility_rounded : Icons.autorenew_rounded,
+                hidden ? 'Pay to show it to buyers' : 'Renew its listing time',
+                subtitle: hidden
+                    ? "Buyers can't see it until it's paid for"
+                    : (p.paidUntil != null ? 'Ends ${_shortDate(p.paidUntil!)}' : null),
+                color: BrokaColors.warning),
+          if (p.priceEditable)
+            tile(_ProductAction.price, Icons.sell_outlined, 'Change the price',
+                subtitle: 'Up to twice a week'),
+          if (p.state == StoreProductState.live)
+            tile(_ProductAction.share, Icons.ios_share_rounded, 'Share this product',
+                subtitle: 'WhatsApp, your status, SMS and more'),
+          tile(_ProductAction.insights, Icons.insights_rounded, "See how it's doing"),
+          tile(_ProductAction.view, Icons.visibility_outlined, 'See it as buyers do'),
+          tile(_ProductAction.remove, Icons.remove_circle_outline_rounded,
+              'Take it out of the store',
+              subtitle: 'It stays on BROKA as your own listing',
+              color: BrokaColors.textMid),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
+}
+
+/// A new price for one product. Pops the price, or null to leave it.
+class _PriceDialog extends StatefulWidget {
+  const _PriceDialog({required this.product});
+  final StoreProduct product;
+
+  @override
+  State<_PriceDialog> createState() => _PriceDialogState();
+}
+
+class _PriceDialogState extends State<_PriceDialog> {
+  late final _ctrl =
+      TextEditingController(text: widget.product.listing.price.round().toString());
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final value = double.tryParse(_ctrl.text.trim());
+    if (value == null || value <= 0) {
+      setState(() => _error = 'Enter a price in shillings');
+      return;
+    }
+    // The same price isn't a change, and would spend one of the week's two.
+    Navigator.pop(context, value == widget.product.listing.price ? null : value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: BrokaColors.bgMid,
+      title: const Text('Change the price', style: TextStyle(color: BrokaColors.textHigh)),
+      content: Column(mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(widget.product.listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textMid)),
+        const SizedBox(height: 14),
+        TextField(
+          key: const Key('price-field'),
+          controller: _ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          onSubmitted: (_) => _save(),
+          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 18,
+              fontWeight: FontWeight.w700),
+          decoration: InputDecoration(
+            prefixText: 'KES ',
+            prefixStyle: const TextStyle(color: BrokaColors.textMid, fontSize: 18),
+            errorText: _error,
+          ),
+        ),
+        const SizedBox(height: 10),
+        const Text('A price can change twice a week, at least 12 hours apart.',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+          key: const Key('save-price'),
+          onPressed: _save,
+          child: const Text('Save', style: TextStyle(fontWeight: FontWeight.w800)),
+        ),
+      ],
     );
   }
 }
@@ -1110,11 +1878,8 @@ class _SettingsTab extends StatelessWidget {
   final Store store;
   final ValueChanged<Store> onStoreChanged;
 
-  Future<void> _edit(BuildContext context, StoreSetupStep step) async {
-    final updated = await Navigator.of(context).push<Store>(MaterialPageRoute(
-        builder: (_) => StoreEditScreen(store: store, step: step)));
-    if (updated != null) onStoreChanged(updated);
-  }
+  Future<void> _edit(BuildContext context, StoreSetupStep step) =>
+      _editStore(context, store, step, onStoreChanged);
 
   @override
   Widget build(BuildContext context) {
@@ -1140,7 +1905,7 @@ class _SettingsTab extends StatelessWidget {
           ),
         );
 
-    return ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
+    return _tabList(context, key: const Key('settings-list'), children: [
       tile(Icons.storefront_outlined, 'Store name', store.name, StoreSetupStep.name),
       tile(Icons.link_rounded, 'Store link', store.displayUrl, null,
           trailing: const Tooltip(

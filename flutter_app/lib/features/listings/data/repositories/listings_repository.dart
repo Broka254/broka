@@ -201,6 +201,21 @@ class ListingsRepository {
     }
   }
 
+  /// Changes the price of the caller's own listing. Returns how many more
+  /// price changes the seller has this week. The server allows two a week,
+  /// 12 hours apart, and none while a buyer's deal stands; its refusals are
+  /// sentences written for the seller, passed on as they are.
+  Future<Result<int?>> changePrice(String listingId, double price) async {
+    try {
+      final data = await _client.patch('/listings/$listingId', {'price': price});
+      return Success((data as Map?)?['price_changes_remaining'] as int?);
+    } on ApiException catch (e) {
+      return Failure(e.message, statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(e.toString());
+    }
+  }
+
   /// Inverse of setListingStore - returns a listing to personal.
   Future<Result<BrokaListing>> removeListingStore(String listingId) async {
     try {

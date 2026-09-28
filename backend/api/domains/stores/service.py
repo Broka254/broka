@@ -31,17 +31,17 @@ import uuid
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import and_, case, desc, func, not_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
-from api.core.text_search import term_matches
+from api.core.text_search import matches_all_terms, search_terms, term_matches
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
-from api.domains.listings.paid import live_clause
+from api.domains.listings.paid import is_live, live_clause
 from api.domains.categories.seed import CANONICAL_CATEGORIES
 from api.models.store import Store
-from api.domains.listings.service import ListingService
+from api.domains.listings.service import ListingService, load_listing_media
 from api.security import decode_email_verify_token
 from . import categories as store_categories
 from . import naming
@@ -360,6 +360,89 @@ class StoreService:
             sort=CATALOGUE_SORTS.get(sort or "featured"),
             limit=limit, offset=offset, with_total=with_total,
         )
+
+    async def list_owner_listings(
+        self,
+        store_id: str,
+        requester_id: str,
+        state: str = "all",
+        search: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict:
+        """Every product in the store, as its owner manages them.
+
+        The public catalogue shows only what buyers can see: active and paid
+        up. My Store listed products through it, so a product vanished from
+        its owner's screen the moment it went into a deal, sold, or waited
+        for its listing fee - the products that most need the owner. This
+        lists them all, newest first, each with the state My Store shows:
+
+          live     buyers can see it
+          hidden   active, but its listing fee is unpaid or ran out
+          in_deal  a buyer agreed a deal (status pending)
+          sold     the deal completed
+
+        Deleted (cancelled) listings are left out. `counts` has how many are
+        in each state (and "all"), for the search when there is one, so the
+        filter chips say what tapping them will show.
+        """
+        store = await self.get_owned(store_id, requester_id)
+        now = datetime.utcnow()
+        live = live_clause(now)
+        in_state = {
+            "live": and_(Listing.status == ListingStatus.active, live),
+            "hidden": and_(Listing.status == ListingStatus.active, not_(live)),
+            "in_deal": Listing.status == ListingStatus.pending,
+            "sold": Listing.status == ListingStatus.completed,
+        }
+        where = [
+            Listing.store_id == store.id,
+            Listing.status.in_([
+                ListingStatus.active, ListingStatus.pending, ListingStatus.completed]),
+        ]
+        terms = search_terms(search)
+        if terms:
+            where.append(matches_all_terms(
+                terms, (Listing.name, Listing.category, Listing.description)))
+
+        # sum(case) rather than count() FILTER, which older SQLite lacks.
+        row = (await self.db.execute(select(*(
+            func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+            for cond in in_state.values()
+        )).where(*where))).one()
+        counts = {name: int(n) for name, n in zip(in_state, row)}
+        counts["all"] = sum(counts.values())
+
+        q = select(Listing).where(*where)
+        if state != "all":
+            q = q.where(in_state[state])
+        listings = (await self.db.execute(
+            q.order_by(desc(Listing.created_at), Listing.id).limit(limit).offset(offset)
+        )).scalars().all()
+
+        seller_ids = {l.seller_id for l in listings}
+        sellers = {
+            u.id: u for u in (await self.db.execute(
+                select(User).where(User.id.in_(seller_ids)))).scalars()
+        } if seller_ids else {}
+        assets = await load_listing_media(self.db, listings, list(sellers.values()))
+        items = []
+        for listing in listings:
+            item = ListingService._owner_listing_dict(
+                listing, seller=sellers.get(listing.seller_id), store=store, assets=assets)
+            item["store_state"] = self._owner_state(listing, now)
+            items.append(item)
+        return {"items": items, "counts": counts}
+
+    @staticmethod
+    def _owner_state(listing: Listing, now: datetime) -> str:
+        status = getattr(listing.status, "value", listing.status)
+        if status == ListingStatus.pending.value:
+            return "in_deal"
+        if status == ListingStatus.completed.value:
+            return "sold"
+        return "live" if is_live(listing, now) else "hidden"
 
     async def list_categories(self, store_id: str) -> list[dict]:
         """The categories this store has active products in, with counts,

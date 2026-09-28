@@ -8,6 +8,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
+import '../../domain/models/store_product.dart';
 
 /// Store catalogue sort orders the backend accepts.
 enum StoreSort {
@@ -103,6 +104,33 @@ class StoresRepository {
           if (sort != StoreSort.featured) 'sort': sort.value,
         }) as List;
         return data.map((e) => BrokaListing.fromJson(e as Map<String, dynamic>)).toList();
+      });
+
+  /// Every product in the owner's store, in every state (live, hidden
+  /// until its fee is paid, in a deal, sold), with how many are in each.
+  /// Owner only. [state] null is all of them.
+  Future<Result<StoreProductsPage>> getOwnerProducts(
+    String storeId, {
+    StoreProductState? state,
+    String? search,
+    int limit = 20,
+    int offset = 0,
+  }) =>
+      _guard(() async {
+        final data = await _client.get('/stores/$storeId/manage/listings', queryParams: {
+          'limit': limit.toString(),
+          'offset': offset.toString(),
+          if (state != null) 'state': state.value,
+          if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+        }) as Map<String, dynamic>;
+        return StoreProductsPage(
+          items: [
+            for (final e in data['items'] as List? ?? const [])
+              StoreProduct.fromJson(e as Map<String, dynamic>),
+          ],
+          counts: StoreProductCounts.fromJson(
+              (data['counts'] as Map?)?.cast<String, dynamic>() ?? const {}),
+        );
       });
 
   /// The categories the store has products in, biggest first.

@@ -73,6 +73,9 @@ what it says; each needs a decision first.
    or waiting for its listing fee disappears from the screen where the
    owner manages the store. An owner-only endpoint returning every status
    with its `fee_state` would fix it.
+   **Done (2026-09-28):** `GET /stores/{id}/manage/listings` (owner only)
+   lists every product with its state and fee, and My Store's Products tab
+   uses it (`CHANGES.md`).
 3. **Store display names aren't checked for impersonation.** The link
    can't be `safaricom`, but the store can be *named* "Safaricom Official".
    Apply the reserved-name list (or a review queue) to names too.

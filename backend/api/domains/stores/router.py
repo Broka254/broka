@@ -269,6 +269,23 @@ async def get_store_listings(
     )
 
 
+@router.get("/{store_id}/manage/listings")
+async def get_owner_listings(
+    store_id: str,
+    state: Literal["all", "live", "hidden", "in_deal", "sold"] = "all",
+    search: Optional[str] = Query(None, max_length=100),
+    limit: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every product in the store with its state and listing fee, for My
+    Store: {items, counts}. Owner only."""
+    return await StoreService(db).list_owner_listings(
+        store_id, current_user["id"], state=state, search=search, limit=limit, offset=offset,
+    )
+
+
 @router.get("/{store_id}/categories")
 async def get_store_categories(store_id: str, db: AsyncSession = Depends(get_db)):
     """[{name, count}] - the categories this store has products in."""

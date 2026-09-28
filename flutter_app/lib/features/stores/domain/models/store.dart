@@ -140,6 +140,16 @@ class Store {
     return uri.replace(queryParameters: {...uri.queryParameters, 'via': via}).toString();
   }
 
+  /// One of the store's products on the web storefront
+  /// (…/store/clanix/p/<id>), which opens in the app when it's installed.
+  String productUrl(String listingId, {String? via}) {
+    final uri = Uri.parse(url);
+    return uri.replace(
+      path: '${uri.path}/p/$listingId',
+      queryParameters: via == null ? null : {'via': via},
+    ).toString();
+  }
+
   /// Best image for a small square (logo), as a BrokaImage source.
   String? get logoSource => logo?.thumb ?? logoUrl;
 
