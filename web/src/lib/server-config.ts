@@ -1,8 +1,14 @@
 // Settings only the server may read.
 import 'server-only'
 
-/** The BROKA API (the Render service). */
-export const API_URL = (process.env.BROKA_API_URL?.trim() || 'https://broka-dbjd.onrender.com').replace(/\/+$/, '')
+/**
+ * The BROKA API: the Azure Container App. Render (broka-dbjd.onrender.com)
+ * stays up as the fallback; switch back with BROKA_API_URL (a redeploy, no
+ * code change).
+ */
+export const API_URL = (
+  process.env.BROKA_API_URL?.trim() || 'https://broka-api.redhill-7a4b8acc.southafricanorth.azurecontainerapps.io'
+).replace(/\/+$/, '')
 
 /**
  * Shared with the API (its STOREFRONT_API_KEY). Proves to the API that a

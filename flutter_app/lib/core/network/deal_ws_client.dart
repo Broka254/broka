@@ -84,7 +84,7 @@ class DealWsState {
 class DealWsClient {
   static const String _baseWsUrl = String.fromEnvironment(
     'API_WS_URL',
-    defaultValue: 'wss://broka-dbjd.onrender.com',
+    defaultValue: 'wss://broka-api.redhill-7a4b8acc.southafricanorth.azurecontainerapps.io',
   );
 
   static const Duration _pingInterval   = Duration(seconds: 25);

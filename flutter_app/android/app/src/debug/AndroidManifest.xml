@@ -3,7 +3,7 @@
   Debug-build-only override (Phase 12 - security audit).
 
   The main manifest now ships with usesCleartextTraffic="false", since
-  production always talks to https://broka-dbjd.onrender.com by default
+  production always talks to the API over HTTPS by default
   (see ApiService.baseUrl) and a release build should never be able to
   carry unencrypted traffic regardless of how it's configured.
 
