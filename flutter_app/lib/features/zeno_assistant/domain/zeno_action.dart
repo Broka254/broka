@@ -162,9 +162,14 @@ class ZenoAction {
   /// a chat. A call never does - it rings someone's phone - and neither does
   /// anything that still needs the user to say which person they meant.
   /// A guide is read, not run: its steps go somewhere when the user taps
-  /// them.
+  /// them. Nor does a search Zeno offers about a listing ([isOffer]).
   bool get runsByItself =>
       type != ZenoActionType.call && type != ZenoActionType.guide && choices.isEmpty && !requiresConfirmation;
+
+  /// A search Zeno offers and waits on: "this one has 4GB - want me to look
+  /// for 8GB laptops?", with a button.
+  bool get isOffer =>
+      requiresConfirmation && (type == ZenoActionType.search || type == ZenoActionType.findForMe);
 
   /// Picks one of [choices].
   ZenoAction choose(ZenoContact c) => ZenoAction(
@@ -204,7 +209,11 @@ class ZenoAction {
       case ZenoActionType.search:
       case ZenoActionType.findForMe:
         final q = text('query');
-        return q == null ? null : ZenoAction(type: type, query: q);
+        // Offered rather than run when Zeno came up with it while answering
+        // about a listing (zeno_assistant/service.py): the buyer taps it.
+        return q == null
+            ? null
+            : ZenoAction(type: type, query: q, requiresConfirmation: json['requires_confirmation'] == true);
       case ZenoActionType.call:
       case ZenoActionType.openChat:
         final target = ZenoContact.fromJson(json['target']);

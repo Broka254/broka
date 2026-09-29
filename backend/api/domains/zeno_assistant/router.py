@@ -5,7 +5,7 @@ the turn and intents.py for what Zeno may do.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
@@ -30,6 +30,9 @@ class AssistantTurnIn(BaseModel):
     language: str = Field(default="english", max_length=20)
     # "voice" asks for replies that read well aloud.
     mode: Literal["text", "voice"] = "text"
+    # Set when the user opened Zeno from a listing to ask about it. Only
+    # the id: the server reads the listing itself (listing_context.py).
+    listing_id: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("history", mode="before")
     @classmethod
@@ -85,4 +88,5 @@ async def assistant_turn(
         history=body.history,
         language=body.language,
         voice=body.mode == "voice",
+        listing_id=body.listing_id,
     )

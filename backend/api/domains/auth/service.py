@@ -625,11 +625,19 @@ class AuthService:
         # brand-new sellers with zero deals yet, and §3.5's cold-start
         # fairness point is exactly that they should see their neutral 80%
         # starting score, not have it hidden until their first sale.
-        # The owner's own - the ranking inputs are not a public figure.
+        # The owner's own - the raw ranking inputs, rank score included, are
+        # not a public figure.
         metrics = await self.db.get(SellerMetrics, user_id) if own else None
         if metrics:
             d["dcr_score"]  = metrics.dcr_score
             d["rank_score"] = metrics.rank_score
+        # What a buyer is shown of the same numbers on a listing's screen:
+        # rating, completion rate and response time, from last night's
+        # snapshot - never rank or backlog (trust/public_standing.py).
+        from api.domains.trust.public_standing import public_seller_standing
+        standing = await public_seller_standing(self.db, user_id)
+        if standing:
+            d["seller_standing"] = standing
         return d
 
     # Where another user is, to two decimal places: about a kilometre. The

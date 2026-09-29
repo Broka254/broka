@@ -1,22 +1,49 @@
 // BROKA - Product Detail Screen
 // Large photos, listing date/time, maps with ±1km disclaimer, distance,
-// expanded seller section, Zeno Analysis (price compare, credibility, travel cost, fraud detection).
-import 'dart:convert';
+// the deal's terms, the seller and their standing, and Zeno.
+//
+// 2026-09-29, on Home's visual system: the constellation, Home's header
+// language (back chevron, the category's badge and glowing name), cards with
+// the product card's gradient edge, and the brand gradient on the one CTA.
+// Three things moved to where a buyer looks first:
+//
+//  * DEAL TERMS - fixed price or negotiable, and whether the seller can
+//    deliver - as two tiles of their own. They were two of ten small chips,
+//    and they decide whether a buyer should start the conversation at all.
+//  * The seller's standing - the seller dashboard's overall rating, deal
+//    completion rate and response time, in the dashboard's own colours
+//    (models/seller_standing.dart). It replaces a "credibility" score this
+//    screen made up from the star rating and deal count.
+//  * ZENO INSIGHT - opens Zeno about this listing (ZenoScreen.aboutListing),
+//    where the buyer asks what they need to know and Zeno offers to find
+//    another listing when this one doesn't fit. It was a panel that asked the
+//    model for a one-off verdict, and a price comparison against an endpoint
+//    that is never mounted (api/routers/listings.py), so it always said there
+//    was nothing to compare.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import '../features/categories/domain/category_visual.dart';
+import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../main.dart';
 import '../models/listing.dart';
+import '../models/seller_standing.dart';
 import '../services/api_service.dart';
-import '../services/broka_tts.dart';
 import '../services/last_screen_tracker.dart';
 import '../utils/land_size.dart';
 import '../utils/price_unit.dart';
 import '../utils/auth_gate.dart';
 import '../widgets/broka_image.dart';
+import '../widgets/constellation_background.dart';
+import '../widgets/motion_widgets.dart';
+import '../widgets/zeno_avatar.dart';
+import 'zeno_screen.dart';
 
 class ProductScreen extends StatefulWidget {
-  const ProductScreen({super.key});
+  const ProductScreen({super.key, this.animateBackground = true});
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
+
   @override
   State<ProductScreen> createState() => _ProductScreenState();
 }
@@ -25,22 +52,10 @@ class _ProductScreenState extends State<ProductScreen> {
   Listing? _listing;
   int _photoIndex = 0;
   Map<String, dynamic>? _sellerInfo;
-  bool    _zenoExpanded  = false;
-  String? _zenoComment;        // AI-generated commentary
-  bool    _zenoCommentLoading = false;
 
-  @override
-  void initState() {
-    super.initState();
-    BrokaTts.instance.onUnavailable = (reason) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(ttsUnavailableMessage(reason)),
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-      ));
-    };
-  }
+  /// The seller's profile has answered, with or without a standing. Until
+  /// then the standing tiles are placeholders, not "not measured yet".
+  bool _sellerLoaded = false;
 
   @override
   void didChangeDependencies() {
@@ -50,7 +65,6 @@ class _ProductScreenState extends State<ProductScreen> {
       if (args is Listing) {
         _listing = args;
         _loadSeller();
-        _loadPriceComparison();
         LastScreenTracker.save('/product', {'listingId': args.id});
       } else if (args is Map && args['listingId'] is String) {
         // Restored from a relaunch - we only persisted the ID, fetch fresh.
@@ -65,7 +79,6 @@ class _ProductScreenState extends State<ProductScreen> {
       if (!mounted) return;
       setState(() => _listing = listing);
       _loadSeller();
-      _loadPriceComparison();
       LastScreenTracker.save('/product', {'listingId': listingId});
     } catch (_) {
       // Listing may have been deleted/sold since the app was last open.
@@ -75,14 +88,22 @@ class _ProductScreenState extends State<ProductScreen> {
 
   Future<void> _loadSeller() async {
     final sid = _listing?.sellerId;
-    if (sid == null) return;
+    if (sid == null) {
+      // Called just as the listing arrives; the build that shows it is
+      // already on its way.
+      _sellerLoaded = true;
+      return;
+    }
     try {
       final info = await ApiService.getUserProfile(sid);
       if (mounted) setState(() => _sellerInfo = info);
     } catch (_) {}
-    // Zeno's verdict is now loaded on-demand (see _toggleZenoAnalysis) to
-    // avoid burning AI API calls on every listing view.
+    if (mounted) setState(() => _sellerLoaded = true);
   }
+
+  /// The seller dashboard's rating, completion rate and response time, as
+  /// buyers are shown them. Null for a seller with no recent figures.
+  SellerStanding? get _standing => SellerStanding.fromJson(_sellerInfo?['seller_standing']);
 
   /// Gallery sources, first photo first: the stored images' large size
   /// when the listing has them, else the legacy base64 photos. BrokaImage
@@ -95,30 +116,8 @@ class _ProductScreenState extends State<ProductScreen> {
     return raw.split(',').where((s) => s.isNotEmpty).toList();
   }
 
-  /// The first photo as base64 for Zeno's analysis, or null.
-  ///
-  /// A stored image is fetched at its medium size. A legacy photo is
-  /// already base64. The version this replaces only accepted a data URI,
-  /// but listing photos were always stored as bare base64, so Zeno never
-  /// actually received the photo it was told about.
-  Future<String?> _zenoImageBase64() async {
-    final stored = _listing?.photos ?? const [];
-    if (stored.isNotEmpty) {
-      final url = BrokaImage.networkUrl(stored.first.medium);
-      if (url == null) return null;
-      try {
-        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
-        return res.statusCode == 200 ? base64Encode(res.bodyBytes) : null;
-      } catch (_) {
-        return null;
-      }
-    }
-    if (_photos.isEmpty) return null;
-    final bytes = BrokaImage.inlineBytes(_photos.first);
-    return bytes == null ? null : base64Encode(bytes);
-  }
-
   bool get _isMine => _listing?.sellerId == ApiService.currentUserId;
+  bool get _isAuction => _listing?.listingType == 'auction';
 
   double? get _distanceKm {
     final myLat = ApiService.currentUserLat;
@@ -145,62 +144,6 @@ class _ProductScreenState extends State<ProductScreen> {
     return '${months[now.month - 1]} ${now.day}, ${now.year}';
   }
 
-  // ── Zeno Analysis helpers ─────────────────────────────────────────────────
-
-  // Real on-platform price comparison (replaces the old fixed-percentage
-  // heuristic, which mathematically always produced ~14% for Electronics
-  // regardless of actual price - it was comparing price against itself).
-  Map<String, dynamic>? _priceComparison;
-  bool _priceComparisonLoaded = false;
-
-  Future<void> _loadPriceComparison() async {
-    if (_listing == null || _priceComparisonLoaded) return;
-    try {
-      final comparison = await ApiService.getPriceComparison(_listing!.id);
-      if (mounted) {
-        setState(() {
-        _priceComparison = comparison;
-        _priceComparisonLoaded = true;
-      });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _priceComparisonLoaded = true);
-    }
-  }
-
-  bool get _hasPlatformPriceData =>
-      (_priceComparison?['has_enough_data'] as bool?) ?? false;
-
-  double? get _marketAvgPrice =>
-      _hasPlatformPriceData ? (_priceComparison?['platform_avg_price'] as num?)?.toDouble() : null;
-
-  // Null when there isn't enough on-platform data yet - callers should fall
-  // back to general market knowledge (e.g. let Zeno reason about it from
-  // training knowledge) rather than show a fabricated number.
-  double? get _priceDiffPct =>
-      _hasPlatformPriceData ? (_priceComparison?['diff_pct'] as num?)?.toDouble() : null;
-
-  int get _priceComparisonSampleSize => (_priceComparison?['sample_size'] as int?) ?? 0;
-
-  bool get _isPriceSuspicious {
-    final diff = _priceDiffPct;
-    if (diff == null) return false; // not enough data to judge
-    return diff < -35 || diff > 60;
-  }
-
-  double get _credibilityScore {
-    double score = 5.0;
-    final r = (_listing?.sellerRating as num?)?.toDouble() ?? 5.0;
-    score += (r > 5 ? r / 2 : r) * 0.5;
-    final deals = _listing?.sellerCompletedDeals ?? 0;
-    if (deals > 10) {
-      score += 1.5;
-    } else if (deals > 3) score += 0.8;
-    final verified = _sellerInfo?['is_verified'] as bool? ?? false;
-    if (verified) score += 1.5;
-    return score.clamp(0.0, 10.0);
-  }
-
   double? get _travelCostEstimate {
     final d = _distanceKm;
     if (d == null) return null;
@@ -208,100 +151,214 @@ class _ProductScreenState extends State<ProductScreen> {
     return 30 + d * 6.5;
   }
 
+  // ── Zeno ──────────────────────────────────────────────────────────────────
+
+  /// Opens Zeno about this listing, optionally with a question already
+  /// asked. Zeno's answers are model calls made on the user's account, so a
+  /// guest is asked to sign in first - the same sheet as every other
+  /// account-gated action.
+  Future<void> _openZeno([String? question]) async {
+    final l = _listing;
+    if (l == null) return;
+    if (!await requireAuth(context, reason: 'to ask Zeno about this listing')) return;
+    if (!mounted) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ZenoScreen(
+        aboutListing: ZenoAboutListing.fromListing(l),
+        initialQuery: question,
+      ),
+    ));
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    if (_listing == null) {
-      return const Scaffold(body: Center(
-          child: CircularProgressIndicator(color: BrokaColors.gold)));
+    final l = _listing;
+    if (l == null) {
+      return Scaffold(
+        backgroundColor: BrokaColors.bg,
+        body: ConstellationBackground(
+          animate: widget.animateBackground,
+          child: const Center(child: CircularProgressIndicator(color: BrokaColors.gold)),
+        ),
+      );
     }
-    final l = _listing!;
+    final tint = CategoryVisuals.gradientFor(l.category).first;
+    final sections = <Widget>[
+      _buildMediaSection(l),
+      _buildInfoSection(l),
+      _buildDealTerms(l),
+      _buildSellerSection(l),
+      if (_hasMapData) _buildMapPreview(l),
+      _buildDescSection(l),
+      _buildZenoInsight(l),
+    ];
     return Scaffold(
       backgroundColor: BrokaColors.bg,
-      body: CustomScrollView(slivers: [
-        _buildAppBar(l),
-        SliverToBoxAdapter(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _buildMediaSection(l),
-          _buildInfoSection(l),
-          _buildSellerSection(l),
-          if (_hasMapData) _buildMapPreview(l),
-          _buildDescSection(l),
-          _buildZenoAnalysis(l),
-          const SizedBox(height: 100),
-        ])),
-      ]),
+      // The constellation Home and every screen reached from it sit on, with
+      // the listing's category colour washing down from the top the way it
+      // does in the category's Zone.
+      body: ConstellationBackground(
+        animate: widget.animateBackground,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.2,
+              colors: [tint.withOpacity(0.13), Colors.transparent],
+              stops: const [0.0, 0.55],
+            ),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Column(children: [
+              _buildHeader(l),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.only(bottom: 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (int i = 0; i < sections.length; i++)
+                        FadeSlideIn(index: i, child: sections[i]),
+                    ],
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
       bottomNavigationBar: _isMine ? null : _buildCTA(l),
     );
   }
 
-  // ── App Bar ───────────────────────────────────────────────────────────────
+  // ── Header ────────────────────────────────────────────────────────────────
 
-  Widget _buildAppBar(Listing l) => SliverAppBar(
-    backgroundColor: BrokaColors.bgMid,
-    expandedHeight: 0,
-    pinned: true,
-    leading: GestureDetector(
-      onTap: () => Navigator.pop(context),
-      child: Container(
-        margin: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          color: BrokaColors.bgCard,
-          border: Border.all(color: BrokaColors.border),
+  /// The header every screen reached from Home wears: a bare back chevron,
+  /// the category's badge and glowing name, and what kind of sale this is.
+  Widget _buildHeader(Listing l) {
+    final narrow = MediaQuery.sizeOf(context).width < 360;
+    final gradient = CategoryVisuals.gradientFor(l.category);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 6, 16, 6),
+      child: Row(children: [
+        IconButton(
+          tooltip: 'Back',
+          onPressed: () => Navigator.maybePop(context),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: BrokaColors.textHigh, size: 19),
         ),
-        child: const Icon(Icons.arrow_back_ios_new_rounded,
-            color: BrokaColors.textMid, size: 16),
+        Container(
+          width: 34,
+          height: 34,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(colors: [
+              gradient.first.withOpacity(0.28),
+              gradient.last.withOpacity(0.14),
+            ]),
+            border: Border.all(color: gradient.first.withOpacity(0.5)),
+          ),
+          child: Text(l.emoji, style: const TextStyle(fontSize: 16)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: ZoneGlowText(
+            l.category,
+            gradient: gradient,
+            fontSize: narrow ? 17 : 19,
+            maxLines: 1,
+            letterSpacing: narrow ? 0.8 : 1.1,
+          ),
+        ),
+        const SizedBox(width: 8),
+        _saleTypeBadge(l),
+      ]),
+    );
+  }
+
+  Widget _saleTypeBadge(Listing l) {
+    final color = _isAuction ? BrokaColors.danger : BrokaColors.gold;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Text(_isAuction ? '⬤ LIVE AUCTION' : 'DIRECT SALE',
+          style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800,
+              letterSpacing: 0.6, color: color)),
+    );
+  }
+
+  // ── Shared pieces ─────────────────────────────────────────────────────────
+
+  Widget _secLabel(String t) => Text(t, style: const TextStyle(
+      color: BrokaColors.textMid, fontSize: 11,
+      fontWeight: FontWeight.w700, letterSpacing: 1.3));
+
+  /// Home's product card surface: the card gradient inside a thin
+  /// violet-to-blue edge.
+  Widget _edgedCard({
+    required Widget child,
+    List<Color>? edge,
+    EdgeInsets padding = const EdgeInsets.all(14),
+    double radius = 16,
+  }) => Container(
+    padding: const EdgeInsets.all(1.2),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(radius),
+      gradient: LinearGradient(
+        colors: edge ?? [BrokaColors.gold.withOpacity(0.45), BrokaColors.neonBlue.withOpacity(0.35)],
+        begin: Alignment.topLeft, end: Alignment.bottomRight,
       ),
     ),
-    title: Text(l.name, style: const TextStyle(
-        color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w700),
-        maxLines: 1, overflow: TextOverflow.ellipsis),
-    actions: [
-      Container(
-        margin: const EdgeInsets.only(right: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: l.listingType == 'auction'
-              ? BrokaColors.danger.withOpacity(0.15)
-              : BrokaColors.gold.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: l.listingType == 'auction'
-              ? BrokaColors.danger.withOpacity(0.5)
-              : BrokaColors.gold.withOpacity(0.5)),
-        ),
-        child: Text(l.listingType == 'auction' ? '⬤ LIVE AUCTION' : 'DIRECT SALE',
-            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
-                color: l.listingType == 'auction'
-                    ? BrokaColors.danger : BrokaColors.gold)),
+    child: Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: BoxDecoration(
+        gradient: BrokaColors.cardGradient,
+        borderRadius: BorderRadius.circular(radius - 1),
       ),
-    ],
+      child: child,
+    ),
   );
 
   // ── Media ─────────────────────────────────────────────────────────────────
 
   Widget _buildMediaSection(Listing l) {
     final photos = _photos;
-    return Column(children: [
-      if (photos.isNotEmpty)
-        _buildPhotoGallery(photos)
-      else
-        Container(
-          height: 280,
-          color: BrokaColors.bgCard,
-          child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(l.emoji, style: const TextStyle(fontSize: 64)),
-            const SizedBox(height: 8),
-            const Text('No media available',
-                style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
-          ])),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: _edgedCard(
+        padding: EdgeInsets.zero,
+        radius: 18,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(17),
+          child: photos.isNotEmpty
+              ? _buildPhotoGallery(photos)
+              : SizedBox(
+                  height: 260,
+                  child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(l.emoji, style: const TextStyle(fontSize: 64)),
+                    const SizedBox(height: 8),
+                    const Text('No media available',
+                        style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+                  ])),
+                ),
         ),
-    ]);
+      ),
+    );
   }
 
   Widget _buildPhotoGallery(List<String> photos) {
     return Stack(children: [
       SizedBox(
-        height: 340,
+        height: 320,
         // Receiving end of the card's Hero. Only the FIRST photo carries
         // the tag: that is the one the card was showing, and two widgets
         // claiming the same tag in one subtree is an assertion failure, not
@@ -321,7 +378,7 @@ class _ProductScreenState extends State<ProductScreen> {
       ),
       // Page indicator dots
       if (photos.length > 1)
-        Positioned(bottom: 48, left: 0, right: 0,
+        Positioned(bottom: 44, left: 0, right: 0,
           child: Row(mainAxisAlignment: MainAxisAlignment.center,
             children: List.generate(photos.length, (i) => Container(
               margin: const EdgeInsets.symmetric(horizontal: 3),
@@ -371,7 +428,7 @@ class _ProductScreenState extends State<ProductScreen> {
   // ── Info ──────────────────────────────────────────────────────────────────
 
   Widget _buildInfoSection(Listing l) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+    padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -386,6 +443,7 @@ class _ProductScreenState extends State<ProductScreen> {
                 color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
           ),
         ])),
+        const SizedBox(width: 10),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
@@ -406,23 +464,11 @@ class _ProductScreenState extends State<ProductScreen> {
       const SizedBox(height: 12),
       Wrap(spacing: 8, runSpacing: 8, children: [
         _chip(l.category, Icons.category_rounded, BrokaColors.neonBlue),
-        // Selling terms (2026-09-25).
         if (LandSize.describe(l.attributes) != null)
           _chip(LandSize.describe(l.attributes)!, Icons.straighten_rounded, BrokaColors.neonGreen),
         if (l.quantity != null && l.quantity! > 1)
           _chip('${PriceUnits.quantity(l.quantity!, l.priceUnit)} available',
               Icons.inventory_2_outlined, BrokaColors.neonCyan),
-        l.priceNegotiable
-            ? _chip('Open to offers', Icons.handshake_outlined, BrokaColors.neonGreen)
-            : _chip('Fixed price', Icons.lock_outline_rounded, BrokaColors.neonPink),
-        if (l.deliveryAvailable == true)
-          _chip(l.deliveryNote == null || l.deliveryNote!.isEmpty
-                  ? 'Seller can deliver'
-                  // Chips don't wrap their text: a long note is cut here.
-                  : 'Delivers: ${l.deliveryNote!.length > 34 ? '${l.deliveryNote!.substring(0, 33)}…' : l.deliveryNote}',
-              Icons.local_shipping_outlined, BrokaColors.neonBlue)
-        else if (l.deliveryAvailable == false)
-          _chip('Buyer collects', Icons.storefront_outlined, BrokaColors.textMid),
         if (l.locationName != null)
           _chip(l.locationName!, Icons.location_on_rounded, BrokaColors.gold),
         if (_distanceKm != null)
@@ -442,23 +488,128 @@ class _ProductScreenState extends State<ProductScreen> {
     child: Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(icon, size: 11, color: color),
       const SizedBox(width: 5),
-      Text(label, style: TextStyle(color: color,
-          fontSize: 11, fontWeight: FontWeight.w600)),
+      Flexible(
+        child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+      ),
     ]),
   );
 
-  // ── Seller Section ────────────────────────────────────────────────────────
+  // ── Deal terms ────────────────────────────────────────────────────────────
+
+  /// Fixed price or negotiable, and whether the seller delivers: the two
+  /// answers that decide whether this is worth starting a conversation
+  /// about, as the seller gave them in the sell wizard.
+  Widget _buildDealTerms(Listing l) {
+    final (priceTitle, priceBody, priceIcon, priceColor) = _isAuction
+        ? ('Auction', 'Bids decide the price', Icons.gavel_rounded, BrokaColors.danger)
+        : l.priceNegotiable
+            ? ('Negotiable', 'Make an offer - Zeno negotiates it for you',
+                Icons.handshake_outlined, BrokaColors.neonGreen)
+            : ('Fixed price', 'The seller takes the asking price, no offers',
+                Icons.lock_outline_rounded, BrokaColors.neonPink);
+    final note = (l.deliveryNote ?? '').trim();
+    final (deliveryTitle, deliveryBody, deliveryIcon, deliveryColor) = switch (l.deliveryAvailable) {
+      true => ('Seller delivers', note.isEmpty ? 'The seller can arrange delivery' : note,
+          Icons.local_shipping_outlined, BrokaColors.neonBlue),
+      false => ('Pickup only', 'You collect it from the seller',
+          Icons.storefront_outlined, BrokaColors.warning),
+      null => ('Delivery not stated', 'Ask the seller before you pay',
+          Icons.help_outline_rounded, BrokaColors.textMid),
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _secLabel('DEAL TERMS'),
+        const SizedBox(height: 10),
+        IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(child: _termTile(
+              key: const Key('deal-term-price'),
+              label: 'PRICE', title: priceTitle, body: priceBody,
+              icon: priceIcon, color: priceColor,
+            )),
+            const SizedBox(width: 10),
+            Expanded(child: _termTile(
+              key: const Key('deal-term-delivery'),
+              label: 'DELIVERY', title: deliveryTitle, body: deliveryBody,
+              icon: deliveryIcon, color: deliveryColor,
+            )),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _termTile({
+    required Key key,
+    required String label,
+    required String title,
+    required String body,
+    required IconData icon,
+    required Color color,
+  }) => Semantics(
+    key: key,
+    container: true,
+    label: '$label: $title. $body',
+    excludeSemantics: true,
+    child: Container(
+      padding: const EdgeInsets.all(1.2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(
+          colors: [color.withOpacity(0.75), color.withOpacity(0.2)],
+          begin: Alignment.topLeft, end: Alignment.bottomRight,
+        ),
+        boxShadow: [BoxShadow(color: color.withOpacity(0.14), blurRadius: 14)],
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [
+            Color.alphaBlend(color.withOpacity(0.14), BrokaColors.bgCard),
+            BrokaColors.cardGradColors.last,
+          ], begin: Alignment.topLeft, end: Alignment.bottomRight),
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              width: 30, height: 30,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color.withOpacity(0.18),
+                border: Border.all(color: color.withOpacity(0.6)),
+              ),
+              child: Icon(icon, size: 16, color: color),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 9.5,
+                      fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Text(title, maxLines: 2, overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color == BrokaColors.textMid ? BrokaColors.textHigh : color,
+                  fontSize: 15, fontWeight: FontWeight.w800, height: 1.2)),
+          const SizedBox(height: 4),
+          Text(body, maxLines: 3, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 11, height: 1.35)),
+        ]),
+      ),
+    ),
+  );
+
+  // ── Seller ────────────────────────────────────────────────────────────────
 
   Widget _buildSellerSection(Listing l) {
     final sellerName = l.sellerName ?? _sellerInfo?['name'] as String? ?? 'Seller';
-    final sellerRating = (l.sellerRating as num?)?.toDouble()
-        ?? (_sellerInfo?['rating'] as num?)?.toDouble() ?? 5.0;
-    // Convert to 10-scale
-    final rating10 = sellerRating <= 5.0 ? sellerRating * 2 : sellerRating;
     final deals = l.sellerCompletedDeals
         ?? (_sellerInfo?['completed_deals'] as num?)?.toInt() ?? 0;
-    final verified = _sellerInfo?['is_verified'] as bool? ?? false;
-    final photo = _sellerInfo?['profile_photo'] as String?;
+    final verified = _sellerInfo?['is_verified'] as bool? ?? l.sellerVerified;
+    final photo = _sellerInfo?['profile_photo'] as String? ?? l.sellerProfilePhoto;
     final location = _sellerInfo?['location_name'] as String? ?? l.locationName;
     final lastSeen = _sellerInfo?['last_seen'] as String?;
     final memberSince = _sellerInfo?['created_at'] as String?;
@@ -468,11 +619,11 @@ class _ProductScreenState extends State<ProductScreen> {
       try {
         final dt = DateTime.parse(lastSeen);
         final diff = DateTime.now().difference(dt);
-        if (diff.inMinutes < 2) {
-          lastSeenLabel = 'Online now';
-        } else if (diff.inMinutes < 60) lastSeenLabel = '${diff.inMinutes}m ago';
-        else if (diff.inHours < 24) lastSeenLabel = '${diff.inHours}h ago';
-        else lastSeenLabel = '${diff.inDays}d ago';
+        lastSeenLabel = diff.inMinutes < 2
+            ? 'Online now'
+            : diff.inMinutes < 60
+                ? '${diff.inMinutes}m ago'
+                : diff.inHours < 24 ? '${diff.inHours}h ago' : '${diff.inDays}d ago';
       } catch (_) {}
     }
 
@@ -486,29 +637,23 @@ class _ProductScreenState extends State<ProductScreen> {
       } catch (_) {}
     }
 
+    final initial = Center(child: Text(
+        sellerName.isEmpty ? '?' : sellerName[0].toUpperCase(),
+        style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)));
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('SELLER DETAILS', style: TextStyle(
-            color: BrokaColors.textLow, fontSize: 10,
-            fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+        _secLabel('SELLER'),
         const SizedBox(height: 10),
         GestureDetector(
           onTap: () => Navigator.pushNamed(context, '/user-profile',
               arguments: l.sellerId),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
-                  begin: Alignment.topLeft, end: Alignment.bottomRight),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: BrokaColors.border),
-            ),
+          child: _edgedCard(
             child: Column(children: [
               Row(children: [
-                // Avatar
                 Container(
-                  width: 56, height: 56,
+                  width: 52, height: 52,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: const LinearGradient(
@@ -519,31 +664,25 @@ class _ProductScreenState extends State<ProductScreen> {
                   ),
                   child: ClipOval(
                     child: photo != null && photo.isNotEmpty
-                        ? Image.memory(base64Decode(photo), fit: BoxFit.cover)
-                        : Center(child: Text(
-                            sellerName[0].toUpperCase(),
-                            style: const TextStyle(color: Colors.white,
-                                fontSize: 22, fontWeight: FontWeight.w800))),
+                        ? BrokaImage(photo, width: 52, height: 52, placeholder: initial)
+                        : initial,
                   ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
-                    Expanded(child: Text(sellerName, style: const TextStyle(
-                        color: BrokaColors.textHigh, fontSize: 16,
-                        fontWeight: FontWeight.w700))),
-                    if (verified)
-                      const Icon(Icons.verified_rounded,
-                          color: BrokaColors.gold, size: 18),
+                    Flexible(child: Text(sellerName, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16,
+                            fontWeight: FontWeight.w700))),
+                    if (verified) ...[
+                      const SizedBox(width: 6),
+                      const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 18),
+                    ],
                   ]),
                   const SizedBox(height: 4),
-                  Row(children: [
-                    const Icon(Icons.star_rounded, size: 13, color: BrokaColors.gold),
-                    const SizedBox(width: 4),
-                    Text('${rating10.toStringAsFixed(1)}/10  ·  $deals deals',
-                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-                  ]),
+                  Text(deals == 1 ? '1 deal completed' : '$deals deals completed',
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
                   const SizedBox(height: 3),
                   Row(children: [
                     Container(
@@ -551,13 +690,13 @@ class _ProductScreenState extends State<ProductScreen> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: lastSeenLabel == 'Online now'
-                            ? BrokaColors.neonGreen : BrokaColors.textLow,
+                            ? BrokaColors.neonGreen : BrokaColors.textMid,
                       ),
                     ),
                     const SizedBox(width: 5),
                     Text(lastSeenLabel, style: TextStyle(
                         color: lastSeenLabel == 'Online now'
-                            ? BrokaColors.neonGreen : BrokaColors.textLow,
+                            ? BrokaColors.neonGreen : BrokaColors.textMid,
                         fontSize: 11)),
                   ]),
                 ])),
@@ -572,9 +711,9 @@ class _ProductScreenState extends State<ProductScreen> {
                       const Icon(Icons.location_on_outlined,
                           size: 12, color: BrokaColors.neonBlue),
                       const SizedBox(width: 4),
-                      Text(location, style: const TextStyle(
-                          color: BrokaColors.textMid, fontSize: 11)),
-                    ])),
+                      Flexible(child: Text(location, maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: BrokaColors.textMid, fontSize: 11))),
+                    ])) else const Spacer(),
                     if (memberLabel.isNotEmpty) Row(children: [
                       const Icon(Icons.calendar_month_rounded,
                           size: 12, color: BrokaColors.gold),
@@ -587,6 +726,109 @@ class _ProductScreenState extends State<ProductScreen> {
             ]),
           ),
         ),
+        const SizedBox(height: 10),
+        _buildStanding(),
+      ]),
+    );
+  }
+
+  /// The seller dashboard's rating, completion rate and response time, in
+  /// the dashboard's colours: green where the dashboard shades green.
+  Widget _buildStanding() {
+    if (!_sellerLoaded) {
+      return const ShimmerBox(height: 92, radius: BorderRadius.all(Radius.circular(14)));
+    }
+    final s = _standing ?? const SellerStanding();
+    final rating = s.overallRating;
+    final dcr = s.dcr;
+    final reply = s.responseMinutes;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      IntrinsicHeight(
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(child: _standingTile(
+            key: const Key('standing-rating'),
+            label: 'RATING',
+            value: rating == null ? '—' : rating.toStringAsFixed(1),
+            suffix: rating == null ? null : '/10',
+            sub: rating == null ? 'Not rated yet' : 'BROKA rating',
+            band: s.ratingBand,
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _standingTile(
+            key: const Key('standing-dcr'),
+            label: 'COMPLETION',
+            value: dcr == null ? '—' : '${dcr.round()}%',
+            sub: dcr == null
+                ? 'No deals yet'
+                : (s.dcrProvisional ? 'Early - few deals' : 'of deals completed'),
+            band: s.dcrBand,
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _standingTile(
+            key: const Key('standing-response'),
+            label: 'REPLIES IN',
+            value: reply == null ? '—' : SellerStanding.formatMinutes(reply),
+            sub: reply == null ? 'Not measured yet' : 'typical reply',
+            band: s.responseBand,
+          )),
+        ]),
+      ),
+      const SizedBox(height: 6),
+      const Text('Measured by BROKA from the seller\'s deals and chats · updated daily',
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+    ]);
+  }
+
+  static Color _bandColor(StandingBand b) => switch (b) {
+    StandingBand.good => BrokaColors.neonGreen,
+    StandingBand.fair => BrokaColors.warning,
+    StandingBand.poor => BrokaColors.danger,
+    StandingBand.unknown => BrokaColors.textMid,
+  };
+
+  Widget _standingTile({
+    required Key key,
+    required String label,
+    required String value,
+    String? suffix,
+    required String sub,
+    required StandingBand band,
+  }) {
+    final color = _bandColor(band);
+    return Container(
+      key: key,
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [
+          Color.alphaBlend(color.withOpacity(0.10), BrokaColors.bgCard),
+          BrokaColors.cardGradColors.last,
+        ], begin: Alignment.topLeft, end: Alignment.bottomRight),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(label, maxLines: 1, style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 9,
+              fontWeight: FontWeight.w700, letterSpacing: 1.1)),
+        ),
+        const SizedBox(height: 6),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text.rich(TextSpan(children: [
+            TextSpan(text: value, style: TextStyle(
+                color: color, fontSize: 21, fontWeight: FontWeight.w900, height: 1.0)),
+            if (suffix != null)
+              TextSpan(text: suffix, style: TextStyle(
+                  color: color.withOpacity(0.75), fontSize: 11, fontWeight: FontWeight.w700)),
+          ]), maxLines: 1),
+        ),
+        const SizedBox(height: 5),
+        Text(sub, maxLines: 2, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 10, height: 1.3)),
       ]),
     );
   }
@@ -596,6 +838,7 @@ class _ProductScreenState extends State<ProductScreen> {
   Widget _buildMapPreview(Listing l) {
     final myLat = ApiService.currentUserLat;
     final dist  = _distanceKm;
+    final fare  = _travelCostEstimate;
 
     String? distanceText;
     if (dist != null) distanceText = '~${dist.toStringAsFixed(1)} km';
@@ -604,9 +847,7 @@ class _ProductScreenState extends State<ProductScreen> {
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('LOCATION MAP', style: TextStyle(
-              color: BrokaColors.textLow, fontSize: 10,
-              fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+          _secLabel('LOCATION'),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -623,142 +864,149 @@ class _ProductScreenState extends State<ProductScreen> {
         const SizedBox(height: 10),
         GestureDetector(
           onTap: () => Navigator.pushNamed(context, '/listing-map', arguments: l),
-          child: Container(
-            height: 160,
-            decoration: BoxDecoration(
-              color: const Color(0xFF0A0820),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: BrokaColors.border),
-            ),
-            clipBehavior: Clip.hardEdge,
-            child: Stack(children: [
-              // Map grid background
-              Positioned.fill(child: CustomPaint(painter: _MapGridPainter())),
-              // Seller pin
-              Positioned(
-                left: MediaQuery.of(context).size.width * 0.5 - 32 - 16,
-                top: 55,
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                    width: 32, height: 32,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: BrokaColors.gold,
-                      boxShadow: [BrokaColors.glowGold],
-                    ),
-                    child: const Icon(Icons.store_rounded,
-                        color: Colors.white, size: 16),
-                  ),
-                  const SizedBox(height: 2),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: BrokaColors.gold,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text('Seller', style: TextStyle(
-                        color: Colors.white, fontSize: 8,
-                        fontWeight: FontWeight.w700)),
-                  ),
-                ]),
-              ),
-              // Buyer pin
-              if (myLat != null)
-                Positioned(
-                  left: 36,
-                  bottom: 28,
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Container(
-                      width: 26, height: 26,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: BrokaColors.neonBlue,
-                        border: Border.all(color: Colors.white, width: 1.5),
+          child: _edgedCard(
+            padding: EdgeInsets.zero,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(15),
+              child: SizedBox(
+                height: 168,
+                child: Stack(children: [
+                  // Map grid background
+                  Positioned.fill(child: Container(color: const Color(0xFF0A0820))),
+                  Positioned.fill(child: CustomPaint(painter: _MapGridPainter())),
+                  // Seller pin
+                  Positioned(
+                    left: MediaQuery.of(context).size.width * 0.5 - 32 - 16,
+                    top: 50,
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
+                        width: 32, height: 32,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: BrokaColors.gold,
+                          boxShadow: [BrokaColors.glowGold],
+                        ),
+                        child: const Icon(Icons.store_rounded,
+                            color: Colors.white, size: 16),
                       ),
-                      child: const Icon(Icons.person_rounded,
-                          color: Colors.white, size: 14),
-                    ),
-                    const SizedBox(height: 2),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: BrokaColors.neonBlue,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text('You', style: TextStyle(
-                          color: Colors.white, fontSize: 8,
-                          fontWeight: FontWeight.w700)),
-                    ),
-                  ]),
-                ),
-              // Dashed line
-              if (myLat != null)
-                Positioned.fill(child: CustomPaint(
-                    painter: _DashedLinePainter())),
-              // Bottom info row
-              Positioned(left: 0, right: 0, bottom: 0,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: BrokaColors.bgMid.withOpacity(0.95),
-                    border: const Border(top: BorderSide(
-                        color: BrokaColors.border)),
-                  ),
-                  child: Row(children: [
-                    const Icon(Icons.location_on_rounded,
-                        color: BrokaColors.gold, size: 14),
-                    const SizedBox(width: 6),
-                    Expanded(child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(l.locationName != null
-                          ? 'Seller in ${l.locationName}'
-                          : 'Seller location available',
-                          style: const TextStyle(color: BrokaColors.textHigh,
-                              fontSize: 12, fontWeight: FontWeight.w600)),
-                      const Text('Approximate location · ±1 km radius',
-                          style: TextStyle(color: BrokaColors.textLow,
-                              fontSize: 9)),
-                    ])),
-                    if (distanceText != null)
+                      const SizedBox(height: 2),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: BrokaColors.neonBlue.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
+                          color: BrokaColors.gold,
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(distanceText, style: const TextStyle(
-                            color: BrokaColors.neonBlue, fontSize: 11,
+                        child: const Text('Seller', style: TextStyle(
+                            color: Colors.white, fontSize: 8,
                             fontWeight: FontWeight.w700)),
                       ),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.chevron_right_rounded,
-                        color: BrokaColors.textMid, size: 16),
-                  ]),
-                )),
-              // Tap to explore badge
-              Positioned(right: 10, top: 10,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: BrokaColors.neonBlue,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [BrokaColors.glowBlue],
+                    ]),
                   ),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.map_outlined, color: Colors.white, size: 10),
-                    SizedBox(width: 4),
-                    Text('View Route', style: TextStyle(
-                        color: Colors.white, fontSize: 9,
-                        fontWeight: FontWeight.w800)),
-                  ]),
-                )),
-            ]),
+                  // Buyer pin
+                  if (myLat != null)
+                    Positioned(
+                      left: 36,
+                      bottom: 34,
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Container(
+                          width: 26, height: 26,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: BrokaColors.neonBlue,
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          child: const Icon(Icons.person_rounded,
+                              color: Colors.white, size: 14),
+                        ),
+                        const SizedBox(height: 2),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: BrokaColors.neonBlue,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text('You', style: TextStyle(
+                              color: Colors.white, fontSize: 8,
+                              fontWeight: FontWeight.w700)),
+                        ),
+                      ]),
+                    ),
+                  // Dashed line
+                  if (myLat != null)
+                    Positioned.fill(child: CustomPaint(
+                        painter: _DashedLinePainter())),
+                  // Bottom info row
+                  Positioned(left: 0, right: 0, bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: BrokaColors.bgMid.withOpacity(0.95),
+                        border: const Border(top: BorderSide(
+                            color: BrokaColors.border)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.location_on_rounded,
+                            color: BrokaColors.gold, size: 14),
+                        const SizedBox(width: 6),
+                        Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(l.locationName != null
+                              ? 'Seller in ${l.locationName}'
+                              : 'Seller location available',
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: BrokaColors.textHigh,
+                                  fontSize: 12, fontWeight: FontWeight.w600)),
+                          // The matatu estimate lived in the old analysis
+                          // panel, behind a tap; it belongs with the place.
+                          Text(fare == null
+                              ? 'Approximate location · ±1 km radius'
+                              : '±1 km · ~KES ${fare.toStringAsFixed(0)} by matatu, one way',
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: BrokaColors.textMid,
+                                  fontSize: 9.5)),
+                        ])),
+                        if (distanceText != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: BrokaColors.neonBlue.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
+                            ),
+                            child: Text(distanceText, style: const TextStyle(
+                                color: BrokaColors.neonBlue, fontSize: 11,
+                                fontWeight: FontWeight.w700)),
+                          ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.chevron_right_rounded,
+                            color: BrokaColors.textMid, size: 16),
+                      ]),
+                    )),
+                  // Tap to explore badge
+                  Positioned(right: 10, top: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: BrokaColors.neonBlue,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: const [BrokaColors.glowBlue],
+                      ),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.map_outlined, color: Colors.white, size: 10),
+                        SizedBox(width: 4),
+                        Text('View Route', style: TextStyle(
+                            color: Colors.white, fontSize: 9,
+                            fontWeight: FontWeight.w800)),
+                      ]),
+                    )),
+                ]),
+              ),
+            ),
           ),
         ),
       ]),
@@ -770,26 +1018,16 @@ class _ProductScreenState extends State<ProductScreen> {
   Widget _buildDescSection(Listing l) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('ABOUT THIS LISTING', style: TextStyle(
-          color: BrokaColors.textLow, fontSize: 10,
-          fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+      _secLabel('ABOUT THIS LISTING'),
       const SizedBox(height: 10),
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
-              begin: Alignment.topLeft, end: Alignment.bottomRight),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: BrokaColors.border),
-        ),
+      _edgedCard(
         // The seller's own words. This used to be a fixed placeholder - the
         // description came back from the API and was never shown.
         child: Text(
           (l.description ?? '').trim().isNotEmpty
               ? l.description!.trim()
-              : 'Tap "Start Negotiation" below to contact the seller and get a detailed description. '
-                'The AI broker will mediate a fair deal for both parties.',
+              : 'The seller hasn\'t written a description. Ask Zeno below what to check, '
+                'or ask the seller when you start the conversation.',
           style: TextStyle(
               color: (l.description ?? '').trim().isNotEmpty ? BrokaColors.textHigh : BrokaColors.textMid,
               fontSize: 13, height: 1.6),
@@ -798,481 +1036,87 @@ class _ProductScreenState extends State<ProductScreen> {
     ]),
   );
 
+  // ── Zeno Insight ──────────────────────────────────────────────────────────
 
-  // ── Zeno AI Commentary ─────────────────────────────────────────────────────
-
-  Future<void> _toggleZenoAnalysis() async {
-    // Zeno's verdict is a model call, and /negotiate/chat requires an
-    // account. A guest is asked to sign in first - same sheet as every other
-    // account-gated action - rather than the panel opening onto "Zeno
-    // analysis unavailable".
-    if (!_zenoExpanded &&
-        !await requireAuth(context, reason: "to get Zeno's verdict on this deal")) {
-      return;
-    }
-    if (!mounted) return;
-    setState(() => _zenoExpanded = !_zenoExpanded);
-    // Only fire the AI call the first time the panel is opened, so collapsing
-    // and re-expanding doesn't re-trigger it (saves on API costs).
-    if (_zenoExpanded && _zenoComment == null && !_zenoCommentLoading) {
-      _loadZenoComment();
-    }
-  }
-
-  Future<void> _loadZenoComment() async {
-    final listing = _listing;
-    if (listing == null) return;
-    if (_zenoCommentLoading) return;
-    setState(() => _zenoCommentLoading = true);
-
-    try {
-      await _loadPriceComparison();
-      final zenoImage = await _zenoImageBase64();
-
-      final sellerName  = listing.sellerName ?? _sellerInfo?['name'] as String? ?? 'Seller';
-      final userName     = ApiService.currentUserNickname ?? ApiService.currentUserName ?? 'Buyer';
-      final lang         = ApiService.currentUserLanguage;
-      final price        = listing.price;
-      final credScore    = _credibilityScore;
-      final distKm       = _distanceKm;
-      final category     = listing.category;
-
-      // ── Price comparison block: real on-platform data when we have
-      // enough, otherwise tell Zeno honestly so it falls back to its own
-      // general market knowledge instead of presenting a fake number.
-      String priceBlock;
-      if (_hasPlatformPriceData) {
-        final diff = _priceDiffPct!;
-        final avg  = _marketAvgPrice!;
-        priceBlock =
-            'On-platform comparison: $_priceComparisonSampleSize similar active '
-            'listings found, average price KES ${avg.toStringAsFixed(0)}. '
-            'This listing is ${diff > 0 ? "${diff.toStringAsFixed(0)}% above" : "${diff.abs().toStringAsFixed(0)}% below"} that average.';
-      } else {
-        priceBlock =
-            'Not enough similar listings on BROKA yet for a reliable on-platform '
-            'average (only $_priceComparisonSampleSize found). Use your own general '
-            'knowledge of typical market prices for this kind of item in Kenya '
-            'instead, and be clear that this is a general estimate, not platform data.';
-      }
-
-      // ── Whether a features/pros-and-cons discussion is appropriate.
-      // Zeno uses judgement here rather than a hard rule, but we steer it:
-      // electronics/vehicles/branded durable goods - yes; produce, livestock,
-      // generic commodities - no, since "pros and cons" doesn't make sense
-      // for a sack of maize.
-      final featuresLikelyRelevant = category == 'Electronics' || category == 'Automobiles' || category == 'Vehicles';
-
-      final prompt = '''You are Zeno, BROKA's AI assistant for East African markets.
-Respond ONLY in $lang language.
-Give a thorough but conversational verdict in 6-9 sentences.
-Start with "$userName, judging from..."
-Be balanced and fair to both the buyer and the seller — most listings and
-sellers on BROKA are legitimate. Only raise trust concerns or red flags when
-the data genuinely supports it. If the price is fair and the seller's
-credibility is solid, say so plainly and don't manufacture caution.
-
-Listing: ${listing.name} (category: $category) at KES ${price.toStringAsFixed(0)}
-$priceBlock
-Seller credibility: ${credScore.toStringAsFixed(1)}/10
-Distance: ${distKm != null ? "${distKm.toStringAsFixed(1)} km away" : "unknown"}
-Seller: $sellerName (${listing.sellerCompletedDeals ?? 0} deals completed)
-${zenoImage != null ? "\nA photo of the item is attached - look at it and factor in what you can actually observe (condition, apparent authenticity, anything notable)." : ""}
-
-Cover these topics, in this order, each only as long as it deserves:
-1. PRICE: whether it's fair, using the comparison data above (or your general
-   knowledge if there wasn't enough on-platform data — say which one you're using).
-2. SELLER CREDIBILITY: a brief honest read of the credibility score and deal history.
-3. LOCATION/DISTANCE: only flag this if distance is a genuine practical concern.
-4. FEATURES (pros/cons): ${featuresLikelyRelevant ? "this is a $category listing, so go ahead and discuss specific features, pros, and cons relevant to this exact item (e.g. for a phone: storage, condition, model generation; for a vehicle: mileage, year, common issues)." : "use your judgement — for a $category listing this is often NOT appropriate (e.g. there's nothing meaningful to call 'pros and cons' for raw produce or livestock by weight). Skip this topic entirely unless the specific listing genuinely has discussable features."}
-
-Finish with a clear recommendation — buy, negotiate, or walk away — based on the actual evidence.''';
-
-      final comment = await ApiService.zenoChat(
-        message: prompt,
-        history: const [],
-        language: lang,
-        imageBase64: zenoImage,
-      );
-
-      if (mounted) {
-        setState(() {
-        _zenoComment        = comment;
-        _zenoCommentLoading = false;
-      });
-      }
-      // Speak the Zeno verdict aloud so the user hears the analysis.
-      if (comment.isNotEmpty) {
-        BrokaTts.instance.speak(comment, language: lang);
-      }
-    } catch (_) {
-      if (mounted) setState(() => _zenoCommentLoading = false);
-    }
-  }
-
-  // ── Zeno Analysis Section ─────────────────────────────────────────────────
-
-  Widget _buildZenoAnalysis(Listing l) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-    child: Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [
-          BrokaColors.gold.withOpacity(0.08),
-          BrokaColors.bgCard,
-        ], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrokaColors.gold.withOpacity(0.35)),
-        boxShadow: const [BrokaColors.glowGold],
-      ),
-      child: Column(children: [
-        // Header
-        GestureDetector(
-          onTap: _toggleZenoAnalysis,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(children: [
-              Container(
-                width: 34, height: 34,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                      colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-                ),
-                child: const Icon(Icons.auto_awesome_rounded,
-                    color: Colors.white, size: 16),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Zeno Analysis', style: TextStyle(
-                    color: BrokaColors.textHigh, fontSize: 15,
-                    fontWeight: FontWeight.w800)),
-                Text('AI-powered deal intelligence',
-                    style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
-              ])),
-              Icon(_zenoExpanded
-                  ? Icons.keyboard_arrow_up_rounded
-                  : Icons.keyboard_arrow_down_rounded,
-                  color: BrokaColors.textMid, size: 22),
-            ]),
-          ),
-        ),
-
-        if (_zenoExpanded) ...[
-          Container(height: 1, color: BrokaColors.border),
-
-          // Price Comparison
-          _analysisCard(
-            icon: Icons.compare_arrows_rounded,
-            color: BrokaColors.neonBlue,
-            title: 'Price Comparison',
-            content: _buildPriceAnalysis(l),
-          ),
-
-          Container(height: 1, color: BrokaColors.border),
-
-          // Credibility Analysis
-          _analysisCard(
-            icon: Icons.shield_rounded,
-            color: BrokaColors.neonGreen,
-            title: 'Seller Credibility',
-            content: _buildCredibilityAnalysis(),
-          ),
-
-          Container(height: 1, color: BrokaColors.border),
-
-          // Travel Cost
-          _analysisCard(
-            icon: Icons.directions_rounded,
-            color: BrokaColors.gold,
-            title: 'Estimated Travel Cost',
-            content: _buildTravelAnalysis(),
-          ),
-
-          // Zeno AI Commentary
-          Container(height: 1, color: BrokaColors.border),
-          _analysisCard(
-            icon: Icons.auto_awesome_rounded,
-            color: BrokaColors.gold,
-            title: 'Zeno\'s Verdict',
-            content: _buildZenoCommentary(),
-          ),
-
-          if (_isPriceSuspicious) ...[
-            Container(height: 1, color: BrokaColors.border),
-            _analysisCard(
-              icon: Icons.warning_amber_rounded,
-              color: BrokaColors.danger,
-              title: 'Suspicious Pricing Alert',
-              content: _buildSuspiciousAlert(l),
-            ),
-          ],
-
-          const SizedBox(height: 4),
-        ],
-      ]),
-    ),
-  );
-
-  Widget _analysisCard({
-    required IconData icon,
-    required Color color,
-    required String title,
-    required Widget content,
-  }) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Icon(icon, color: color, size: 15),
-        const SizedBox(width: 8),
-        Text(title, style: TextStyle(color: color,
-            fontSize: 12, fontWeight: FontWeight.w700,
-            letterSpacing: 0.4)),
-      ]),
-      const SizedBox(height: 10),
-      content,
-    ]),
-  );
-
-  Widget _buildPriceAnalysis(Listing l) {
-    final diff = _priceDiffPct;
-    if (diff == null) {
-      // Not enough comparable listings yet - be honest about it instead of
-      // showing a fabricated percentage.
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
-          Text('Listing Price', style: TextStyle(
-              color: BrokaColors.textLow, fontSize: 10)),
-        ]),
-        Text(l.formattedPrice, style: const TextStyle(
-            color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 16)),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: BrokaColors.textMid.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: BrokaColors.textMid.withOpacity(0.25)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.info_outline_rounded, color: BrokaColors.textMid, size: 14),
-            const SizedBox(width: 6),
-            Expanded(child: Text(
-              _priceComparisonSampleSize > 0
-                  ? 'Only $_priceComparisonSampleSize similar listings on BROKA so far — not enough yet for a reliable platform average.'
-                  : 'No similar listings on BROKA yet to compare against. Ask Zeno for a general market estimate.',
-              style: const TextStyle(color: BrokaColors.textMid, fontSize: 12))),
-          ]),
-        ),
-      ]);
-    }
-
-    final isAbove = diff > 0;
-    final diffAbs = diff.abs();
-    final color = diffAbs < 10 ? BrokaColors.neonGreen
-        : isAbove ? BrokaColors.warning : BrokaColors.neonBlue;
-    final label = diffAbs < 10 ? 'Fair price (vs $_priceComparisonSampleSize similar listings)'
-        : isAbove ? '${diffAbs.toStringAsFixed(0)}% above $_priceComparisonSampleSize similar listings'
-        : '${diffAbs.toStringAsFixed(0)}% below $_priceComparisonSampleSize similar listings';
-    final avgPrice = _marketAvgPrice!;
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Listing Price', style: TextStyle(
-              color: BrokaColors.textLow, fontSize: 10)),
-          Text(l.formattedPrice, style: const TextStyle(
-              color: BrokaColors.textHigh, fontWeight: FontWeight.w700)),
-        ])),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('BROKA Avg (similar listings)', style: TextStyle(
-              color: BrokaColors.textLow, fontSize: 10)),
-          Text(_Listing_formatPrice(avgPrice), style: const TextStyle(
-              color: BrokaColors.textMid, fontWeight: FontWeight.w700)),
-        ])),
-      ]),
-      const SizedBox(height: 10),
-      Stack(children: [
-        Container(height: 8, decoration: BoxDecoration(
-            color: BrokaColors.border, borderRadius: BorderRadius.circular(4))),
-        FractionallySizedBox(
-          widthFactor: ((l.price / (avgPrice * 2)).clamp(0.0, 1.0)),
-          child: Container(height: 8, decoration: BoxDecoration(
-            color: color, borderRadius: BorderRadius.circular(4))),
-        ),
-      ]),
-      const SizedBox(height: 8),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Row(children: [
-          Icon(diffAbs < 10 ? Icons.check_circle_rounded
-              : Icons.info_rounded, color: color, size: 14),
-          const SizedBox(width: 6),
-          Expanded(child: Text(label, style: TextStyle(
-              color: color, fontSize: 12))),
-        ]),
-      ),
-    ]);
-  }
-
-  String _Listing_formatPrice(double v) {
-    if (v >= 1000000) return 'KES ${(v/1000000).toStringAsFixed(1)}M';
-    if (v >= 1000)    return 'KES ${(v/1000).toStringAsFixed(0)}K';
-    return 'KES ${v.toStringAsFixed(0)}';
-  }
-
-  Widget _buildCredibilityAnalysis() {
-    final score = _credibilityScore;
-    final color = score >= 7 ? BrokaColors.neonGreen
-        : score >= 5 ? BrokaColors.gold : BrokaColors.danger;
-    final label = score >= 7 ? 'High credibility seller'
-        : score >= 5 ? 'Moderate credibility'
-        : 'Low credibility - proceed with caution';
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Expanded(child: Stack(children: [
-          Container(height: 8, decoration: BoxDecoration(
-              color: BrokaColors.border, borderRadius: BorderRadius.circular(4))),
-          FractionallySizedBox(
-            widthFactor: score / 10,
-            child: Container(height: 8, decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [
-                BrokaColors.danger, BrokaColors.warning, BrokaColors.neonGreen]),
-              borderRadius: BorderRadius.circular(4))),
-          ),
-        ])),
-        const SizedBox(width: 12),
-        Text('${score.toStringAsFixed(1)}/10', style: TextStyle(
-            color: color, fontWeight: FontWeight.w700, fontSize: 13)),
-      ]),
-      const SizedBox(height: 8),
-      Text(label, style: TextStyle(color: color, fontSize: 12)),
-      const SizedBox(height: 6),
-      Wrap(spacing: 6, runSpacing: 4, children: [
-        if (_sellerInfo?['is_verified'] == true)
-          _tagChip('✓ ID Verified', BrokaColors.neonGreen),
-        if ((_listing?.sellerCompletedDeals ?? 0) > 5)
-          _tagChip('${_listing?.sellerCompletedDeals} deals completed',
-              BrokaColors.neonBlue),
-        if (_photos.length >= 3)
-          _tagChip('${_photos.length} photos', BrokaColors.gold),
-      ]),
-    ]);
-  }
-
-  Widget _tagChip(String label, Color color) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    decoration: BoxDecoration(
-      color: color.withOpacity(0.1),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: color.withOpacity(0.3)),
-    ),
-    child: Text(label, style: TextStyle(color: color, fontSize: 10,
-        fontWeight: FontWeight.w600)),
-  );
-
-  Widget _buildTravelAnalysis() {
-    final d = _distanceKm;
-    final cost = _travelCostEstimate;
-    if (d == null) {
-      return const Text('Enable location to see travel cost estimate',
-          style: TextStyle(color: BrokaColors.textMid, fontSize: 12));
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Expanded(child: _travelStat('Distance', '~${d.toStringAsFixed(1)} km',
-            BrokaColors.neonBlue)),
-        Expanded(child: _travelStat('Matatu Fare (est.)',
-            'KES ${cost!.toStringAsFixed(0)} one-way', BrokaColors.gold)),
-      ]),
-      const SizedBox(height: 8),
-      const Text('⚠️ Distance is approximate (±1 km). Confirm exact meeting point with seller.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 10, height: 1.4)),
-    ]);
-  }
-
-  Widget _travelStat(String label, String value, Color color) =>
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(label, style: const TextStyle(color: BrokaColors.textLow, fontSize: 10)),
-    const SizedBox(height: 3),
-    Text(value, style: TextStyle(color: color, fontSize: 12,
-        fontWeight: FontWeight.w700)),
-  ]);
-
-  Widget _buildZenoCommentary() {
-    if (_zenoCommentLoading) {
-      return const Row(children: [
-        SizedBox(width: 16, height: 16,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: BrokaColors.gold)),
-        SizedBox(width: 10),
-        Text('Zeno is analysing this deal...',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-      ]);
-    }
-    if (_zenoComment == null || _zenoComment!.isEmpty) {
-      return const Text('Zeno analysis unavailable.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 12));
-    }
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [
-          BrokaColors.gold.withOpacity(0.10),
-          BrokaColors.neonBlue.withOpacity(0.05),
-        ]),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: BrokaColors.gold.withOpacity(0.25)),
-      ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          width: 28, height: 28,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-                colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-          ),
-          child: const Icon(Icons.auto_awesome_rounded,
-              color: Colors.white, size: 13),
-        ),
-        const SizedBox(width: 10),
-        Expanded(child: Text(_zenoComment!,
-            style: const TextStyle(
-                color: BrokaColors.textHigh, fontSize: 12.5,
-                height: 1.5, fontStyle: FontStyle.italic))),
-      ]),
-    );
-  }
-
-  Widget _buildSuspiciousAlert(Listing l) {
-    // Only ever shown when _isPriceSuspicious is true, which already
-    // guarantees _priceDiffPct is non-null.
-    final diff = _priceDiffPct!;
-    final tooLow = diff < -35;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: BrokaColors.danger.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: BrokaColors.danger.withOpacity(0.4)),
-      ),
+  /// Opens Zeno about this listing - the whole card, or one of its
+  /// questions, already asked.
+  Widget _buildZenoInsight(Listing l) {
+    final questions = _isMine
+        ? const ['How can I sell this faster?', 'Is my price right?']
+        : const ['Is this a fair price?', 'Is this seller reliable?', 'Find me something similar'];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(
-          tooLow
-              ? '🚨 This price is ${diff.abs().toStringAsFixed(0)}% below market average. '
-                'Extremely low prices may indicate a scam or stolen goods.'
-              : '⚠️ This price is ${diff.toStringAsFixed(0)}% above market average. '
-                'Verify why the seller is asking significantly above market value.',
-          style: const TextStyle(color: BrokaColors.danger, fontSize: 12, height: 1.5),
+        _secLabel('ZENO INSIGHT'),
+        const SizedBox(height: 10),
+        Semantics(
+          button: true,
+          label: 'Ask Zeno about this listing',
+          child: GestureDetector(
+            key: const Key('ask-zeno'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openZeno(),
+            child: Container(
+              padding: const EdgeInsets.all(1.4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                gradient: const LinearGradient(
+                  colors: BrokaColors.brandGradient,
+                  begin: Alignment.topLeft, end: Alignment.bottomRight,
+                ),
+                boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.28), blurRadius: 18)],
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [
+                    Color.alphaBlend(BrokaColors.neonPurple.withOpacity(0.16), BrokaColors.bgCard),
+                    BrokaColors.cardGradColors.last,
+                  ], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(16.6),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    const ZenoAvatar(size: 40, glow: true),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(_isMine ? 'Ask Zeno about your listing' : 'Ask Zeno about this listing',
+                          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15.5,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 3),
+                      Text(
+                        _isMine
+                            ? 'How it compares, what buyers will ask, and how to sell it faster.'
+                            : "The price, the seller, delivery, what to check - and if it isn't "
+                              'right for you, Zeno finds you one that is.',
+                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
+                      ),
+                    ])),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.chevron_right_rounded, color: BrokaColors.textHigh, size: 22),
+                  ]),
+                  const SizedBox(height: 12),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (final q in questions)
+                      Material(
+                        color: BrokaColors.bgCard.withOpacity(0.9),
+                        shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonPurple.withOpacity(0.45))),
+                        child: InkWell(
+                          customBorder: const StadiumBorder(),
+                          onTap: () => _openZeno(q),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                            child: Text(q, style: const TextStyle(
+                                color: BrokaColors.textHigh, fontSize: 12, fontWeight: FontWeight.w600)),
+                          ),
+                        ),
+                      ),
+                  ]),
+                ]),
+              ),
+            ),
+          ),
         ),
-        const SizedBox(height: 8),
-        const Text('Zeno recommends: Always use BROKA escrow and never pay before seeing the item.',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 11, height: 1.4)),
       ]),
     );
   }
@@ -1283,40 +1127,56 @@ Finish with a clear recommendation — buy, negotiate, or walk away — based on
     top: false,
     child: Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      decoration: const BoxDecoration(
-        color: BrokaColors.bgMid,
-        border: Border(top: BorderSide(color: BrokaColors.border)),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgMid.withOpacity(0.97),
+        border: const Border(top: BorderSide(color: BrokaColors.border)),
       ),
       child: Row(children: [
         Expanded(child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min, children: [
-          Text(l.formattedPrice, style: const TextStyle(
-              color: BrokaColors.textHigh, fontSize: 20,
-              fontWeight: FontWeight.w800)),
-          const Text('Escrow protected · 3% fee',
-              style: TextStyle(color: BrokaColors.textLow, fontSize: 11)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(l.formattedPrice, style: const TextStyle(
+                color: BrokaColors.textHigh, fontSize: 20,
+                fontWeight: FontWeight.w800)),
+          ),
+          Text(
+            _isAuction
+                ? 'Escrow protected · 3% fee'
+                : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · Escrow protected',
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
         ])),
         const SizedBox(width: 12),
-        GestureDetector(
-          onTap: () async {
-            final authed = await requireAuth(context, reason: 'to start negotiating');
-            if (!authed || !mounted) return;
-            Navigator.pushNamed(context, '/negotiate',
-                arguments: {'listing': l, 'role': 'buyer'});
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                  colors: [Color(0xFFFF4D6D), Color(0xFFFF8C42)]),
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: const [BoxShadow(
-                  color: Color(0x55FF4D6D), blurRadius: 14)],
+        // The brand gradient, as on Home's primary actions. The label says
+        // what happens: a fixed price is not negotiated, it is agreed with
+        // the seller - through the same room, which knows it is fixed.
+        Semantics(
+          button: true,
+          child: GestureDetector(
+            key: const Key('product-cta'),
+            onTap: () async {
+              final authed = await requireAuth(context, reason: 'to start negotiating');
+              if (!authed || !mounted) return;
+              Navigator.pushNamed(context, '/negotiate',
+                  arguments: {'listing': l, 'role': 'buyer'});
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 15),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                    colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [BoxShadow(
+                    color: BrokaColors.gold.withOpacity(0.4), blurRadius: 14)],
+              ),
+              child: Text(
+                  _isAuction || l.priceNegotiable ? 'Start Negotiation' : 'Contact Seller',
+                  style: const TextStyle(color: Colors.white,
+                      fontWeight: FontWeight.w800, fontSize: 15)),
             ),
-            child: const Text('Start Negotiation',
-                style: TextStyle(color: Colors.white,
-                    fontWeight: FontWeight.w800, fontSize: 15)),
           ),
         ),
       ]),

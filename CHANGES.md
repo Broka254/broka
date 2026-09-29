@@ -1,3 +1,34 @@
+# The listing screen: the seller's standing, the deal's terms, and Zeno about it (2026-09-29)
+
+**The listing screen** (`flutter_app/lib/screens/product_screen.dart`) is on
+Home's visual system: the constellation, Home's header (the category's badge
+and glowing name), cards with the product card's gradient edge, and the brand
+gradient on the one button.
+
+- **Deal terms**, as two tiles near the top: fixed price or negotiable, and
+  whether the seller delivers (with their note), picks up, or hasn't said.
+  They were two of ten small chips. A fixed price reads "Contact Seller"
+  rather than "Start Negotiation".
+- **The seller's standing**: the seller dashboard's overall rating, deal
+  completion rate and response time, in the dashboard's colours, from
+  `seller_standing` on `GET /auth/user/{id}` (`trust/public_standing.py`,
+  last night's snapshot; rank and backlog stay the seller's; SELLER_METRICS.md).
+  It replaces a "credibility" score the screen made up, and the seller card's
+  "10.0/10", which every new seller showed (the rating's default of 5.0,
+  doubled).
+- **Zeno Insight** opens Zeno about the listing, where the buyer asks what
+  they need to know. It replaces a panel that asked the model for a one-off
+  verdict and a price comparison from `/listings/{id}/price-comparison` - an
+  endpoint in `api/routers/listings.py`, which is never mounted, so it always
+  said there was nothing to compare. The matatu fare estimate moved to the
+  map.
+
+**Zeno, asked about a listing** (ZENO_ACTIONS.md): `listing_id` on
+`POST /zeno/assistant/turn`. The server reads the listing - BROKA's facts
+apart from the seller's fenced words - and when it doesn't fit, Zeno offers a
+search the buyer takes with a tap (`requires_confirmation`, a
+**[Not now] [Find it]** card) instead of one that just happens.
+
 # Rust in the backend, and password hashing off the event loop (2026-09-28)
 
 **A Rust extension, `backend/native/`** (PyO3, built with maturin), for the

@@ -8,7 +8,9 @@
 //
 // One conversation per account and per mode (the market assistant and the
 // Buying Agent are different conversations), keyed by user id so another
-// account signed in on the same phone never sees it.
+// account signed in on the same phone never sees it. Questions about a
+// listing are a third, and remember which listing: coming back to the same
+// one picks the conversation up, opening Zeno from another starts afresh.
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -58,6 +60,7 @@ class ZenoConversation {
     this.lastVerdict,
     this.watching = false,
     this.negotiationOpened = const {},
+    this.aboutListing,
     required this.savedAt,
   });
 
@@ -73,6 +76,9 @@ class ZenoConversation {
   final bool watching;
   final Set<String> negotiationOpened;
 
+  /// The id of the listing this conversation is about, if it is one.
+  final String? aboutListing;
+
   final DateTime savedAt;
 
   /// Nothing but Zeno's greeting.
@@ -87,6 +93,7 @@ class ZenoConversation {
         if (lastVerdict != null) 'last_verdict': lastVerdict,
         'watching': watching,
         'negotiation_opened': negotiationOpened.toList(),
+        if (aboutListing != null) 'about_listing': aboutListing,
       };
 
   factory ZenoConversation.fromJson(Map<String, dynamic> j) => ZenoConversation(
@@ -111,6 +118,7 @@ class ZenoConversation {
         negotiationOpened: {
           for (final id in (j['negotiation_opened'] as List? ?? const [])) id.toString(),
         },
+        aboutListing: j['about_listing'] as String?,
       );
 }
 
@@ -164,6 +172,7 @@ class ZenoChatStore {
         lastVerdict: convo.lastVerdict,
         watching: convo.watching,
         negotiationOpened: convo.negotiationOpened,
+        aboutListing: convo.aboutListing,
         savedAt: convo.savedAt,
       );
       final prefs = await SharedPreferences.getInstance();

@@ -153,6 +153,29 @@ Negatives sort ABOVE positives here, unlike the dashboard. A seller opening
 one listing is looking for the thing to fix; a seller opening the dashboard
 is taking stock.
 
+## What buyers see (2026-09-29)
+
+A listing's screen shows the seller's **overall rating, deal completion
+rate and response time** — the dashboard's first three charts, in the
+dashboard's colours (`flutter_app/lib/models/seller_standing.dart` holds the
+thresholds both screens use). `GET /auth/user/{id}` carries them as
+`seller_standing`, built by `trust/public_standing.py`:
+
+- **From the newest nightly snapshot**, not computed live. A listing is
+  opened far more often than a dashboard, and the live response time scans
+  every message on the platform from the last 30 days. A snapshot older
+  than seven days gives nothing: those are the figures of a job that has
+  stopped, not the seller's standing.
+- **DCR only after the first funded deal**, marked provisional under ten.
+  The 80% prior is not a track record, and a buyer shouldn't be shown one.
+- **Response time null when unmeasured**, never a placeholder.
+- **Rank position, rank score and backlog stay the seller's.** Rank tells a
+  rival how far they have to climb; the backlog can be inflated by anyone
+  willing to open conversations.
+
+Zeno is given the same three figures when a buyer asks it about a listing
+(ZENO_ACTIONS.md).
+
 ## Phase 5 — rank, seller of the week/month, prizes
 
 Not started. `rank_position` is already snapshotted daily, so the leaderboard

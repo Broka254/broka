@@ -68,6 +68,33 @@ The microphone also stops, with the session still on:
 
 A call still waits for a tap, from the pill as from anywhere.
 
+## Asking about a listing (2026-09-29)
+
+A listing's "Ask Zeno" card opens the assistant about that listing: the app
+sends `listing_id` with each turn, and `listing_context.py` reads the
+listing and puts it in the prompt. This is the one place another user's
+words reach the assistant - "does it come with a charger?" is answered by
+the seller's description or not at all - so:
+
+- **By id, loaded on the server.** The app says which listing, never what
+  it says, so a client cannot hand Zeno a lower price or a verified seller.
+  A listing buyers cannot see (unpaid, lapsed) gives no context, except to
+  its own seller.
+- **Facts apart from words.** Price, negotiable or fixed, delivery, the
+  seller's rating / completion rate / response time (SELLER_METRICS.md) are
+  given as BROKA's records. Title, description, delivery note, place and
+  details are the seller's, clipped and fenced (`<<<LISTING ... LISTING>>>`,
+  with the markers stripped from the text so a description cannot close the
+  fence). No names.
+- **When it doesn't fit, Zeno offers a search** (`FIND_FOR_ME` with the
+  buyer's own words). A search the model proposes in this mode comes back
+  with `requires_confirmation` and the app shows **[Not now] [Find it]**: a
+  description must not be able to carry the buyer off to a search they
+  never asked for. A search the buyer types as a command still just runs.
+- Its own conversation on the phone (`ZenoChatStore` mode `listing`,
+  remembering which listing), and not through Zeno's session: the session's
+  turns carry no listing.
+
 ## Safety properties, all tested
 
 - **Only people the user already talks to.** `contacts.resolve` matches the
@@ -78,7 +105,8 @@ A call still waits for a tap, from the pill as from anywhere.
   Axio guy"); ids come only from the user's own threads. An id it writes is
   dropped. No other user's name or listing title is put in its prompt, so no
   other party can write instructions into it - the injection route this
-  file was first written about does not exist here.
+  file was first written about does not exist here. The one exception is
+  a listing the user opened Zeno from (below), and it is fenced.
 - **The vocabulary is closed**, on both sides: the server cleans the model's
   proposal to it, and the app parses only what it knows (a newer server's
   action does nothing on an older app).

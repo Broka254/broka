@@ -197,3 +197,82 @@ class TestProfile:
         grace_id, _ = people["grace"]
         assert (await client.get(f"/auth/user/{grace_id}")).status_code in (401, 403)
         assert (await client.get("/auth/search", params={"q": "grace"})).status_code in (401, 403)
+
+
+class TestSellerStanding:
+    """The seller dashboard's rating, completion rate and response time, as
+    a buyer sees them on a listing's screen - and nothing else of the
+    seller's metrics (trust/public_standing.py)."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _no_snapshots(self, people):
+        from sqlalchemy import delete
+        from api.database import SellerMetricSnapshot
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(SellerMetricSnapshot))
+            await db.commit()
+
+    @staticmethod
+    async def _snapshot(seller_id: str, days_ago: int, **fields):
+        from datetime import datetime, timedelta
+        from api.database import SellerMetricSnapshot
+        values = dict(overall_rating=8.46, dcr_score=92.3, rank_score=0.71, rank_position=3,
+                      median_response_min=25.0, completed_deals=14, pending_deals=6)
+        values.update(fields)
+        async with AsyncSessionLocal() as db:
+            db.add(SellerMetricSnapshot(
+                seller_id=seller_id,
+                snapshot_date=datetime.utcnow().date() - timedelta(days=days_ago), **values))
+            await db.commit()
+
+    @pytest.mark.asyncio
+    async def test_a_buyer_sees_rating_completion_and_reply_time(self, client, people):
+        grace_id, _ = people["grace"]
+        _, as_otieno = people["otieno"]
+        await self._snapshot(grace_id, 3, overall_rating=5.0, dcr_score=60.0, median_response_min=300.0)
+        await self._snapshot(grace_id, 1)
+        body = (await client.get(f"/auth/user/{grace_id}", headers=as_otieno)).json()
+        standing = body["seller_standing"]
+        assert standing == {
+            "overall_rating": 8.5, "dcr": 92.3, "dcr_provisional": False,
+            "median_response_minutes": 25.0, "completed_deals": 14,
+            "as_of": standing["as_of"],
+        }
+        # Rank and backlog are the seller's own.
+        assert not {"rank_score", "rank_position", "pending_deals"} & set(standing)
+        assert not PRIVATE_FIELDS & set(body)
+
+    @pytest.mark.asyncio
+    async def test_no_completion_rate_before_a_completed_deal(self, client, people):
+        # DCR starts at an 80% prior (§3.2); shown to a buyer, that is a
+        # track record the seller does not have.
+        grace_id, _ = people["grace"]
+        _, as_otieno = people["otieno"]
+        await self._snapshot(grace_id, 1, dcr_score=80.0, completed_deals=0, median_response_min=None)
+        standing = (await client.get(f"/auth/user/{grace_id}", headers=as_otieno)).json()["seller_standing"]
+        assert standing["dcr"] is None and standing["dcr_provisional"] is False
+        assert standing["median_response_minutes"] is None
+        assert standing["overall_rating"] == 8.5
+
+    @pytest.mark.asyncio
+    async def test_under_ten_deals_is_provisional(self, client, people):
+        grace_id, _ = people["grace"]
+        _, as_otieno = people["otieno"]
+        await self._snapshot(grace_id, 0, completed_deals=4)
+        standing = (await client.get(f"/auth/user/{grace_id}", headers=as_otieno)).json()["seller_standing"]
+        assert standing["dcr"] == 92.3 and standing["dcr_provisional"] is True
+
+    @pytest.mark.asyncio
+    async def test_stale_figures_are_not_shown(self, client, people):
+        grace_id, _ = people["grace"]
+        _, as_otieno = people["otieno"]
+        await self._snapshot(grace_id, 8)
+        body = (await client.get(f"/auth/user/{grace_id}", headers=as_otieno)).json()
+        assert "seller_standing" not in body
+
+    @pytest.mark.asyncio
+    async def test_someone_who_has_never_sold_has_none(self, client, people):
+        otieno_id, _ = people["otieno"]
+        _, as_grace = people["grace"]
+        body = (await client.get(f"/auth/user/{otieno_id}", headers=as_grace)).json()
+        assert "seller_standing" not in body

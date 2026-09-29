@@ -15,11 +15,15 @@ class ZenoAssistantRepository {
   ///
   /// Stateless, like the Buying Agent: [history] is the conversation so far,
   /// without [message] - the server adds it after the history itself.
+  ///
+  /// [listingId]: the listing the user opened Zeno from to ask about. Only
+  /// the id - the server reads the listing itself.
   Future<Result<ZenoTurnResult>> turn({
     required String message,
     required List<Map<String, String>> history,
     required String language,
     bool voice = false,
+    String? listingId,
   }) async {
     try {
       final res = await _client.post('/zeno/assistant/turn', {
@@ -27,6 +31,7 @@ class ZenoAssistantRepository {
         'history': history,
         'language': language,
         'mode': voice ? 'voice' : 'text',
+        if (listingId != null) 'listing_id': listingId,
       });
       if (res is! Map) return const Failure('Zeno sent back nothing usable.');
       return Success(ZenoTurnResult.fromJson(res.cast<String, dynamic>()));

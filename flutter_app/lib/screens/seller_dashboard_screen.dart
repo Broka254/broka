@@ -28,6 +28,7 @@ import '../theme/motion.dart';
 import '../services/api_service.dart';
 import '../widgets/particle_field.dart';
 import '../models/listing.dart';
+import '../models/seller_standing.dart';
 import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
@@ -359,7 +360,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         label: 'Overall rating',
         points: _series('overall_rating'),
         currentValue: _live('overall_rating'),
-        goodThreshold: 8.0, poorThreshold: 6.0,
+        // Shared with the listing screen's seller standing, which shows
+        // buyers these three figures in the same colours.
+        goodThreshold: SellerStanding.ratingGood, poorThreshold: SellerStanding.ratingPoor,
         format: (v) => '${v.toStringAsFixed(1)}/10',
         lineColor: BrokaColors.gold,
       ),
@@ -367,7 +370,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         label: 'Deal completion rate',
         points: _series('dcr'),
         currentValue: _live('dcr'),
-        goodThreshold: 90.0, poorThreshold: 70.0,
+        goodThreshold: SellerStanding.dcrGood, poorThreshold: SellerStanding.dcrPoor,
         format: (v) => '${v.toStringAsFixed(0)}%',
         lineColor: BrokaColors.neonGreen,
       ),
@@ -377,11 +380,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         currentValue: _live('median_response_minutes'),
         // Lower is better: green sits at the BOTTOM of this one.
         higherIsBetter: false,
-        goodThreshold: 30.0, poorThreshold: 180.0,
-        format: (v) => v < 60
-            ? '${v.round()}m'
-            : (v < 1440 ? '${(v / 60).toStringAsFixed(1)}h'
-                        : '${(v / 1440).toStringAsFixed(1)}d'),
+        goodThreshold: SellerStanding.responseGood, poorThreshold: SellerStanding.responsePoor,
+        format: SellerStanding.formatMinutes,
         lineColor: BrokaColors.neonBlue,
       ),
       FactorTrendChart(

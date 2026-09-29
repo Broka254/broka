@@ -6,6 +6,9 @@
 //   a person to pick                one button per person it could be
 //   a call                          who, about what, and [Not now] [Call] -
 //                                   nothing rings until Call is tapped
+//   a search Zeno offers            what it would look for, and [Not now]
+//                                   [Find it] - asked about a listing that
+//                                   doesn't fit, it waits for the buyer
 //   a guide                         its steps, each with the way to where it
 //                                   is done (zeno_guide_card.dart)
 import 'package:flutter/material.dart';
@@ -39,7 +42,8 @@ class ZenoActionCard extends StatelessWidget {
   /// Voice mode's size.
   final bool large;
 
-  /// A call: place it. Anything else: do it again.
+  /// A call: place it. An offered search: run it. Anything else: do it
+  /// again.
   final VoidCallback? onConfirm;
   final VoidCallback? onDismiss;
   final ValueChanged<ZenoContact>? onChoose;
@@ -67,6 +71,8 @@ class ZenoActionCard extends StatelessWidget {
       body = _Choices(action: action, large: large, onChoose: onChoose, onDismiss: onDismiss, phase: phase);
     } else if (action.type == ZenoActionType.call) {
       body = _CallConfirm(action: action, phase: phase, large: large, onConfirm: onConfirm, onDismiss: onDismiss);
+    } else if (action.isOffer && phase != ZenoActionPhase.done) {
+      body = _Offer(action: action, phase: phase, large: large, onConfirm: onConfirm, onDismiss: onDismiss);
     } else {
       body = _Chip(action: action, phase: phase, large: large, onAgain: onConfirm);
     }
@@ -306,6 +312,99 @@ class _CallConfirm extends StatelessWidget {
               child: LinearProgressIndicator(
                 minHeight: 2,
                 color: BrokaColors.success,
+                backgroundColor: BrokaColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// A search Zeno offers instead of running: asked about a listing that
+/// doesn't fit, Zeno says what it would look for, and the buyer decides.
+/// Once taken it becomes the ordinary chip - "open again" - like any
+/// search that ran by itself.
+class _Offer extends StatelessWidget {
+  const _Offer({
+    required this.action,
+    required this.phase,
+    required this.large,
+    this.onConfirm,
+    this.onDismiss,
+  });
+
+  final ZenoAction action;
+  final ZenoActionPhase phase;
+  final bool large;
+  final VoidCallback? onConfirm;
+  final VoidCallback? onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final dismissed = phase == ZenoActionPhase.dismissed;
+    final agent = action.type == ZenoActionType.findForMe;
+    final tone = dismissed ? BrokaColors.textMid : BrokaColors.neonCyan;
+    return AnimatedOpacity(
+      duration: BrokaMotion.quick,
+      opacity: dismissed ? 0.55 : 1,
+      child: Container(
+        padding: EdgeInsets.all(large ? 16 : 12),
+        decoration: _glass(tone, large: large),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            Container(
+              width: large ? 34 : 28,
+              height: large ? 34 : 28,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+              ),
+              child: Icon(ZenoActionRunner.icon(action), size: large ? 18 : 15, color: Colors.white),
+            ),
+            SizedBox(width: large ? 12 : 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  dismissed
+                      ? 'Not searching'
+                      : (agent ? 'Find something that fits?' : 'Search for something else?'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: BrokaColors.textHigh, fontSize: large ? 16 : 13.5, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 2),
+                Text('"${action.query}"',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: large ? 13 : 11.5)),
+              ]),
+            ),
+          ]),
+          if (phase == ZenoActionPhase.pending) ...[
+            SizedBox(height: large ? 16 : 12),
+            Row(children: [
+              Expanded(child: _Button(label: 'Not now', onTap: onDismiss, large: large, filled: false)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _Button(
+                  label: agent ? 'Find it' : 'Search',
+                  icon: agent ? Icons.radar_rounded : Icons.search_rounded,
+                  onTap: onConfirm,
+                  large: large,
+                  filled: true,
+                ),
+              ),
+            ]),
+          ],
+          if (phase == ZenoActionPhase.running)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                color: BrokaColors.neonCyan,
                 backgroundColor: BrokaColors.border,
                 borderRadius: BorderRadius.circular(2),
               ),

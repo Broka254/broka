@@ -712,10 +712,11 @@ async def seller_metrics(
 ):
     """Current standing plus the history series behind the dashboard graphs.
 
-    Own metrics only. A seller's response time, backlog and rank position
-    are competitive information - publishing them would let anyone profile
-    every other seller on the platform, and rank position in particular
-    tells a rival exactly how far they have to climb.
+    Own metrics only. A seller's backlog and rank position are competitive
+    information - rank position in particular tells a rival exactly how far
+    they have to climb. Buyers are shown three of these figures on a
+    listing's screen (overall rating, DCR, response time), from the nightly
+    snapshot and nothing else of it: trust/public_standing.py.
 
     `history` is one point per day from SellerMetricSnapshot. Days with no
     snapshot are simply absent rather than zero-filled: a gap in the line is

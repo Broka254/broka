@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import User
 from api.domains.ai_broker.service import AIBrokerService
-from . import contacts, guides, intents, knowledge
+from . import contacts, guides, intents, knowledge, listing_context
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,14 @@ def _choose(choices: list[dict], language: str) -> str:
     return f"Yupi - {listed}?" if _sw(language) else f"Which one - {listed}?"
 
 
+def _offer(action: dict, language: str) -> str:
+    """Zeno's line for a search it offers, about a listing, and waits on."""
+    q = action["query"]
+    if _sw(language):
+        return f"Nikutafutie \"{q}\" badala yake?"
+    return f"Want me to look for \"{q}\" instead?"
+
+
 def _offline(language: str) -> str:
     if _sw(language):
         return ("Siwezi kufikiri vizuri sasa hivi - lakini bado naweza kufungua skrini, "
@@ -150,6 +158,7 @@ async def assistant_turn(
     history: list[dict],
     language: str,
     voice: bool = False,
+    listing_id: Optional[str] = None,
 ) -> dict:
     # 1. A plain command needs no model. A call or chat request only
     #    short-cuts when it names someone the user actually talks to -
@@ -170,6 +179,8 @@ async def assistant_turn(
     from api.routers.negotiate import _language_instruction  # router module; imported late
     topics = knowledge.topics_for(message)
     facts = await knowledge.gather(db, user_id, topics) if topics else {}
+    # Opened from a listing: what it says, loaded by id (listing_context.py).
+    about = await listing_context.load(db, user_id, listing_id) if listing_id else None
     service = AIBrokerService()
     name = await _first_name(db, user_id)
 
@@ -184,6 +195,7 @@ async def assistant_turn(
             facts=known,
             guides=guides.GUIDES,
             topics=(knowledge.TOPIC_HELP if may_ask else None),
+            listing=about,
         )
 
     calls = 1
@@ -222,4 +234,11 @@ async def assistant_turn(
         return {"reply": reply or _offline(language), "action": None, "source": "model", **used}
     if problem == "choose":
         return {"reply": _choose(resolved["choices"], language), "action": resolved, "source": "model", **used}
+    if about is not None and resolved["type"] in ("SEARCH", "FIND_FOR_ME"):
+        # A search the model came up with while the seller's words were in
+        # its prompt is offered, not run: a description must not be able to
+        # carry a buyer off to a search they never asked for. A search the
+        # user typed as a command took the fast path above and runs.
+        resolved = {**resolved, "requires_confirmation": True}
+        return {"reply": reply or _offer(resolved, language), "action": resolved, "source": "model", **used}
     return {"reply": reply or _confirmation(resolved, language), "action": resolved, "source": "model", **used}

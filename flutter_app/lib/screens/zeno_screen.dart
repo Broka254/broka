@@ -50,6 +50,12 @@
 // cards to swipe through instead of a 210px column each, and a watch that
 // switches on with a burst. The same pass fixed the screen's weak spots -
 // see CHANGES.md and test/buy_agent_ui_test.dart.
+//
+// 2026-09-29: a listing's "Ask Zeno" card opens the assistant about that
+// listing (aboutListing): pinned under the header, its id sent with every
+// turn so the server can read it to Zeno, suggestions about it, and its own
+// saved conversation. When it doesn't fit what the buyer wants, Zeno offers
+// a search - a card with a button, not a search that just happens.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -59,6 +65,7 @@ import '../services/zeno_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
 import '../widgets/zeno_voice_card.dart';
 import '../main.dart';
+import '../widgets/broka_image.dart';
 import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
@@ -76,6 +83,7 @@ import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
 import '../features/premium/presentation/premium_upsell.dart';
 import '../features/zeno_assistant/data/zeno_assistant_repository.dart';
+import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../features/zeno_assistant/domain/zeno_action.dart';
 import '../features/zeno_assistant/presentation/zeno_action_card.dart';
 import '../features/zeno_assistant/zeno_action_runner.dart';
@@ -129,10 +137,13 @@ _Lang _langByKey(String key) =>
 class ZenoScreen extends StatefulWidget {
   final ZenoMode mode;
 
-  /// Buying-agent mode only: something the buyer already typed elsewhere
-  /// (Home's search bar) so they don't have to say it twice. Sent as their
-  /// first turn the moment the screen opens.
+  /// Something the user already said elsewhere, sent as their first turn
+  /// the moment the screen opens: the Buying Agent's query from Home's
+  /// search bar, or a question tapped on a listing's "Ask Zeno" card.
   final String? initialQuery;
+
+  /// Assistant only: the listing the user opened Zeno from, to ask about.
+  final ZenoAboutListing? aboutListing;
 
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
@@ -149,6 +160,7 @@ class ZenoScreen extends StatefulWidget {
     super.key,
     this.mode = ZenoMode.assistant,
     this.initialQuery,
+    this.aboutListing,
     this.animateBackground = true,
     this.startInVoice = false,
     @visibleForTesting this.voiceService,
@@ -209,8 +221,13 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   bool get _isBuying => widget.mode == ZenoMode.buyingAgent;
 
-  /// ZenoChatStore's key for this mode's conversation.
-  String get _storeMode => _isBuying ? 'buying' : 'assistant';
+  /// The listing this conversation is about, when opened from one.
+  ZenoAboutListing? get _about => _isBuying ? null : widget.aboutListing;
+
+  /// ZenoChatStore's key for this mode's conversation. Questions about a
+  /// listing are kept apart from the general assistant's conversation:
+  /// "is it still available?" means nothing in the other one.
+  String get _storeMode => _isBuying ? 'buying' : (_about != null ? 'listing' : 'assistant');
 
   /// True until the saved conversation (if any) has been read back, so the
   /// opening suggestions don't flash up over a conversation that is about
@@ -305,8 +322,20 @@ class _ZenoScreenState extends State<ZenoScreen>
     ('🛋️', 'Something for my living room'),
   ];
 
-  List<(String, String)> get _suggestions =>
-      _isBuying ? _buyingSuggestions : _assistantSuggestions;
+  /// About the listing it was opened from - the questions a buyer has
+  /// before they start negotiating, and the way out when it doesn't fit.
+  List<(String, String)> get _listingSuggestions => [
+        ('💰', 'Is this a fair price?'),
+        ('⭐', 'Is this seller reliable?'),
+        ('🔍', 'What should I check before buying?'),
+        if (_about?.delivers != false) ('🚚', 'Can it be delivered to me?'),
+        if (_about?.negotiable ?? true) ('🤝', 'What offer should I make?'),
+        ('🔄', 'Find me something similar'),
+      ];
+
+  List<(String, String)> get _suggestions => _isBuying
+      ? _buyingSuggestions
+      : (_about != null ? _listingSuggestions : _assistantSuggestions);
 
   @override
   void initState() {
@@ -341,7 +370,10 @@ class _ZenoScreenState extends State<ZenoScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_session == null && !_isBuying) {
+    // Not about a listing: the session's turns carry no listing, so a
+    // question asked through it would reach Zeno without the listing it
+    // is about. Voice here is the screen's own card, through _send.
+    if (_session == null && !_isBuying && _about == null) {
       _session = ZenoSession.maybeOf(context);
       _session?.attachChat(this);
     }
@@ -372,7 +404,9 @@ class _ZenoScreenState extends State<ZenoScreen>
   Future<void> _restore() async {
     final initial = widget.initialQuery?.trim() ?? '';
     final fresh = _isBuying && initial.isNotEmpty;
-    final saved = fresh ? null : await ZenoChatStore.load(_storeMode);
+    var saved = fresh ? null : await ZenoChatStore.load(_storeMode);
+    // Questions about another listing are another conversation.
+    if (_about != null && saved?.aboutListing != _about!.id) saved = null;
     if (!mounted) return;
     setState(() {
       if (saved != null && !saved.isEmpty) {
@@ -393,7 +427,8 @@ class _ZenoScreenState extends State<ZenoScreen>
     });
     _scrollDown(animate: false);
     if (_isBuying && _watching) _checkWatchStillOn();
-    if (fresh) _send(initial);
+    // A question tapped on the listing joins its conversation.
+    if (fresh || (_about != null && initial.isNotEmpty)) _send(initial);
     if (widget.startInVoice && !_isBuying) _openVoice();
   }
 
@@ -434,6 +469,7 @@ class _ZenoScreenState extends State<ZenoScreen>
         lastVerdict: _lastVerdict,
         watching: _watching,
         negotiationOpened: _negotiationOpened,
+        aboutListing: _about?.id,
         savedAt: DateTime.now(),
       ),
     );
@@ -526,6 +562,16 @@ class _ZenoScreenState extends State<ZenoScreen>
       return;
     }
 
+    final about = _about;
+    if (about != null) {
+      final ask = switch (_langKey) {
+        'swahili' => 'Habari$greet! Niulize chochote kuhusu "${about.name}" - bei, muuzaji, usafirishaji, au kama kinakufaa. Kisipokufaa, nitakutafutia kingine.',
+        _ => 'Hi$greet! Ask me anything about "${about.name}" - the price, the seller, delivery, or whether it fits what you need. If it doesn\'t, I\'ll find you something that does.',
+      };
+      _turns.add(_Turn(Message(role: 'broker', content: ask)));
+      return;
+    }
+
     final welcomeMsg = switch (_langKey) {
       'swahili' => 'Habari$greet! Mimi ni Zeno, mshauri wako wa biashara wa BROKA. Ninaweza kukusaidia kutathmini bei, kugundua udanganyifu, au kupanga mkakati wa mazungumzo. Niulize chochote! 🤝',
       'luo'     => 'Misawa$greet! An Zeno, jakony mar ohala mar BROKA. Anyalo konyi nyiso nengo maber, neno wach miriambo, kata loso hera. Penj gimoro amora! 🤝',
@@ -581,6 +627,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       history: context20,
       language: _langKey,
       voice: _voice.isOpen,
+      listingId: _about?.id,
     );
     if (!mounted || epoch != _epoch) return;
     switch (result) {
@@ -693,7 +740,10 @@ class _ZenoScreenState extends State<ZenoScreen>
       large: large,
       onConfirm: action.type == ZenoActionType.call
           ? () => _confirmCall(turn)
-          : () => ZenoActionRunner.run(context, action),
+          // An offered search, taken: it runs, and its card follows it.
+          : (action.isOffer && _actionPhase[turn] == ZenoActionPhase.pending
+              ? () => _runAction(turn)
+              : () => ZenoActionRunner.run(context, action)),
       onDismiss: () => _dismissAction(turn),
       onChoose: (who) => _choose(turn, who),
       onStep: (i) {
@@ -1163,6 +1213,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           child: Stack(children: [
             Column(children: [
               _buildHeader(),
+              if (_about != null) _buildListingStrip(_about!),
               // What Zeno has gathered, growing in under the header as
               // it learns it. No AnimatedSize under reduced motion: at a
               // zero duration it asserts that it was mutated in its own
@@ -1206,6 +1257,7 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   /// What the header says Zeno is doing, and the colour of its dot.
   (String, Color) get _agentState {
+    if (_about != null) return ('Asking about a listing', BrokaColors.neonGreen);
     if (!_isBuying) return ('AI Market Assistant', BrokaColors.neonGreen);
     if (_searching) return ('Hunting…', BrokaColors.neonCyan);
     if (_typing) return ('Thinking…', BrokaColors.neonPurple);
@@ -1317,6 +1369,79 @@ class _ZenoScreenState extends State<ZenoScreen>
       ]),
     );
   }
+
+  /// The listing being asked about, pinned under the header: what it is,
+  /// its price, and the two terms buyers ask about first - the same
+  /// wording as the listing's own screen.
+  Widget _buildListingStrip(ZenoAboutListing l) {
+    final fallback = Container(
+      color: BrokaColors.bgMid,
+      alignment: Alignment.center,
+      child: Text(l.emoji, style: const TextStyle(fontSize: 20)),
+    );
+    return Padding(
+      key: const Key('zeno-about-listing'),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          gradient: BrokaColors.cardGradient,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.4)),
+        ),
+        child: Row(children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: l.photo == null
+                  ? fallback
+                  : BrokaImage(l.photo, width: 44, height: 44, placeholder: fallback),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(l.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: BrokaColors.textHigh, fontSize: 13.5, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 3),
+              Row(children: [
+                Flexible(
+                  child: Text(l.priceLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: BrokaColors.neonCyan, fontSize: 12.5, fontWeight: FontWeight.w800)),
+                ),
+                const SizedBox(width: 8),
+                _term(l.negotiable ? 'Negotiable' : 'Fixed price',
+                    l.negotiable ? BrokaColors.neonGreen : BrokaColors.neonPink),
+                if (l.delivers != null) ...[
+                  const SizedBox(width: 6),
+                  _term(l.delivers! ? 'Delivers' : 'Pickup', l.delivers! ? BrokaColors.neonBlue : BrokaColors.textMid),
+                ],
+              ]),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _term(String label, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.4)),
+        ),
+        child: Text(label,
+            style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700)),
+      );
 
   Widget _buildMessages() {
     // In the Buying Agent the list's first row is the agent's core. It is
@@ -1665,7 +1790,7 @@ class _ZenoScreenState extends State<ZenoScreen>
                       filled: false,
                       hintText: _isBuying
                           ? "Tell Zeno what you're looking for"
-                          : 'Ask Zeno anything',
+                          : (_about != null ? 'Ask about this listing' : 'Ask Zeno anything'),
                       hintStyle: const TextStyle(color: BrokaColors.textMid, fontSize: 15),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
