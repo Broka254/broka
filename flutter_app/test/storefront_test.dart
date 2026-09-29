@@ -138,12 +138,17 @@ void main() {
       expect(find.byType(ConstellationBackground), findsOneWidget);
       expect(find.text('Clanix Electronics'), findsWidgets);
       expect(find.text('Electronics · Starehe, Nairobi'), findsOneWidget);
-      expect(find.text('Verified seller'), findsOneWidget);
-      expect(find.text('12 deals done'), findsOneWidget);
-      expect(find.text('4.8'), findsOneWidget);
-      // The rest of what there is to know is under "Store details".
-      expect(find.text('Genuine phones and accessories.'), findsNothing);
-      expect(find.text('Products (3)'), findsOneWidget);
+      final identity = find.byKey(const Key('store-identity'));
+      expect(find.descendant(of: identity, matching: find.byIcon(Icons.verified_rounded)),
+          findsOneWidget);
+      // The seller's record and the rest of what there is to know are
+      // under "More details", not crowding the header.
+      expect(find.byKey(const Key('store-more-details')), findsOneWidget);
+      expect(find.byKey(const Key('store-details-button')), findsOneWidget);
+      for (final text in ['12 deals done', '4.8', 'Since 2025', 'Verified seller',
+          'Genuine phones and accessories.']) {
+        expect(find.text(text), findsNothing, reason: text);
+      }
       expect(find.byKey(const Key('category-pill-all')), findsOneWidget);
       expect(find.byKey(const Key('category-pill-Gaming')), findsOneWidget);
       expect(find.byType(ProductCard), findsNWidgets(3));
@@ -161,10 +166,12 @@ void main() {
       expect(photo, findsNothing);
       expect(find.byType(ProductCard), findsNWidgets(3));
 
-      await tester.tap(find.byKey(const Key('store-view-details')));
+      await tester.tap(find.byKey(const Key('store-more-details')));
       await tester.pumpAndSettle();
-      expect(find.byType(ProductCard), findsNothing);
+      expect(find.byType(StoreDetailsScreen), findsOneWidget);
       // The cover and both shop photos.
+      await tester.dragUntilVisible(find.byKey(const Key('store-photos')),
+          find.byKey(const Key('store-details-list')), const Offset(0, -200));
       expect(find.descendant(of: find.byKey(const Key('store-photos')), matching: photo),
           findsNWidgets(3));
       await tester.tap(find.byKey(const Key('store-photo-1')));
@@ -173,22 +180,35 @@ void main() {
       expect(find.text('2 of 3'), findsOneWidget);
     });
 
-    testWidgets('Store details: owner, location, contact and store info', (tester) async {
+    testWidgets("Store details: the seller's record, location, contact and store info",
+        (tester) async {
       final backend = _Backend(description: 'Genuine phones and accessories.');
       await _pumpStore(tester, backend);
-      await tester.tap(find.byKey(const Key('store-view-details')));
+      // From the bar, as from anywhere in the catalogue.
+      await tester.tap(find.byKey(const Key('store-details-button')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Genuine phones and accessories.'), findsOneWidget);
+      final summary = find.byKey(const Key('store-details-summary'));
+      expect(find.descendant(of: summary, matching: find.text('Clanix Electronics')),
+          findsOneWidget);
+      expect(find.descendant(of: summary, matching: find.text('Open')), findsOneWidget);
       final owner = find.byKey(const Key('store-owner'));
-      for (final text in ['Jane Wanjiru', 'Verified seller', 'On BROKA since January 2025',
-          '12', '4.8', '3']) {
-        expect(find.descendant(of: owner, matching: find.text(text)), findsOneWidget,
-            reason: text);
+      expect(find.descendant(of: owner, matching: find.text('Jane Wanjiru')), findsOneWidget);
+      expect(find.descendant(of: owner, matching: find.text('Verified seller')), findsOneWidget);
+      // Deals done, rating and the year joined, each in its own tile.
+      for (final (key, value, label) in [
+        ('owner-deals', '12', 'Deals done'),
+        ('owner-rating', '4.8', 'Rating'),
+        ('owner-since', '2025', 'On BROKA since'),
+      ]) {
+        final tile = find.byKey(Key(key));
+        expect(find.descendant(of: tile, matching: find.text(value)), findsOneWidget, reason: key);
+        expect(find.descendant(of: tile, matching: find.text(label)), findsOneWidget, reason: key);
       }
       final details = find.byKey(const Key('store-details'));
-      Future<void> show(Finder f) =>
-          tester.dragUntilVisible(f, find.byType(CustomScrollView), const Offset(0, -200));
+      Future<void> show(Finder f) => tester.dragUntilVisible(
+          f, find.byKey(const Key('store-details-list')), const Offset(0, -200));
+      await show(find.text('Genuine phones and accessories.'));
       await show(find.byKey(const Key('store-location')));
       expect(find.text('Starehe, Nairobi'), findsOneWidget);
       expect(find.text('Moi Avenue, opposite the Hilton'), findsOneWidget);
@@ -196,12 +216,40 @@ void main() {
       expect(find.text('sales@clanix.co.ke'), findsOneWidget);
       await show(find.byKey(const Key('store-buying-safely')));
       for (final text in ['Electronics', 'broka.co.ke/store/clanix', '3 on sale',
-          'September 2026', 'Open']) {
+          'September 2026']) {
         expect(find.descendant(of: details, matching: find.text(text)), findsOneWidget,
             reason: text);
       }
       // Nothing about the store is fetched twice for the details.
       expect(backend.requests.where((r) => r.url.path == '/stores/s1'), hasLength(1));
+
+      // Back is the store's products again.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(ProductCard), findsNWidgets(3));
+    });
+
+    testWidgets("a new seller's record says so instead of inventing numbers", (tester) async {
+      await tester.pumpWidget(MaterialApp(home: StoreDetailsScreen(
+        store: Store.fromJson({
+          ..._store(),
+          'owner': {'verified': false, 'rating': 5.0, 'completed_deals': 0},
+        }),
+        animateBackground: false,
+      )));
+      await tester.pumpAndSettle();
+      final owner = find.byKey(const Key('store-owner'));
+      expect(find.descendant(of: owner, matching: find.text('The owner of Clanix Electronics')),
+          findsOneWidget);
+      expect(find.descendant(of: owner, matching: find.text('Not verified yet')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('owner-deals')), matching: find.text('0')),
+          findsOneWidget);
+      // A rating with no deals behind it isn't one.
+      expect(find.descendant(of: find.byKey(const Key('owner-rating')),
+          matching: find.text('New')), findsOneWidget);
+      expect(find.text('5.0'), findsNothing);
+      expect(find.descendant(of: find.byKey(const Key('owner-since')), matching: find.text('–')),
+          findsOneWidget);
     });
 
     testWidgets('a link can open straight on Store details', (tester) async {
@@ -216,8 +264,13 @@ void main() {
         ),
       ));
       await tester.pumpAndSettle();
+      expect(find.byType(StoreDetailsScreen), findsOneWidget);
       expect(find.byKey(const Key('store-owner')), findsOneWidget);
-      expect(backend.listingQueries(), isEmpty);
+      // Opened on top of the store's home: Back is its products.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreDetailsScreen), findsNothing);
+      expect(find.byType(ProductCard), findsNWidgets(3));
     });
 
     testWidgets('Store details finds the shop on a map and emails it', (tester) async {
@@ -315,11 +368,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
 
-        await tester.tap(find.byKey(const Key('store-view-details')));
+        // "More details" has scrolled away; the bar's button is still there.
+        await tester.tap(find.byKey(const Key('store-details-button')));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull, reason: 'Store details at $size');
         for (var i = 0; i < 4; i++) {
-          await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
+          await tester.drag(find.byKey(const Key('store-details-list')), const Offset(0, -500));
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull, reason: 'Store details at $size');
         }
@@ -335,11 +389,15 @@ void main() {
           const StoreLinkTarget(slug: 'clanix', via: 'tiktok'));
       expect(StoreLinkTarget.parse('https://broka.co.ke/store/clanix/p/abc-123?via=qr'),
           const StoreLinkTarget(slug: 'clanix', listingId: 'abc-123', via: 'qr'));
+      // The web's Store details page.
+      expect(StoreLinkTarget.parse('https://broka.co.ke/store/clanix/about?via=whatsapp'),
+          const StoreLinkTarget(slug: 'clanix', via: 'whatsapp', details: true));
       for (final bad in [
         null, '', 'http://broka.co.ke/store/clanix', 'https://evil.com/store/clanix',
         'https://broka.co.ke/', 'https://broka.co.ke/store/', 'https://broka.co.ke/stores/x',
         'https://broka.co.ke/store/bad_name', 'https://broka.co.ke/store/x/p/',
-        'https://broka.co.ke/store/clanix/q/1',
+        'https://broka.co.ke/store/clanix/q/1', 'https://broka.co.ke/store/clanix/about/x',
+        'https://broka.co.ke/store/clanix/abouts',
       ]) {
         expect(StoreLinkTarget.parse(bad), isNull, reason: '$bad');
       }
@@ -383,6 +441,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(seen.last.name, '/product');
       expect(seen.last.arguments, {'listingId': 'l1'});
+
+      // The web's Store details page opens the store with its details on
+      // top. It was an unknown /store/ link: the app opened, showing nothing.
+      expect(links.handle('https://broka.co.ke/store/clanix/about'), isTrue);
+      await tester.pumpAndSettle();
+      expect(seen.last.name, '/store-view');
+      expect(seen.last.arguments, {'slug': 'clanix', 'via': null, 'view': 'details'});
 
       // Links that aren't BROKA store links are ignored.
       expect(links.handle('https://example.com/store/x'), isFalse);

@@ -1,24 +1,30 @@
-// "Store details" - everything a buyer arriving from a shared link needs to
-// know about a store before buying from it, in one place:
+// "Store details" - its own screen, opened from "More details" under the
+// store's name or the info button in its bar. Everything a buyer arriving
+// from a shared link needs to know about a store before buying from it,
+// with the store's home left to its products:
 //
-//   photos     the cover and shop photos (the store's home no longer puts
-//              the cover behind its name, where it fought with the text)
+//   summary    logo, name, what and where, open or taking a break
+//   seller     who runs it, and their record in three numbers: deals
+//              done, rating, and the year they joined BROKA (these were
+//              chips crowding the store's header)
+//   photos     the cover and shop photos
 //   about      the owner's own description, in full
-//   owner      who runs it, and their real seller record
 //   location   where the shop is, with a way to find it on a map
 //   contact    the verified business email, and how to ask about a product
-//   info       category, link, when it opened, whether it's open
+//   info       category, link, products, when it opened
 //   safety     how paying through BROKA protects the buyer
 //
-// Shown on the store's home (StoreHomeScreen's "Store details" tab), which
-// the owner also sees through "View as a buyer".
+// The web storefront has the same page at /store/<name>/about, and that
+// link opens this screen in the app.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../main.dart' show BrokaColors;
 import '../../../../widgets/broka_image.dart';
+import '../../../../widgets/constellation_background.dart';
 import '../../domain/models/store.dart';
+import '../my_store_screen.dart' show StoreLogo;
 
 const _months = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -26,6 +32,51 @@ const _months = [
 ];
 
 String _monthYear(DateTime d) => '${_months[d.month - 1]} ${d.year}';
+
+/// Opens [store]'s details on top of whatever is showing.
+/// [animateBackground] follows the screen it's opened from (tests draw
+/// the constellation still).
+Future<void> showStoreDetails(BuildContext context, Store store,
+        {bool animateBackground = true}) =>
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      settings: const RouteSettings(name: 'store-details'),
+      builder: (_) => StoreDetailsScreen(store: store, animateBackground: animateBackground),
+    ));
+
+class StoreDetailsScreen extends StatelessWidget {
+  const StoreDetailsScreen({
+    super.key,
+    required this.store,
+    this.openUrl,
+    this.animateBackground = true,
+  });
+
+  final Store store;
+  final Future<bool> Function(Uri uri)? openUrl;
+  final bool animateBackground;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: BrokaColors.bg,
+      appBar: AppBar(
+        backgroundColor: BrokaColors.bg,
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: BrokaColors.textHigh,
+        title: const Text('Store details', style: TextStyle(color: BrokaColors.textHigh,
+            fontSize: 17, fontWeight: FontWeight.w800)),
+      ),
+      body: ConstellationBackground(
+        animate: animateBackground,
+        child: ListView(
+          key: const Key('store-details-list'),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [StoreDetailsView(store: store, openUrl: openUrl)],
+        ),
+      ),
+    );
+  }
+}
 
 class StoreDetailsView extends StatelessWidget {
   const StoreDetailsView({super.key, required this.store, this.openUrl});
@@ -70,19 +121,21 @@ class StoreDetailsView extends StatelessWidget {
 
     return Column(key: const Key('store-details'),
         crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _Summary(store: store),
+      const SizedBox(height: 22),
+      _label('The seller'),
+      _OwnerCard(store: store),
       if (photos.isNotEmpty) ...[
+        const SizedBox(height: 22),
         _label('Photos of the shop'),
         _PhotoStrip(photos: photos, storeName: store.name),
-        const SizedBox(height: 22),
       ],
       if (description.isNotEmpty) ...[
+        const SizedBox(height: 22),
         _label('About the store'),
         _card(child: Text(description, style: const TextStyle(
             color: BrokaColors.textHigh, fontSize: 14, height: 1.5))),
-        const SizedBox(height: 22),
       ],
-      _label('Store owner'),
-      _OwnerCard(store: store),
       const SizedBox(height: 22),
       _label('Location'),
       _card(
@@ -167,13 +220,6 @@ class StoreDetailsView extends StatelessWidget {
           if (opened != null)
             _InfoRow(icon: Icons.event_outlined, label: 'Opened',
                 value: _monthYear(opened), dense: true),
-          _InfoRow(
-            icon: store.isActive ? Icons.storefront_rounded : Icons.pause_circle_outline_rounded,
-            label: 'Status',
-            value: store.isActive ? 'Open' : 'Taking a break',
-            valueColor: store.isActive ? BrokaColors.success : BrokaColors.warning,
-            dense: true,
-          ),
         ]),
       ),
       const SizedBox(height: 22),
@@ -198,6 +244,48 @@ class StoreDetailsView extends StatelessWidget {
         ]),
       ),
     ]);
+  }
+}
+
+/// Which store this is, so the screen stands on its own when a link
+/// opened it straight away.
+class _Summary extends StatelessWidget {
+  const _Summary({required this.store});
+  final Store store;
+
+  @override
+  Widget build(BuildContext context) {
+    final place = [store.category, store.locationLine]
+        .whereType<String>().where((s) => s.isNotEmpty).join(' · ');
+    final color = store.isActive ? BrokaColors.success : BrokaColors.warning;
+    return _card(
+      key: const Key('store-details-summary'),
+      child: Row(children: [
+        StoreLogo(store: store, size: 60),
+        const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(store.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 18,
+                  fontWeight: FontWeight.w800, height: 1.2)),
+          if (place.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(place, maxLines: 2, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+          ],
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: color.withOpacity(0.6)),
+            ),
+            child: Text(store.isActive ? 'Open' : 'Taking a break', style: TextStyle(
+                color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
+          ),
+        ])),
+      ]),
+    );
   }
 }
 
@@ -229,7 +317,6 @@ class _InfoRow extends StatelessWidget {
     required this.icon,
     required this.label,
     this.value,
-    this.valueColor,
     this.trailing,
     this.dense = false,
     this.plainValue = false,
@@ -238,7 +325,6 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String? value;
-  final Color? valueColor;
   final Widget? trailing;
 
   /// A label beside its value on one line, for the short facts under
@@ -250,7 +336,7 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final valueStyle = TextStyle(color: valueColor ?? BrokaColors.textHigh,
+    final valueStyle = TextStyle(color: BrokaColors.textHigh,
         fontSize: 14, fontWeight: plainValue ? FontWeight.w400 : FontWeight.w600, height: 1.4);
     const labelStyle = TextStyle(color: BrokaColors.textMid, fontSize: 12.5);
     return ConstrainedBox(
@@ -304,14 +390,14 @@ class _OwnerCard extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(
-            width: 52, height: 52,
+            width: 48, height: 48,
             alignment: Alignment.center,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               gradient: LinearGradient(colors: BrokaColors.brandGradient),
             ),
             child: Text(name.characters.first.toUpperCase(),
-                style: const TextStyle(color: Colors.white, fontSize: 22,
+                style: const TextStyle(color: Colors.white, fontSize: 20,
                     fontWeight: FontWeight.w800)),
           ),
           const SizedBox(width: 14),
@@ -319,7 +405,7 @@ class _OwnerCard extends StatelessWidget {
             Text(name, maxLines: 2, overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16,
                     fontWeight: FontWeight.w800)),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Row(children: [
               Icon(verified ? Icons.verified_rounded : Icons.info_outline_rounded, size: 15,
                   color: verified ? BrokaColors.success : BrokaColors.textMid),
@@ -328,45 +414,68 @@ class _OwnerCard extends StatelessWidget {
                   style: TextStyle(color: verified ? BrokaColors.success : BrokaColors.textMid,
                       fontSize: 12.5, fontWeight: FontWeight.w600))),
             ]),
-            if (since != null) ...[
-              const SizedBox(height: 2),
-              Text('On BROKA since ${_monthYear(since)}',
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
-            ],
           ])),
         ]),
         const SizedBox(height: 14),
-        Container(height: 1, color: BrokaColors.border),
-        const SizedBox(height: 12),
-        IntrinsicHeight(
-          child: Row(children: [
-            _fact('$deals', deals == 1 ? 'deal done' : 'deals done'),
-            const VerticalDivider(color: BrokaColors.border, width: 1),
-            _fact(rating != null ? rating.toStringAsFixed(1) : 'New', 'rating',
-                icon: rating != null ? Icons.star_rounded : null),
-            const VerticalDivider(color: BrokaColors.border, width: 1),
-            _fact('${store.listingCount}', store.listingCount == 1 ? 'product' : 'products'),
-          ]),
-        ),
+        // The seller's record in three numbers, side by side, each with
+        // what it counts under it.
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _fact(
+            key: const Key('owner-deals'),
+            icon: Icons.handshake_outlined,
+            iconColor: _link,
+            value: '$deals',
+            label: deals == 1 ? 'Deal done' : 'Deals done',
+          ),
+          const SizedBox(width: 8),
+          _fact(
+            key: const Key('owner-rating'),
+            icon: Icons.star_rounded,
+            iconColor: const Color(0xFFFBBF24),
+            value: rating != null ? rating.toStringAsFixed(1) : 'New',
+            label: rating != null ? 'Rating' : 'No rating yet',
+          ),
+          const SizedBox(width: 8),
+          _fact(
+            key: const Key('owner-since'),
+            icon: Icons.calendar_month_outlined,
+            iconColor: _link,
+            value: since != null ? '${since.year}' : '–',
+            label: 'On BROKA since',
+          ),
+        ]),
       ]),
     );
   }
 
-  Widget _fact(String value, String label, {IconData? icon}) => Expanded(
-        child: Column(children: [
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            if (icon != null) ...[
-              Icon(icon, size: 17, color: const Color(0xFFFBBF24)),
-              const SizedBox(width: 3),
-            ],
-            Flexible(child: Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17,
-                    fontWeight: FontWeight.w800))),
+  Widget _fact({
+    required Key key,
+    required IconData icon,
+    required Color iconColor,
+    required String value,
+    required String label,
+  }) =>
+      Expanded(
+        child: Container(
+          key: key,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+          decoration: BoxDecoration(
+            color: BrokaColors.bg.withOpacity(0.55),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: BrokaColors.border),
+          ),
+          child: Column(children: [
+            Icon(icon, size: 20, color: iconColor),
+            const SizedBox(height: 6),
+            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 18,
+                    fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            Text(label, maxLines: 2, textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.2)),
           ]),
-          const SizedBox(height: 2),
-          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-        ]),
+        ),
       );
 }
 

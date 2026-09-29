@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { ProductCardData } from '@/lib/catalogue'
@@ -69,30 +69,46 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreHero', () => {
-  it('has no cover photo behind the name, and points at Store details', () => {
-    render(<StoreHero view={storeView(shop())} />)
-    expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
-    expect(screen.getByText('Electronics · Moi Avenue, Bazaar Plaza, Starehe, Nairobi')).toBeTruthy()
-    expect(screen.queryAllByRole('img')).toEqual([])
-    expect(screen.getByText('ⓘ Store details').getAttribute('href')).toBe('#store-details')
-    // What the store says about itself is under Store details now.
-    expect(screen.queryByText('Genuine phones and accessories.')).toBeNull()
+  it('is the name, what and where, and More details - no cover photo, no record chips', () => {
+    const { container } = render(<StoreHero view={storeView(shop())} />)
+    expect(screen.getByRole('heading', { name: /^Clanix/ })).toBeTruthy()
+    expect(screen.getByRole('img', { name: 'Verified seller' })).toBeTruthy()
+    expect(screen.getByText('Electronics · Starehe, Nairobi')).toBeTruthy()
+    expect(container.querySelectorAll('img')).toHaveLength(0)
+    expect(screen.getByText('ⓘ More details ›').getAttribute('href')).toBe('/store/clanix/about')
+    // The seller's record and what the store says about itself are on the
+    // Store details page.
+    for (const text of ['12 deals done', '4.8', 'On BROKA since 2025', 'Genuine phones and accessories.']) {
+      expect(screen.queryByText(text)).toBeNull()
+    }
+  })
+
+  it('shows no tick for a seller who is not verified', () => {
+    render(<StoreHero view={storeView(shop({ owner: { verified: false, rating: null, completed_deals: 0, member_since: null } }))} />)
+    expect(screen.queryByRole('img', { name: 'Verified seller' })).toBeNull()
   })
 })
 
 describe('StoreDetails', () => {
-  it('shows the photos, the owner, where the shop is and how to reach it', () => {
+  it("shows the seller's record, the photos, where the shop is and how to reach it", () => {
     render(<StoreDetails view={storeView(shop())} />)
     const photos = screen.getAllByRole('img')
     expect(photos.map((i) => i.getAttribute('src'))).toEqual([
       'https://media.broka.co.ke/img/c1/medium.webp',
       'https://media.broka.co.ke/img/p1/medium.webp',
     ])
+    expect(screen.getByText('Open')).toBeTruthy()
     expect(screen.getByText('Genuine phones and accessories.')).toBeTruthy()
     expect(screen.getByText('Jane Wanjiru')).toBeTruthy()
     expect(screen.getByText('✓ Verified seller')).toBeTruthy()
-    expect(screen.getByText('On BROKA since January 2025')).toBeTruthy()
-    expect(screen.getByText('4.8')).toBeTruthy()
+    // Deals done, rating and the year joined, each in its own tile.
+    for (const [label, value] of [
+      ['Deals done', '12'],
+      ['Rating', '4.8'],
+      ['On BROKA since', '2025'],
+    ] as const) {
+      expect(within(screen.getByText(label).parentElement!).getByText(value)).toBeTruthy()
+    }
     expect(screen.getByText('📍 Starehe, Nairobi')).toBeTruthy()
     expect(screen.getByText('Moi Avenue, Bazaar Plaza')).toBeTruthy()
     expect(screen.getByText('Find it on the map').getAttribute('href')).toBe(
@@ -101,7 +117,6 @@ describe('StoreDetails', () => {
     expect(screen.getByText('sales@clanix.co.ke').getAttribute('href')).toBe('mailto:sales@clanix.co.ke')
     expect(screen.getByText('September 2026')).toBeTruthy()
     expect(screen.getByText('3 products on sale')).toBeTruthy()
-    expect(screen.getByText('Open')).toBeTruthy()
   })
 
   it('never shows an unverified email, a rating without deals, or photos it does not have', () => {
@@ -120,7 +135,9 @@ describe('StoreDetails', () => {
     )
     expect(screen.queryAllByRole('img')).toEqual([])
     expect(screen.queryByText('sales@clanix.co.ke')).toBeNull()
-    expect(screen.getByText('New')).toBeTruthy()
+    expect(within(screen.getByText('No rating yet').parentElement!).getByText('New')).toBeTruthy()
+    expect(screen.queryByText('5.0')).toBeNull()
+    expect(within(screen.getByText('On BROKA since').parentElement!).getByText('–')).toBeTruthy()
     expect(screen.getByText('Not verified yet')).toBeTruthy()
     // An API from before the owner's name was sent.
     expect(screen.getByText('The owner of Clanix')).toBeTruthy()

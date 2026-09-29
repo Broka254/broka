@@ -1,24 +1,24 @@
 // A store's home in the app - the "mini Jumia" a buyer lands on from a
 // shared link, a product's store badge, or the store directory.
 //
-//   header    logo, name, category and location, and the owner's real
-//             seller record (verified, completed deals, rating). No cover
-//             photo: behind the name it fought with the text and pushed
-//             the products below the fold; the shop's photos are under
-//             "Store details" instead
-//   switch    Products | Store details, pinned under the bar
+//   header    logo, name (with a tick for a verified seller), category and
+//             location, and "More details". Nothing else: no cover photo
+//             behind the name (it fought with the text and pushed the
+//             products below the fold), and no row of record chips
 //   products  search, category pills built like Home's category rail
 //             (same registry, same ring-and-emoji shape, only this store's
 //             categories, with how many products each has), sort, and the
 //             store's products as ProductCards
-//   details   everything a buyer needs to know about the store before
-//             buying: photos, about, owner, location, contact, store info
-//             and how paying through BROKA protects them
-//             (widgets/store_details_view.dart)
+//
+// "More details" and the info button in the bar open Store details
+// (widgets/store_details_view.dart): the seller's record - deals done,
+// rating, the year they joined - the shop's photos, about, location,
+// contact, store info and how paying through BROKA protects the buyer.
 //
 // Opened with arguments {storeId} or {slug}, plus an optional {via} (the
-// shared link's source tag), on route '/store-view'. The cart arrives with
-// checkout (Online Stores phase 4).
+// shared link's source tag) and {view: 'details'} to open Store details
+// straight away (a /store/<name>/about link), on route '/store-view'. The
+// cart arrives with checkout (Online Stores phase 4).
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -36,16 +36,13 @@ import '../domain/models/store.dart';
 import 'my_store_screen.dart' show StoreLogo;
 import 'widgets/store_details_view.dart';
 
-/// What the store's home shows under its header.
-enum StoreHomeView { products, details }
-
 class StoreHomeScreen extends StatefulWidget {
   const StoreHomeScreen({
     super.key,
     this.storeId,
     this.slug,
     this.via,
-    this.initialView = StoreHomeView.products,
+    this.openDetails = false,
     this.repository,
     this.share,
     this.animateBackground = true,
@@ -59,9 +56,9 @@ class StoreHomeScreen extends StatefulWidget {
   /// Where the visitor came from (a shared link's ?via= tag).
   final String? via;
 
-  /// Products, or straight to "Store details" (route argument
-  /// {view: 'details'}).
-  final StoreHomeView initialView;
+  /// Open Store details on top once the store has loaded (route argument
+  /// {view: 'details'}), so Back from them lands on the store's products.
+  final bool openDetails;
   final StoresRepository? repository;
   final StoreShare? share;
   final bool animateBackground;
@@ -84,7 +81,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   bool _notFound = false;
   bool _isOwner = false;
 
-  late StoreHomeView _view = widget.initialView;
+  late bool _openDetails = widget.openDetails;
 
   /// The store's name moves into the bar once the header has scrolled
   /// away - not before, or it would sit right above itself.
@@ -118,7 +115,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
     _storeId = widget.storeId ?? map['storeId'] as String?;
     _slug = widget.slug ?? map['slug'] as String?;
     _via = widget.via ?? map['via'] as String?;
-    if (map['view'] == 'details') _view = StoreHomeView.details;
+    if (map['view'] == 'details') _openDetails = true;
     _load();
   }
 
@@ -150,6 +147,15 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
         return;
       case Success(:final data):
         setState(() { _store = data; _storeId = data.id; _loading = false; });
+        if (_openDetails) {
+          _openDetails = false;
+          // After this frame, so the store's home is under the details.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              showStoreDetails(context, data, animateBackground: widget.animateBackground);
+            }
+          });
+        }
     }
     await Future.wait([_loadCategories(), _checkOwnerAndCountVisit()]);
   }
@@ -277,22 +283,15 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
             isOwner: _isOwner,
             showTitle: _showTitle,
             onShare: () => _share(store),
+            onDetails: () => showStoreDetails(context, store,
+                animateBackground: widget.animateBackground),
           ),
-          SliverToBoxAdapter(child: _StoreIdentity(store: store)),
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _ViewSwitchDelegate(
-              view: _view,
-              productCount: store.listingCount,
-              onChanged: (v) => setState(() => _view = v),
-            ),
-          ),
-          if (_view == StoreHomeView.details)
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              sliver: SliverToBoxAdapter(child: StoreDetailsView(store: store)),
-            )
-          else if (store.isActive) ...[
+          SliverToBoxAdapter(child: _StoreIdentity(
+            store: store,
+            onDetails: () => showStoreDetails(context, store,
+                animateBackground: widget.animateBackground),
+          )),
+          if (store.isActive) ...[
             SliverToBoxAdapter(child: _searchAndSort()),
             if (_categories.isNotEmpty)
               SliverToBoxAdapter(child: _CategoryPills(
@@ -417,17 +416,19 @@ class _StoreBar extends StatelessWidget {
     required this.isOwner,
     required this.showTitle,
     required this.onShare,
+    required this.onDetails,
   });
   final Store store;
   final bool isOwner;
   final bool showTitle;
   final VoidCallback onShare;
+  final VoidCallback onDetails;
 
   @override
   Widget build(BuildContext context) {
     return SliverAppBar(
       pinned: true,
-      // Opaque: the products and details scroll up under it.
+      // Opaque: the products scroll up under it.
       backgroundColor: BrokaColors.bg,
       surfaceTintColor: Colors.transparent,
       iconTheme: const IconThemeData(color: BrokaColors.textHigh),
@@ -439,6 +440,14 @@ class _StoreBar extends StatelessWidget {
                 fontWeight: FontWeight.w800)),
       ),
       actions: [
+        // Store details from anywhere in the catalogue: the bar stays
+        // pinned once "More details" under the name has scrolled away.
+        IconButton(
+          key: const Key('store-details-button'),
+          tooltip: 'Store details',
+          icon: const Icon(Icons.info_outline_rounded),
+          onPressed: onDetails,
+        ),
         IconButton(
           tooltip: 'Share store',
           icon: const Icon(Icons.ios_share_rounded),
@@ -459,30 +468,21 @@ class _StoreBar extends StatelessWidget {
 // violet reads at 7:1.
 const _accent = Color(0xFFB69CFF);
 
-/// Who the store is, at a glance: logo, name, what and where, and the
-/// owner's record. The rest is under "Store details".
+/// Who the store is, at a glance: logo, name, what and where, and the way
+/// to everything else about it. The seller's record (deals done, rating,
+/// the year they joined) is under Store details: as a row of chips here it
+/// wrapped onto a second line and pushed the products down.
 class _StoreIdentity extends StatelessWidget {
-  const _StoreIdentity({required this.store});
+  const _StoreIdentity({required this.store, required this.onDetails});
   final Store store;
+  final VoidCallback onDetails;
 
   @override
   Widget build(BuildContext context) {
-    final owner = store.owner;
     final place = [store.category, store.locationLine]
         .whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     final glow = CategoryVisuals.gradientFor(store.category);
-    final trust = <(IconData, String, Color)>[
-      if (owner?.verified ?? false)
-        (Icons.verified_rounded, 'Verified seller', BrokaColors.success),
-      if ((owner?.completedDeals ?? 0) > 0)
-        (Icons.handshake_outlined,
-            '${owner!.completedDeals} deal${owner.completedDeals == 1 ? '' : 's'} done',
-            BrokaColors.textMid),
-      if ((owner?.completedDeals ?? 0) > 0 && owner?.rating != null)
-        (Icons.star_rounded, owner!.rating!.toStringAsFixed(1), const Color(0xFFFBBF24)),
-      if (owner?.memberSince != null)
-        (Icons.calendar_month_outlined, 'Since ${owner!.memberSince!.year}', BrokaColors.textMid),
-    ];
+    final verified = store.owner?.verified ?? false;
 
     return Padding(
       key: const Key('store-identity'),
@@ -499,36 +499,53 @@ class _StoreIdentity extends StatelessWidget {
           const SizedBox(width: 14),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min, children: [
-            Text(store.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 22,
-                    fontWeight: FontWeight.w800, height: 1.15, letterSpacing: -0.2)),
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(text: store.name),
+                // A tick beside the name, the way people know it from
+                // other apps; what it means is spelled out in the details.
+                if (verified)
+                  const WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: Padding(
+                      padding: EdgeInsets.only(left: 6),
+                      child: Icon(Icons.verified_rounded, size: 19, color: BrokaColors.success,
+                          semanticLabel: 'Verified seller'),
+                    ),
+                  ),
+              ]),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 22,
+                  fontWeight: FontWeight.w800, height: 1.15, letterSpacing: -0.2),
+            ),
             if (place.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(place, maxLines: 2, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
             ],
-          ])),
-        ]),
-        if (trust.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final (icon, label, color) in trust)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: BrokaColors.bgCard.withOpacity(0.7),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: BrokaColors.border),
-                ),
+            const SizedBox(height: 4),
+            InkWell(
+              key: const Key('store-more-details'),
+              onTap: onDetails,
+              borderRadius: BorderRadius.circular(10),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 6),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(icon, size: 14, color: color),
-                  const SizedBox(width: 5),
-                  Text(label, style: const TextStyle(color: BrokaColors.textHigh,
-                      fontSize: 12, fontWeight: FontWeight.w600)),
+                  Icon(Icons.info_outline_rounded, size: 16, color: _accent),
+                  SizedBox(width: 5),
+                  // Flexible: beside a 72dp logo on a 320dp phone with large
+                  // text, the row is wider than the space left.
+                  Flexible(child: Text('More details', maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: _accent, fontSize: 13.5,
+                          fontWeight: FontWeight.w700))),
+                  Icon(Icons.chevron_right_rounded, size: 18, color: _accent),
                 ]),
               ),
-          ]),
-        ],
+            ),
+          ])),
+        ]),
         if (!store.isActive)
           Container(
             key: const Key('store-paused-banner'),
@@ -549,88 +566,6 @@ class _StoreIdentity extends StatelessWidget {
             ]),
           ),
       ]),
-    );
-  }
-}
-
-/// Products | Store details, in the pill switcher the Seller Dashboard
-/// uses. Pinned under the bar, so the details are one tap away from
-/// anywhere in the catalogue.
-class _ViewSwitchDelegate extends SliverPersistentHeaderDelegate {
-  _ViewSwitchDelegate({
-    required this.view,
-    required this.productCount,
-    required this.onChanged,
-  });
-
-  final StoreHomeView view;
-  final int productCount;
-  final ValueChanged<StoreHomeView> onChanged;
-
-  static const _height = 60.0;
-
-  @override
-  double get minExtent => _height;
-  @override
-  double get maxExtent => _height;
-
-  @override
-  bool shouldRebuild(_ViewSwitchDelegate old) =>
-      old.view != view || old.productCount != productCount || old.onChanged != onChanged;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    Widget segment(StoreHomeView v, String label, IconData icon) {
-      final selected = v == view;
-      return Expanded(
-        child: Semantics(
-          button: true,
-          selected: selected,
-          child: GestureDetector(
-            key: Key('store-view-${v.name}'),
-            behavior: HitTestBehavior.opaque,
-            onTap: () => onChanged(v),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                gradient: selected
-                    ? const LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue])
-                    : null,
-              ),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(icon, size: 16, color: selected ? Colors.white : BrokaColors.textMid),
-                const SizedBox(width: 6),
-                Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: selected ? Colors.white : BrokaColors.textMid,
-                      fontSize: 13.5,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    ))),
-              ]),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      height: _height,
-      color: BrokaColors.bg,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.86),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: BrokaColors.border),
-        ),
-        child: Row(children: [
-          segment(StoreHomeView.products, 'Products ($productCount)',
-              Icons.grid_view_rounded),
-          segment(StoreHomeView.details, 'Store details', Icons.info_outline_rounded),
-        ]),
-      ),
     );
   }
 }

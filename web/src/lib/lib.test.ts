@@ -8,7 +8,7 @@ import { CATEGORIES, canonicalCategory, categoryVisual } from './categories'
 import { buildConstellation, MESH_COUNT, STAR_COUNT, seededRandom } from './constellation'
 import { clip, conditionLabel, formatPrice, formatUnitPrice, placeLine, plural, yearOf } from './format'
 import { resolveImage, resolveSizes, srcSet } from './images'
-import { androidAppLink, previewImageUrl, productPath, storePath, viaTag } from './links'
+import { androidAppLink, previewImageUrl, productPath, storeDetailsPath, storePath, viaTag } from './links'
 import type { Listing } from './types'
 
 const API = 'https://api.example.com'
@@ -161,6 +161,9 @@ describe('links', () => {
   it('build paths and preview URLs', () => {
     expect(storePath('clanix')).toBe('/store/clanix')
     expect(productPath('clanix', 'abc')).toBe('/store/clanix/p/abc')
+    // The app opens the same link on its Store details screen
+    // (StoreLinkTarget in flutter_app/lib/services/deep_link_service.dart).
+    expect(storeDetailsPath('clanix')).toBe('/store/clanix/about')
     expect(previewImageUrl('abc')).toBe('https://broka.co.ke/og/abc.jpg')
   })
   it('open this page in the Android app, or download it', () => {

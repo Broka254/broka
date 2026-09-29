@@ -345,19 +345,22 @@ The original Phase 3 plan follows.
 
 After phase 3, from the owner's feedback that the store screens were
 disorganised:
-- **No cover photo behind the store's name**, in the app, on the web or on
-  My Store's header: it fought with the text and pushed products below
-  the fold. The header is the logo, name, category and place, and the
-  owner's record.
-- **"Store details"**: the app's store home has a pinned
-  Products | Store details switch; the web page has the section beside the
-  catalogue on wide screens and under it on phones (the hero links to it).
-  It holds the shop's photos (cover first), the description, the owner
-  (their name - now in the store payload's `owner.name`, still no id or
-  phone - verified, member since, deals, rating), the location with the
-  landmark and a map link, the verified business email, how to ask about a
-  product, the store's basics (category, link, products, opened, status)
-  and how paying through BROKA protects the buyer.
+- **The store's header is only who it is**, in the app and on the web: the
+  logo, the name (with a tick for a verified seller), category and place,
+  and "More details". No cover photo behind the name (it fought with the
+  text and pushed products below the fold), and no row of record chips
+  (deals, rating, year joined wrapped onto a second line).
+- **"Store details" is its own screen**, opened from "More details" under
+  the name or the info button in the app's bar (which stays pinned), and
+  on the web its own page, `/store/<name>/about`, which opens the same
+  screen in the app. In order: which store (logo, name, open or paused);
+  the seller - their name (now in the store payload's `owner.name`, still
+  no id or phone), verified or not, and their record as three tiles:
+  deals done, rating, year joined; the shop's photos (cover first); the
+  description; the location with its landmark and a map link; the
+  verified business email and how to ask about a product; the store's
+  basics (category, link, products, opened); and how paying through BROKA
+  protects the buyer.
 - **My Store**: a compact header (logo, name, open/paused, products live,
   link), the Seller Dashboard's pill tabs, the Overview in the order an
   owner acts on it (status, what needs them, setup, the week in numbers,

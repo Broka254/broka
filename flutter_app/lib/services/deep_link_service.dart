@@ -1,6 +1,7 @@
 // Store links opening in the app.
 //
 // https://broka.co.ke/store/<name>            -> the store's home
+// https://broka.co.ke/store/<name>/about      -> its Store details
 // https://broka.co.ke/store/<name>/p/<id>     -> one of its products
 // (www.broka.co.ke too; a ?via= tag is kept for the owner's visit stats.)
 //
@@ -24,7 +25,7 @@ import '../features/stores/data/repositories/stores_repository.dart';
 /// Where a link points.
 @immutable
 class StoreLinkTarget {
-  const StoreLinkTarget({required this.slug, this.listingId, this.via});
+  const StoreLinkTarget({required this.slug, this.listingId, this.via, this.details = false});
 
   final String slug;
 
@@ -33,6 +34,10 @@ class StoreLinkTarget {
 
   /// The link's ?via= tag.
   final String? via;
+
+  /// A link to the store's details page (/store/<name>/about). Every
+  /// /store/ link opens the app, so one it didn't know opened nothing.
+  final bool details;
 
   bool get isProduct => listingId != null;
 
@@ -53,6 +58,9 @@ class StoreLinkTarget {
     if (!_slugPattern.hasMatch(slug)) return null;
     final via = uri.queryParameters['via'];
     if (parts.length == 2) return StoreLinkTarget(slug: slug, via: via);
+    if (parts.length == 3 && parts[2] == 'about') {
+      return StoreLinkTarget(slug: slug, via: via, details: true);
+    }
     if (parts.length == 4 && parts[2] == 'p' && _idPattern.hasMatch(parts[3])) {
       return StoreLinkTarget(slug: slug, listingId: parts[3], via: via);
     }
@@ -64,13 +72,14 @@ class StoreLinkTarget {
       other is StoreLinkTarget &&
       other.slug == slug &&
       other.listingId == listingId &&
-      other.via == via;
+      other.via == via &&
+      other.details == details;
 
   @override
-  int get hashCode => Object.hash(slug, listingId, via);
+  int get hashCode => Object.hash(slug, listingId, via, details);
 
   @override
-  String toString() => 'StoreLinkTarget($slug, $listingId, $via)';
+  String toString() => 'StoreLinkTarget($slug, $listingId, $via${details ? ', details' : ''})';
 }
 
 class DeepLinkService {
@@ -146,8 +155,13 @@ class DeepLinkService {
       nav.pushNamed('/product', arguments: {'listingId': target.listingId});
       _countProductVisit(target);
     } else {
-      // The store screen counts its own visit, with the link's tag.
-      nav.pushNamed('/store-view', arguments: {'slug': target.slug, 'via': target.via});
+      // The store screen counts its own visit, with the link's tag, and
+      // opens its details on top for an /about link.
+      nav.pushNamed('/store-view', arguments: {
+        'slug': target.slug,
+        'via': target.via,
+        if (target.details) 'view': 'details',
+      });
     }
   }
 

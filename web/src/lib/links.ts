@@ -4,6 +4,9 @@ import { ANDROID_PACKAGE, APP_DOWNLOAD_URL, SITE_URL } from './config'
 
 export const storePath = (slug: string) => `/store/${encodeURIComponent(slug)}`
 
+/** The store's "Store details" page (the app opens the same link). */
+export const storeDetailsPath = (slug: string) => `${storePath(slug)}/about`
+
 export const productPath = (slug: string, listingId: string) =>
   `${storePath(slug)}/p/${encodeURIComponent(listingId)}`
 
