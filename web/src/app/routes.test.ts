@@ -88,6 +88,21 @@ describe('storefront API routes', () => {
     expect(at({ 'x-real-ip': 'evil<script>', 'x-forwarded-for': 'also bad' })).toBeNull()
     expect(at({})).toBeNull()
   })
+  it("takes the website's word for the visitor only with the shared key", () => {
+    const at = (headers: Record<string, string>) =>
+      visitorAddress(new Request('https://x', { headers }))
+    // Passed on by broka.co.ke: the platform's headers name the website.
+    const passedOn = { 'x-real-ip': '76.76.21.9', 'x-broka-visitor-ip': '41.90.1.2' }
+    const key = 'p'.repeat(40)
+    // Not configured here: anyone can send the header, so it means nothing.
+    expect(at({ ...passedOn, 'x-broka-proxy-key': key })).toBe('76.76.21.9')
+    vi.stubEnv('STOREFRONT_PROXY_KEY', key)
+    expect(at({ ...passedOn, 'x-broka-proxy-key': key })).toBe('41.90.1.2')
+    expect(at({ ...passedOn, 'x-broka-proxy-key': 'q'.repeat(40) })).toBe('76.76.21.9')
+    expect(at({ ...passedOn, 'x-broka-proxy-key': 'short' })).toBe('76.76.21.9')
+    expect(at(passedOn)).toBe('76.76.21.9')
+    expect(at({ ...passedOn, 'x-broka-proxy-key': key, 'x-broka-visitor-ip': 'junk' })).toBeNull()
+  })
   it('refuses bad ids, junk and oversized bodies without calling the API', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

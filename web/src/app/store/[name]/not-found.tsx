@@ -1,5 +1,4 @@
-import Link from 'next/link'
-
+import { HomeLink } from '@/components/HomeLink'
 import { SiteHeader } from '@/components/SiteHeader'
 
 import styles from '../../message.module.css'
@@ -16,9 +15,7 @@ export default function StoreNotFound() {
         <p className="muted">
           There&apos;s no store at this link. Check the spelling, or ask the seller for their link again.
         </p>
-        <Link className="button" href="/">
-          Go to BROKA
-        </Link>
+        <HomeLink className="button">Go to BROKA</HomeLink>
       </main>
     </>
   )

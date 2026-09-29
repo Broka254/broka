@@ -1,5 +1,4 @@
-import Link from 'next/link'
-
+import { HomeLink } from './HomeLink'
 import styles from './SiteFooter.module.css'
 
 export function SiteFooter() {
@@ -10,7 +9,7 @@ export function SiteFooter() {
         received what you paid for.
       </p>
       <p className={styles.small}>
-        <Link href="/">BROKA</Link> · Kenya&apos;s AI-brokered marketplace
+        <HomeLink>BROKA</HomeLink> · Kenya&apos;s AI-brokered marketplace
       </p>
     </footer>
   )

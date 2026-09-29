@@ -11,6 +11,13 @@ const securityHeaders = [
 ]
 
 const nextConfig: NextConfig = {
+  // broka.co.ke is the BROKA website, which passes the storefront's paths on
+  // to this deployment. Without a prefix this site's scripts and styles
+  // (/_next/...) would be asked of the website and not found, leaving store
+  // pages unstyled and dead. Next serves them under the prefix itself; the
+  // website passes /store-assets/* here. Must equal ASSET_PREFIX in
+  // src/lib/links.ts.
+  assetPrefix: '/store-assets',
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {

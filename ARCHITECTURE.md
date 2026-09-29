@@ -272,7 +272,12 @@ public `/stores` JSON API from its own server (never from the visitor's
 browser), caches those reads for 60 seconds, and relays the few browser
 calls it needs (load more, visit and share counts) through its own
 `/api/stores/*` routes. Link previews point at `broka.co.ke/og/{id}.jpg`,
-proxied from the API's `GET /media/og/{id}.jpg`.
+proxied from the API's `GET /media/og/{id}.jpg`. broka.co.ke is served by
+the BROKA website (a separate repository and deployment), which passes
+`/store/*`, `/og/*`, `/api/stores/*`, `/.well-known/*` and `/store-assets/*`
+on to the storefront (Next.js multi-zones): the storefront keeps its own
+files under `/store-assets` (`assetPrefix`), and links back to `/` are plain
+`<a>` tags (`HomeLink`), since `/` is the website.
 
 The API's older HTML page, `GET /store/{slug}` (`api/domains/stores/web.py`,
 registered at `/store` - singular, separate from the `/stores` JSON API),

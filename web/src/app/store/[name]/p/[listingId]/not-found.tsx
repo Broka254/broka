@@ -1,5 +1,4 @@
-import Link from 'next/link'
-
+import { HomeLink } from '@/components/HomeLink'
 import { SiteHeader } from '@/components/SiteHeader'
 
 import styles from '../../../../message.module.css'
@@ -16,9 +15,7 @@ export default function ProductNotFound() {
         <p className="muted">
           This product isn&apos;t in this store, or the link is incomplete.
         </p>
-        <Link className="button" href="/">
-          Go to BROKA
-        </Link>
+        <HomeLink className="button">Go to BROKA</HomeLink>
       </main>
     </>
   )

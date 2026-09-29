@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +14,7 @@ import { OpenInApp } from './OpenInApp'
 import { ProductCard } from './ProductCard'
 import { ProductGrid } from './ProductGrid'
 import { ShareButtons } from './ShareButtons'
+import { SiteHeader } from './SiteHeader'
 import { StoreDetails } from './StoreDetails'
 import { StoreHero } from './StoreHero'
 import { TrustChips } from './TrustChips'
@@ -294,5 +298,22 @@ describe('Opening the app', () => {
     )
     expect(screen.queryByText('Open')).toBeNull()
     expect(screen.getByText('Get it').getAttribute('href')).toMatch(/broka-release\.apk$/)
+  })
+})
+
+describe('Site header and footer', () => {
+  it('link home with a plain <a>: "/" is the BROKA website, another deployment', () => {
+    // A Next <Link> would load "/" into this site instead of going there.
+    // (In tests a <Link> has no router and behaves like an <a>, so this reads
+    // the source.)
+    const src = resolve(process.cwd(), 'src')
+    const offenders = (readdirSync(src, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+      .filter((f) => /<Link\b[^>]*\bhref=(?:"\/"|\{'\/'\})/.test(readFileSync(resolve(src, f), 'utf8')))
+    expect(offenders).toEqual([])
+  })
+  it("show the logo from the storefront's own files", () => {
+    const { container } = render(<SiteHeader />)
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/store-assets/logo.png')
   })
 })

@@ -3,6 +3,7 @@ import Image from 'next/image'
 import { SiteFooter } from '@/components/SiteFooter'
 import { SiteHeader } from '@/components/SiteHeader'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
+import { asset } from '@/lib/links'
 
 import styles from './home.module.css'
 
@@ -11,7 +12,7 @@ export default function Home() {
     <>
       <SiteHeader />
       <main className={`page ${styles.main}`}>
-        <Image src="/logo.png" alt="" width={120} height={120} priority className={styles.mark} />
+        <Image src={asset('/logo.png')} unoptimized alt="" width={120} height={120} priority className={styles.mark} />
         <h1 className={styles.title}>Buy and sell with confidence</h1>
         <p className={styles.lead}>
           BROKA is Kenya&apos;s AI-brokered marketplace. Zeno negotiates for you, and your money is

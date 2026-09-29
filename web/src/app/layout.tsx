@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from 'next'
 import { Constellation } from '@/components/Constellation'
 import { OpenInApp } from '@/components/OpenInApp'
 import { SITE_URL } from '@/lib/config'
-import { DEFAULT_PREVIEW_IMAGE } from '@/lib/links'
+import { DEFAULT_PREVIEW_IMAGE, asset } from '@/lib/links'
 
 import './globals.css'
 
@@ -12,6 +12,12 @@ export const metadata: Metadata = {
   title: { default: 'BROKA', template: '%s · BROKA' },
   description: "Shop Kenyan stores on BROKA: every purchase protected until you've received it.",
   applicationName: 'BROKA',
+  // In public/store-assets, not app/icon.png: /icon.png on broka.co.ke is
+  // the BROKA website's (see ASSET_PREFIX).
+  icons: {
+    icon: { url: asset('/icon.png'), type: 'image/png', sizes: '192x192' },
+    apple: { url: asset('/apple-icon.png'), type: 'image/png', sizes: '180x180' },
+  },
   openGraph: {
     siteName: 'BROKA',
     type: 'website',

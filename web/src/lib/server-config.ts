@@ -19,3 +19,15 @@ export const API_URL = (
 export function storefrontApiKey(): string {
   return process.env.STOREFRONT_API_KEY?.trim() ?? ''
 }
+
+/**
+ * Shared with the BROKA website (its STOREFRONT_PROXY_KEY), which serves
+ * broka.co.ke and passes the storefront's requests on here. Requests it
+ * passes on arrive from the website's servers, so the platform's own
+ * visitor headers may name the website rather than the visitor; the website
+ * sends the visitor's address itself, with this key to prove it. Empty = not
+ * configured: that header is ignored.
+ */
+export function storefrontProxyKey(): string {
+  return process.env.STOREFRONT_PROXY_KEY?.trim() ?? ''
+}

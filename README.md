@@ -371,7 +371,9 @@ The web storefront's settings, set in Vercel:
 | Variable | Needed | Purpose |
 |---|---|---|
 | `BROKA_API_URL` | Required | The API (the Render URL). Read on the server only |
-| `NEXT_PUBLIC_SITE_URL` | Default `https://broka.co.ke` | The site's own address, for canonical links and link previews |
+| `NEXT_PUBLIC_SITE_URL` | Default `https://broka.co.ke` | The address visitors see, for canonical links and link previews: broka.co.ke, not the project's own `*.vercel.app` |
+| `STOREFRONT_API_KEY` | Required | The same value as on the API: lets it trust the visitor address sent with visit and share counts |
+| `STOREFRONT_PROXY_KEY` | For visit stats | The same value as in the BROKA website's project: lets this site trust the visitor address the website sends with the requests it passes on |
 | `NEXT_PUBLIC_APP_DOWNLOAD_URL` | Optional | Where "Get the app" goes. Defaults to the latest APK on GitHub releases |
 | `ANDROID_CERT_SHA256` | For App Links | The release key's SHA-256 fingerprint(s), comma-separated, served in `/.well-known/assetlinks.json` so store links open the app directly |
 | `APPLE_APP_IDS` | For an iOS build | `<TeamID>.com.broka.app`, for Universal Links |
@@ -435,8 +437,12 @@ recreated from the models).
 
 `render.yaml` deploys the backend as one Docker web service plus a
 PostgreSQL database, both on Render's free plan. The web storefront is a
-Vercel project with Root Directory `web` and the domain `broka.co.ke`
-(settings above); Vercel deploys it on every push.
+Vercel project with Root Directory `web` (settings above); Vercel deploys it
+on every push. broka.co.ke itself is the BROKA website (the
+`broka-website` repository, its own Vercel project), which passes the
+storefront's paths on to it: set the website's `STOREFRONT_URL` to the
+storefront project's `*.vercel.app` address, and the same
+`STOREFRONT_PROXY_KEY` in both.
 
 **Minimum production config:**
 1. PostgreSQL.

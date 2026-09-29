@@ -111,7 +111,7 @@ describe('store view', () => {
     )
     expect(storePreviewImage(store({ logo: sizes('g1') })).url).toBe(`${SITE_URL}/og/g1.jpg`)
     expect(storePreviewImage(store())).toEqual({
-      url: '/og-default.jpg',
+      url: '/store-assets/og-default.jpg',
       width: 1200,
       height: 630,
       type: 'image/jpeg',
@@ -160,7 +160,7 @@ describe('product view', () => {
   it('previews with the cover or first photo', () => {
     expect(productPreviewImage(listing({ cover: sizes('c1'), photos: [sizes('a')] })).url).toBe(`${SITE_URL}/og/c1.jpg`)
     expect(productPreviewImage(listing({ photos: [sizes('a')] })).url).toBe(`${SITE_URL}/og/a.jpg`)
-    expect(productPreviewImage(listing()).url).toBe('/og-default.jpg')
+    expect(productPreviewImage(listing()).url).toBe('/store-assets/og-default.jpg')
   })
 
   it('offers in whole shillings with the right availability', () => {

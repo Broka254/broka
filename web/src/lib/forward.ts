@@ -1,7 +1,9 @@
 // Passing the storefront's visit and share counts on to the API.
 import 'server-only'
 
-import { API_URL, storefrontApiKey } from './server-config'
+import { timingSafeEqual } from 'node:crypto'
+
+import { API_URL, storefrontApiKey, storefrontProxyKey } from './server-config'
 
 const ID = /^[A-Za-z0-9-]{1,64}$/
 const MAX_BODY = 2048
@@ -9,17 +11,33 @@ const MAX_BODY = 2048
 const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/
 const IPV6 = /^[0-9a-f:.]+$/i
 
+/** Headers the BROKA website adds to the requests it passes on here. */
+const PROXY_KEY_HEADER = 'x-broka-proxy-key'
+const PROXY_VISITOR_HEADER = 'x-broka-visitor-ip'
+
+function fromWebsite(req: Request): boolean {
+  const expected = storefrontProxyKey()
+  const given = req.headers.get(PROXY_KEY_HEADER)
+  if (!expected || !given) return false
+  const a = Buffer.from(given)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
 /**
- * The visitor's address as the hosting platform saw it. Vercel sets
- * x-real-ip and x-forwarded-for itself (overwriting anything the visitor
- * sent), so the first entry is the visitor. Anything that doesn't look like
- * an address is dropped; the API validates it again.
+ * The visitor's address. On broka.co.ke the BROKA website passes these
+ * requests on from its own servers, so the platform's headers may name the
+ * website, and every web visitor would look like one client to the API's
+ * per-visitor limits; the website sends the visitor's address itself, with
+ * the shared key. Otherwise (the storefront opened at its own address),
+ * Vercel sets x-real-ip and x-forwarded-for itself (overwriting anything the
+ * visitor sent), so the first entry is the visitor. Anything that doesn't
+ * look like an address is dropped; the API validates it again.
  */
 export function visitorAddress(req: Request): string | null {
-  const candidates = [
-    req.headers.get('x-real-ip'),
-    req.headers.get('x-forwarded-for')?.split(',')[0],
-  ]
+  const candidates = fromWebsite(req)
+    ? [req.headers.get(PROXY_VISITOR_HEADER)]
+    : [req.headers.get('x-real-ip'), req.headers.get('x-forwarded-for')?.split(',')[0]]
   for (const raw of candidates) {
     const value = raw?.trim()
     if (value && value.length <= 45 && (IPV4.test(value) || (value.includes(':') && IPV6.test(value)))) {

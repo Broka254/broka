@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -8,7 +8,18 @@ import { CATEGORIES, canonicalCategory, categoryVisual } from './categories'
 import { buildConstellation, MESH_COUNT, STAR_COUNT, seededRandom } from './constellation'
 import { clip, conditionLabel, formatPrice, formatUnitPrice, placeLine, plural, yearOf } from './format'
 import { resolveImage, resolveSizes, srcSet } from './images'
-import { androidAppLink, previewImageUrl, productPath, storeDetailsPath, storePath, viaTag } from './links'
+import nextConfig from '../../next.config'
+import {
+  ASSET_PREFIX,
+  DEFAULT_PREVIEW_IMAGE,
+  androidAppLink,
+  asset,
+  previewImageUrl,
+  productPath,
+  storeDetailsPath,
+  storePath,
+  viaTag,
+} from './links'
 import type { Listing } from './types'
 
 const API = 'https://api.example.com'
@@ -172,6 +183,19 @@ describe('links', () => {
       'intent://broka.co.ke/store/clanix?via=whatsapp#Intent;scheme=https;package=com.broka.app;' +
         'S.browser_fallback_url=https%3A%2F%2Fdl%2Fapp.apk;end',
     )
+  })
+  it("keep the storefront's own files under its prefix, the only path broka.co.ke passes on", () => {
+    expect(nextConfig.assetPrefix).toBe(ASSET_PREFIX)
+    expect(DEFAULT_PREVIEW_IMAGE).toBe('/store-assets/og-default.jpg')
+    // A file at the top of public/ would be asked of the website.
+    const pub = resolve(process.cwd(), 'public')
+    expect(readdirSync(pub)).toEqual(['store-assets'])
+    for (const file of ['/logo.png', '/og-default.jpg', '/icon.png', '/apple-icon.png']) {
+      expect(existsSync(resolve(pub, asset(file).slice(1)))).toBe(true)
+    }
+    // Metadata files in app/ are served from the top too (/icon.png).
+    const app = resolve(process.cwd(), 'src/app')
+    expect(readdirSync(app).filter((f) => /\.(png|jpe?g|ico|svg)$/.test(f))).toEqual([])
   })
   it('accept only plain source tags', () => {
     expect(viaTag('WhatsApp')).toBe('whatsapp')
