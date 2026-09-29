@@ -15,6 +15,8 @@ export interface StoreView {
   url: string
   place: string | null
   cover: { src: string; srcSet: string | null } | null
+  /** Every picture of the shop, cover first, for "Store details". */
+  photos: Array<{ src: string; thumb: string }>
   logo: string | null
   initial: string
   gradient: readonly string[]
@@ -25,6 +27,18 @@ export function storeView(store: Store): StoreView {
   const coverSizes: ResolvedSizes | null =
     resolveSizes(store.cover, API_URL) ?? resolveSizes(store.photo_images?.[0], API_URL)
   const legacyCover = resolveImage(store.photos?.[0], API_URL)
+  const sized = [store.cover, ...(store.photo_images ?? [])]
+    .map((p) => resolveSizes(p, API_URL))
+    .filter((p): p is ResolvedSizes => p !== null)
+  const legacy = (store.photos ?? [])
+    .map((p) => resolveImage(p, API_URL))
+    .filter((p): p is string => Boolean(p))
+  // Old rows keep their photos as plain strings until the media backfill
+  // converts them; they count when there are no stored shop photos.
+  const photos = [
+    ...sized.map((p) => ({ src: p.large, thumb: p.medium })),
+    ...((store.photo_images ?? []).length ? [] : legacy.map((src) => ({ src, thumb: src }))),
+  ]
   const path = storePath(store.slug)
   return {
     store,
@@ -36,6 +50,7 @@ export function storeView(store: Store): StoreView {
       : legacyCover
         ? { src: legacyCover, srcSet: null }
         : null,
+    photos,
     logo: resolveSizes(store.logo, API_URL)?.medium ?? resolveImage(store.logo_url, API_URL),
     initial: (Array.from(store.name.trim())[0] ?? '?').toUpperCase(),
     gradient: categoryVisual(store.category).gradient,

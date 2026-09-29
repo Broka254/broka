@@ -1,14 +1,20 @@
 // A store's home in the app - the "mini Jumia" a buyer lands on from a
 // shared link, a product's store badge, or the store directory.
 //
-//   header    cover, logo, name, category and location, and the owner's
-//             real seller record (verified, completed deals, rating)
-//   search    within this store's products
-//   category  pills built like Home's category rail (same registry, same
-//             ring-and-emoji shape), only this store's categories, with
-//             how many products each has
-//   sort      recommended, newest, price low/high
-//   grid      the store's products, as ProductCards
+//   header    logo, name, category and location, and the owner's real
+//             seller record (verified, completed deals, rating). No cover
+//             photo: behind the name it fought with the text and pushed
+//             the products below the fold; the shop's photos are under
+//             "Store details" instead
+//   switch    Products | Store details, pinned under the bar
+//   products  search, category pills built like Home's category rail
+//             (same registry, same ring-and-emoji shape, only this store's
+//             categories, with how many products each has), sort, and the
+//             store's products as ProductCards
+//   details   everything a buyer needs to know about the store before
+//             buying: photos, about, owner, location, contact, store info
+//             and how paying through BROKA protects them
+//             (widgets/store_details_view.dart)
 //
 // Opened with arguments {storeId} or {slug}, plus an optional {via} (the
 // shared link's source tag), on route '/store-view'. The cart arrives with
@@ -20,7 +26,6 @@ import 'package:flutter/material.dart';
 import '../../../core/utils/result.dart';
 import '../../../main.dart' show BrokaColors;
 import '../../../services/api_service.dart';
-import '../../../widgets/broka_image.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
 import '../../categories/domain/category_visual.dart';
@@ -29,6 +34,10 @@ import '../data/repositories/stores_repository.dart';
 import '../data/store_share.dart';
 import '../domain/models/store.dart';
 import 'my_store_screen.dart' show StoreLogo;
+import 'widgets/store_details_view.dart';
+
+/// What the store's home shows under its header.
+enum StoreHomeView { products, details }
 
 class StoreHomeScreen extends StatefulWidget {
   const StoreHomeScreen({
@@ -36,6 +45,7 @@ class StoreHomeScreen extends StatefulWidget {
     this.storeId,
     this.slug,
     this.via,
+    this.initialView = StoreHomeView.products,
     this.repository,
     this.share,
     this.animateBackground = true,
@@ -48,6 +58,10 @@ class StoreHomeScreen extends StatefulWidget {
 
   /// Where the visitor came from (a shared link's ?via= tag).
   final String? via;
+
+  /// Products, or straight to "Store details" (route argument
+  /// {view: 'details'}).
+  final StoreHomeView initialView;
   final StoresRepository? repository;
   final StoreShare? share;
   final bool animateBackground;
@@ -70,6 +84,13 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   bool _notFound = false;
   bool _isOwner = false;
 
+  late StoreHomeView _view = widget.initialView;
+
+  /// The store's name moves into the bar once the header has scrolled
+  /// away - not before, or it would sit right above itself.
+  final _scroll = ScrollController();
+  bool _showTitle = false;
+
   List<StoreCategoryCount> _categories = const [];
   String? _category;
   String _search = '';
@@ -77,6 +98,15 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   Timer? _searchDebounce;
   final _searchCtrl = TextEditingController();
   final _grid = ProductGridController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(() {
+      final show = _scroll.hasClients && _scroll.offset > 72;
+      if (show != _showTitle) setState(() => _showTitle = show);
+    });
+  }
 
   @override
   void didChangeDependencies() {
@@ -88,6 +118,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
     _storeId = widget.storeId ?? map['storeId'] as String?;
     _slug = widget.slug ?? map['slug'] as String?;
     _via = widget.via ?? map['via'] as String?;
+    if (map['view'] == 'details') _view = StoreHomeView.details;
     _load();
   }
 
@@ -95,6 +126,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   void dispose() {
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -239,14 +271,28 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
         color: BrokaColors.gold,
         backgroundColor: BrokaColors.bgCard,
         onRefresh: _refresh,
-        child: CustomScrollView(slivers: [
-          _StoreHeader(
+        child: CustomScrollView(controller: _scroll, slivers: [
+          _StoreBar(
             store: store,
             isOwner: _isOwner,
+            showTitle: _showTitle,
             onShare: () => _share(store),
           ),
-          SliverToBoxAdapter(child: _intro(store)),
-          if (store.isActive) ...[
+          SliverToBoxAdapter(child: _StoreIdentity(store: store)),
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _ViewSwitchDelegate(
+              view: _view,
+              productCount: store.listingCount,
+              onChanged: (v) => setState(() => _view = v),
+            ),
+          ),
+          if (_view == StoreHomeView.details)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              sliver: SliverToBoxAdapter(child: StoreDetailsView(store: store)),
+            )
+          else if (store.isActive) ...[
             SliverToBoxAdapter(child: _searchAndSort()),
             if (_categories.isNotEmpty)
               SliverToBoxAdapter(child: _CategoryPills(
@@ -293,48 +339,8 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
     );
   }
 
-  Widget _intro(Store store) {
-    final description = store.description?.trim() ?? '';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (!store.isActive)
-          Container(
-            key: const Key('store-paused-banner'),
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: BrokaColors.warning.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: BrokaColors.warning.withOpacity(0.4)),
-            ),
-            child: const Row(children: [
-              Icon(Icons.pause_circle_outline_rounded, color: BrokaColors.warning),
-              SizedBox(width: 10),
-              Expanded(child: Text(
-                  'This store is taking a break. Its products will be back soon.',
-                  style: TextStyle(color: BrokaColors.textHigh, fontSize: 13))),
-            ]),
-          ),
-        if (description.isNotEmpty) _Description(description),
-        if (store.businessEmail != null && store.businessEmailVerified)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Row(children: [
-              const Icon(Icons.alternate_email_rounded, size: 15, color: BrokaColors.textMid),
-              const SizedBox(width: 6),
-              Flexible(child: Text(store.businessEmail!,
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
-            ]),
-          ),
-      ]),
-    );
-  }
-
   Widget _searchAndSort() => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
         child: Row(children: [
           Expanded(
             child: TextField(
@@ -353,7 +359,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
               decoration: InputDecoration(
                 hintText: 'Search this store',
                 isDense: true,
-                prefixIcon: const Icon(Icons.search_rounded, color: BrokaColors.textLow),
+                prefixIcon: const Icon(Icons.search_rounded, color: BrokaColors.textMid),
                 suffixIcon: _searchCtrl.text.isEmpty
                     ? null
                     : IconButton(
@@ -405,22 +411,33 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
-class _StoreHeader extends StatelessWidget {
-  const _StoreHeader({required this.store, required this.isOwner, required this.onShare});
+class _StoreBar extends StatelessWidget {
+  const _StoreBar({
+    required this.store,
+    required this.isOwner,
+    required this.showTitle,
+    required this.onShare,
+  });
   final Store store;
   final bool isOwner;
+  final bool showTitle;
   final VoidCallback onShare;
-
-  static const _expanded = 268.0;
 
   @override
   Widget build(BuildContext context) {
     return SliverAppBar(
       pinned: true,
-      stretch: true,
-      expandedHeight: _expanded,
-      backgroundColor: BrokaColors.bg.withOpacity(0.94),
-      iconTheme: const IconThemeData(color: Colors.white),
+      // Opaque: the products and details scroll up under it.
+      backgroundColor: BrokaColors.bg,
+      surfaceTintColor: Colors.transparent,
+      iconTheme: const IconThemeData(color: BrokaColors.textHigh),
+      title: AnimatedOpacity(
+        opacity: showTitle ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17,
+                fontWeight: FontWeight.w800)),
+      ),
       actions: [
         IconButton(
           tooltip: 'Share store',
@@ -430,160 +447,191 @@ class _StoreHeader extends StatelessWidget {
         if (isOwner)
           TextButton(
             onPressed: () => Navigator.of(context).pushNamed('/store-manage'),
-            child: const Text('Manage', style: TextStyle(color: BrokaColors.gold,
+            child: const Text('Manage', style: TextStyle(color: _accent,
                 fontWeight: FontWeight.w700)),
           ),
       ],
-      flexibleSpace: LayoutBuilder(builder: (context, constraints) {
-        final top = MediaQuery.of(context).padding.top;
-        final collapsedHeight = kToolbarHeight + top;
-        final t = ((constraints.maxHeight - collapsedHeight) / (_expanded - kToolbarHeight))
-            .clamp(0.0, 1.0);
-        return Stack(fit: StackFit.expand, children: [
-          FlexibleSpaceBar(
-            collapseMode: CollapseMode.parallax,
-            background: _HeaderBackground(store: store),
-          ),
-          // The store name moves into the bar once the header has scrolled away.
-          Positioned(
-            left: 56, right: 110, top: top, height: kToolbarHeight,
-            child: IgnorePointer(
-              child: Opacity(
-                opacity: (1 - t * 3).clamp(0.0, 1.0),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17,
-                          fontWeight: FontWeight.w800)),
-                ),
-              ),
-            ),
-          ),
-        ]);
-      }),
     );
   }
 }
 
-class _HeaderBackground extends StatelessWidget {
-  const _HeaderBackground({required this.store});
+// BrokaColors.gold is under 4:1 on the dark background; this lighter
+// violet reads at 7:1.
+const _accent = Color(0xFFB69CFF);
+
+/// Who the store is, at a glance: logo, name, what and where, and the
+/// owner's record. The rest is under "Store details".
+class _StoreIdentity extends StatelessWidget {
+  const _StoreIdentity({required this.store});
   final Store store;
 
   @override
   Widget build(BuildContext context) {
-    final cover = store.coverSource;
     final owner = store.owner;
     final place = [store.category, store.locationLine]
         .whereType<String>().where((s) => s.isNotEmpty).join(' · ');
-    final trust = <(IconData, String)>[
-      if (owner?.verified ?? false) (Icons.verified_rounded, 'Verified seller'),
+    final glow = CategoryVisuals.gradientFor(store.category);
+    final trust = <(IconData, String, Color)>[
+      if (owner?.verified ?? false)
+        (Icons.verified_rounded, 'Verified seller', BrokaColors.success),
       if ((owner?.completedDeals ?? 0) > 0)
         (Icons.handshake_outlined,
-            '${owner!.completedDeals} deal${owner.completedDeals == 1 ? '' : 's'} done'),
+            '${owner!.completedDeals} deal${owner.completedDeals == 1 ? '' : 's'} done',
+            BrokaColors.textMid),
       if ((owner?.completedDeals ?? 0) > 0 && owner?.rating != null)
-        (Icons.star_rounded, owner!.rating!.toStringAsFixed(1)),
+        (Icons.star_rounded, owner!.rating!.toStringAsFixed(1), const Color(0xFFFBBF24)),
       if (owner?.memberSince != null)
-        (Icons.calendar_month_outlined, 'Since ${owner!.memberSince!.year}'),
+        (Icons.calendar_month_outlined, 'Since ${owner!.memberSince!.year}', BrokaColors.textMid),
     ];
-    return Stack(fit: StackFit.expand, children: [
-      if (cover != null)
-        BrokaImage(cover, fit: BoxFit.cover)
-      else
-        DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: CategoryVisuals.gradientFor(store.category)
-              .map((c) => c.withOpacity(0.55)).toList(),
-        ))),
-      const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
-        begin: Alignment.topCenter, end: Alignment.bottomCenter,
-        colors: [Color(0x8003040A), Color(0x0003040A), Color(0xF203040A)],
-        stops: [0, 0.35, 1],
-      ))),
-      Positioned(
-        left: 16, right: 16, bottom: 14,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min, children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            StoreLogo(store: store, size: 64),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min, children: [
-              Text(store.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 21,
-                      fontWeight: FontWeight.w800, height: 1.15)),
-              if (place.isNotEmpty) ...[
-                const SizedBox(height: 3),
-                Text(place, maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Color(0xFFD7D2EA), fontSize: 12.5)),
-              ],
-            ])),
-          ]),
-          if (trust.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(spacing: 6, runSpacing: 6, children: [
-              for (final (icon, label) in trust)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.35),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white.withOpacity(0.18)),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(icon, size: 13, color: icon == Icons.verified_rounded
-                        ? BrokaColors.success
-                        : (icon == Icons.star_rounded ? const Color(0xFFFBBF24) : Colors.white70)),
-                    const SizedBox(width: 4),
-                    Text(label, style: const TextStyle(color: Colors.white, fontSize: 11.5,
-                        fontWeight: FontWeight.w600)),
-                  ]),
-                ),
-            ]),
-          ],
+
+    return Padding(
+      key: const Key('store-identity'),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              boxShadow: [BoxShadow(color: glow.first.withOpacity(0.45), blurRadius: 24)],
+            ),
+            child: StoreLogo(store: store, size: 72),
+          ),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min, children: [
+            Text(store.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 22,
+                    fontWeight: FontWeight.w800, height: 1.15, letterSpacing: -0.2)),
+            if (place.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(place, maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+            ],
+          ])),
         ]),
-      ),
-    ]);
+        if (trust.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final (icon, label, color) in trust)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: BrokaColors.bgCard.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: BrokaColors.border),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(icon, size: 14, color: color),
+                  const SizedBox(width: 5),
+                  Text(label, style: const TextStyle(color: BrokaColors.textHigh,
+                      fontSize: 12, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+          ]),
+        ],
+        if (!store.isActive)
+          Container(
+            key: const Key('store-paused-banner'),
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            margin: const EdgeInsets.only(top: 12),
+            decoration: BoxDecoration(
+              color: BrokaColors.warning.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: BrokaColors.warning.withOpacity(0.4)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.pause_circle_outline_rounded, color: BrokaColors.warning),
+              SizedBox(width: 10),
+              Expanded(child: Text(
+                  'This store is taking a break. Its products will be back soon.',
+                  style: TextStyle(color: BrokaColors.textHigh, fontSize: 13))),
+            ]),
+          ),
+      ]),
+    );
   }
 }
 
-class _Description extends StatefulWidget {
-  const _Description(this.text);
-  final String text;
+/// Products | Store details, in the pill switcher the Seller Dashboard
+/// uses. Pinned under the bar, so the details are one tap away from
+/// anywhere in the catalogue.
+class _ViewSwitchDelegate extends SliverPersistentHeaderDelegate {
+  _ViewSwitchDelegate({
+    required this.view,
+    required this.productCount,
+    required this.onChanged,
+  });
+
+  final StoreHomeView view;
+  final int productCount;
+  final ValueChanged<StoreHomeView> onChanged;
+
+  static const _height = 60.0;
 
   @override
-  State<_Description> createState() => _DescriptionState();
-}
-
-class _DescriptionState extends State<_Description> {
-  bool _open = false;
+  double get minExtent => _height;
+  @override
+  double get maxExtent => _height;
 
   @override
-  Widget build(BuildContext context) {
-    const style = TextStyle(color: BrokaColors.textMid, fontSize: 13.5, height: 1.45);
-    return LayoutBuilder(builder: (context, constraints) {
-      final painter = TextPainter(
-        text: TextSpan(text: widget.text, style: style),
-        maxLines: 3,
-        textDirection: TextDirection.ltr,
-        textScaler: MediaQuery.textScalerOf(context),
-      )..layout(maxWidth: constraints.maxWidth);
-      final long = painter.didExceedMaxLines;
-      return GestureDetector(
-        onTap: long ? () => setState(() => _open = !_open) : null,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(widget.text, style: style,
-              maxLines: _open ? null : 3,
-              overflow: _open ? TextOverflow.visible : TextOverflow.ellipsis),
-          if (long)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(_open ? 'Less' : 'More',
-                  style: const TextStyle(color: BrokaColors.gold, fontSize: 12.5,
-                      fontWeight: FontWeight.w700)),
+  bool shouldRebuild(_ViewSwitchDelegate old) =>
+      old.view != view || old.productCount != productCount || old.onChanged != onChanged;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    Widget segment(StoreHomeView v, String label, IconData icon) {
+      final selected = v == view;
+      return Expanded(
+        child: Semantics(
+          button: true,
+          selected: selected,
+          child: GestureDetector(
+            key: Key('store-view-${v.name}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => onChanged(v),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                gradient: selected
+                    ? const LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue])
+                    : null,
+              ),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(icon, size: 16, color: selected ? Colors.white : BrokaColors.textMid),
+                const SizedBox(width: 6),
+                Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? Colors.white : BrokaColors.textMid,
+                      fontSize: 13.5,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    ))),
+              ]),
             ),
-        ]),
+          ),
+        ),
       );
-    });
+    }
+
+    return Container(
+      height: _height,
+      color: BrokaColors.bg,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.86),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: Row(children: [
+          segment(StoreHomeView.products, 'Products ($productCount)',
+              Icons.grid_view_rounded),
+          segment(StoreHomeView.details, 'Store details', Icons.info_outline_rounded),
+        ]),
+      ),
+    );
   }
 }
 

@@ -4,19 +4,17 @@ import { ShareButtons } from './ShareButtons'
 import { TrustChips } from './TrustChips'
 import styles from './store.module.css'
 
+/** Who the store is, at a glance: logo, name, what and where, the owner's
+ *  record, and sharing. No cover photo behind the name - it fought with the
+ *  text and pushed the products down; the shop's photos, and the rest of
+ *  what a visitor needs to know, are under "Store details" (StoreDetails). */
 export function StoreHero({ view }: { view: StoreView }) {
   const { store } = view
   const subtitle = [store.category, view.place].filter(Boolean).join(' · ')
   return (
     <section className={styles.hero} aria-labelledby="store-name">
-      <div className={styles.cover} style={view.cover ? undefined : { background: `linear-gradient(135deg, ${view.gradient.join(', ')})` }}>
-        {view.cover && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={view.cover.src} srcSet={view.cover.srcSet ?? undefined} sizes="100vw" alt="" fetchPriority="high" />
-        )}
-      </div>
       <div className={styles.identity}>
-        <div className={styles.logo}>
+        <div className={styles.logo} style={{ boxShadow: `0 10px 34px ${view.gradient[0]}66` }}>
           {view.logo ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={view.logo} alt={`${store.name} logo`} />
@@ -24,31 +22,26 @@ export function StoreHero({ view }: { view: StoreView }) {
             <span aria-hidden="true">{view.initial}</span>
           )}
         </div>
-        <div>
+        <div className={styles.identityText}>
           <h1 id="store-name" className={styles.name}>
             {store.name}
           </h1>
           {subtitle && <p className={styles.place}>{subtitle}</p>}
         </div>
       </div>
-      <div className={styles.about}>
-        {store.owner && (
-          <TrustChips
-            verified={store.owner.verified}
-            completedDeals={store.owner.completed_deals}
-            rating={store.owner.rating}
-            memberSince={store.owner.member_since}
-          />
-        )}
-        {view.description && <p className={styles.description}>{view.description}</p>}
-        {store.business_email && store.business_email_verified && (
-          <a className={styles.email} href={`mailto:${store.business_email}`}>
-            ✉ {store.business_email}
-          </a>
-        )}
-        <div className={styles.actions}>
-          <ShareButtons storeId={store.id} url={view.url} title={store.name} />
-        </div>
+      {store.owner && (
+        <TrustChips
+          verified={store.owner.verified}
+          completedDeals={store.owner.completed_deals}
+          rating={store.owner.rating}
+          memberSince={store.owner.member_since}
+        />
+      )}
+      <div className={styles.actions}>
+        <a className={styles.detailsLink} href="#store-details">
+          ⓘ Store details
+        </a>
+        <ShareButtons storeId={store.id} url={view.url} title={store.name} />
       </div>
       {!store.is_active && (
         <p className={styles.paused} role="status">

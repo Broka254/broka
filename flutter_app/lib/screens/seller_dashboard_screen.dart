@@ -8,6 +8,11 @@
 // square controls) and a pill tab switcher in the brand gradient - instead
 // of its own background, a boxed back button, a "LIVE" pill and a Material
 // tab strip with a gold underline. What is on the three tabs is unchanged.
+//
+// 2026-09-29: linked with My Store, the online store's own dashboard. The
+// Overview shows the store (open or paused, its link, products, the week's
+// visits, Manage) right under the seller's numbers, or the way to open one;
+// a store button in the header opens it from any tab. My Store links back.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -24,6 +29,8 @@ import '../services/api_service.dart';
 import '../widgets/particle_field.dart';
 import '../models/listing.dart';
 import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
+import '../features/stores/presentation/store_entry.dart';
+import '../features/stores/presentation/widgets/menu_store_section.dart';
 
 class SellerDashboardScreen extends StatefulWidget {
   const SellerDashboardScreen({super.key, this.animateBackground = true});
@@ -759,6 +766,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           ),
         ),
         const SizedBox(width: 8),
+        BrokaHeaderButton(
+          key: const Key('dashboard-my-store'),
+          icon: Icons.storefront_rounded,
+          // My Store, or for a seller without a store the introduction to
+          // one (StoreEntry decides).
+          onTap: () => StoreEntry.open(context),
+          tooltip: 'My Store',
+        ),
+        const SizedBox(width: 8),
         BrokaHeaderButton(icon: Icons.refresh_rounded, onTap: _load, tooltip: 'Refresh'),
       ]),
     );
@@ -876,6 +892,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       // costing the seller sales right now.
       AwaitingPaymentPanel(reloadSignal: _feeReload),
       _buildCommandHeader(),
+      _buildStoreSection(),
       _buildRadialStatCards(),
       _buildRevenueChart(),
       _buildDealPipeline(),
@@ -913,6 +930,32 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           const SizedBox(height: 8),
         ]),
       ),
+    );
+  }
+
+  // ── Online store ─────────────────────────────────────────────────────────────
+
+  /// The seller's online store, the same card the Menu shows: open or
+  /// paused, the link, products and the week's visits, with Manage (My
+  /// Store), Preview and Share. Without a store, the way to open one - for
+  /// a seller who isn't set up as a business yet, that starts with the
+  /// business details. Keyed on the refresh counter, so pulling to refresh
+  /// the dashboard refreshes the store too.
+  Widget _buildStoreSection() {
+    final profile = _profile;
+    final bool? businessReady = profile == null
+        ? null
+        : profile['account_type'] == 'buyer_seller' && profile['seller_tier'] == 'long_term';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _secLabel('YOUR ONLINE STORE'),
+        const SizedBox(height: 10),
+        MenuStoreSection(
+          key: ValueKey('dashboard-store-$_feeReload'),
+          businessReady: businessReady,
+        ),
+      ]),
     );
   }
 

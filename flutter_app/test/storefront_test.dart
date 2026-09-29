@@ -4,9 +4,12 @@ import 'dart:convert';
 
 import 'package:broka/core/network/api_client.dart';
 import 'package:broka/features/stores/data/repositories/stores_repository.dart';
+import 'package:broka/features/stores/domain/models/store.dart';
 import 'package:broka/features/stores/presentation/store_home_screen.dart';
+import 'package:broka/features/stores/presentation/widgets/store_details_view.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/deep_link_service.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:broka/widgets/product_card.dart';
 import 'package:flutter/material.dart';
@@ -19,7 +22,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 http.Response _json(Object? body, [int status = 200]) =>
     http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
 
-Map<String, dynamic> _store({bool active = true, String? description}) => {
+// A 1x1 PNG, so a store can have photos without the network.
+const _pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42'
+    'mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+Map<String, dynamic> _image(String id) =>
+    {'id': id, 'thumb': _pixel, 'medium': _pixel, 'large': _pixel};
+
+Map<String, dynamic> _store({bool active = true, String? description, bool photos = false}) => {
       'id': 's1',
       'name': 'Clanix Electronics',
       'slug': 'clanix',
@@ -28,12 +38,17 @@ Map<String, dynamic> _store({bool active = true, String? description}) => {
       'description': description,
       'county': 'Nairobi',
       'subcounty': 'Starehe',
-      'owner': {'verified': true, 'rating': 4.8, 'completed_deals': 12,
+      'location_description': 'Moi Avenue, opposite the Hilton',
+      'business_email': 'sales@clanix.co.ke',
+      'business_email_verified': true,
+      'owner': {'name': 'Jane Wanjiru', 'verified': true, 'rating': 4.8, 'completed_deals': 12,
           'member_since': '2025-01-10T00:00:00'},
       'is_active': active,
       'listing_count': 3,
+      'cover': photos ? _image('c1') : null,
       'photos': [],
-      'photo_images': [],
+      'photo_images': photos ? [_image('p1'), _image('p2')] : [],
+      'created_at': '2026-09-02T08:00:00',
     };
 
 Map<String, dynamic> _listing(String id, String name, double price, String category) => {
@@ -43,13 +58,14 @@ Map<String, dynamic> _listing(String id, String name, double price, String categ
     };
 
 class _Backend {
-  _Backend({bool active = true, String? description, int? failListingsTimes}) {
+  _Backend({bool active = true, String? description, bool photos = false,
+      int? failListingsTimes}) {
     _failListings = failListingsTimes ?? 0;
     client = ApiClient(client: MockClient((req) async {
       requests.add(req);
       final path = req.url.path;
       if (path == '/stores/s1' || path == '/stores/slug/clanix') {
-        return _json(_store(active: active, description: description));
+        return _json(_store(active: active, description: description, photos: photos));
       }
       if (path == '/stores/slug/nope') return _json({'detail': 'Store not found'}, 404);
       if (path == '/stores/mine') return _json(null);
@@ -125,13 +141,105 @@ void main() {
       expect(find.text('Verified seller'), findsOneWidget);
       expect(find.text('12 deals done'), findsOneWidget);
       expect(find.text('4.8'), findsOneWidget);
-      expect(find.text('Genuine phones and accessories.'), findsOneWidget);
+      // The rest of what there is to know is under "Store details".
+      expect(find.text('Genuine phones and accessories.'), findsNothing);
+      expect(find.text('Products (3)'), findsOneWidget);
       expect(find.byKey(const Key('category-pill-all')), findsOneWidget);
       expect(find.byKey(const Key('category-pill-Gaming')), findsOneWidget);
       expect(find.byType(ProductCard), findsNWidgets(3));
 
       final visit = backend.requests.singleWhere((r) => r.url.path == '/stores/s1/visit');
       expect(jsonDecode(visit.body), {'via': 'whatsapp'});
+    });
+
+    testWidgets('the store photo is not behind the name, but under Store details',
+        (tester) async {
+      final backend = _Backend(photos: true);
+      await _pumpStore(tester, backend);
+      final photo = find.byWidgetPredicate((w) => w is BrokaImage && w.source == _pixel);
+      // The header is the logo (here the initial), the name and the facts.
+      expect(photo, findsNothing);
+      expect(find.byType(ProductCard), findsNWidgets(3));
+
+      await tester.tap(find.byKey(const Key('store-view-details')));
+      await tester.pumpAndSettle();
+      expect(find.byType(ProductCard), findsNothing);
+      // The cover and both shop photos.
+      expect(find.descendant(of: find.byKey(const Key('store-photos')), matching: photo),
+          findsNWidgets(3));
+      await tester.tap(find.byKey(const Key('store-photo-1')));
+      await tester.pumpAndSettle();
+      expect(find.byType(StorePhotoViewer), findsOneWidget);
+      expect(find.text('2 of 3'), findsOneWidget);
+    });
+
+    testWidgets('Store details: owner, location, contact and store info', (tester) async {
+      final backend = _Backend(description: 'Genuine phones and accessories.');
+      await _pumpStore(tester, backend);
+      await tester.tap(find.byKey(const Key('store-view-details')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Genuine phones and accessories.'), findsOneWidget);
+      final owner = find.byKey(const Key('store-owner'));
+      for (final text in ['Jane Wanjiru', 'Verified seller', 'On BROKA since January 2025',
+          '12', '4.8', '3']) {
+        expect(find.descendant(of: owner, matching: find.text(text)), findsOneWidget,
+            reason: text);
+      }
+      final details = find.byKey(const Key('store-details'));
+      Future<void> show(Finder f) =>
+          tester.dragUntilVisible(f, find.byType(CustomScrollView), const Offset(0, -200));
+      await show(find.byKey(const Key('store-location')));
+      expect(find.text('Starehe, Nairobi'), findsOneWidget);
+      expect(find.text('Moi Avenue, opposite the Hilton'), findsOneWidget);
+      await show(find.byKey(const Key('store-email')));
+      expect(find.text('sales@clanix.co.ke'), findsOneWidget);
+      await show(find.byKey(const Key('store-buying-safely')));
+      for (final text in ['Electronics', 'broka.co.ke/store/clanix', '3 on sale',
+          'September 2026', 'Open']) {
+        expect(find.descendant(of: details, matching: find.text(text)), findsOneWidget,
+            reason: text);
+      }
+      // Nothing about the store is fetched twice for the details.
+      expect(backend.requests.where((r) => r.url.path == '/stores/s1'), hasLength(1));
+    });
+
+    testWidgets('a link can open straight on Store details', (tester) async {
+      final backend = _Backend();
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (settings) => MaterialPageRoute(
+          settings: const RouteSettings(arguments: {'storeId': 's1', 'view': 'details'}),
+          builder: (_) => StoreHomeScreen(repository: backend.repo, animateBackground: false),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('store-owner')), findsOneWidget);
+      expect(backend.listingQueries(), isEmpty);
+    });
+
+    testWidgets('Store details finds the shop on a map and emails it', (tester) async {
+      final opened = <Uri>[];
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+        child: StoreDetailsView(
+          store: Store.fromJson(_store()),
+          openUrl: (uri) async {
+            opened.add(uri);
+            return true;
+          },
+        ),
+      ))));
+      await tester.ensureVisible(find.byKey(const Key('store-open-map')));
+      await tester.tap(find.byKey(const Key('store-open-map')));
+      await tester.ensureVisible(find.byTooltip('Email the store'));
+      await tester.tap(find.byTooltip('Email the store'));
+      await tester.pumpAndSettle();
+      expect(opened.first.host, 'www.google.com');
+      expect(opened.first.queryParameters['query'],
+          'Moi Avenue, opposite the Hilton, Starehe, Nairobi, Kenya');
+      expect(opened.last.toString(), 'mailto:sales@clanix.co.ke');
     });
 
     testWidgets('category, search and sort filter the catalogue', (tester) async {
@@ -198,7 +306,7 @@ void main() {
         tester.view.physicalSize = size * 3;
         tester.view.devicePixelRatio = 3;
         addTearDown(tester.view.reset);
-        final backend = _Backend(description: 'A long description ' * 20);
+        final backend = _Backend(description: 'A long description ' * 20, photos: true);
         await tester.pumpWidget(MaterialApp(home: StoreHomeScreen(
             storeId: 's1', repository: backend.repo, animateBackground: false)));
         await tester.pumpAndSettle();
@@ -206,6 +314,15 @@ void main() {
         await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+
+        await tester.tap(find.byKey(const Key('store-view-details')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'Store details at $size');
+        for (var i = 0; i < 4; i++) {
+          await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull, reason: 'Store details at $size');
+        }
       });
     }
   });

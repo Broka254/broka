@@ -7,12 +7,16 @@ import '../../../../models/listing_photo.dart';
 
 /// The store owner's seller record, as shown on the storefront.
 class StoreOwnerFacts {
+  /// Who runs the store. Null from backends before the store page had
+  /// "Store details".
+  final String? name;
   final bool verified;
   final double? rating;
   final int completedDeals;
   final DateTime? memberSince;
 
   const StoreOwnerFacts({
+    this.name,
     this.verified = false,
     this.rating,
     this.completedDeals = 0,
@@ -21,7 +25,9 @@ class StoreOwnerFacts {
 
   static StoreOwnerFacts? fromJson(Object? j) {
     if (j is! Map) return null;
+    final name = (j['name'] as String?)?.trim();
     return StoreOwnerFacts(
+      name: name == null || name.isEmpty ? null : name,
       verified: j['verified'] as bool? ?? false,
       rating: (j['rating'] as num?)?.toDouble(),
       completedDeals: (j['completed_deals'] as num?)?.toInt() ?? 0,
@@ -158,6 +164,20 @@ class Store {
       cover?.medium ??
       (photoImages.isNotEmpty ? photoImages.first.medium : null) ??
       (photos.isNotEmpty ? photos.first : null);
+
+  /// Every picture of the shop - the cover first, then the shop photos -
+  /// as BrokaImage sources: [thumb] for a strip, [large] for full screen.
+  /// Older responses carry only [photos], one size each.
+  List<({String thumb, String large})> get shopPhotos => [
+        if (cover != null) (thumb: cover!.medium, large: cover!.large),
+        if (photoImages.isNotEmpty)
+          for (final p in photoImages) (thumb: p.medium, large: p.large)
+        else
+          for (final p in photos) (thumb: p, large: p),
+      ];
+
+  /// When the store opened, or null when the response has no date.
+  DateTime? get openedAt => DateTime.tryParse(createdAt ?? '');
 }
 
 /// One entry of a store's category rail.

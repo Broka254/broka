@@ -1,16 +1,22 @@
 // My Store - the owner's dashboard.
 //
-//   Overview  open/paused switch, what needs the owner (products hidden
-//             until their fee is paid, products in a deal), what's left
-//             to set up, the link with QR and share buttons, and the last
-//             7 days of visits (and where they came from)
+//   header    the store at a glance - logo, name, open or paused, how many
+//             products are live, the link - and a way to the Seller
+//             Dashboard and to the store as buyers see it. No cover photo:
+//             behind the name and the tabs it made both hard to read; the
+//             photos are the buyers' "Store details" now
+//   Overview  in the order an owner acts on it: open/paused, what needs
+//             them (products hidden until their fee is paid, products in a
+//             deal), what's left to set up, the week in numbers, quick
+//             actions, the link with QR and share buttons, where visitors
+//             came from, and the Seller Dashboard
 //   Products  every product in the store, whatever its state (live,
 //             hidden, in a deal, sold), with search and a filter per
 //             state; each one can be paid for, repriced, shared, checked
 //             on, or taken out. New products go straight into the store,
 //             existing listings can be moved in
-//   Settings  every part of the store, edited with the setup wizard's own
-//             pages; the link is shown but fixed
+//   Settings  every part of the store, grouped, edited with the setup
+//             wizard's own pages; the link is shown but fixed
 //
 // Only real numbers are shown: visits and shares are counted by the
 // backend (api/domains/stores/stats.py). Orders and revenue appear once
@@ -290,10 +296,12 @@ class _Dashboard extends StatelessWidget {
   /// Fetches the store again, quietly.
   final Future<void> Function() onRefresh;
 
+  static const _tabs = ['Overview', 'Products', 'Settings'];
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: _tabs.length,
       child: NestedScrollView(
         headerSliverBuilder: (context, _) => [
           // With _tabList's injector, keeps each tab's content below the
@@ -303,13 +311,22 @@ class _Dashboard extends StatelessWidget {
             handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
             sliver: SliverAppBar(
               pinned: true,
-              expandedHeight: 230,
-              backgroundColor: BrokaColors.bg.withOpacity(0.92),
-              iconTheme: const IconThemeData(color: Colors.white),
-              title: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrokaColors.textHigh,
-                      fontWeight: FontWeight.w800, fontSize: 17)),
+              expandedHeight: _Header.height + kToolbarHeight + _PillTabs.height,
+              // Opaque: a tab's content scrolls up under the pinned bar.
+              backgroundColor: BrokaColors.bg,
+              surfaceTintColor: Colors.transparent,
+              iconTheme: const IconThemeData(color: BrokaColors.textHigh),
+              // "My Store" here and the store's own name in the header: the
+              // name twice, one above the other, said nothing twice.
+              title: const Text('My Store', style: TextStyle(color: BrokaColors.textHigh,
+                  fontWeight: FontWeight.w800, fontSize: 17)),
               actions: [
+                IconButton(
+                  key: const Key('open-seller-dashboard'),
+                  tooltip: 'Seller Dashboard',
+                  icon: const Icon(Icons.insights_rounded),
+                  onPressed: () => Navigator.of(context).pushNamed('/seller-dashboard'),
+                ),
                 IconButton(
                   tooltip: 'View as a buyer',
                   icon: const Icon(Icons.visibility_outlined),
@@ -318,15 +335,19 @@ class _Dashboard extends StatelessWidget {
                 ),
               ],
               flexibleSpace: FlexibleSpaceBar(
-                collapseMode: CollapseMode.parallax,
-                background: _Header(store: store),
+                collapseMode: CollapseMode.pin,
+                background: Padding(
+                  padding: EdgeInsets.only(
+                      top: MediaQuery.paddingOf(context).top + kToolbarHeight),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: _Header(store: store),
+                  ),
+                ),
               ),
-              bottom: const TabBar(
-                indicatorColor: BrokaColors.gold,
-                labelColor: BrokaColors.textHigh,
-                unselectedLabelColor: BrokaColors.textMid,
-                labelStyle: TextStyle(fontWeight: FontWeight.w700),
-                tabs: [Tab(text: 'Overview'), Tab(text: 'Products'), Tab(text: 'Settings')],
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(_PillTabs.height),
+                child: _PillTabs(labels: _tabs, controller: DefaultTabController.of(context)),
               ),
             ),
           ),
@@ -343,51 +364,130 @@ class _Dashboard extends StatelessWidget {
   }
 }
 
+/// The store at a glance, under the bar: logo, name, open or paused, how
+/// many products buyers can see, and the link.
 class _Header extends StatelessWidget {
   const _Header({required this.store});
   final Store store;
 
+  static const height = 96.0;
+
   @override
   Widget build(BuildContext context) {
-    final cover = store.coverSource;
-    return Stack(fit: StackFit.expand, children: [
-      if (cover != null)
-        BrokaImage(cover, fit: BoxFit.cover)
-      else
-        DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: CategoryVisuals.gradientFor(store.category)
-              .map((c) => c.withOpacity(0.55)).toList(),
-        ))),
-      const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
-        begin: Alignment.topCenter, end: Alignment.bottomCenter,
-        colors: [Color(0x66000000), Color(0x00000000), Color(0xE603040A)],
-        stops: [0, 0.4, 1],
-      ))),
-      Positioned(
-        left: 16, right: 16, bottom: 58,
-        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          StoreLogo(store: store, size: 60),
-          const SizedBox(width: 12),
+    final glow = CategoryVisuals.gradientFor(store.category);
+    final live = '${store.listingCount} product${store.listingCount == 1 ? '' : 's'} live';
+    return SizedBox(
+      height: height,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        child: Row(children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [BoxShadow(color: glow.first.withOpacity(0.4), blurRadius: 20)],
+            ),
+            child: StoreLogo(store: store, size: 64),
+          ),
+          const SizedBox(width: 14),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min, children: [
-            Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontSize: 20,
+              mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text(store.name, key: const Key('my-store-name'), maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 19,
                     fontWeight: FontWeight.w800)),
             const SizedBox(height: 4),
             Row(children: [
               _StatusPill(active: store.isActive),
               const SizedBox(width: 8),
               Flexible(child: Text(
-                  '${store.listingCount} product${store.listingCount == 1 ? '' : 's'}'
-                  '${store.category != null ? ' · ${store.category}' : ''}',
+                  [live, if (store.category != null) store.category!].join(' · '),
                   maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Color(0xFFD7D2EA), fontSize: 12.5))),
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
             ]),
+            const SizedBox(height: 3),
+            Text(store.displayUrl, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _priceColor, fontSize: 12.5,
+                    fontWeight: FontWeight.w600)),
           ])),
         ]),
       ),
-    ]);
+    );
+  }
+}
+
+/// Overview / Products / Settings as the Seller Dashboard's pill switcher:
+/// the dark card surface, and the selected tab in the brand gradient. It
+/// follows the TabController's animation, so it slides with a swipe too.
+class _PillTabs extends StatelessWidget {
+  const _PillTabs({required this.labels, required this.controller});
+  final List<String> labels;
+  final TabController controller;
+
+  static const height = 60.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final animation = controller.animation!;
+    return Container(
+      key: const Key('my-store-tabs'),
+      height: height,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.86),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: AnimatedBuilder(
+          animation: animation,
+          builder: (context, _) => LayoutBuilder(builder: (context, box) {
+            final w = box.maxWidth / labels.length;
+            final position = animation.value;
+            return Stack(children: [
+              Positioned(
+                left: position * w, top: 0, bottom: 0, width: w,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [BoxShadow(
+                        color: BrokaColors.neonBlue.withOpacity(0.25), blurRadius: 10)],
+                  ),
+                ),
+              ),
+              Row(children: [
+                for (var i = 0; i < labels.length; i++)
+                  Expanded(
+                    child: Semantics(
+                      button: true,
+                      selected: controller.index == i,
+                      child: GestureDetector(
+                        key: Key('my-store-tab-$i'),
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => controller.animateTo(i),
+                        child: Center(
+                          child: Text(labels[i], maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: (position - i).abs() < 0.5
+                                    ? Colors.white
+                                    : BrokaColors.textMid,
+                                fontSize: 13.5,
+                                fontWeight: (position - i).abs() < 0.5
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                              )),
+                        ),
+                      ),
+                    ),
+                  ),
+              ]),
+            ]);
+          }),
+        ),
+      ),
+    );
   }
 }
 
@@ -456,7 +556,9 @@ Widget _tabList(BuildContext context, {Key? key, required List<Widget> children}
       ),
     ]);
 
-Widget _card({required Widget child, EdgeInsets padding = const EdgeInsets.all(16)}) => Container(
+Widget _card({Key? key, required Widget child, EdgeInsets padding = const EdgeInsets.all(16)}) =>
+    Container(
+      key: key,
       padding: padding,
       decoration: BoxDecoration(
         color: BrokaColors.bgCard.withOpacity(0.6),
@@ -588,6 +690,7 @@ class _OverviewTabState extends State<_OverviewTab> {
   Widget build(BuildContext context) {
     final store = widget.store;
     final counts = _counts;
+    final stats = _stats;
     return RefreshIndicator(
       color: BrokaColors.gold,
       onRefresh: () async {
@@ -630,11 +733,32 @@ class _OverviewTabState extends State<_OverviewTab> {
           onEdit: (step) => _editStore(context, store, step, widget.onStoreChanged),
           onAddProduct: _addProduct,
         ),
-        const SizedBox(height: 14),
-        StoreShareCard(store: store, share: widget.share),
         const SizedBox(height: 22),
-        _sectionLabel('Last 7 days'),
-        _StatsCard(stats: _stats, error: _statsError, onRetry: _loadStats),
+        _sectionLabel('This week'),
+        // A dash, never a zero, for a number that hasn't loaded: a zero
+        // says nobody came.
+        Row(children: [
+          Expanded(child: _GlanceTile(
+            key: const Key('visits-total'),
+            icon: Icons.people_alt_outlined,
+            value: stats == null ? '–' : '${stats.visits}',
+            label: stats?.visits == 1 ? 'Visitor' : 'Visitors',
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: _GlanceTile(
+            icon: Icons.ios_share_rounded,
+            value: stats == null ? '–' : '${stats.shares}',
+            label: stats?.shares == 1 ? 'Share' : 'Shares',
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: _GlanceTile(
+            key: const Key('glance-live'),
+            icon: Icons.storefront_outlined,
+            value: '${counts?.live ?? store.listingCount}',
+            label: 'Live',
+            onTap: () => _showProducts(StoreProductState.live),
+          )),
+        ]),
         const SizedBox(height: 22),
         _sectionLabel('Quick actions'),
         Row(children: [
@@ -643,7 +767,7 @@ class _OverviewTabState extends State<_OverviewTab> {
             label: 'Add a product',
             onTap: _addProduct,
           )),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(child: _QuickAction(
             icon: Icons.drive_file_move_outline,
             label: 'Move listings in',
@@ -652,10 +776,67 @@ class _OverviewTabState extends State<_OverviewTab> {
               if (moved > 0) await widget.onRefresh();
             },
           )),
+          const SizedBox(width: 10),
+          Expanded(child: _QuickAction(
+            icon: Icons.visibility_outlined,
+            label: 'View as a buyer',
+            onTap: () => Navigator.of(context).pushNamed('/store-view',
+                arguments: {'storeId': store.id}),
+          )),
         ]),
+        const SizedBox(height: 22),
+        StoreShareCard(store: store, share: widget.share),
+        const SizedBox(height: 22),
+        _sectionLabel('Visits, last 7 days'),
+        _StatsCard(stats: stats, error: _statsError, onRetry: _loadStats),
+        const SizedBox(height: 22),
+        _sectionLabel('Your selling'),
+        const SellerDashboardLink(),
       ]),
     );
   }
+}
+
+/// One number from the week, big, with what it counts under it.
+class _GlanceTile extends StatelessWidget {
+  const _GlanceTile({
+    super.key,
+    required this.icon,
+    required this.value,
+    required this.label,
+    this.onTap,
+  });
+  final IconData icon;
+  final String value;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: BrokaColors.bgCard.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(icon, color: _priceColor, size: 20),
+              const SizedBox(height: 8),
+              Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 24,
+                      fontWeight: FontWeight.w800, height: 1.1)),
+              const SizedBox(height: 2),
+              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+            ]),
+          ),
+        ),
+      );
 }
 
 class _QuickAction extends StatelessWidget {
@@ -672,16 +853,68 @@ class _QuickAction extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(16),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+            constraints: const BoxConstraints(minHeight: 88),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
             ),
-            child: Column(children: [
-              Icon(icon, color: BrokaColors.gold, size: 26),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(icon, color: _priceColor, size: 24),
               const SizedBox(height: 8),
-              Text(label, textAlign: TextAlign.center, style: const TextStyle(
-                  color: BrokaColors.textHigh, fontWeight: FontWeight.w600, fontSize: 13)),
+              Text(label, textAlign: TextAlign.center, maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh,
+                      fontWeight: FontWeight.w600, fontSize: 12.5)),
+            ]),
+          ),
+        ),
+      );
+}
+
+/// The way from My Store to the Seller Dashboard: the store is one part of
+/// someone's selling, and their rating, deals, revenue and the listings
+/// outside the store live there. The Seller Dashboard links back with its
+/// own store card.
+class SellerDashboardLink extends StatelessWidget {
+  const SellerDashboardLink({super.key});
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: BrokaColors.bgCard.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          key: const Key('seller-dashboard-link'),
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => Navigator.of(context).pushNamed('/seller-dashboard'),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(colors: [
+                    BrokaColors.gold.withOpacity(0.35),
+                    BrokaColors.neonBlue.withOpacity(0.2),
+                  ]),
+                  border: Border.all(color: BrokaColors.gold.withOpacity(0.5)),
+                ),
+                child: const Icon(Icons.insights_rounded, color: BrokaColors.textHigh, size: 22),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Seller Dashboard', style: TextStyle(color: BrokaColors.textHigh,
+                    fontWeight: FontWeight.w700, fontSize: 15)),
+                SizedBox(height: 2),
+                Text('Your rating, deals, revenue and every listing, in the store or not',
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.35)),
+              ])),
+              const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid),
             ]),
           ),
         ),
@@ -774,9 +1007,9 @@ class _SetupChecklist extends StatelessWidget {
       ),
       (
         key: 'cover',
-        done: store.coverSource != null,
-        title: 'Add a cover photo',
-        hint: 'A wide photo across the top of your store',
+        done: store.shopPhotos.isNotEmpty,
+        title: 'Add photos of your shop',
+        hint: 'Buyers see them under Store details',
         onTap: () => onEdit(StoreSetupStep.photos),
       ),
       (
@@ -893,24 +1126,9 @@ class _StatsCard extends StatelessWidget {
     final sources = s.visitsBySource.entries.where((e) => e.value > 0).toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
+    // The week's totals are the "This week" tiles above; this is how they
+    // spread over the days, and where the visitors came from.
     return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-        Text('${s.visits}', key: const Key('visits-total'), style: const TextStyle(
-            color: BrokaColors.textHigh, fontSize: 30, fontWeight: FontWeight.w800)),
-        const SizedBox(width: 8),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Text('visitor${s.visits == 1 ? '' : 's'}',
-              style: const TextStyle(color: BrokaColors.textMid)),
-        ),
-        const Spacer(),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Text('${s.shares} share${s.shares == 1 ? '' : 's'}',
-              style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
-        ),
-      ]),
-      const SizedBox(height: 14),
       SizedBox(
         // Count label + tallest bar (55) + weekday label, with room for
         // larger system text.
@@ -1243,6 +1461,7 @@ class _ProductsTabState extends State<_ProductsTab> {
               label: const Text('Add product'),
               style: FilledButton.styleFrom(
                 backgroundColor: BrokaColors.gold,
+                foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
@@ -1276,13 +1495,33 @@ class _ProductsTabState extends State<_ProductsTab> {
           if (_loading)
             const Padding(padding: EdgeInsets.all(20),
                 child: Center(child: CircularProgressIndicator(color: BrokaColors.gold))),
+          // What failed, in a card with a real button. It was the server's
+          // bare message ("Not Found") and a Retry link floating on the
+          // background, which read as the store having no products.
           if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(12),
+            _card(
+              key: const Key('products-error'),
               child: Column(children: [
+                const Icon(Icons.cloud_off_rounded, color: BrokaColors.textMid, size: 34),
+                const SizedBox(height: 10),
+                Text(_items.isEmpty ? "Couldn't load your products" : "Couldn't load more products",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: BrokaColors.textHigh,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
                 Text(_error!, textAlign: TextAlign.center,
-                    style: const TextStyle(color: BrokaColors.textMid)),
-                TextButton(onPressed: _loadMore, child: const Text('Retry')),
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _loadMore,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Try again'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BrokaColors.textHigh,
+                    side: const BorderSide(color: BrokaColors.border),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
               ]),
             ),
         ]),
@@ -1883,59 +2122,83 @@ class _SettingsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget tile(IconData icon, String title, String value, StoreSetupStep? step,
+    Widget row(IconData icon, String title, String value, StoreSetupStep? step,
             {Widget? trailing}) =>
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Material(
-            color: BrokaColors.bgCard.withOpacity(0.6),
-            borderRadius: BorderRadius.circular(14),
-            child: ListTile(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              leading: Icon(icon, color: BrokaColors.gold),
-              title: Text(title, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-              subtitle: Text(value, maxLines: 2, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14.5)),
-              trailing: trailing ??
-                  (step != null
-                      ? const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid)
-                      : null),
-              onTap: step == null ? null : () => _edit(context, step),
-            ),
-          ),
+        ListTile(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          leading: Icon(icon, color: _priceColor),
+          title: Text(title, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+          subtitle: Text(value, maxLines: 2, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14.5)),
+          trailing: trailing ??
+              (step != null
+                  ? const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid)
+                  : null),
+          onTap: step == null ? null : () => _edit(context, step),
         );
 
+    // Related settings share a card, the way a phone's own settings are
+    // grouped: seven separate tiles in one long column read as a list to
+    // get through, not as a store's profile.
+    Widget group(String label, List<Widget> rows) => Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _sectionLabel(label),
+            Material(
+              color: BrokaColors.bgCard.withOpacity(0.6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(color: BrokaColors.border.withOpacity(0.8)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(children: [
+                for (var i = 0; i < rows.length; i++) ...[
+                  if (i > 0)
+                    const Divider(height: 1, indent: 56, color: BrokaColors.border),
+                  rows[i],
+                ],
+              ]),
+            ),
+          ]),
+        );
+
+    final photoCount = store.photoImages.isNotEmpty ? store.photoImages.length : store.photos.length;
     return _tabList(context, key: const Key('settings-list'), children: [
-      tile(Icons.storefront_outlined, 'Store name', store.name, StoreSetupStep.name),
-      tile(Icons.link_rounded, 'Store link', store.displayUrl, null,
-          trailing: const Tooltip(
-            message: "A store's link can't change",
-            child: Icon(Icons.lock_outline_rounded, color: BrokaColors.textLow, size: 20),
-          )),
-      tile(Icons.category_outlined, 'Category and description',
-          [store.category ?? 'Not set', if ((store.description ?? '').isNotEmpty) store.description!]
-              .join(' · '),
-          StoreSetupStep.category),
-      tile(Icons.place_outlined, 'Location',
-          [store.locationDescription, store.subcounty, store.county]
-              .where((s) => s != null && s.trim().isNotEmpty).join(', ').ifEmpty('Not set'),
-          StoreSetupStep.location),
-      tile(Icons.account_circle_outlined, 'Logo',
-          store.logoSource != null ? 'Added' : 'None - your initial is shown',
-          StoreSetupStep.logo),
-      tile(Icons.photo_library_outlined, 'Cover and shop photos',
-          '${store.cover != null ? 'Cover photo' : 'No cover'}, '
-          '${store.photoImages.isNotEmpty ? store.photoImages.length : store.photos.length} '
-          'shop photo(s)',
-          StoreSetupStep.photos),
-      tile(Icons.alternate_email_rounded, 'Business email',
-          store.businessEmail == null
-              ? 'None'
-              : '${store.businessEmail}${store.businessEmailVerified ? '' : ' (not verified)'}',
-          StoreSetupStep.email,
-          trailing: store.businessEmailVerified
-              ? const Icon(Icons.verified_rounded, color: BrokaColors.success, size: 20)
-              : null),
+      group('How buyers see it', [
+        row(Icons.storefront_outlined, 'Store name', store.name, StoreSetupStep.name),
+        row(Icons.category_outlined, 'Category and description',
+            [store.category ?? 'Not set', if ((store.description ?? '').isNotEmpty) store.description!]
+                .join(' · '),
+            StoreSetupStep.category),
+        row(Icons.account_circle_outlined, 'Logo',
+            store.logoSource != null ? 'Added' : 'None - your initial is shown',
+            StoreSetupStep.logo),
+        row(Icons.photo_library_outlined, 'Photos of the shop',
+            '${store.cover != null ? 'Cover photo' : 'No cover'}, '
+            '$photoCount shop photo${photoCount == 1 ? '' : 's'}',
+            StoreSetupStep.photos),
+      ]),
+      group('Where to find you', [
+        row(Icons.place_outlined, 'Location',
+            [store.locationDescription, store.subcounty, store.county]
+                .where((s) => s != null && s.trim().isNotEmpty).join(', ').ifEmpty('Not set'),
+            StoreSetupStep.location),
+        row(Icons.alternate_email_rounded, 'Business email',
+            store.businessEmail == null
+                ? 'None'
+                : '${store.businessEmail}${store.businessEmailVerified ? '' : ' (not verified)'}',
+            StoreSetupStep.email,
+            trailing: store.businessEmailVerified
+                ? const Icon(Icons.verified_rounded, color: BrokaColors.success, size: 20)
+                : null),
+        row(Icons.link_rounded, 'Store link', store.displayUrl, null,
+            trailing: const Tooltip(
+              message: "A store's link can't change",
+              child: Icon(Icons.lock_outline_rounded, color: BrokaColors.textMid, size: 20),
+            )),
+      ]),
+      _sectionLabel('Your selling'),
+      const SellerDashboardLink(),
     ]);
   }
 }

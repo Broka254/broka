@@ -24,6 +24,7 @@ import 'package:broka/features/stores/presentation/store_launched_screen.dart';
 import 'package:broka/features/stores/presentation/widgets/store_share_card.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/image_upload_service.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:broka/widgets/wizard_scaffold.dart';
 import 'package:flutter/material.dart';
@@ -736,18 +737,25 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(ConstellationBackground), findsOneWidget);
-      expect(find.byType(StoreShareCard), findsOneWidget);
-      expect(find.byKey(const Key('store-link-text')), findsOneWidget);
-      expect(find.text('broka.co.ke/store/clanix'), findsOneWidget);
-      expect(find.text('WhatsApp'), findsWidgets);
       expect(find.text('Your store is open'), findsOneWidget);
-      // The week's numbers are further down, under what's left to set up.
+      // The header says which store, under a bar that says where you are.
+      expect(find.text('My Store'), findsOneWidget);
+      expect(find.byKey(const Key('my-store-name')), findsOneWidget);
+      // The week's numbers are under what's left to set up.
       final overview = find.byKey(const Key('overview-list'));
       await tester.dragUntilVisible(
           find.byKey(const Key('visits-total')), overview, const Offset(0, -200));
-      expect(find.text('9'), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('visits-total')),
+          matching: find.text('9')), findsOneWidget);
+      // Then the link, to share.
       await tester.dragUntilVisible(
-          find.byKey(const Key('store-open-switch')), overview, const Offset(0, 200));
+          find.byType(StoreShareCard), overview, const Offset(0, -200));
+      expect(find.byKey(const Key('store-link-text')), findsOneWidget);
+      expect(find.descendant(of: find.byType(StoreShareCard),
+          matching: find.text('broka.co.ke/store/clanix')), findsOneWidget);
+      expect(find.text('WhatsApp'), findsWidgets);
+      // Back to the top, where the switch is clear of the pinned bar.
+      await tester.fling(overview, const Offset(0, 2000), 3000);
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('store-open-switch')));
@@ -838,7 +846,7 @@ void main() {
       await tester.drag(find.byKey(const Key('overview-list')), const Offset(0, -600));
       await tester.pumpAndSettle();
       await openProducts(tester);
-      final tabsBottom = tester.getBottomLeft(find.byType(TabBar)).dy;
+      final tabsBottom = tester.getBottomLeft(find.byKey(const Key('my-store-tabs'))).dy;
       // Add product and the search used to sit under the collapsed header,
       // out of reach.
       expect(tester.getTopLeft(find.byKey(const Key('add-product'))).dy,
@@ -949,6 +957,66 @@ void main() {
       expect(backend.requests.where((r) => r.url.path == '/stores/mine'), hasLength(2));
     });
 
+    testWidgets('My Store has no cover photo in its header', (tester) async {
+      await openMyStore(tester, store: {..._storeJson(), 'photos': [_pixel]});
+      expect(find.byWidgetPredicate((w) => w is BrokaImage && w.source == _pixel), findsNothing);
+      // The photo still counts as the shop's photos being done.
+      expect(find.byKey(const Key('checklist-cover')), findsNothing);
+    });
+
+    testWidgets('My Store and the Seller Dashboard link to each other', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      final backend = FakeBackend({
+        'GET /stores/mine': (_) => _json(_storeJson()),
+        'GET /stores/s1/stats': (_) => _json(_stats()),
+        'GET /stores/s1/manage/listings': (r) => _manage(r, _mixedProducts()),
+      });
+      final opened = <String>[];
+      await tester.pumpWidget(MaterialApp(
+        home: MyStoreScreen(repository: backend.repo,
+            listings: ListingsRepository(client: backend.client), animateBackground: false),
+        onGenerateRoute: (settings) {
+          opened.add(settings.name!);
+          return MaterialPageRoute(builder: (_) => Text('route ${settings.name}'));
+        },
+      ));
+      await tester.pumpAndSettle();
+
+      // From the bar...
+      await tester.tap(find.byKey(const Key('open-seller-dashboard')));
+      await tester.pumpAndSettle();
+      expect(opened, ['/seller-dashboard']);
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+
+      // ...and from the foot of the Overview.
+      await tester.dragUntilVisible(find.byKey(const Key('seller-dashboard-link')),
+          find.byKey(const Key('overview-list')), const Offset(0, -300));
+      await tester.tap(find.byKey(const Key('seller-dashboard-link')));
+      await tester.pumpAndSettle();
+      expect(opened, ['/seller-dashboard', '/seller-dashboard']);
+    });
+
+    testWidgets("products that can't load say so in a card, and try again", (tester) async {
+      var fail = true;
+      await openMyStore(tester, more: {
+        'GET /stores/s1/manage/listings': (r) =>
+            fail ? _json({'detail': 'Not Found'}, 404) : _manage(r, _mixedProducts()),
+      });
+      await openProducts(tester);
+      expect(find.byKey(const Key('products-error')), findsOneWidget);
+      expect(find.text("Couldn't load your products"), findsOneWidget);
+      expect(find.text('No products yet'), findsNothing);
+
+      fail = false;
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('products-error')), findsNothing);
+      expect(find.text('Samsung A15'), findsOneWidget);
+    });
+
     testWidgets('the QR code carries the tagged link', (tester) async {
       await tester.pumpWidget(MaterialApp(home: Scaffold(
           body: StoreQrCode(store: Store.fromJson(_storeJson())))));
@@ -1026,8 +1094,14 @@ void main() {
         }
         await tester.tap(find.text('Products'));
         await tester.pumpAndSettle();
+        // On a small phone the product is below the fold.
+        // Mid-screen, clear of the pinned bar and tabs.
+        await Scrollable.ensureVisible(tester.element(find.byKey(const Key('store-product-l2'))),
+            alignment: 0.5);
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('store-product-l2')));
         await tester.pumpAndSettle();
+        expect(find.byKey(const Key('product-action-pay')), findsOneWidget);
         expect(tester.takeException(), isNull, reason: 'product actions at $size');
         c.dispose();
       });

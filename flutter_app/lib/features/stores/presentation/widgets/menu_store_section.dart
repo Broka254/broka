@@ -173,7 +173,6 @@ class _StoreCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cover = store.coverSource;
     final initial = store.name.isNotEmpty ? store.name[0].toUpperCase() : '?';
     return Container(
       decoration: BoxDecoration(
@@ -184,25 +183,24 @@ class _StoreCard extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // The storefront's own header in miniature: the cover photo (or the
-        // brand colours when there is none) with the logo sitting across its
-        // lower edge and the open/paused state on it - so the card reads as
-        // the store, not as another settings row.
+        // A band in the brand colours with the logo sitting across its lower
+        // edge and the open/paused state on it - so the card reads as the
+        // store, not as another settings row. Not the cover photo: the
+        // store's own page no longer puts it behind the name either (its
+        // photos are under "Store details").
         Stack(clipBehavior: Clip.none, children: [
-          SizedBox(
+          const SizedBox(
             height: 70,
             width: double.infinity,
-            child: cover != null
-                ? BrokaImage(cover, fit: BoxFit.cover)
-                : const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF2A1A5E), Color(0xFF0E1B3D)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                  ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF2A1A5E), Color(0xFF0E1B3D)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+            ),
           ),
           Positioned(
             top: 10,

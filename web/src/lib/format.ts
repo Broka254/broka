@@ -35,6 +35,15 @@ export function yearOf(iso: string | null | undefined): number | null {
   return Number.isNaN(d.getTime()) ? null : d.getUTCFullYear()
 }
 
+const monthYear = new Intl.DateTimeFormat('en-KE', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+
+/** "January 2025" from an ISO timestamp, or null. */
+export function monthYearOf(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : monthYear.format(d)
+}
+
 /** "1 product" / "3 products" */
 export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`

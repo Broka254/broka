@@ -11,6 +11,7 @@ import { CategoryPills } from '@/components/CategoryPills'
 import { ProductGrid } from '@/components/ProductGrid'
 import { SiteFooter } from '@/components/SiteFooter'
 import { SiteHeader } from '@/components/SiteHeader'
+import { StoreDetails } from '@/components/StoreDetails'
 import { StoreHero } from '@/components/StoreHero'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import styles from '@/components/store.module.css'
@@ -77,40 +78,47 @@ export default async function StorePage({ params, searchParams }: Props) {
       <SiteHeader />
       <main className="page">
         <StoreHero view={view} />
-        {store.is_active && (
-          <section aria-label="Products">
-            {categories.length > 0 && (
-              <CategoryPills basePath={view.path} categories={categories} total={store.listing_count} filters={filters} />
-            )}
-            <CatalogueControls basePath={view.path} filters={filters} />
-            {filtered && (
-              <p className={styles.resultNote} role="status">
-                {products.length === 0 ? 'No products' : products.length >= PAGE_SIZE ? 'Products' : `${products.length} product${products.length === 1 ? '' : 's'}`}
-                {filters.q ? ` matching “${filters.q}”` : ''}
-                {filters.category ? ` in ${filters.category}` : ''} ·{' '}
-                <a href={view.path}>Show everything</a>
-              </p>
-            )}
-            {products.length > 0 ? (
-              <ProductGrid
-                key={filtersQuery(filters)}
-                storeId={store.id}
-                slug={store.slug}
-                filters={filters}
-                initial={products}
-                pageSize={PAGE_SIZE}
-              />
-            ) : (
-              <div className={`card ${styles.empty}`}>
-                <p aria-hidden="true" style={{ fontSize: 34, margin: 0 }}>
-                  {filtered ? '🔍' : '📦'}
+        {/* The catalogue, with the store's details beside it on wide
+            screens and under it on phones. */}
+        <div className={styles.storeLayout}>
+          {store.is_active ? (
+            <section aria-label="Products" className={styles.catalogue}>
+              {categories.length > 0 && (
+                <CategoryPills basePath={view.path} categories={categories} total={store.listing_count} filters={filters} />
+              )}
+              <CatalogueControls basePath={view.path} filters={filters} />
+              {filtered && (
+                <p className={styles.resultNote} role="status">
+                  {products.length === 0 ? 'No products' : products.length >= PAGE_SIZE ? 'Products' : `${products.length} product${products.length === 1 ? '' : 's'}`}
+                  {filters.q ? ` matching “${filters.q}”` : ''}
+                  {filters.category ? ` in ${filters.category}` : ''} ·{' '}
+                  <a href={view.path}>Show everything</a>
                 </p>
-                <h2>{filtered ? 'No products match' : 'Nothing listed yet'}</h2>
-                <p>{filtered ? 'Try another search or category.' : 'Check back soon: this store is just getting started.'}</p>
-              </div>
-            )}
-          </section>
-        )}
+              )}
+              {products.length > 0 ? (
+                <ProductGrid
+                  key={filtersQuery(filters)}
+                  storeId={store.id}
+                  slug={store.slug}
+                  filters={filters}
+                  initial={products}
+                  pageSize={PAGE_SIZE}
+                />
+              ) : (
+                <div className={`card ${styles.empty}`}>
+                  <p aria-hidden="true" style={{ fontSize: 34, margin: 0 }}>
+                    {filtered ? '🔍' : '📦'}
+                  </p>
+                  <h2>{filtered ? 'No products match' : 'Nothing listed yet'}</h2>
+                  <p>{filtered ? 'Try another search or category.' : 'Check back soon: this store is just getting started.'}</p>
+                </div>
+              )}
+            </section>
+          ) : (
+            <div className={styles.catalogue} />
+          )}
+          <StoreDetails view={view} />
+        </div>
         <VisitBeacon storeId={store.id} via={via} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(storeJsonLd(view)) }} />
       </main>

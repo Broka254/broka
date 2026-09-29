@@ -40,6 +40,8 @@ void main() {
       if (p == '/auth/user/seller-1') {
         return {'id': 'seller-1', 'name': 'Grace Akinyi', 'rating': 4.7, 'completed_deals': 3, 'trust_score': 86};
       }
+      if (p == '/stores/mine') return _store;
+      if (p == '/stores/st1/stats') return _stats;
       if (p.endsWith('/revenue')) return {'total': 0, 'deals': 0, 'series': []};
       if (p.endsWith('/metrics')) return {'history': [], 'advice': []};
       return null;
@@ -54,7 +56,7 @@ void main() {
     expect(find.byType(ConstellationBackground), findsOneWidget);
     expect(find.byType(ChatAmbientBackground), findsNothing);
     expect(find.text('SELLER DASHBOARD'), findsOneWidget);
-    expect(find.byType(BrokaHeaderButton), findsOneWidget); // refresh
+    expect(find.byType(BrokaHeaderButton), findsNWidgets(2)); // My Store, refresh
     expect(find.byType(TabBar), findsNothing);
     expect(find.text('LIVE'), findsNothing);
 
@@ -63,6 +65,61 @@ void main() {
     expect(find.text('DEAL SUMMARY'), findsOneWidget);
     final deals = tester.widget<Text>(find.text('Deals'));
     expect(deals.style!.color, Colors.white, reason: 'the selected tab is lit');
+  });
+
+  testWidgets('shows the online store, and opens My Store from it and from the header',
+      (tester) async {
+    final opened = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: const SellerDashboardScreen(animateBackground: false),
+      onGenerateRoute: (settings) {
+        opened.add(settings.name!);
+        return MaterialPageRoute(builder: (_) => Text('route ${settings.name}'));
+      },
+    ));
+    await _settle(tester);
+
+    expect(find.text('YOUR ONLINE STORE'), findsOneWidget);
+    expect(find.text("Grace's Phones"), findsOneWidget);
+    expect(find.text('broka.co.ke/store/graces-phones'), findsOneWidget);
+    expect(find.text('11'), findsOneWidget); // visits this week
+
+    await tester.ensureVisible(find.text('Manage store'));
+    await _settle(tester);
+    await tester.tap(find.text('Manage store'));
+    await _settle(tester);
+    expect(opened, ['/store-manage']);
+
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('dashboard-my-store')));
+    await _settle(tester);
+    expect(opened, ['/store-manage', '/store-manage']);
+  });
+
+  testWidgets('without a store, the header opens the introduction to one', (tester) async {
+    setFakeRoute((uri) {
+      if (uri.path == '/auth/user/seller-1') {
+        return {'id': 'seller-1', 'name': 'Grace Akinyi', 'account_type': 'buyer_seller',
+            'seller_tier': 'long_term'};
+      }
+      if (uri.path == '/stores/mine') return const FakeResponse(null);
+      return null;
+    });
+    final opened = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: const SellerDashboardScreen(animateBackground: false),
+      onGenerateRoute: (settings) {
+        opened.add(settings.name!);
+        return MaterialPageRoute(builder: (_) => Text('route ${settings.name}'));
+      },
+    ));
+    await _settle(tester);
+    expect(find.text('Open your online store'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('dashboard-my-store')));
+    await _settle(tester);
+    expect(opened, ['/store-explainer']);
   });
 
   testWidgets('nothing overflows on a 320dp phone at a large text size', (tester) async {
@@ -88,3 +145,21 @@ Future<void> _settle(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 100));
   }
 }
+
+const _store = {
+  'id': 'st1',
+  'name': "Grace's Phones",
+  'slug': 'graces-phones',
+  'url': 'https://broka.co.ke/store/graces-phones',
+  'category': 'Electronics',
+  'is_active': true,
+  'listing_count': 4,
+  'photos': [],
+  'photo_images': [],
+};
+
+const _stats = {
+  'days': 7,
+  'visits': {'total': 11, 'by_day': [], 'by_source': {}, 'by_surface': {}},
+  'shares': {'total': 2, 'by_channel': {}},
+};

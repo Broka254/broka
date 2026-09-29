@@ -715,7 +715,11 @@ class StoreService:
     def _owner_facts(owner: Optional[User]) -> Optional[dict]:
         if owner is None:
             return None
+        # The name is what a buyer needs to know who runs the store (the
+        # store page's "Store details"). Still no id or phone: a store
+        # page is public and indexed, and nothing on it needs either.
         return {
+            "name": (owner.name or "").strip() or None,
             "verified": bool(owner.is_verified),
             "rating": round(float(owner.rating), 1) if owner.rating is not None else None,
             "completed_deals": int(owner.completed_deals or 0),

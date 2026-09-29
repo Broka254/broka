@@ -82,6 +82,21 @@ describe('store view', () => {
     expect(storeView(store({ photo_images: [sizes('p1')] })).cover?.src).toContain('/p1/')
   })
 
+  it('lists every shop photo for Store details, cover first', () => {
+    const view = storeView(store({ cover: sizes('c1'), photo_images: [sizes('p1'), sizes('p2')] }))
+    expect(view.photos.map((p) => p.src)).toEqual([
+      'https://media.broka.co.ke/img/c1/large.webp',
+      'https://media.broka.co.ke/img/p1/large.webp',
+      'https://media.broka.co.ke/img/p2/large.webp',
+    ])
+    expect(view.photos[0]?.thumb).toBe(`${API_URL}/media/img/c1/medium.webp`)
+    // A row the media backfill hasn't converted: its plain photo strings.
+    expect(storeView(store({ photos: ['https://media.broka.co.ke/old.webp'] })).photos).toEqual([
+      { src: 'https://media.broka.co.ke/old.webp', thumb: 'https://media.broka.co.ke/old.webp' },
+    ])
+    expect(storeView(store()).photos).toEqual([])
+  })
+
   it('has no cover or logo to show when the store has none', () => {
     const view = storeView(store())
     expect(view.cover).toBeNull()

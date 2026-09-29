@@ -399,6 +399,13 @@ class TestStorePayload:
         assert owner["member_since"]
         assert "id" not in owner and "phone" not in owner
 
+        # Who runs the store: the store page's "Store details" names them.
+        async with AsyncSessionLocal() as db:
+            expected_name = (await db.get(User, user_id)).name
+        assert owner["name"] == expected_name
+        public = (await client.get(f"/stores/{store['id']}")).json()
+        assert public["owner"] == owner
+
         directory = (await client.get("/stores", params={"limit": 100})).json()
         listed = next(s for s in directory if s["id"] == store["id"])
         assert listed["owner"] == owner

@@ -13,6 +13,8 @@ export interface ImageSizes {
 }
 
 export interface StoreOwner {
+  /** Who runs the store. Absent from API versions before "Store details". */
+  name?: string | null
   verified: boolean
   rating: number | null
   completed_deals: number
@@ -41,6 +43,7 @@ export interface Store {
   owner: StoreOwner | null
   is_active: boolean
   listing_count: number
+  created_at?: string | null
 }
 
 export interface StoreCategory {

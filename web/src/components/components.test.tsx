@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { ProductCardData } from '@/lib/catalogue'
+import { storeView } from '@/lib/storefront'
+import type { ImageSizes, Store } from '@/lib/types'
 
 import { AppButton } from './AppButton'
 import { CategoryPills } from './CategoryPills'
@@ -9,6 +11,8 @@ import { OpenInApp } from './OpenInApp'
 import { ProductCard } from './ProductCard'
 import { ProductGrid } from './ProductGrid'
 import { ShareButtons } from './ShareButtons'
+import { StoreDetails } from './StoreDetails'
+import { StoreHero } from './StoreHero'
 import { TrustChips } from './TrustChips'
 import { VisitBeacon } from './VisitBeacon'
 
@@ -31,6 +35,98 @@ const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; SM-A145F) AppleWebKit/537.36
 function setUserAgent(ua: string) {
   vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua)
 }
+
+const sizes = (id: string): ImageSizes => ({
+  id,
+  thumb: `https://media.broka.co.ke/img/${id}/thumb.webp`,
+  medium: `https://media.broka.co.ke/img/${id}/medium.webp`,
+  large: `https://media.broka.co.ke/img/${id}/large.webp`,
+})
+
+const shop = (over: Partial<Store> = {}): Store => ({
+  id: 's1',
+  name: 'Clanix',
+  slug: 'clanix',
+  url: 'https://broka.co.ke/store/clanix',
+  category: 'Electronics',
+  description: 'Genuine phones and accessories.',
+  country: 'Kenya',
+  county: 'Nairobi',
+  subcounty: 'Starehe',
+  location_description: 'Moi Avenue, Bazaar Plaza',
+  business_email: 'sales@clanix.co.ke',
+  business_email_verified: true,
+  logo: null,
+  cover: sizes('c1'),
+  photo_images: [sizes('p1')],
+  logo_url: null,
+  photos: [],
+  owner: { name: 'Jane Wanjiru', verified: true, rating: 4.84, completed_deals: 12, member_since: '2025-01-10T00:00:00' },
+  is_active: true,
+  listing_count: 3,
+  created_at: '2026-09-02T08:00:00',
+  ...over,
+})
+
+describe('StoreHero', () => {
+  it('has no cover photo behind the name, and points at Store details', () => {
+    render(<StoreHero view={storeView(shop())} />)
+    expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
+    expect(screen.getByText('Electronics · Moi Avenue, Bazaar Plaza, Starehe, Nairobi')).toBeTruthy()
+    expect(screen.queryAllByRole('img')).toEqual([])
+    expect(screen.getByText('ⓘ Store details').getAttribute('href')).toBe('#store-details')
+    // What the store says about itself is under Store details now.
+    expect(screen.queryByText('Genuine phones and accessories.')).toBeNull()
+  })
+})
+
+describe('StoreDetails', () => {
+  it('shows the photos, the owner, where the shop is and how to reach it', () => {
+    render(<StoreDetails view={storeView(shop())} />)
+    const photos = screen.getAllByRole('img')
+    expect(photos.map((i) => i.getAttribute('src'))).toEqual([
+      'https://media.broka.co.ke/img/c1/medium.webp',
+      'https://media.broka.co.ke/img/p1/medium.webp',
+    ])
+    expect(screen.getByText('Genuine phones and accessories.')).toBeTruthy()
+    expect(screen.getByText('Jane Wanjiru')).toBeTruthy()
+    expect(screen.getByText('✓ Verified seller')).toBeTruthy()
+    expect(screen.getByText('On BROKA since January 2025')).toBeTruthy()
+    expect(screen.getByText('4.8')).toBeTruthy()
+    expect(screen.getByText('📍 Starehe, Nairobi')).toBeTruthy()
+    expect(screen.getByText('Moi Avenue, Bazaar Plaza')).toBeTruthy()
+    expect(screen.getByText('Find it on the map').getAttribute('href')).toBe(
+      'https://www.google.com/maps/search/?api=1&query=Moi%20Avenue%2C%20Bazaar%20Plaza%2C%20Starehe%2C%20Nairobi%2C%20Kenya',
+    )
+    expect(screen.getByText('sales@clanix.co.ke').getAttribute('href')).toBe('mailto:sales@clanix.co.ke')
+    expect(screen.getByText('September 2026')).toBeTruthy()
+    expect(screen.getByText('3 products on sale')).toBeTruthy()
+    expect(screen.getByText('Open')).toBeTruthy()
+  })
+
+  it('never shows an unverified email, a rating without deals, or photos it does not have', () => {
+    render(
+      <StoreDetails
+        view={storeView(
+          shop({
+            cover: null,
+            photo_images: [],
+            business_email_verified: false,
+            is_active: false,
+            owner: { verified: false, rating: 5, completed_deals: 0, member_since: null },
+          }),
+        )}
+      />,
+    )
+    expect(screen.queryAllByRole('img')).toEqual([])
+    expect(screen.queryByText('sales@clanix.co.ke')).toBeNull()
+    expect(screen.getByText('New')).toBeTruthy()
+    expect(screen.getByText('Not verified yet')).toBeTruthy()
+    // An API from before the owner's name was sent.
+    expect(screen.getByText('The owner of Clanix')).toBeTruthy()
+    expect(screen.getByText('Taking a break')).toBeTruthy()
+  })
+})
 
 describe('TrustChips', () => {
   it('shows a rating only when there are deals behind it', () => {

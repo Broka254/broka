@@ -341,6 +341,34 @@ The original Phase 3 plan follows.
 - The old HTML page served by FastAPI at `/store/{name}` redirects to the
   web URL.
 
+### Store pages reorganised (2026-09-29)
+
+After phase 3, from the owner's feedback that the store screens were
+disorganised:
+- **No cover photo behind the store's name**, in the app, on the web or on
+  My Store's header: it fought with the text and pushed products below
+  the fold. The header is the logo, name, category and place, and the
+  owner's record.
+- **"Store details"**: the app's store home has a pinned
+  Products | Store details switch; the web page has the section beside the
+  catalogue on wide screens and under it on phones (the hero links to it).
+  It holds the shop's photos (cover first), the description, the owner
+  (their name - now in the store payload's `owner.name`, still no id or
+  phone - verified, member since, deals, rating), the location with the
+  landmark and a map link, the verified business email, how to ask about a
+  product, the store's basics (category, link, products, opened, status)
+  and how paying through BROKA protects the buyer.
+- **My Store**: a compact header (logo, name, open/paused, products live,
+  link), the Seller Dashboard's pill tabs, the Overview in the order an
+  owner acts on it (status, what needs them, setup, the week in numbers,
+  quick actions, the link, visits), Settings grouped, and a real error
+  card when products can't load.
+- **Seller Dashboard and My Store link to each other**: the dashboard's
+  Overview shows the store card (the Menu's), and a store button in its
+  header opens My Store (or the introduction, without a store); My Store
+  has a Seller Dashboard button in its bar and a card at the foot of the
+  Overview and Settings.
+
 ### Phase 4 — Stock, cart, checkout, orders
 
 **Backend**
