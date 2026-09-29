@@ -808,6 +808,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_list_screen.dart` — BROKA — Store discovery (spec §12/§21, Phase 4) 1-column list, modeled directly on trader_list_screen.dart - same reasoning applies: Produc…
 - `presentation/store_media_image.dart` — BROKA — Store media image (Phase 6 hardening)
 - `presentation/widgets/menu_store_section.dart` — The Menu's "Online store" section.
+- `presentation/widgets/store_details_view.dart` — "Store details" - its own screen, opened from "More details" under the store's name or the info button in its bar.
 - `presentation/widgets/store_share_card.dart` — The store's link, its QR code and one-tap sharing - on the "your store is live" screen and at the top of My Store.
 
 ### `flutter_app/lib/features/traders/`
@@ -979,6 +980,7 @@ Routes under `web/src/app/` (`:name` is a dynamic segment):
 | `/api/stores/:id/visit` | route | A store visit from the web storefront, passed on to the API with the visitor's own user agent (the API skips crawlers). |
 | `/og/:file` | route | Link-preview images: https://broka.co.ke/og/<image id>.jpg |
 | `/` | page |  |
+| `/store/:name/about` | page | A store's details on the web: https://broka.co.ke/store/<name>/about. |
 | `/store/:name/p/:listingId` | page | One product in a store: https://broka.co.ke/store/<name>/p/<id>. |
 | `/store/:name` | page | A store's home on the web: https://broka.co.ke/store/<name>. |
 
@@ -1008,7 +1010,8 @@ Modules:
 - `web/src/components/ShareButtons.tsx` — Sharing a store or product from the web: WhatsApp (how most people here share), and the system share sheet or a copied link.
 - `web/src/components/SiteFooter.tsx`
 - `web/src/components/SiteHeader.tsx`
-- `web/src/components/StoreHero.tsx`
+- `web/src/components/StoreDetails.tsx` — "Store details": everything a visitor arriving from a shared link needs to know about a store before buying from it - which store it is, wh…
+- `web/src/components/StoreHero.tsx` — Who the store is, at a glance: logo, name (with a tick for a verified seller), what and where, "More details", and sharing.
 - `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, since.
 - `web/src/components/VisitBeacon.tsx` — Counts this page view as a store visit, for the owner's stats, from the visitor's own browser (so crawlers that don't run scripts aren't co…
 
