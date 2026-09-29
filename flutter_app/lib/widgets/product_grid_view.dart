@@ -219,19 +219,22 @@ class _ProductGridViewState extends State<ProductGridView> {
   /// Height ProductCard's text panel needs below the photo, at a text scale
   /// of 1.
   ///
-  /// Measured against the card rather than guessed (polish pass, 2026-09-18):
-  /// 18px of panel padding, a 20px seller row, a title allowed to run to two
-  /// lines (~33), the price (~20), the location/freshness row (~15), the 30px
-  /// CTA, and the four gaps between them. Two lines of title are reserved
-  /// whether or not a given listing needs them, which is deliberate: the photo
-  /// sits in an Expanded, so a one-line title spends the difference on a
-  /// bigger image instead of leaving a hole.
-  static const double _cardTextBlock = 156;
+  /// Measured against the card rather than guessed (re-measured in the
+  /// 2026-09-29 visual upgrade): 19px of panel padding, a title allowed to
+  /// run to two lines (~33), the price row with its 28px arrow, the
+  /// location/freshness row (~12), the hairline and the 20px seller row, and
+  /// the gaps between them. Two lines of title are reserved whether or not a
+  /// given listing needs them, which is deliberate: the photo sits in an
+  /// Expanded, so a one-line title spends the difference on a bigger image
+  /// instead of leaving a hole.
+  static const double _cardTextBlock = 138;
 
   /// How much of the card's width the photo gets as height. Slightly wider
   /// than tall, which is the shape most listing photos are actually taken in,
-  /// so BoxFit.cover crops the least.
-  static const double _cardImageShare = 0.75;
+  /// so BoxFit.cover crops the least. 0.75 until 2026-09-29; the 18px the
+  /// card's panel gave up went to the photo, so a tile is about as tall as
+  /// it was and a screen holds as many.
+  static const double _cardImageShare = 0.85;
 
   // Two columns on every device (brief §4/§6: keep the existing two-column
   // marketplace layout). The RATIO, though, is computed from the real card

@@ -338,9 +338,11 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
       await _settle(tester);
 
+      // The card sets its price as one Text.rich since 2026-09-29 (currency
+      // small, amount large), so read the plain text, not just `data`.
       final prices = tester
           .widgetList<Text>(find.byType(Text))
-          .map((t) => t.data)
+          .map((t) => t.data ?? t.textSpan?.toPlainText())
           .whereType<String>()
           .where((t) => t.startsWith('KES '))
           .toList();

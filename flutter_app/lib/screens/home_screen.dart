@@ -1453,8 +1453,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Row(children: [
           Text('🔥 ', style: TextStyle(fontSize: _narrow(context) ? 14 : 15)),
           // Flexible, or the ellipsis below can never engage: a bare Text in
-          // a Row overflowed on a 320dp phone at a large text size.
+          // a Row overflowed on a 320dp phone at a large text size. flex 4
+          // against the rule's 1, so the rule never squeezes the heading
+          // into an ellipsis - at a 1.35 text scale it needs up to ~60% of
+          // the row (on a 320dp phone).
           Flexible(
+            flex: 4,
             child: Text('Fresh on Broka',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1466,6 +1470,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     height: 1.1,
                     letterSpacing: -0.2,
                     fontWeight: FontWeight.w800)),
+          ),
+          // A rule fading out to the right (2026-09-29 visual upgrade): the
+          // feed starts here, and the rail and Zeno above it are not part of
+          // it. A hairline, not a card edge or a background band.
+          const SizedBox(width: 10),
+          Expanded(
+            child: Container(
+              height: 1,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [
+                  BrokaColors.gold.withOpacity(0.55),
+                  BrokaColors.neonBlue.withOpacity(0.18),
+                  Colors.transparent,
+                ], stops: const [0.0, 0.45, 1.0]),
+              ),
+            ),
           ),
         ]),
       );

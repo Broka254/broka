@@ -33,6 +33,7 @@ import '../utils/price_format.dart';
 import '../utils/price_unit.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../models/listing_photo.dart';
+import '../theme/motion.dart';
 import 'broka_image.dart';
 
 class ProductCard extends StatelessWidget {
@@ -452,7 +453,8 @@ class ProductCard extends StatelessWidget {
         return CircleAvatar(radius: 10, backgroundImage: MemoryImage(base64Decode(photo)));
       } catch (_) {}
     }
-    final initial = (_sellerName?.isNotEmpty ?? false) ? _sellerName![0].toUpperCase() : '?';
+    final name = (_sellerName?.isNotEmpty ?? false) ? _sellerName : _storeName;
+    final initial = (name?.isNotEmpty ?? false) ? name![0].toUpperCase() : '?';
     return CircleAvatar(
       radius: 10,
       backgroundColor: BrokaColors.gold.withOpacity(0.3),
@@ -460,6 +462,49 @@ class ProductCard extends StatelessWidget {
     );
   }
 
+  /// A paid boost that is still running - the same test Home uses to pin a
+  /// listing to the top of its feed (HomeScreen._fetchListingsPage), so a
+  /// card is never badged without being pinned, or pinned without its badge.
+  /// A seller pays for "a glowing FEATURED badge" (boost_screen.dart); until
+  /// the 2026-09-29 pass no card drew one. featuredUntil is a DateTime on
+  /// the older Listing model and the backend's naive-UTC string on
+  /// BrokaListing.
+  bool get _isFeaturedNow {
+    try {
+      if (item.isFeatured != true) return false;
+      final raw = item.featuredUntil;
+      final until = raw is DateTime ? raw : parseBackendUtc(raw as String?);
+      return until != null && until.isAfter(DateTime.now().toUtc());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Color get _conditionTone {
+    switch (_condition) {
+      case 'new': return BrokaColors.neonGreen;
+      case 'refurbished': return BrokaColors.warning;
+      default: return BrokaColors.neonCyan;
+    }
+  }
+
+  // Violet lifted 30% toward white. The brand violet itself is ~3.7:1 on the
+  // card and read as dim at 17px; this is ~6:1 and still unmistakably Broka.
+  static const Color _priceTint = Color(0xFFAE8DF8);
+
+  // Visual upgrade (2026-09-29). The layout, top to bottom, and why:
+  //  * The photo gets the height the full-width "View Deal" bar used to
+  //    take. That bar, repeated on every card, was the loudest thing in the
+  //    grid - louder than the photos - and the whole card already opens the
+  //    deal. The CTA stays, as a round arrow beside the price.
+  //  * Then name, price, where and when; who is selling moves to a footer
+  //    under a hairline. The seller row used to sit above the product's own
+  //    name, so it was the first line a buyer read.
+  //  * A live boost gets its FEATURED badge and a brighter brand edge.
+  //  * The card sinks a little under a finger (_PressScale), so a tap is felt
+  //    before the next screen arrives.
+  // ProductGridView's _cardTextBlock is measured against this panel; change
+  // one, re-measure the other.
   @override
   Widget build(BuildContext context) {
     // Small-Android type scale (polish pass, 2026-09-18, brief §7/§8). A card
@@ -469,23 +514,26 @@ class ProductCard extends StatelessWidget {
     // sizes its tiles from the same number, so the two stay in agreement and
     // this costs no extra layout pass per card.
     final compact = MediaQuery.sizeOf(context).width < 360;
-    // Home-redesign brief round 3 (2026-08-18): "make it super attractive
-    // and futuristic" - a thin gradient edge (purple -> blue, matching the
-    // app's own brand gradient) instead of a flat single-color border,
-    // via a 1.2px padded outer gradient container wrapping the actual
-    // card body. Cheap (one extra Container, no shaders/blurs per card)
-    // so it doesn't reintroduce the "blur on every card" performance risk
-    // flagged in the original brief.
-    return GestureDetector(
+    final featured = _isFeaturedNow;
+    // Home-redesign brief round 3 (2026-08-18): a thin gradient edge instead
+    // of a flat border, via a 1.2px padded outer gradient container. Cheap
+    // (one extra Container, no shaders or blurs per card). The one shadow is
+    // on featured cards only - a few per page, not every card.
+    return _PressScale(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(1.2),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
           gradient: LinearGradient(
-            colors: [BrokaColors.gold.withOpacity(0.45), BrokaColors.neonBlue.withOpacity(0.35)],
+            colors: featured
+                ? BrokaColors.brandGradient
+                : [BrokaColors.gold.withOpacity(0.45), BrokaColors.neonBlue.withOpacity(0.35)],
             begin: Alignment.topLeft, end: Alignment.bottomRight,
           ),
+          boxShadow: featured
+              ? [BoxShadow(color: BrokaColors.gold.withOpacity(0.30), blurRadius: 14)]
+              : null,
         ),
         child: Container(
           decoration: BoxDecoration(
@@ -496,316 +544,405 @@ class ProductCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Shared-element transition into the product screen.
-                  //
-                  // The app had ZERO Hero widgets. Tapping a card cut to a
-                  // new screen and re-decoded the same photo from scratch,
-                  // so the one image the user was looking at visibly
-                  // disappeared and came back. Carrying it across is the
-                  // single clearest "this is a modern app" signal available,
-                  // and it costs one widget at each end.
-                  //
-                  // Tag is the listing id, so it is unique per card even
-                  // when the same product appears in two rails on one
-                  // screen — Flutter asserts on duplicate tags in a single
-                  // subtree, and "featured" plus "nearby" showing one
-                  // listing is a real case here.
-                  Hero(
-                    tag: 'listing-photo-$_heroId',
-                    // The card clips to a rounded rect and the detail view
-                    // does not, so without this the corners pop square for
-                    // the duration of the flight.
-                    flightShuttleBuilder: (_, anim, __, ___, ____) =>
-                        AnimatedBuilder(
-                      animation: anim,
-                      builder: (_, __) => ClipRRect(
-                        borderRadius: BorderRadius.circular(
-                            16 * (1 - anim.value)),
-                        child: _buildImage(),
-                      ),
-                    ),
-                    child: _buildImage(),
-                  ),
-                  // Home-redesign brief round 3 (2026-08-18): a faint
-                  // bottom-edge scrim - purely a depth/polish cue (helps
-                  // the badge/favorite icons above read as "layered" over
-                  // the photo rather than flat), not for text legibility
-                  // since no text sits over the image in this layout.
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                        colors: [Colors.transparent, Colors.transparent, Color(0x33000000)],
-                        stops: [0.0, 0.7, 1.0],
-                      ),
-                    ),
-                  ),
-                  // Home-redesign brief round 3 (2026-08-18): a soft
-                  // bottom scrim gives the image area more depth (a flat
-                  // photo edge-to-edge into the info panel read as plain)
-                  // and doubles as extra legibility contrast for the
-                  // condition badge above it - one static gradient, no
-                  // shader/blur cost per card.
-                  Positioned(
-                    left: 0, right: 0, bottom: 0, height: 40,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                          colors: [Colors.black.withOpacity(0.0), Colors.black.withOpacity(0.35)],
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Home-redesign brief §16: condition badge, top-left.
-                  // Falls back to nothing rather than a fabricated
-                  // condition when the listing genuinely has none set.
-                  if (_conditionLabel.isNotEmpty)
-                    Positioned(
-                      top: 8, left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.55),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(_conditionLabel, style: const TextStyle(
-                            color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                  // Plot size / quantity, top-right - the corner the
-                  // favourite button would use, which no caller wires yet
-                  // (see below); it gives way if one ever does.
-                  if (_factBadge != null && onWishlistTap == null)
-                    Positioned(
-                      top: 8, right: 8,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 120),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.62),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: BrokaColors.gold.withOpacity(0.55)),
-                          ),
-                          child: Text(_factBadge!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white, fontSize: 10,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                      ),
-                    ),
-                  // Home-redesign brief round 2 (2026-08-17): only render
-                  // the favorite button when a real callback is actually
-                  // wired in. Grepped this whole codebase - there is no
-                  // wishlist/favorites system anywhere (no model, no
-                  // endpoint, no repository), and none of this card's
-                  // current callers (Home's feed, search results,
-                  // ProductGridView) ever passed onWishlistTap - so this
-                  // heart bounced convincingly on tap and did nothing.
-                  // "A fake interaction is worse than no interaction":
-                  // omitting it entirely until a real wishlist exists is
-                  // more honest than a disabled-looking icon that still
-                  // invites a tap. The animation/State code stays as-is -
-                  // whoever wires a real wishlist later just needs to pass
-                  // onWishlistTap/isWishlisted and this reappears working.
-                  if (onWishlistTap != null)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: _FavoriteButton(isWishlisted: isWishlisted, onTap: onWishlistTap),
-                    ),
-                  // Showcase spec §18: subtle indicator, AI-generated
-                  // covers only - a gallery-uploaded cover never gets
-                  // this label, and this is never a "Verified" badge
-                  // (listing/seller verification stays fully independent
-                  // of this - see _showVerifiedBadge above, untouched).
-                  // Bottom-left: both top corners are already taken by
-                  // the condition badge and favorite button.
-                  if (_isAiShowcase)
-                    Positioned(
-                      bottom: 8, left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.55),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text('✨ AI Showcase', style: TextStyle(
-                            color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Trader identity row (brief §12/§18) - placed below the
-                  // image rather than overlaid on it, so it never covers
-                  // product photography (brief §15's explicit priority).
-                  if (_sellerName != null && _sellerName!.isNotEmpty) ...[
-                    Row(children: [
-                      _traderAvatar(),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(_sellerName!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11,
-                                height: 1.1, fontWeight: FontWeight.w600)),
-                      ),
-                      if (_showVerifiedBadge) ...[
-                        const SizedBox(width: 3),
-                        const Icon(Icons.verified, size: 11, color: Color(0xFF4DD6A5)),
-                      ],
-                      if (_sellerRating > 0 && _sellerCompletedDeals > 0) ...[
-                        const SizedBox(width: 3),
-                        const Icon(Icons.star_rounded, size: 11, color: BrokaColors.gold),
-                        Text(_sellerRating.toStringAsFixed(1),
-                            style: const TextStyle(color: BrokaColors.gold, fontSize: 10, fontWeight: FontWeight.w700)),
-                      ] else if (_sellerCompletedDeals == 0) ...[
-                        const SizedBox(width: 4),
-                        // Polish pass (2026-09-18, brief §6): secondary, not
-                        // invisible. This was BrokaColors.textLow (#2E3D5A) on
-                        // a #111D35 card - about 1.4:1 contrast, which is past
-                        // "de-emphasised" and into "cannot be read at all".
-                        // A dimmed white keeps it clearly subordinate to the
-                        // seller name beside it while staying legible.
-                        Text('New seller', style: TextStyle(
-                            color: Colors.white.withOpacity(0.40), fontSize: 9.5,
-                            height: 1.1, fontStyle: FontStyle.italic)),
-                      ],
-                    ]),
-                    const SizedBox(height: 5),
-                  ],
-                  if (_storeName != null && _storeName!.isNotEmpty) ...[
-                    GestureDetector(
-                      onTap: (_storeId != null && _storeSlug != null && onViewStore != null)
-                          ? () => onViewStore!(_storeId!, _storeSlug!)
-                          : null,
-                      child: Row(children: [
-                        const Icon(Icons.storefront_rounded, size: 11, color: BrokaColors.gold),
-                        const SizedBox(width: 3),
-                        Flexible(
-                          child: Text(_storeName!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: BrokaColors.gold, fontSize: 10,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                        if (onViewStore != null) ...[
-                          const SizedBox(width: 2),
-                          const Icon(Icons.chevron_right, size: 12, color: BrokaColors.gold),
-                        ],
-                      ]),
-                    ),
-                    const SizedBox(height: 5),
-                  ],
-                  // Polish pass (2026-09-18, brief §6/§8): the product name is
-                  // the strongest text on the card after the price, and it now
-                  // gets two lines. One line ellipsised "Samsung Galaxy A54
-                  // 128GB Dual SIM" down to "Samsung Galaxy A5…", which is the
-                  // half of the title that says least. ProductGridView reserves
-                  // the second line in its tile height whether a listing needs
-                  // it or not, so allowing it here never costs the photo on a
-                  // card whose title is short.
-                  Text(
-                    _title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        height: 1.22,
-                        letterSpacing: -0.1,
-                        fontSize: compact ? 12.5 : 13.5),
-                  ),
-                  const SizedBox(height: 4),
-                  // Home-redesign brief round 3 (2026-08-18): bumped size
-                  // and added a soft glow so price reads as the clear
-                  // first stop for the eye, ahead of the CTA below it -
-                  // previously both price and button used the same gold
-                  // color/weight and visually competed.
-                  // Home collapsing-scroll pass (2026-09-18, brief §5/§14):
-                  // prices are full digit-grouped amounts now ("KES 125,000",
-                  // not "KES 125K"), so the string can be roughly twice as
-                  // wide as before on an expensive listing. FittedBox scales
-                  // it down to fit the card instead of ellipsizing it - a
-                  // truncated price ("KES 1,500,0…") would be worse than a
-                  // smaller one, and a wrapped one would push the CTA out of
-                  // the card. Cheap prices are unaffected: scaleDown only
-                  // ever shrinks, never enlarges, so KES 250 still renders at
-                  // the full 16px.
-                  SizedBox(
-                    width: double.infinity,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        _priceText,
-                        maxLines: 1,
-                        softWrap: false,
-                        style: TextStyle(
-                          color: BrokaColors.gold,
-                          fontWeight: FontWeight.w800,
-                          height: 1.1,
-                          letterSpacing: -0.2,
-                          fontSize: compact ? 16 : 17.5,
-                          // Softer than the previous 0.5/10 glow. At full
-                          // strength the halo bled into the location row
-                          // underneath and made the whole panel look hazy;
-                          // the price still reads first because of size and
-                          // weight, which is a steadier way to win than bloom.
-                          shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.32), blurRadius: 8)],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  // Metadata line: kept, but deliberately the quietest thing
-                  // in the panel (brief §6/§8). Name and price are what a
-                  // buyer scans a grid for; where and when are what they check
-                  // once something has already caught their eye.
-                  Row(children: [
-                    Icon(Icons.location_on_outlined,
-                        size: 11, color: Colors.white.withOpacity(0.42)),
-                    const SizedBox(width: 3),
-                    Expanded(
-                      child: Text(
-                        _locationText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            color: Colors.white.withOpacity(0.48),
-                            height: 1.15,
-                            fontSize: compact ? 10 : 10.5),
-                      ),
-                    ),
-                    if (_freshnessText != null) ...[
-                      const SizedBox(width: 5),
-                      Text(_freshnessText!,
-                          style: TextStyle(
-                              color: Colors.white.withOpacity(0.34),
-                              height: 1.15,
-                              fontSize: compact ? 9.5 : 10)),
-                    ],
-                  ]),
-                  const SizedBox(height: 8),
-                  // Home-redesign brief §13/§14: single primary CTA. No
-                  // separate "Offer" action here - negotiation happens
-                  // inside the deal/listing detail screen this navigates
-                  // to, same destination the rest of the card already
-                  // taps through to.
-                  _ViewDealButton(onTap: onTap),
-                ],
-              ),
-            ),
-          ],
+              Expanded(child: _buildPhoto(featured)),
+              _buildInfo(compact),
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _buildPhoto(bool featured) {
+    final fact = onWishlistTap == null ? _factBadge : null;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Shared-element transition into the product screen.
+        //
+        // The app had ZERO Hero widgets. Tapping a card cut to a new screen
+        // and re-decoded the same photo from scratch, so the one image the
+        // user was looking at visibly disappeared and came back. Carrying it
+        // across is the single clearest "this is a modern app" signal
+        // available, and it costs one widget at each end.
+        //
+        // Tag is the listing id, so it is unique per card even when the same
+        // product appears in two rails on one screen — Flutter asserts on
+        // duplicate tags in a single subtree, and "featured" plus "nearby"
+        // showing one listing is a real case here.
+        Hero(
+          tag: 'listing-photo-$_heroId',
+          // The card clips to a rounded rect and the detail view does not,
+          // so without this the corners pop square for the duration of the
+          // flight.
+          flightShuttleBuilder: (_, anim, __, ___, ____) => AnimatedBuilder(
+            animation: anim,
+            builder: (_, __) => ClipRRect(
+              borderRadius: BorderRadius.circular(16 * (1 - anim.value)),
+              child: _buildImage(),
+            ),
+          ),
+          child: _buildImage(),
+        ),
+        // One scrim over the lower half: depth where the photo meets the
+        // panel, and contrast for the chip that can sit there. (There were
+        // two stacked scrims doing the same job.) One static gradient, no
+        // shader or blur per card.
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter, end: Alignment.bottomCenter,
+              colors: [Color(0x00000000), Color(0x00000000), Color(0x66000000)],
+              stops: [0.0, 0.55, 1.0],
+            ),
+          ),
+        ),
+        // Listing facts, top-left and stacked: the FEATURED badge, the
+        // condition (Home-redesign brief §16 - nothing when the listing has
+        // none, never a guessed one), and on a featured listing the plot
+        // size or quantity too. Side by side, FEATURED and a fact badge
+        // don't both fit a 320dp card, and one of them would be cut.
+        Positioned(
+          top: 8, left: 8,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final chip in [
+                if (featured) const _FeaturedBadge(),
+                if (_conditionLabel.isNotEmpty)
+                  _PhotoChip(label: _conditionLabel, dot: _conditionTone),
+                if (featured && fact != null) _factChip(fact),
+              ])
+                Padding(padding: const EdgeInsets.only(bottom: 4), child: chip),
+            ],
+          ),
+        ),
+        // Plot size / quantity, top-right - the corner the favourite button
+        // would use, which no caller wires yet (see below); it gives way if
+        // one ever does.
+        if (!featured && fact != null)
+          Positioned(top: 8, right: 8, child: _factChip(fact)),
+        // Home-redesign brief round 2 (2026-08-17): only render the favorite
+        // button when a real callback is actually wired in. There is no
+        // wishlist/favorites system anywhere (no model, no endpoint, no
+        // repository), and none of this card's callers pass onWishlistTap -
+        // so this heart used to bounce convincingly on tap and do nothing.
+        // Whoever wires a real wishlist later just needs to pass
+        // onWishlistTap/isWishlisted and this reappears working.
+        if (onWishlistTap != null)
+          Positioned(
+            top: 8,
+            right: 8,
+            child: _FavoriteButton(isWishlisted: isWishlisted, onTap: onWishlistTap),
+          ),
+        // Showcase spec §18: subtle indicator, AI-generated covers only - a
+        // gallery-uploaded cover never gets this label, and this is never a
+        // "Verified" badge (listing/seller verification stays fully
+        // independent of this - see _showVerifiedBadge above).
+        if (_isAiShowcase)
+          const Positioned(
+            bottom: 8, left: 8,
+            child: _PhotoChip(label: '✨ AI Showcase'),
+          ),
+      ],
+    );
+  }
+
+  Widget _factChip(String fact) => ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 120),
+        child: _PhotoChip(label: fact, edge: BrokaColors.gold),
+      );
+
+  Widget _buildInfo(bool compact) {
+    final hasSeller = _sellerName != null && _sellerName!.isNotEmpty;
+    final hasStore = _storeName != null && _storeName!.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Polish pass (2026-09-18, brief §6/§8): the product name gets two
+          // lines. One line ellipsised "Samsung Galaxy A54 128GB Dual SIM"
+          // down to "Samsung Galaxy A5…", the half of the title that says
+          // least. ProductGridView reserves the second line whether a listing
+          // needs it or not; a short title gives the difference to the photo.
+          Text(
+            _title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                height: 1.22,
+                letterSpacing: -0.1,
+                fontSize: compact ? 12.5 : 13.5),
+          ),
+          const SizedBox(height: 5),
+          Row(children: [
+            // Collapsing-scroll pass (2026-09-18, brief §5/§14): prices are
+            // full digit-grouped amounts ("KES 1,450,000", never "1.45M"), so
+            // FittedBox scales a long one down instead of ellipsizing it - a
+            // truncated price would be worse than a smaller one. scaleDown
+            // never enlarges, so a short price renders at full size.
+            Expanded(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: _priceLabel(compact),
+              ),
+            ),
+            const SizedBox(width: 6),
+            // Home-redesign brief §13/§14: one primary CTA. No separate
+            // "Offer" action - negotiation happens inside the deal screen
+            // this opens, the same place the rest of the card taps through to.
+            _ViewDealButton(onTap: onTap, size: compact ? 26 : 28),
+          ]),
+          const SizedBox(height: 4),
+          // Metadata line: deliberately the quietest thing in the panel
+          // (brief §6/§8). Name and price are what a buyer scans a grid for;
+          // where and when are what they check once something has caught
+          // their eye.
+          Row(children: [
+            Icon(Icons.location_on_outlined,
+                size: 11, color: Colors.white.withOpacity(0.42)),
+            const SizedBox(width: 3),
+            Expanded(
+              child: Text(
+                _locationText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.48),
+                    height: 1.15,
+                    fontSize: compact ? 10 : 10.5),
+              ),
+            ),
+            if (_freshnessText != null) ...[
+              const SizedBox(width: 5),
+              Text(_freshnessText!,
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.34),
+                      height: 1.15,
+                      fontSize: compact ? 9.5 : 10)),
+            ],
+          ]),
+          if (hasSeller || hasStore) ...[
+            const SizedBox(height: 8),
+            Container(height: 1, color: Colors.white.withOpacity(0.06)),
+            const SizedBox(height: 7),
+            _identityRow(hasStore),
+          ],
+        ],
       ),
+    );
+  }
+
+  /// "KES 38,500" with the currency set small and the amount large, and a
+  /// per-unit price's " / bag" set small and quiet after it. One Text.rich,
+  /// so its plain text is still exactly _priceText.
+  Widget _priceLabel(bool compact) {
+    final size = compact ? 16.0 : 17.5;
+    final base = _basePriceText;
+    final full = _priceText;
+    final amount = TextStyle(
+      color: _priceTint,
+      fontWeight: FontWeight.w800,
+      height: 1.1,
+      letterSpacing: -0.2,
+      fontSize: size,
+      // Soft on purpose: at 0.5/10 the halo bled into the location row
+      // underneath. Size and weight are what make the price read first.
+      shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.32), blurRadius: 8)],
+    );
+    if (!base.startsWith('KES ')) {
+      return Text(full, maxLines: 1, softWrap: false, style: amount);
+    }
+    final small = TextStyle(fontSize: size * 0.62, letterSpacing: 0.3);
+    return Text.rich(
+      TextSpan(style: amount, children: [
+        TextSpan(
+            text: 'KES ',
+            style: small.copyWith(
+                color: _priceTint.withOpacity(0.72), fontWeight: FontWeight.w700)),
+        TextSpan(text: base.substring(4)),
+        // "KES 3,500 / bag" (2026-09-25): a per-bag price shown bare read
+        // as the price of the whole lot.
+        if (full.length > base.length)
+          TextSpan(
+              text: full.substring(base.length),
+              style: small.copyWith(
+                  color: Colors.white.withOpacity(0.55),
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0)),
+      ]),
+      maxLines: 1,
+      softWrap: false,
+    );
+  }
+
+  // Trader identity (brief §12/§18) - below the image rather than over it,
+  // so it never covers product photography (brief §15's explicit priority).
+  // One row whether or not the listing is in a store: a store listing names
+  // the store where the seller's name would be, beside the seller's own face
+  // and record. As a second row it made a store listing's photo shorter than
+  // the one next to it, so the photos in a grid row stopped lining up.
+  Widget _identityRow(bool hasStore) => Row(children: [
+        _traderAvatar(),
+        const SizedBox(width: 6),
+        Expanded(
+          child: hasStore
+              ? _storeLink()
+              : Text(_sellerName!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 11,
+                      height: 1.1, fontWeight: FontWeight.w600)),
+        ),
+        if (_showVerifiedBadge) ...[
+          const SizedBox(width: 3),
+          const Icon(Icons.verified, size: 11, color: Color(0xFF4DD6A5)),
+        ],
+        if (_sellerRating > 0 && _sellerCompletedDeals > 0) ...[
+          const SizedBox(width: 3),
+          const Icon(Icons.star_rounded, size: 11, color: BrokaColors.gold),
+          Text(_sellerRating.toStringAsFixed(1),
+              style: const TextStyle(color: _priceTint, fontSize: 10, fontWeight: FontWeight.w700)),
+        ] else if (_sellerCompletedDeals == 0 && !hasStore) ...[
+          // Not on a store's row: beside the store's name it cut the name to
+          // "Kicks K…", and the name is what a buyer can act on. Store
+          // details show the owner's record (0 deals, rating "New").
+          const SizedBox(width: 4),
+          // Polish pass (2026-09-18, brief §6): secondary, not invisible.
+          // BrokaColors.textLow on the card was ~1.4:1, past "de-emphasised"
+          // and into "cannot be read at all".
+          Text('New seller', style: TextStyle(
+              color: Colors.white.withOpacity(0.40), fontSize: 9.5,
+              height: 1.1, fontStyle: FontStyle.italic)),
+        ],
+      ]);
+
+  // Store feature (spec §13): a tap target only when the caller can open
+  // the store.
+  Widget _storeLink() {
+    final canOpen = _storeId != null && _storeSlug != null && onViewStore != null;
+    return GestureDetector(
+      onTap: canOpen ? () => onViewStore!(_storeId!, _storeSlug!) : null,
+      behavior: HitTestBehavior.opaque,
+      child: Row(children: [
+        const Icon(Icons.storefront_rounded, size: 11, color: _priceTint),
+        const SizedBox(width: 3),
+        Flexible(
+          child: Text(_storeName!, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _priceTint, fontSize: 10.5,
+                  height: 1.1, fontWeight: FontWeight.w700)),
+        ),
+        if (canOpen) const Icon(Icons.chevron_right, size: 12, color: _priceTint),
+      ]),
+    );
+  }
+}
+
+/// Sinks the card to 97% while a finger is on it. A tap that is recognised
+/// only when the next screen appears feels dropped; this answers at once.
+/// Nothing moves under reduced motion. Taps that land on something inside
+/// the card with its own handler (the store row, the arrow) are theirs: the
+/// innermost recogniser wins the arena, and this one just springs back.
+class _PressScale extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  const _PressScale({required this.child, this.onTap});
+
+  @override
+  State<_PressScale> createState() => _PressScaleState();
+}
+
+class _PressScaleState extends State<_PressScale> {
+  bool _down = false;
+
+  void _press(bool down) {
+    if (_down != down) setState(() => _down = down);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tappable = widget.onTap != null;
+    return GestureDetector(
+      onTap: widget.onTap,
+      onTapDown: tappable ? (_) => _press(true) : null,
+      onTapUp: tappable ? (_) => _press(false) : null,
+      onTapCancel: tappable ? () => _press(false) : null,
+      child: AnimatedScale(
+        scale: _down && !BrokaMotion.reduced(context) ? 0.97 : 1.0,
+        duration: BrokaMotion.instant,
+        curve: Curves.easeOut,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// A small dark chip over the photo. [dot] is a coloured status light
+/// before the label; [edge] a coloured hairline around it.
+class _PhotoChip extends StatelessWidget {
+  final String label;
+  final Color? dot;
+  final Color? edge;
+  const _PhotoChip({required this.label, this.dot, this.edge});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.58),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            width: 0.8,
+            color: edge?.withOpacity(0.6) ?? Colors.white.withOpacity(0.12)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (dot != null) ...[
+          Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 4),
+        ],
+        Flexible(
+          child: Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 10, height: 1.1,
+                  fontWeight: FontWeight.w700)),
+        ),
+      ]),
+    );
+  }
+}
+
+/// The badge a boost buys: the same gradient, rocket and lettering as the
+/// one boost_screen.dart shows the seller when they pay for it.
+class _FeaturedBadge extends StatelessWidget {
+  const _FeaturedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(6, 3, 7, 3),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.55), blurRadius: 8)],
+      ),
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.rocket_launch_rounded, size: 10, color: Colors.white),
+        SizedBox(width: 3),
+        Text('FEATURED',
+            style: TextStyle(
+                color: Colors.white, fontSize: 9, height: 1.1,
+                fontWeight: FontWeight.w900, letterSpacing: 0.6)),
+      ]),
     );
   }
 }
@@ -865,66 +1002,41 @@ class _FavoriteButtonState extends State<_FavoriteButton> with SingleTickerProvi
   }
 }
 
-// Home-redesign brief §14/§24: full-width, rounded, subtle glow, scale
-// feedback on press. Uses Material/InkWell for the press ripple rather
-// than a custom AnimationController - standard, cheap, and already gives
-// the "scale/press feedback" the brief asks for without adding another
-// animation to maintain.
-// Home-redesign brief §14/§24, redesigned round 3 (2026-08-18): a solid
-// gradient fill (borrowing main.dart's GoldButton visual language -
-// [gold, goldDim] + a glow shadow - scaled down for a compact grid card)
-// instead of an outline-only button in the same gold tone as the price
-// text above it. A filled CTA reads as clearly more "clickable" than a
-// bordered one, and no longer visually competes with the price for the
-// same color weight (Meta AI review, point 5: "price and CTA compete
-// visually... make CTA stand out"). Uses Material/InkWell for the press
-// ripple rather than a custom AnimationController - cheap, standard, and
-// already gives press feedback without another animation to maintain.
+// Home-redesign brief §14/§24: the card's one CTA. A filled violet gradient
+// with a glow (main.dart's GoldButton language), so it reads as the thing to
+// press - round beside the price since 2026-09-29, where it used to be a
+// full-width bar under everything (see ProductCard.build). Material/InkWell
+// for the press ripple rather than another AnimationController.
 class _ViewDealButton extends StatelessWidget {
   final VoidCallback? onTap;
-  const _ViewDealButton({this.onTap});
+  final double size;
+  const _ViewDealButton({this.onTap, required this.size});
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      // 32 -> 30 (polish pass, brief §6). Two pixels back to the photo on
-      // every card; the CTA is still a comfortable target, and the entire
-      // card behind it already navigates to the same place.
-      height: 30,
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(9),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(9),
-            gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.goldDim]),
-            boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.35), blurRadius: 10)],
-          ),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(9),
-            splashColor: Colors.white.withOpacity(0.2),
-            // FittedBox (collapsing-scroll pass, 2026-09-18, brief §27/§28):
-            // "View Deal →" needs ~123px and a card column on a 320dp phone
-            // is 119.6px wide, so this Row overflowed by 3.2px on every card
-            // on a small Android screen. Scaling down is the right answer
-            // rather than shortening the label or ellipsizing a 9-character
-            // CTA; on every wider screen scaleDown is a no-op and the button
-            // renders exactly as before.
-            child: const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 6),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Text('View Deal', style: TextStyle(
-                        color: BrokaColors.bg, fontWeight: FontWeight.w800, fontSize: 11.5)),
-                    SizedBox(width: 4),
-                    Icon(Icons.arrow_forward_rounded, size: 13, color: BrokaColors.bg),
-                  ]),
-                ),
+    return Semantics(
+      button: true,
+      label: 'View deal',
+      child: SizedBox.square(
+        dimension: size,
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          child: Ink(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [BrokaColors.gold, BrokaColors.goldDim],
+                begin: Alignment.topLeft, end: Alignment.bottomRight,
               ),
+              boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.40), blurRadius: 10)],
+            ),
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              splashColor: Colors.white.withOpacity(0.2),
+              child: Icon(Icons.arrow_forward_rounded,
+                  size: size * 0.55, color: Colors.white),
             ),
           ),
         ),
@@ -933,8 +1045,10 @@ class _ViewDealButton extends StatelessWidget {
   }
 }
 
-// Home-redesign brief §28: "premium skeleton with a subtle shimmer" -
-// this previously was a flat static gradient box with no shimmer at all.
+// Home-redesign brief §28: "premium skeleton with a subtle shimmer". Since
+// 2026-09-29 it is the card's own outline - photo, two title lines, price
+// and arrow, where/when, seller - so the feed arriving swaps each shape for
+// its content instead of swapping a blank tile for a card.
 class ProductCardSkeleton extends StatefulWidget {
   const ProductCardSkeleton({super.key});
 
@@ -955,15 +1069,18 @@ class _ProductCardSkeletonState extends State<ProductCardSkeleton> with SingleTi
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        decoration: BoxDecoration(gradient: BrokaColors.cardGradient, borderRadius: BorderRadius.circular(16)),
+      borderRadius: BorderRadius.circular(18),
+      child: DecoratedBox(
+        decoration: const BoxDecoration(gradient: BrokaColors.cardGradient),
         child: AnimatedBuilder(
           animation: _ctrl,
+          // Built once; only the shimmer's shader changes per frame.
+          child: const _SkeletonOutline(),
           builder: (context, child) {
             // Sweeps a soft highlight band left-to-right, looping - kept
             // deliberately faint (12% peak opacity) per the brief's "the
-            // shimmer should be extremely subtle."
+            // shimmer should be extremely subtle." srcATop lights only the
+            // placeholder shapes, not the gaps between them.
             return ShaderMask(
               blendMode: BlendMode.srcATop,
               shaderCallback: (bounds) => LinearGradient(
@@ -977,12 +1094,67 @@ class _ProductCardSkeletonState extends State<ProductCardSkeleton> with SingleTi
                 stops: const [0.35, 0.5, 0.65],
                 transform: _SlideGradient(_ctrl.value),
               ).createShader(bounds),
-              child: Container(color: BrokaColors.bgCard.withOpacity(0.4)),
+              child: child,
             );
           },
         ),
       ),
     );
+  }
+}
+
+class _SkeletonOutline extends StatelessWidget {
+  const _SkeletonOutline();
+
+  static Widget _bar(double widthFactor, double height) => FractionallySizedBox(
+        widthFactor: widthFactor,
+        alignment: Alignment.centerLeft,
+        child: Container(
+          height: height,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.07),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+      );
+
+  static Widget _dot(double size) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.07), shape: BoxShape.circle),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    // The panel below adds up to the card's own (ProductGridView's
+    // _cardTextBlock), so the photo block lines up with the photo.
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: Container(color: Colors.white.withOpacity(0.045))),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(10, 11, 10, 10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _bar(0.92, 10),
+          const SizedBox(height: 6),
+          _bar(0.6, 10),
+          const SizedBox(height: 9),
+          Row(children: [
+            Expanded(child: _bar(0.62, 15)),
+            const SizedBox(width: 6),
+            _dot(28),
+          ]),
+          const SizedBox(height: 7),
+          _bar(0.72, 8),
+          const SizedBox(height: 10),
+          Container(height: 1, color: Colors.white.withOpacity(0.05)),
+          const SizedBox(height: 8),
+          Row(children: [
+            _dot(20),
+            const SizedBox(width: 6),
+            Expanded(child: _bar(0.55, 8)),
+          ]),
+        ]),
+      ),
+    ]);
   }
 }
 
