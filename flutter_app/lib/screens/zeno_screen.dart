@@ -1371,8 +1371,8 @@ class _ZenoScreenState extends State<ZenoScreen>
   }
 
   /// The listing being asked about, pinned under the header: what it is,
-  /// its price, and the two terms buyers ask about first - the same
-  /// wording as the listing's own screen.
+  /// its price, and the two terms buyers ask about first - the listing
+  /// screen's deal terms, shortened, in its colours.
   Widget _buildListingStrip(ZenoAboutListing l) {
     final fallback = Container(
       color: BrokaColors.bgMid,
@@ -1422,7 +1422,7 @@ class _ZenoScreenState extends State<ZenoScreen>
                     l.negotiable ? BrokaColors.neonGreen : BrokaColors.neonPink),
                 if (l.delivers != null) ...[
                   const SizedBox(width: 6),
-                  _term(l.delivers! ? 'Delivers' : 'Pickup', l.delivers! ? BrokaColors.neonBlue : BrokaColors.textMid),
+                  _term(l.delivers! ? 'Delivers' : 'Pickup', l.delivers! ? BrokaColors.neonBlue : BrokaColors.warning),
                 ],
               ]),
             ]),
