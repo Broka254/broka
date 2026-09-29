@@ -1005,12 +1005,13 @@ Modules:
 - `web/src/components/CategoryPills.tsx` — The store's categories, drawn like the app's home category rail: a gradient ring around the category's emoji, its name underneath, and here…
 - `web/src/components/Constellation.tsx` — The glowing connected dots behind every page, as in the app.
 - `web/src/components/Gallery.tsx` — A product's photos: one large image and a strip of thumbnails.
+- `web/src/components/HomeLink.tsx` — A link to BROKA's home page.
 - `web/src/components/OpenInApp.tsx` — "Open in the BROKA app" for Android visitors.
 - `web/src/components/ProductCard.tsx`
 - `web/src/components/ProductGrid.tsx` — The catalogue grid: the first page rendered on the server, more pages fetched on request through /api/stores/[id]/listings.
 - `web/src/components/ShareButtons.tsx` — Sharing a store or product from the web: WhatsApp (how most people here share), and the system share sheet or a copied link.
 - `web/src/components/SiteFooter.tsx`
-- `web/src/components/SiteHeader.tsx`
+- `web/src/components/SiteHeader.tsx` — The logo is unoptimized because /_next/image on broka.co.ke is the BROKA website's image service, which doesn't have the storefront's files.
 - `web/src/components/StoreDetails.tsx` — "Store details": everything a visitor arriving from a shared link needs to know about a store before buying from it - which store it is, wh…
 - `web/src/components/StoreHero.tsx` — Who the store is, at a glance: logo, name (with a tick for a verified seller), what and where, "More details", and sharing.
 - `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, since.
