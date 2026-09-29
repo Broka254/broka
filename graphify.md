@@ -151,19 +151,19 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:237) |
 | GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:707) |
 | GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:656) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:875) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:876) |
 | GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:173) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:910) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:911) |
 | PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:327) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:941) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:952) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:942) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:953) |
 | GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:519) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:892) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:893) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:918) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:930) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:919) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:931) |
 | GET | `/live` | public | `live` (backend/main.py:541) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
@@ -241,7 +241,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:112) |
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:286) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:106) |
-| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:58) |
+| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:61) |
 
 ## Backend modules
 
@@ -371,6 +371,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 - `completion_rate.py` — BROKA - Deal Completion Rate (Volume 2, Chapter 3)
 - `deal_lifecycle.py` — Deal lifecycle — what stage a deal is really at, and whose turn it is.
 - `metric_snapshots.py` — Daily seller metric snapshots — the data behind the history graphs.
+- `public_standing.py` — A seller's standing as buyers see it: on a listing's screen, and to Zeno when a buyer asks it about a listing.
 - `response_time.py` — Seller response time — measured, not guessed.
 - `seller_advice.py` — Seller advice — "working for you" / "working against you".
 - `seller_rating.py` — Seller Overall Rating — one number out of 10, from the signals that matter.
@@ -381,6 +382,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 - `guides.py` — Zeno's guides: "how do I open a store?", "how do I sell faster?" answered with steps built from the user's own situation, and a button on e…
 - `intents.py` — What Zeno, the assistant, may do - and the commands it understands without asking a model.
 - `knowledge.py` — What Zeno knows about the user it is talking to - fetched only when a question needs it.
+- `listing_context.py` — The listing a user is asking Zeno about, when they opened Zeno from it.
 - `router.py` — Zeno as the user's assistant - POST /zeno/assistant/turn.
 - `service.py` — One turn of Zeno as the user's assistant - text or voice, it is the same turn.
 
@@ -529,7 +531,7 @@ of a change.
 - **ai_broker** — domains: categories, listings; core: circuit_breaker, config, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
-- **auth** — domains: media; core: client_ip, config, email, events, fraud, geo, nudge_templates, presence, rate_limit, sms, text_search; database, security
+- **auth** — domains: media, trust; core: client_ip, config, email, events, fraud, geo, nudge_templates, presence, rate_limit, sms, text_search; database, security
 - **buy_agent** — domains: ai_broker, categories, listings, premium; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
@@ -550,7 +552,7 @@ of a change.
 - **trust** — domains: listings; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
-- **zeno_assistant** — domains: ai_broker, buy_agent, premium; core: rate_limit; database, security
+- **zeno_assistant** — domains: ai_broker, buy_agent, listings, premium, trust; core: rate_limit; database, security
 
 ## Background jobs
 
@@ -826,6 +828,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/features/zeno_assistant/`
 
 - `data/zeno_assistant_repository.dart` — lib/features/zeno_assistant/data/zeno_assistant_repository.dart
+- `domain/zeno_about_listing.dart` — The listing a buyer opened Zeno from, to ask about it.
 - `domain/zeno_action.dart` — What Zeno, the assistant, can do in the app - the app's side of the closed vocabulary in backend/api/domains/zeno_assistant/intents.py.
 - `presentation/zeno_action_card.dart` — What Zeno is doing, or asking to do, under its reply - in the typed conversation and, larger, in voice mode.
 - `presentation/zeno_guide_card.dart` — A guide from Zeno - "how do I open a store?", "tips to sell faster" - as steps to follow rather than a paragraph to remember.
@@ -880,6 +883,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing.dart` — BROKA - Listing Model
 - `listing_photo.dart` — A listing or store image as the backend describes it: one stored image in three sizes.
 - `models.dart` — BROKA - Domain Models (MatchResult, Message, Bid) NOTE: Listing model lives in listing.dart
+- `seller_standing.dart` — A seller's standing, as buyers see it on a listing's screen: GET /auth/user/{id} -> seller_standing (backend/api/domains/trust public_stand…
 
 ### `flutter_app/lib/utils/`
 
@@ -954,6 +958,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
+- `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
@@ -963,6 +968,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
+- `zeno_about_listing_test.dart` — Zeno, opened from a listing's "Ask Zeno" card (2026-09-29): the listing pinned under the header, questions about it, its id on every turn s…
 - `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
 - `zeno_sms_prompts_test.dart` — How Zeno asks about SMS alerts on the sell wizard's last step (ZenoSmsPrompts, ZenoStreamingBubble): ten phrasings, never the same one twic…
@@ -1036,7 +1042,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Rust in the backend, and password hashing off the event loop (2026-09-28)
+- `CHANGES.md` — The listing screen: the seller's standing, the deal's terms, and Zeno about it (2026-09-29)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
