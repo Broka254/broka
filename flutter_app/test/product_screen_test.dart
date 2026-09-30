@@ -24,6 +24,11 @@ Listing _listing({
   bool negotiable = true,
   bool? delivers = true,
   String? deliveryNote = 'Within Nairobi CBD for KES 300',
+  String status = 'active',
+  bool soldOut = false,
+  int? quantity,
+  int? unitsLeft,
+  String? priceUnit,
 }) => Listing(
       id: 'listing-1',
       name: 'iPhone 13 128GB',
@@ -35,7 +40,11 @@ Listing _listing({
       deliveryNote: deliveryNote,
       locationName: 'Westlands, Nairobi',
       listingType: 'direct',
-      status: 'active',
+      status: status,
+      soldOut: soldOut,
+      quantity: quantity,
+      unitsLeft: unitsLeft,
+      priceUnit: priceUnit,
       views: 42,
       sellerId: sellerId,
       sellerName: 'Grace Akinyi',
@@ -256,6 +265,33 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(ZenoScreen), findsNothing);
       expect(find.textContaining('ask Zeno about this listing'), findsOneWidget);
+    });
+  });
+
+  group('when there is nothing left to buy', () {
+    // Every list a buyer browses leaves these out; a link, a notification or
+    // a chat still opens them.
+    testWidgets('a sold-out listing says so instead of offering a deal', (tester) async {
+      await open(tester, _listing(status: 'pending', soldOut: true));
+      expect(find.byKey(const Key('product-cta')), findsNothing);
+      expect(textIn(tester, const Key('product-unavailable')), contains('Sold out'));
+    });
+
+    testWidgets('a deleted one says the seller removed it', (tester) async {
+      await open(tester, _listing(status: 'cancelled'));
+      expect(find.byKey(const Key('product-cta')), findsNothing);
+      expect(textIn(tester, const Key('product-unavailable')), contains('Removed by the seller'));
+    });
+
+    testWidgets('a listing of several units says how many are left', (tester) async {
+      await open(tester, _listing(quantity: 100, unitsLeft: 12, priceUnit: 'bag'));
+      expect(textIn(tester, const Key('units-left')), '12 of 100 bags left');
+      expect(find.byKey(const Key('product-cta')), findsOneWidget);
+    });
+
+    testWidgets('before any are sold, the total', (tester) async {
+      await open(tester, _listing(quantity: 100, priceUnit: 'bag'));
+      expect(textIn(tester, const Key('units-left')), '100 bags available');
     });
   });
 

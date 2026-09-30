@@ -25,6 +25,12 @@ class Listing {
   final String  listingType;
   final String  status;
   final int     views;
+  /// Units not in a deal yet (direct sales), from the single-listing read
+  /// only - lists don't carry it. Null when unknown.
+  final int?    unitsLeft;
+  /// Every unit sold or in a deal under way. Lists only ever hold listings
+  /// on sale, so this is only ever true from the single-listing read.
+  final bool    soldOut;
   // Media
   final String? verifiedPhotos;  // comma-separated base64 or URLs
   // AI Showcase/Cover Image (2026-08-29) - optional, homescreen-only.
@@ -80,6 +86,8 @@ class Listing {
     required this.listingType,
     required this.status,
     required this.views,
+    this.unitsLeft,
+    this.soldOut = false,
     this.verifiedPhotos,
     this.showcaseImageUrl,
     this.showcaseImageSource,
@@ -123,6 +131,8 @@ class Listing {
         listingType:          j['listing_type']  as String,
         status:               j['status']        as String,
         views:                ((j['views'] ?? 0) as num).toInt(),
+        unitsLeft:            (j['units_left'] as num?)?.toInt(),
+        soldOut:              j['sold_out'] as bool? ?? false,
         verifiedPhotos:       j['verified_photos'] as String?,
         showcaseImageUrl:     j['showcase_image_url'] as String?,
         showcaseImageSource:  j['showcase_image_source'] as String?,

@@ -1,17 +1,20 @@
-import { plural, yearOf } from '@/lib/format'
+import { formatDealTime, plural, yearOf } from '@/lib/format'
 
 import styles from './store.module.css'
 
-/** The seller's real record: verified, completed deals, rating, since. */
+/** The seller's real record: verified, completed deals, rating, deal time, since. */
 export function TrustChips({
   verified,
   completedDeals,
   rating,
+  dealTimeMinutes,
   memberSince,
 }: {
   verified: boolean
   completedDeals: number
   rating: number | null
+  /** Average from agreement to payout; the app shows the same figure. */
+  dealTimeMinutes?: number | null
   memberSince?: string | null
 }) {
   const since = yearOf(memberSince)
@@ -21,6 +24,9 @@ export function TrustChips({
     chips.push({ key: 'd', icon: '🤝', text: `${plural(completedDeals, 'deal')} done` })
     // A rating only means something once there are deals behind it.
     if (rating != null) chips.push({ key: 'r', icon: '★', text: rating.toFixed(1), tone: styles.star })
+    if (dealTimeMinutes != null) {
+      chips.push({ key: 't', icon: '⏱', text: `Deals take ${formatDealTime(dealTimeMinutes)}` })
+    }
   }
   if (since) chips.push({ key: 's', icon: '📅', text: `On BROKA since ${since}` })
   if (!chips.length) return null

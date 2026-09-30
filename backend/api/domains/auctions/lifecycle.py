@@ -78,7 +78,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
@@ -845,6 +845,11 @@ async def due_for_deal_retry(db: AsyncSession, limit: int = 100) -> list[str]:
 # than the send.
 MAX_ENDING_SOON_ATTEMPTS = 3
 
+# How long a claimed attempt keeps other workers off the reminder: long
+# enough to send and confirm, shorter than the 60-second sweep so the next
+# tick's retry of a failed send is not refused. See claim_ending_soon_attempt.
+ENDING_SOON_RETRY_AFTER = timedelta(seconds=45)
+
 
 async def due_for_ending_soon(db: AsyncSession, limit: int = 100) -> list[AuctionMeta]:
     """Live auctions inside the ending-soon window still owed a reminder.
@@ -883,7 +888,10 @@ async def claim_ending_soon_attempt(db: AsyncSession, listing_id: str) -> bool:
     ending_soon_attempts against the value just observed, so:
 
       * two workers sweeping the same tick cannot both send - the loser's
-        WHERE matches nothing and it skips the auction;
+        WHERE matches nothing and it skips the auction. That takes the
+        claim time as well as the count: a worker reading the row just
+        after another's claim committed saw a count it could increment,
+        and sent a second reminder while the first was still going out;
       * the attempt is recorded BEFORE the send, so a process that dies
         mid-emit has still spent its attempt and cannot retry forever;
       * the reminder stays owed (ending_soon_notified_at still NULL) until
@@ -906,14 +914,17 @@ async def claim_ending_soon_attempt(db: AsyncSession, listing_id: str) -> bool:
     if observed >= MAX_ENDING_SOON_ATTEMPTS:
         return False
 
+    now = datetime.utcnow()
     claim = await db.execute(
         update(AuctionMeta)
         .where(
             AuctionMeta.listing_id == listing_id,
             AuctionMeta.ending_soon_notified_at.is_(None),
             AuctionMeta.ending_soon_attempts == observed,
+            or_(AuctionMeta.ending_soon_claimed_at.is_(None),
+                AuctionMeta.ending_soon_claimed_at <= now - ENDING_SOON_RETRY_AFTER),
         )
-        .values(ending_soon_attempts=observed + 1)
+        .values(ending_soon_attempts=observed + 1, ending_soon_claimed_at=now)
     )
     await db.commit()
     return claim.rowcount > 0

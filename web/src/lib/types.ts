@@ -74,6 +74,13 @@ export interface Listing {
   seller_verified: boolean
   seller_rating: number | null
   seller_completed_deals: number
+  /**
+   * The seller's average deal time, agreement to payout, in minutes - on the
+   * single-listing read only, and only once they have completed a deal.
+   */
+  seller_avg_deal_time_minutes?: number | null
+  /** Whether a buyer can still buy it (single-listing read): not sold out or removed. */
+  available?: boolean
   store_id: string | null
   store_slug: string | null
   store_name: string | null

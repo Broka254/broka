@@ -24,7 +24,9 @@ import '../widgets/message_receipt.dart';
 import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
+import '../widgets/units_stepper.dart';
 import '../widgets/zeno_avatar.dart';
+import '../utils/price_format.dart';
 import '../services/ringtone_service.dart';
 import '../models/models.dart';
 import '../models/listing.dart';
@@ -961,9 +963,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Future<void> _finalizeDeal() async {
     final listing = _listing;
     if (listing == null) return;
+    // A listing of several units (100 bags at KES 3,500 a bag): the buyer
+    // says how many, and pays the unit price for each.
+    final multi = hasUnits(listing);
+    var units = 1;
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDialog) => AlertDialog(
         backgroundColor: BrokaColors.bgMid,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
@@ -973,9 +979,18 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           Text('Listing: ${listing.name}',
               style: const TextStyle(color: BrokaColors.textMid)),
+          if (multi) ...[
+            const SizedBox(height: 12),
+            UnitsStepper(value: units, max: unitsAvailable(listing), unit: listing.priceUnit,
+                onChanged: (v) => setDialog(() => units = v)),
+          ],
           const SizedBox(height: 8),
-          Text('Price: ${listing.formattedPrice}',
-              style: const TextStyle(color: BrokaColors.neonGreen, fontWeight: FontWeight.w700)),
+          Text(
+            units > 1
+                ? 'Price: ${listing.formattedPrice} × $units = ${formatKes(listing.price * units)}'
+                : 'Price: ${listing.formattedPrice}',
+            key: const Key('finalize-price'),
+            style: const TextStyle(color: BrokaColors.neonGreen, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           // Negotiated deals: BROKA's 3.49% (never under KES 20) plus the
           // escrow provider's 1% (PRICING.md). The payment screen shows the
@@ -992,14 +1007,15 @@ class _NegotiationScreenState extends State<NegotiationScreen>
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             child: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.w800))),
         ],
-      ),
+      )),
     );
     if (confirm != true) return;
     try {
       final deal = await ApiService.finalizeDeal(
         listingId: listing.id,
         buyerId: ApiService.currentUserId ?? '',
-        agreedPrice: listing.price,
+        agreedPrice: listing.price * units,
+        quantity: multi ? units : null,
       );
       if (mounted) setState(() => _dealInfo = deal);
     } catch (e) {

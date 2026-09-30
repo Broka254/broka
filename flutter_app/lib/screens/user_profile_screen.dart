@@ -81,6 +81,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   static const _reviewPage = 10;
   static const _gradient = [BrokaColors.gold, BrokaColors.neonBlue];
 
+  /// The listings section, for "See N listings" to scroll to.
+  final _listingsKey = GlobalKey();
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -564,7 +567,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           ]),
           if (!_isSelf && _listings.isNotEmpty) ...[
             const SizedBox(height: 16),
-            _buildNegotiateButton(),
+            _buildListingsButton(),
           ],
         ]),
       ),
@@ -572,12 +575,27 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   /// The brand gradient, as on Home's and the listing screen's primary
-  /// actions.
-  Widget _buildNegotiateButton() => Semantics(
+  /// actions. It was "Start Negotiation", on whichever listing loaded
+  /// first - a seller of ten things got an offer on the one the buyer never
+  /// picked. One listing: open it (its screen has the price, the terms and
+  /// the negotiate button). Several: take the buyer to them.
+  Widget _buildListingsButton() {
+    final one = _listings.length == 1;
+    return Semantics(
         button: true,
         child: GestureDetector(
-          onTap: () => Navigator.pushNamed(context, '/negotiate',
-              arguments: {'listing': _listings.first, 'role': 'buyer'}),
+          key: const Key('profile-listings-button'),
+          onTap: () {
+            if (one) {
+              Navigator.pushNamed(context, '/product', arguments: _listings.first);
+              return;
+            }
+            final target = _listingsKey.currentContext;
+            if (target != null) {
+              Scrollable.ensureVisible(target,
+                  duration: const Duration(milliseconds: 450), curve: Curves.easeOutCubic);
+            }
+          },
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 13),
@@ -586,15 +604,17 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               borderRadius: BorderRadius.circular(14),
               boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.35), blurRadius: 14)],
             ),
-            child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.handshake_outlined, color: Colors.white, size: 18),
-              SizedBox(width: 8),
-              Text('Start Negotiation', style: TextStyle(
-                  color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.storefront_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Text(one ? 'View listing' : 'See ${_listings.length} listings',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
             ]),
           ),
         ),
       );
+  }
 
   // ── Standing ──────────────────────────────────────────────────────────────
 
@@ -869,7 +889,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         ),
       );
     }
-    return _section(_isSelf ? 'YOUR LISTINGS' : 'LISTINGS', body);
+    return KeyedSubtree(
+      key: _listingsKey,
+      child: _section(_isSelf ? 'YOUR LISTINGS' : 'LISTINGS', body),
+    );
   }
 }
 

@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-181 endpoints served by `backend/main.py`. **Auth** is read from each
+184 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 16, optional 2, public 50, token 4, user 109.
+Counts: admin 16, optional 2, public 51, token 4, user 111.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -121,13 +121,13 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
 | GET | `/categories/{category_id}/subcategories` | public | `list_subcategories` (backend/api/domains/categories/router.py:26) |
 | WS | `/deal-ws/ws/{deal_id}` | token | `deal_status_ws` (backend/api/domains/deal_ws/router.py:67) |
-| GET | `/deal/` | user | `get_my_deals` (backend/api/domains/escrow/router.py:168) |
-| POST | `/deal/finalize` | user | `finalize_deal` (backend/api/domains/escrow/router.py:64) |
-| GET | `/deal/{deal_id}` | user | `get_deal` (backend/api/domains/escrow/router.py:158) |
-| POST | `/deal/{deal_id}/confirm-delivery` | user | `confirm_delivery` (backend/api/domains/escrow/router.py:143) |
-| GET | `/deal/{deal_id}/fee-quote` | user | `get_fee_quote` (backend/api/domains/escrow/router.py:81) |
-| POST | `/deal/{deal_id}/fund` | user | `fund_deal_escrow` (backend/api/domains/escrow/router.py:93) |
-| GET | `/deal/{deal_id}/payment-status` | user | `get_payment_status` (backend/api/domains/escrow/router.py:127) |
+| GET | `/deal/` | user | `get_my_deals` (backend/api/domains/escrow/router.py:174) |
+| POST | `/deal/finalize` | user | `finalize_deal` (backend/api/domains/escrow/router.py:69) |
+| GET | `/deal/{deal_id}` | user | `get_deal` (backend/api/domains/escrow/router.py:164) |
+| POST | `/deal/{deal_id}/confirm-delivery` | user | `confirm_delivery` (backend/api/domains/escrow/router.py:149) |
+| GET | `/deal/{deal_id}/fee-quote` | user | `get_fee_quote` (backend/api/domains/escrow/router.py:87) |
+| POST | `/deal/{deal_id}/fund` | user | `fund_deal_escrow` (backend/api/domains/escrow/router.py:99) |
+| GET | `/deal/{deal_id}/payment-status` | user | `get_payment_status` (backend/api/domains/escrow/router.py:133) |
 | GET | `/disputes/v2/deal/{deal_id}` | user | `get_case_for_deal` (backend/api/domains/disputes/router.py:271) |
 | POST | `/disputes/v2/open` | user | `open_case` (backend/api/domains/disputes/router.py:115) |
 | GET | `/disputes/v2/stats/summary` | public | `get_dispute_summary` (backend/api/domains/disputes/router.py:327) |
@@ -155,15 +155,16 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:173) |
 | GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:911) |
 | PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:327) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:942) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:953) |
+| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:919) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:954) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:965) |
 | GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:519) |
 | GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:893) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:919) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:931) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:931) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:943) |
 | GET | `/live` | public | `live` (backend/main.py:541) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
@@ -207,8 +208,10 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:36) |
 | GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:139) |
 | GET | `/ready` | public | `ready` (backend/main.py:491) |
-| POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:23) |
-| GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:38) |
+| POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:30) |
+| GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:64) |
+| GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:45) |
+| GET | `/reviews/summary/{seller_id}` | public | `get_review_summary` (backend/api/domains/reviews/router.py:56) |
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:54) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
@@ -309,6 +312,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 - `router.py` — Listings Router v3.0
 - `sell_probability.py` — Probability that a listing sells — and what is holding it back.
 - `service.py` — Listings Service v3.0
+- `stock.py` — How many of a listing's units are left, and whether buyers still see it.
 - `validation.py` — What a listing may contain - the checks behind POST /listings, PATCH /listings/{id} and POST /listings/{id}/interest.
 
 ### `backend/api/domains/media/`
@@ -370,6 +374,7 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 
 - `completion_rate.py` — BROKA - Deal Completion Rate (Volume 2, Chapter 3)
 - `deal_lifecycle.py` — Deal lifecycle — what stage a deal is really at, and whose turn it is.
+- `deal_time.py` — How long a seller's deals take to complete, from agreement to payout.
 - `metric_snapshots.py` — Daily seller metric snapshots — the data behind the history graphs.
 - `public_standing.py` — A seller's standing as buyers see it: on a listing's screen, and to Zeno when a buyer asks it about a listing.
 - `response_time.py` — Seller response time — measured, not guessed.
@@ -480,46 +485,46 @@ Counts: admin 16, optional 2, public 50, token 4, user 109.
 | Table | Model | Defined at |
 |---|---|---|
 | `auction_meta` | `AuctionMeta` | backend/api/database.py:544 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1053 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1074 |
 | `bids` | `Bid` | backend/api/database.py:533 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:651 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:658 |
 | `categories` | `Category` | backend/api/database.py:287 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:295 |
-| `deals` | `Deal` | backend/api/database.py:703 |
+| `deals` | `Deal` | backend/api/database.py:710 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:993 |
+| `disputes` | `Dispute` | backend/api/database.py:1006 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:264 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:67 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:73 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1020 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1072 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1041 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1093 |
 | `interests` | `Interest` | backend/api/database.py:431 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:912 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:925 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:888 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:901 |
 | `listings` | `Listing` | backend/api/database.py:304 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:66 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:100 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:947 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:960 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:454 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:245 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:967 |
-| `reviews` | `Review` | backend/api/database.py:1008 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:838 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:817 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:980 |
+| `reviews` | `Review` | backend/api/database.py:1021 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:851 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:830 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:498 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:636 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:643 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1036 |
-| `wishlists` | `Wishlist` | backend/api/database.py:624 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1057 |
+| `wishlists` | `Wishlist` | backend/api/database.py:631 |
 
 ## Backend dependencies between domains
 
@@ -537,8 +542,8 @@ of a change.
 - **communication** — nothing outside itself
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, ledger, workers; database, security
-- **escrow** — core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, reconciliation, secrets_crypto; database, security
-- **listings** — domains: auctions, categories, escrow, media, premium, trust; core: config, events, geo, rate_limit, text_search, timeutil; database, security
+- **escrow** — domains: listings; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, reconciliation, secrets_crypto; database, security
+- **listings** — domains: auctions, categories, escrow, media, premium, trust; core: audit, config, events, geo, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — nothing outside itself
@@ -559,27 +564,28 @@ of a change.
 `task_*` functions in `backend/api/core/workers.py`: the in-process sweep
 (every 5 minutes) and ARQ workers.
 
-- `task_ai_summary` (backend/api/core/workers.py:1769)
-- `task_backfill_media` (backend/api/core/workers.py:251) — Convert a bounded batch of base64 images into image assets.
-- `task_check_call_expiry` (backend/api/core/workers.py:439) — Backstop cleanup for stale call sessions (api/core/call_state.py).
-- `task_check_deal_timers` (backend/api/core/workers.py:454) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
-- `task_check_dispute_timers` (backend/api/core/workers.py:1414) — Sweep for DisputeTimer objects whose fires_at has passed.
-- `task_check_interest_nudges` (backend/api/core/workers.py:987) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
-- `task_close_due_auctions` (backend/api/core/workers.py:1847) — Close auctions whose ends_at has passed, and hand winners to Deal.
-- `task_collect_abandoned_media` (backend/api/core/workers.py:260) — Remove uploads no listing, store or profile ever used, a week after they were made.
-- `task_expire_buy_agent_watches` (backend/api/core/workers.py:268) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
-- `task_expire_featured_listings` (backend/api/core/workers.py:418)
-- `task_fraud_sweep` (backend/api/core/workers.py:1785)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2016) — Release listings whose winner never paid.
-- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:1940) — One reminder per auction, to everyone who has bid on it.
-- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1194) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
-- `task_recompute_trust_score` (backend/api/core/workers.py:388)
-- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:211) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
-- `task_reconcile_mpesa` (backend/api/core/workers.py:1808)
-- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1401) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
-- `task_retrain_ml_models` (backend/api/core/workers.py:1154) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
-- `task_send_email_notification` (backend/api/core/workers.py:1764)
-- `task_send_fcm_notification` (backend/api/core/workers.py:400)
+- `task_ai_summary` (backend/api/core/workers.py:1786)
+- `task_backfill_media` (backend/api/core/workers.py:268) — Convert a bounded batch of base64 images into image assets.
+- `task_check_call_expiry` (backend/api/core/workers.py:456) — Backstop cleanup for stale call sessions (api/core/call_state.py).
+- `task_check_deal_timers` (backend/api/core/workers.py:471) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
+- `task_check_dispute_timers` (backend/api/core/workers.py:1431) — Sweep for DisputeTimer objects whose fires_at has passed.
+- `task_check_interest_nudges` (backend/api/core/workers.py:1004) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
+- `task_close_due_auctions` (backend/api/core/workers.py:1864) — Close auctions whose ends_at has passed, and hand winners to Deal.
+- `task_collect_abandoned_media` (backend/api/core/workers.py:277) — Remove uploads no listing, store or profile ever used, a week after they were made.
+- `task_expire_buy_agent_watches` (backend/api/core/workers.py:285) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
+- `task_expire_featured_listings` (backend/api/core/workers.py:435)
+- `task_fraud_sweep` (backend/api/core/workers.py:1802)
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2033) — Release listings whose winner never paid.
+- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:1957) — One reminder per auction, to everyone who has bid on it.
+- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1211) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
+- `task_recompute_trust_score` (backend/api/core/workers.py:405)
+- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:228) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
+- `task_reconcile_mpesa` (backend/api/core/workers.py:1825)
+- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1418) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+- `task_retrain_ml_models` (backend/api/core/workers.py:1171) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
+- `task_send_email_notification` (backend/api/core/workers.py:1781)
+- `task_send_fcm_notification` (backend/api/core/workers.py:417)
+- `task_sync_listing_stock` (backend/api/core/workers.py:215) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
 
 ## Configuration (environment variables)
 
@@ -590,7 +596,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-81 files in `backend/tests/`.
+83 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -632,6 +638,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_listing_fee_payment.py` — Paying the listing fee (PRICING.md; api/domains/pricing/payments.py).
 - `test_listing_overhaul.py` — The 2026-09-25 listing overhaul (LISTING_OVERHAUL.md): the category taxonomy, what a listing must and may now say about itself, the seller'…
 - `test_listing_posting.py` — Posting a listing: what POST /listings, PATCH /listings/{id} and the interest endpoint accept, and what a listing publishes about its selle…
+- `test_listing_stock.py` — BROKA - Listing stock, sold-out listings, and deleting a listing Run: pytest backend/tests/test_listing_stock.py -v
 - `test_listings.py` — BROKA - Listings Endpoint Tests Run: pytest backend/tests/test_listings.py -v
 - `test_media_assets.py` — Image assets: processing, storage, upload, and what listings and stores do with them (Online Stores phase 1).
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
@@ -654,6 +661,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_route_ordering.py` — POST /negotiate/chat must be served by the legacy negotiate.free_chat.
 - `test_search.py` — BROKA - Search Tests (listings and traders) Run: pytest backend/tests/test_search.py -v
 - `test_seller_advice.py` — Seller advice cards (domains/trust/seller_advice).
+- `test_seller_profile_figures.py` — BROKA - The figures a seller's profile shows, and who may review them Run: pytest backend/tests/test_seller_profile_figures.py -v
 - `test_seller_rating.py` — Overall Rating (Design Journal Vol.8 §3.2/§3.3, Part XVI).
 - `test_seller_signup.py` — Signup-time seller categorisation.
 - `test_session_lifetime.py` — Sign-in sessions: refresh tokens, and the schema they and the audit log need.
@@ -790,6 +798,8 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/features/reviews/`
 
 - `data/repositories/reviews_repository.dart` — BROKA v3.0 - Reviews Repository
+- `domain/models/review.dart` — Buyers' reviews of a seller, as the backend's /reviews routes return them (backend/api/domains/reviews/).
+- `presentation/review_prompt.dart` — "Deal complete - how was the seller?", asked right after the buyer confirms the goods and the money is released.
 
 ### `flutter_app/lib/features/stores/`
 
@@ -918,7 +928,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `protection_badge.dart` — BROKA - Protection Badge (Volume 2 §2.1)
 - `sell_step_scaffold.dart` — BROKA - Sell Wizard Step Scaffold
 - `seller_setup.dart` — BROKA - the seller questions, shared.
+- `seller_standing_tiles.dart` — A seller's standing as buyers see it: the seller dashboard's rating, deal completion rate and response time, and how long their deals take…
 - `splash_painters.dart` — Visual-effects painters for the BROKA "AI boot sequence" splash screen.
+- `units_stepper.dart` — How many of a listing's units a deal is for - 3 of the seller's 100 bags.
 - `voice_waveform.dart` — lib/widgets/voice_waveform.dart
 - `wizard_scaffold.dart` — BROKA - step-by-step wizard chrome
 - `zeno_avatar.dart` — lib/widgets/zeno_avatar.dart
@@ -959,6 +971,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
+- `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
@@ -968,6 +981,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
+- `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
 - `zeno_about_listing_test.dart` — Zeno, opened from a listing's "Ask Zeno" card (2026-09-29): the listing pinned under the header, questions about it, its id on every turn s…
 - `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
@@ -1020,7 +1034,7 @@ Modules:
 - `web/src/components/SiteHeader.tsx` — The logo is unoptimized because /_next/image on broka.co.ke is the BROKA website's image service, which doesn't have the storefront's files.
 - `web/src/components/StoreDetails.tsx` — "Store details": everything a visitor arriving from a shared link needs to know about a store before buying from it - which store it is, wh…
 - `web/src/components/StoreHero.tsx` — Who the store is, at a glance: logo, name (with a tick for a verified seller), what and where, "More details", and sharing.
-- `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, since.
+- `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, deal time, since.
 - `web/src/components/VisitBeacon.tsx` — Counts this page view as a store visit, for the owner's stats, from the visitor's own browser (so crawlers that don't run scripts aren't co…
 
 ## CI

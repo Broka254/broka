@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from api.database import (
-    Deal, DealStatus, Listing, ListingType, User, MpesaTransaction, MpesaStatus,
+    Deal, DealStatus, Listing, ListingStatus, ListingType, User, MpesaTransaction, MpesaStatus,
 )
 from api.core.events import (
     publish, DealFinalized, EscrowFunded, EscrowReleased,
@@ -47,6 +47,7 @@ from api.core.econfirm_client import EConfirmError, EConfirmConnectionError, ECo
 from api.core.secrets_crypto import encrypt_secret, decrypt_secret, SecretCryptoError
 from api.models.external_escrow import ExternalEscrow, EConfirmEscrowStatus
 from .repository import DealRepository, MpesaRepository, ExternalEscrowRepository
+from api.domains.listings.stock import is_stocked, status_for, units_taken, units_total
 from .providers import get_escrow_provider
 
 logger = logging.getLogger(__name__)
@@ -135,8 +136,15 @@ class EscrowService:
         current_user_id: str,   # authenticated caller — see note below
         request_ip: Optional[str] = None,
         deal_id: Optional[str] = None,
+        quantity: Optional[int] = None,
     ) -> dict:
         """
+        quantity is how many of the listing's units the deal is for (None:
+        one). A direct listing's units are checked and taken here, under the
+        listing's row lock, so two buyers agreeing to the last bag at once
+        cannot both get it (api/domains/listings/stock.py). Auctions sell
+        one item through their own lifecycle and are not counted.
+
         current_user_id (renamed from this method's old `seller_id` param —
         see api/domains/escrow/router.py's call site) is whoever is
         authenticated and tapped "finalize/accept", which Flutter allows
@@ -159,6 +167,20 @@ class EscrowService:
         listing = r.scalar_one_or_none()
         if not listing:
             raise HTTPException(status_code=404, detail="Listing not found")
+        stocked = is_stocked(listing)
+        # Read again under the listing's row lock (PostgreSQL; SQLite
+        # serialises writers anyway), so two finalizes on one listing run
+        # one after the other. For a direct sale, the units left are counted
+        # and then taken. For an auction, the close and a retry of its
+        # winner's deal can both reach here at once (auctions/lifecycle.py);
+        # without the lock neither saw the other's uncommitted deal and the
+        # winner got two. The second now waits, then finds and returns the
+        # first's deal below.
+        listing = (await self.db.execute(
+            select(Listing).where(Listing.id == listing_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )).scalar_one()
 
         if current_user_id == listing.seller_id:
             seller_id = listing.seller_id
@@ -188,6 +210,23 @@ class EscrowService:
         if existing:
             return {"deal_id": existing.id, "status": existing.status.value, "existed": True}
 
+        # Units. Checked after the join above on purpose: a buyer finishing
+        # their own live deal is not refused because it took the last unit.
+        units = 1
+        taken = sold = 0
+        if stocked:
+            if getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value:
+                raise HTTPException(status_code=409, detail="This listing has been removed by the seller.")
+            units = quantity or 1
+            taken, sold = await units_taken(self.db, listing_id)
+            left = max(units_total(listing) - taken, 0)
+            if left <= 0:
+                raise HTTPException(status_code=409, detail="This listing is sold out.")
+            if units > left:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Only {left} left - this deal can be for {left} at most.")
+
         commission = _commission(agreed_price, listing.listing_type)
         deal = await self.deals.create(
             listing_id=listing_id,
@@ -196,6 +235,7 @@ class EscrowService:
             agreed_price=agreed_price,
             commission=commission,
             status=DealStatus.agreed,
+            quantity=units,
             # deal_id is normally None and the model generates one. The
             # auction close passes an id it has already CLAIMED on the
             # auction row, so that the claim and the deal it refers to
@@ -204,8 +244,14 @@ class EscrowService:
             **({"id": deal_id} if deal_id else {}),
         )
 
-        # Update listing status
-        listing.status = "pending"
+        # A direct listing stays in front of buyers while it has units left,
+        # and goes when this deal takes the last of them. It used to go on
+        # the first agreement, whatever the quantity (listings/stock.py).
+        # An auction's one item is in this deal.
+        if stocked:
+            listing.status = status_for(listing, taken + units, sold) or listing.status
+        else:
+            listing.status = "pending"
         await self.db.commit()
         await self.db.refresh(deal)
 

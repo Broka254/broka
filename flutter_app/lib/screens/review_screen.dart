@@ -9,6 +9,11 @@
 //   seller_id    - pre-select this seller's deals in the picker
 //   seller_name  - display name of the seller
 //   listing_name - name of the listing (shown for context)
+//
+// 2026-09-30: on Home's visual system (the constellation, Home's header,
+// the brand gradient on its buttons), like the profile it opens from. And
+// opened with a deal id alone - the "Deal Complete" notification - it looks
+// the deal up for the seller's name, and says so if it was already reviewed.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,11 +21,15 @@ import '../core/utils/result.dart';
 import '../features/reviews/data/repositories/reviews_repository.dart';
 import '../features/reviews/domain/models/review.dart';
 import '../main.dart';
+import '../widgets/constellation_background.dart';
 
-enum _ReviewStep { loading, pickDeal, form, submitting, success }
+enum _ReviewStep { loading, pickDeal, form, submitting, success, closed }
 
 class ReviewScreen extends StatefulWidget {
-  const ReviewScreen({super.key});
+  const ReviewScreen({super.key, this.animateBackground = true});
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
 }
@@ -43,6 +52,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
   final  _commentCtrl = TextEditingController();
   String? _errorMsg;
 
+  /// Why this deal can't be reviewed, when it can't (step closed).
+  String _closedMessage = '';
+
   _ReviewStep _step = _ReviewStep.loading;
 
   static const _labels = ['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent'];
@@ -64,10 +76,37 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (_dealId.isNotEmpty) {
       _pickedDealId      = _dealId;
       _pickedListingName = _listingName;
-      setState(() => _step = _ReviewStep.form);
+      _step = _ReviewStep.form;
+      // From a notification: only the deal id. Who and what it was come
+      // from the buyer's own reviewable deals.
+      if (_sellerName == 'Seller') _describeDeal();
     } else {
       _loadDeals();
     }
+  }
+
+  Future<void> _describeDeal() async {
+    final result = await reviewsRepository.myReviewableDeals(
+        sellerId: _sellerId.isEmpty ? null : _sellerId);
+    if (!mounted || result is! Success<List<ReviewableDeal>>) return;
+    final deal = result.data.where((d) => d.dealId == _dealId).firstOrNull;
+    setState(() {
+      if (deal == null) {
+        _closedMessage = "This deal can't be reviewed yet - reviews open once "
+            'you confirm the goods arrived and the payment is released.';
+        _step = _ReviewStep.closed;
+      } else if (deal.alreadyReviewed) {
+        _sellerName = deal.sellerName;
+        _closedMessage = "You've already reviewed ${deal.sellerName} for "
+            '"${deal.listingName}". Thank you!';
+        _step = _ReviewStep.closed;
+      } else {
+        _sellerName = deal.sellerName;
+        _sellerId = deal.sellerId;
+        _listingName = deal.listingName;
+        _pickedListingName = deal.listingName;
+      }
+    });
   }
 
   @override
@@ -133,44 +172,102 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  static const _gradient = [BrokaColors.gold, BrokaColors.neonBlue];
+
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: BrokaColors.bg,
-    appBar: _buildAppBar(),
-    body: AnimatedSwitcher(
-      duration: const Duration(milliseconds: 280),
-      child: _buildBody(),
+    body: ConstellationBackground(
+      animate: widget.animateBackground,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topCenter,
+            radius: 1.2,
+            colors: [BrokaColors.gold.withOpacity(0.13), Colors.transparent],
+            stops: const [0.0, 0.55],
+          ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: Column(children: [
+            _buildHeader(),
+            Expanded(child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 280),
+              child: _buildBody(),
+            )),
+          ]),
+        ),
+      ),
     ),
   );
 
-  PreferredSizeWidget _buildAppBar() => AppBar(
-    backgroundColor: BrokaColors.bg,
-    elevation: 0,
-    leading: IconButton(
-      icon: const Icon(Icons.arrow_back_ios_rounded,
-          color: BrokaColors.textMid, size: 18),
-      onPressed: () => Navigator.pop(context,
-          _step == _ReviewStep.success ? true : false),
-    ),
-    title: Row(children: [
-      Container(
-        padding: const EdgeInsets.all(7),
-        decoration: BoxDecoration(
-          color: BrokaColors.gold.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(8),
+  /// The header every screen reached from Home wears.
+  Widget _buildHeader() {
+    final narrow = MediaQuery.sizeOf(context).width < 360;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 6, 16, 6),
+      child: Row(children: [
+        IconButton(
+          tooltip: 'Back',
+          onPressed: () => Navigator.pop(context, _step == _ReviewStep.success),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: BrokaColors.textHigh, size: 19),
         ),
-        child: const Icon(Icons.star_rounded, color: BrokaColors.gold, size: 18),
-      ),
-      const SizedBox(width: 10),
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Leave a Review',
-            style: TextStyle(color: BrokaColors.textHigh,
-                fontSize: 15, fontWeight: FontWeight.w800)),
-        Text('Rate $_sellerName',
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+        Container(
+          width: 34, height: 34,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(colors: [
+              _gradient.first.withOpacity(0.28), _gradient.last.withOpacity(0.14)]),
+            border: Border.all(color: _gradient.first.withOpacity(0.5)),
+          ),
+          child: const Icon(Icons.star_rounded, size: 18, color: BrokaColors.textHigh),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ZoneGlowText('Review', gradient: _gradient,
+              fontSize: narrow ? 17 : 19, maxLines: 1, letterSpacing: narrow ? 0.8 : 1.1),
+          Text('Rate $_sellerName', maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+        ])),
       ]),
-    ]),
-  );
+    );
+  }
+
+  /// The brand gradient, as on Home's primary actions. Null [onTap] greys
+  /// it out.
+  Widget _primaryButton(String label, VoidCallback? onTap, {IconData? icon, Key? key}) =>
+      Semantics(
+        button: true,
+        enabled: onTap != null,
+        child: GestureDetector(
+          key: key,
+          onTap: onTap,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 150),
+            opacity: onTap == null ? 0.4 : 1,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 15),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: _gradient),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: onTap == null ? null : [
+                  BoxShadow(color: BrokaColors.gold.withOpacity(0.35), blurRadius: 14)],
+              ),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 18, color: Colors.white),
+                  const SizedBox(width: 8),
+                ],
+                Text(label, style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15)),
+              ]),
+            ),
+          ),
+        ),
+      );
 
   Widget _buildBody() {
     switch (_step) {
@@ -179,8 +276,24 @@ class _ReviewScreenState extends State<ReviewScreen> {
       case _ReviewStep.form:       return _buildForm();
       case _ReviewStep.submitting: return _buildSubmitting();
       case _ReviewStep.success:    return _buildSuccess();
+      case _ReviewStep.closed:     return _buildClosed();
     }
   }
+
+  Widget _buildClosed() => Center(
+    key: const Key('review-closed'),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.info_outline_rounded, color: BrokaColors.textMid, size: 40),
+        const SizedBox(height: 14),
+        Text(_closedMessage, textAlign: TextAlign.center,
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 14, height: 1.5)),
+        const SizedBox(height: 24),
+        _primaryButton('Done', () => Navigator.pop(context, false)),
+      ]),
+    ),
+  );
 
   // ── Loading ────────────────────────────────────────────────────────────────
 
@@ -205,7 +318,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
         const Text('Only completed deals can be reviewed. One review per deal.',
-            style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
         const SizedBox(height: 20),
         if (_errorMsg != null) ...[
           _ErrorBanner(message: _errorMsg!),
@@ -216,7 +329,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
             width: double.infinity,
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: BrokaColors.bgCard,
+              gradient: BrokaColors.cardGradient,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: BrokaColors.border),
             ),
@@ -229,7 +342,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
               SizedBox(height: 6),
               Text(
                 'You can only review sellers you have completed a deal with.',
-                style: TextStyle(color: BrokaColors.textLow, fontSize: 12),
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12),
                 textAlign: TextAlign.center,
               ),
             ]),
@@ -288,7 +401,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                     Text(listing, style: const TextStyle(color: BrokaColors.textMid,
                         fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
                     Text('KES ${price.toStringAsFixed(0)} · $dateStr',
-                        style: const TextStyle(color: BrokaColors.textLow, fontSize: 10)),
+                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
                   ])),
                   if (picked)
                     const Icon(Icons.check_circle_rounded,
@@ -299,26 +412,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
           }),
         if (pending.isNotEmpty) ...[
           const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _pickedDealId == null ? null : () {
-                _listingName = _pickedListingName ?? '';
-                setState(() { _step = _ReviewStep.form; _errorMsg = null; });
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: BrokaColors.gold,
-                foregroundColor: Colors.black87,
-                disabledBackgroundColor: BrokaColors.bgCard,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-                elevation: 0,
-              ),
-              child: const Text('Continue',
-                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
-            ),
-          ),
+          _primaryButton('Continue', _pickedDealId == null ? null : () {
+            _listingName = _pickedListingName ?? '';
+            setState(() { _step = _ReviewStep.form; _errorMsg = null; });
+          }),
         ],
       ]),
     );
@@ -339,7 +436,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: BrokaColors.bgCard,
+            gradient: BrokaColors.cardGradient,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: BrokaColors.border),
           ),
@@ -433,11 +530,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 fontSize: 15, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
         const Text('Help other buyers know what to expect.',
-            style: TextStyle(color: BrokaColors.textLow, fontSize: 11)),
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
         const SizedBox(height: 10),
         Container(
           decoration: BoxDecoration(
-            color: BrokaColors.bgCard,
+            gradient: BrokaColors.cardGradient,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: BrokaColors.border),
           ),
@@ -448,10 +545,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
             style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14),
             decoration: const InputDecoration(
               hintText: 'e.g. Item was exactly as described, very quick to respond. Would buy again!',
-              hintStyle: TextStyle(color: BrokaColors.textLow, fontSize: 12),
+              hintStyle: TextStyle(color: BrokaColors.textMid, fontSize: 12),
               border: InputBorder.none,
               contentPadding: EdgeInsets.all(14),
-              counterStyle: TextStyle(color: BrokaColors.textLow, fontSize: 10),
+              counterStyle: TextStyle(color: BrokaColors.textMid, fontSize: 10),
             ),
           ),
         ),
@@ -462,31 +559,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
         ],
 
         const SizedBox(height: 24),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _submit,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: BrokaColors.gold,
-              foregroundColor: Colors.black87,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              elevation: 0,
-            ),
-            child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.star_rounded, size: 18),
-              SizedBox(width: 8),
-              Text('Submit Review',
-                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
-            ]),
-          ),
-        ),
+        _primaryButton('Submit Review', _submit, icon: Icons.star_rounded,
+            key: const Key('submit-review')),
 
         const SizedBox(height: 14),
         const Center(child: Text(
           'Your review is public and helps the BROKA community.',
-          style: TextStyle(color: BrokaColors.textLow, fontSize: 11),
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 11),
           textAlign: TextAlign.center,
         )),
       ]),
@@ -538,22 +617,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
               size: 34,
             ))),
         const SizedBox(height: 32),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: BrokaColors.gold,
-              foregroundColor: Colors.black87,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              elevation: 0,
-            ),
-            child: const Text('Done',
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
-          ),
-        ),
+        _primaryButton('Done', () => Navigator.pop(context, true)),
       ]),
     ),
   );

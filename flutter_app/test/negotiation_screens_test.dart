@@ -183,6 +183,49 @@ void main() {
       await _settle(tester);
       expect(tester.takeException(), isNull);
     });
+
+    // A listing of several units: the buyer says how many, up to what is
+    // left, pays the unit price for each, and the deal carries the count
+    // (the backend takes that many from the seller's stock).
+    testWidgets('agreeing a deal on several units asks how many', (tester) async {
+      final bags = Listing.fromJson({
+        ...fakeListingJson(1, price: 3500),
+        'listing_type': 'direct', 'status': 'active',
+        'quantity': 100, 'units_left': 3, 'price_unit': 'bag',
+      });
+      setFakeRoute((uri) {
+        if (uri.path == '/deal/finalize') {
+          return {'deal_id': 'deal-1', 'agreed_price': 10500, 'commission': 366.45};
+        }
+        if (uri.path.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+        return null;
+      });
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (_) => MaterialPageRoute(
+          settings: RouteSettings(arguments: {'listing': bags, 'role': 'buyer'}),
+          builder: (_) => const NegotiationScreen(animateBackground: false),
+        ),
+      ));
+      await _settle(tester);
+
+      await tester.tap(find.byTooltip('Agree the deal'));
+      await _settle(tester);
+      expect(find.text('Finalize Deal?'), findsOneWidget);
+      for (var i = 0; i < 4; i++) {
+        await tester.tap(find.byTooltip('More'));
+        await _settle(tester);
+      }
+      // Three are left, so three is the most.
+      expect(tester.widget<Text>(find.byKey(const Key('units-value'))).data, '3');
+      expect(tester.widget<Text>(find.byKey(const Key('finalize-price'))).data,
+          'Price: KES 3,500 × 3 = KES 10,500');
+
+      await tester.tap(find.text('Confirm'));
+      await _settle(tester);
+      final sent = fakeRequests.singleWhere((r) => r.uri.path == '/deal/finalize').json as Map;
+      expect(sent['quantity'], 3);
+      expect(sent['agreed_price'], 10500);
+    });
   });
 }
 

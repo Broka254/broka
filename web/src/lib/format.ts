@@ -49,6 +49,17 @@ export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
+/**
+ * How long a seller's deals take, for a buyer: "under an hour",
+ * "about 5 hours", "about 2 days". The API sends the mean in minutes.
+ */
+export function formatDealTime(minutes: number): string {
+  if (minutes < 60) return 'under an hour'
+  const hours = minutes / 60
+  if (hours < 36) return `about ${plural(Math.round(hours), 'hour')}`
+  return `about ${plural(Math.round(hours / 24), 'day')}`
+}
+
 /** Shortened text for meta descriptions: whole words, at most [max] characters. */
 export function clip(text: string, max = 160): string {
   const flat = text.replace(/\s+/g, ' ').trim()

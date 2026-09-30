@@ -89,6 +89,7 @@ void main() {
     Object? summary = _summary,
     Object? reviews = _reviews,
     List<Map<String, dynamic>> myDeals = const [],
+    List<Map<String, dynamic>> listings = const [],
   }) {
     setFakeRoute((uri) {
       final p = uri.path;
@@ -96,7 +97,7 @@ void main() {
       if (p == '/reviews/summary/seller-1') return summary;
       if (p == '/reviews/seller/seller-1') return reviews;
       if (p == '/reviews/my-deals') return {'deals': myDeals};
-      if (p == '/listings/') return <Object?>[];
+      if (p == '/listings/') return listings;
       return null;
     });
   }
@@ -263,6 +264,34 @@ void main() {
         'seller_id': 'seller-1', 'seller_name': 'Grace Akinyi',
         'deal_id': 'deal-9', 'listing_name': 'Samsung A54',
       });
+    });
+  });
+
+  group("the seller's listings", () {
+    Map<String, dynamic> listing(String id, String name) => {
+          'id': id, 'name': name, 'category': 'Electronics', 'price': 32000,
+          'listing_type': 'direct', 'status': 'active', 'seller_id': 'seller-1',
+        };
+
+    // It was "Start Negotiation", on whichever listing loaded first.
+    testWidgets('one listing: the button opens it', (tester) async {
+      backend(listings: [listing('l1', 'Samsung A54')]);
+      final opened = await open(tester);
+      expect(find.text('Start Negotiation'), findsNothing);
+      await tester.tap(find.byKey(const Key('profile-listings-button')));
+      await tester.pumpAndSettle();
+      expect(opened.single.name, '/product');
+      expect((opened.single.arguments as dynamic).id, 'l1');
+    });
+
+    testWidgets('several: the button takes the buyer to them', (tester) async {
+      backend(listings: [listing('l1', 'Samsung A54'), listing('l2', 'JBL Flip 6')]);
+      final opened = await open(tester);
+      expect(textIn(tester, const Key('profile-listings-button')), 'See 2 listings');
+      await tester.tap(find.byKey(const Key('profile-listings-button')));
+      await tester.pumpAndSettle();
+      expect(opened, isEmpty);
+      expect(find.text('JBL Flip 6'), findsOneWidget);
     });
   });
 

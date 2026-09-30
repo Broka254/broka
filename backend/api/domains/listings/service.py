@@ -19,6 +19,7 @@ from api.core.text_search import matches_all_terms, search_terms, term_matches
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
 from .paid import fee_applies, fee_state, is_live, live_clause
+from .stock import is_stocked, units_taken, units_total
 from .validation import load_attributes
 
 
@@ -520,7 +521,43 @@ class ListingService:
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
-        return self._listing_dict(listing, seller=seller, store=store, assets=assets)
+        d = self._listing_dict(listing, seller=seller, store=store, assets=assets)
+        d.update(await self._availability(listing))
+        # How long this seller's deals take, agreement to payout - on the
+        # listing itself, for the web storefront's product page, which has
+        # no profile to read it from (the app's listing screen reads the
+        # profile). Same gate as the profile: nothing to time before a sale.
+        if seller is not None and (seller.completed_deals or 0) > 0:
+            from api.domains.trust.deal_time import deal_completion_time
+            timed = await deal_completion_time(self.db, seller.id)
+            d["seller_avg_deal_time_minutes"] = timed["avg_deal_time_minutes"]
+            d["seller_timed_deals"] = timed["timed_deals"]
+        return d
+
+    async def _availability(self, listing: Listing) -> dict:
+        """Whether a buyer can still buy it, for the single-listing read.
+
+        Every list a buyer browses leaves out anything not active; this is
+        for the ways in that skip the lists - a shared link, an old
+        notification, a chat - so the screen can say "Sold out" or
+        "Removed" and offer nothing to buy. A deleted listing is still
+        returned rather than a 404: a chat about it reopens by fetching it.
+
+          units_left  units not in a deal (direct sales; None for auctions)
+          sold_out    every unit is sold or in a deal under way
+          available   on sale: active and not sold out
+        """
+        status = getattr(listing.status, "value", listing.status)
+        left = None
+        if is_stocked(listing):
+            taken, _ = await units_taken(self.db, listing.id)
+            left = max(units_total(listing) - taken, 0)
+        sold_out = status in (ListingStatus.pending.value, ListingStatus.completed.value) or left == 0
+        return {
+            "units_left": left,
+            "sold_out": sold_out,
+            "available": status == ListingStatus.active.value and not sold_out,
+        }
 
     async def list_listings(
         self,
@@ -824,6 +861,16 @@ class ListingService:
             raise HTTPException(status_code=404, detail="Listing not found")
         if listing.seller_id == buyer_id:
             raise HTTPException(status_code=400, detail="Cannot express interest in your own listing")
+        # Interest arms an SMS to the seller: not for something they can't
+        # sell any more.
+        availability = await self._availability(listing)
+        if not availability["available"]:
+            status = getattr(listing.status, "value", listing.status)
+            raise HTTPException(
+                status_code=409,
+                detail=("This listing has been removed by the seller."
+                        if status == ListingStatus.cancelled.value
+                        else "This listing is sold out."))
 
         interest = Interest(
             listing_id=listing_id,
@@ -985,6 +1032,66 @@ class ListingService:
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
+
+    async def delete_listing(self, listing_id: str, requester_id: str) -> dict:
+        """Take the seller's listing off BROKA for good.
+
+        A soft delete - status "cancelled", the status the NaN repair in
+        init_db already uses for "taken off sale" - because deals, chats,
+        reviews and receipts all point at the row. Every buyer-facing list
+        and search shows active listings only, so it is gone from all of
+        them; a link to it says it was removed.
+
+        Refused while a buyer has a deal on it that is still under way: an
+        agreed price the buyer is about to pay, or money in escrow. Deleting
+        would strand them. Finished deals don't stop it. An auction with
+        bids is refused too - the bidders were promised a close.
+        """
+        from api.core.audit import record_audit
+        from api.database import Bid
+        from api.domains.escrow.repository import TERMINAL_DEAL_STATUSES
+
+        # Row-locked and read fresh, like PATCH: a buyer finalizing at the
+        # same moment takes the same lock (EscrowService.finalize_deal).
+        listing = (await self.db.execute(
+            select(Listing).where(Listing.id == listing_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if not listing:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.seller_id != requester_id:
+            raise HTTPException(status_code=403, detail="You can only delete your own listings.")
+        if getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value:
+            return {"deleted": True, "listing_id": listing_id}
+
+        live_deals = (await self.db.execute(
+            select(func.count(Deal.id)).where(
+                Deal.listing_id == listing_id,
+                Deal.status.not_in(tuple(TERMINAL_DEAL_STATUSES)),
+            )
+        )).scalar() or 0
+        if live_deals:
+            raise HTTPException(
+                status_code=409,
+                detail="A buyer has a deal in progress on this listing. "
+                       "You can delete it once that deal is finished.")
+        if not is_stocked(listing):
+            bids = (await self.db.execute(
+                select(func.count(Bid.id)).where(Bid.listing_id == listing_id)
+            )).scalar() or 0
+            if bids:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This auction has bids, so it can't be deleted.")
+
+        listing.status = ListingStatus.cancelled
+        listing.is_featured = False
+        await record_audit(
+            self.db, requester_id, "listing_deleted", "listing", listing_id,
+            detail=f"name={listing.name!r}")
+        await self.db.commit()
+        return {"deleted": True, "listing_id": listing_id}
 
     async def _get_owned_listing_or_403(self, listing_id: str, requester_id: str) -> Listing:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))

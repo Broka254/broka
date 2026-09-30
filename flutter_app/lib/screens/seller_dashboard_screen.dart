@@ -16,7 +16,8 @@
 //
 // 2026-09-30: the average deal time - agreement to payout, over the seller's
 // recent completed deals - beside Deals Done in the header. Buyers see the
-// same figure on the seller's listings and profile.
+// same figure on the seller's listings and profile. And a Delete on each
+// product, which the dashboard never had.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -33,7 +34,9 @@ import '../services/api_service.dart';
 import '../widgets/particle_field.dart';
 import '../models/listing.dart';
 import '../models/seller_standing.dart';
+import '../core/utils/result.dart';
 import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
+import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 
@@ -2200,37 +2203,121 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           // one selling", which is the question a seller opens the app with.
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-            child: PressableScale(
-              onTap: () {
-                HapticFeedback.selectionClick();
-                Navigator.pushNamed(context, '/listing-insights', arguments: l);
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 9),
-                decoration: BoxDecoration(
-                  color: BrokaColors.neonBlue.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.32)),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.insights_rounded,
-                        size: 14, color: BrokaColors.neonBlue),
-                    SizedBox(width: 6),
-                    Text('View insights',
-                        style: TextStyle(color: BrokaColors.neonBlue,
-                            fontSize: 12, fontWeight: FontWeight.w700)),
-                  ],
+            child: Row(children: [
+              Expanded(
+                child: PressableScale(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    Navigator.pushNamed(context, '/listing-insights', arguments: l);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    decoration: BoxDecoration(
+                      color: BrokaColors.neonBlue.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.32)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.insights_rounded,
+                            size: 14, color: BrokaColors.neonBlue),
+                        SizedBox(width: 6),
+                        Text('View insights',
+                            style: TextStyle(color: BrokaColors.neonBlue,
+                                fontSize: 12, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 8),
+              // Smaller and red, beside the thing a seller taps most: it
+              // should be findable, not the obvious tap.
+              Semantics(
+                button: true,
+                label: 'Delete ${l.name}',
+                child: PressableScale(
+                  key: Key('delete-listing-${l.id}'),
+                  onTap: () => _deleteListing(l),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: BrokaColors.danger.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: BrokaColors.danger.withOpacity(0.35)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.delete_outline_rounded, size: 14, color: BrokaColors.danger),
+                      SizedBox(width: 5),
+                      Text('Delete', style: TextStyle(color: BrokaColors.danger,
+                          fontSize: 12, fontWeight: FontWeight.w700)),
+                    ]),
+                  ),
+                ),
+              ),
+            ]),
           ),
           // ── Expanded analytics body ──────────────────────────────────────────
           if (isExpanded) _buildProductExpandedBody(l, label, featured),
         ]),
       ),
+    );
+  }
+
+  /// Asks first, then takes the listing off BROKA. The backend refuses while
+  /// a buyer's deal on it is under way, and says so - shown as it comes.
+  Future<void> _deleteListing(Listing l) async {
+    HapticFeedback.selectionClick();
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: BrokaColors.border)),
+        title: const Text('Delete this listing?',
+            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 17)),
+        content: Text(
+          '"${l.name}" will be taken off BROKA. Buyers won\'t find it in search, '
+          'your store or anywhere else. This can\'t be undone.',
+          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep it', style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            key: const Key('confirm-delete-listing'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete',
+                style: TextStyle(color: BrokaColors.danger, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final result = await listingsRepository.deleteListing(l.id);
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    result.fold(
+      onSuccess: (_) {
+        setState(() {
+          _listings.removeWhere((x) => x.id == l.id);
+          _expanded.remove(l.id);
+          _dealStatusMap.remove(l.id);
+          _boostStatusMap.remove(l.id);
+        });
+        messenger.showSnackBar(SnackBar(
+          content: Text('"${l.name}" deleted'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      },
+      onFailure: (message, _) => messenger.showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: BrokaColors.danger,
+      )),
     );
   }
 

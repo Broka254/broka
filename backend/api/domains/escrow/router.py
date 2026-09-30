@@ -7,6 +7,8 @@ direct-release flow.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +56,9 @@ class FinalizeDealIn(BaseModel):
     agreed_price: float = Field(
         ..., gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False,
     )
+    # How many of the listing's units the deal is for; None is one. The
+    # units left are checked against it (listings/stock.py).
+    quantity: Optional[int] = Field(None, ge=1, le=1_000_000)
 
 
 class FundEscrowIn(BaseModel):
@@ -74,6 +79,7 @@ async def finalize_deal(
         agreed_price=body.agreed_price,
         current_user_id=current_user["id"],
         request_ip=client_ip_or_none(request),
+        quantity=body.quantity,
     )
 
 

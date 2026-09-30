@@ -2073,6 +2073,14 @@ class TestEndingSoonIsRetried:
     forever, with nobody ever told the auction was closing.
     """
 
+    @pytest.fixture
+    def _retry_at_once(self, monkeypatch):
+        # A retry waits out ENDING_SOON_RETRY_AFTER (45s) in production, so
+        # a second worker on the same tick cannot claim it; these tests
+        # sweep back to back as if each were the next tick.
+        from datetime import timedelta as _td
+        monkeypatch.setattr(lifecycle, "ENDING_SOON_RETRY_AFTER", _td(0))
+
     async def _ending_soon(self):
         from api.core.config import settings
 
@@ -2086,7 +2094,7 @@ class TestEndingSoonIsRetried:
         return listing, bidder
 
     @pytest.mark.asyncio
-    async def test_a_failed_send_is_retried_by_the_next_sweep(self, monkeypatch):
+    async def test_a_failed_send_is_retried_by_the_next_sweep(self, monkeypatch, _retry_at_once):
         from api.core import workers
         from api.domains.auctions import events as auction_events
 
@@ -2140,7 +2148,7 @@ class TestEndingSoonIsRetried:
         assert len(calls) == 1, "one delivered reminder, one send"
 
     @pytest.mark.asyncio
-    async def test_retries_are_bounded(self, monkeypatch):
+    async def test_retries_are_bounded(self, monkeypatch, _retry_at_once):
         """A permanently failing delivery stops rather than being attempted
         every 60 seconds until the auction closes."""
         from api.core import workers
@@ -2173,6 +2181,22 @@ class TestEndingSoonIsRetried:
 
         first, second = await asyncio.gather(_claim(), _claim())
         assert [first, second].count(True) == 1
+        assert (await _meta(listing.id)).ending_soon_attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_a_worker_moments_behind_does_not_send_again(self):
+        """The interleaving the gather above only sometimes produced: the
+        second worker reads the row after the first's claim committed, sees
+        one attempt made and none confirmed, and used to claim the next -
+        two reminders, one tick. It failed intermittently on PostgreSQL."""
+        listing, _ = await self._ending_soon()
+
+        async def _claim():
+            async with AsyncSessionLocal() as db:
+                return await lifecycle.claim_ending_soon_attempt(db, listing.id)
+
+        assert await _claim() is True
+        assert await _claim() is False
         assert (await _meta(listing.id)).ending_soon_attempts == 1
 
 

@@ -160,6 +160,12 @@ describe('TrustChips', () => {
     expect(screen.getByText('4.8')).toBeTruthy()
     expect(screen.queryByText('Verified seller')).toBeNull()
   })
+  it('says how long deals take, once there are deals to time', () => {
+    const { rerender } = render(<TrustChips verified={false} completedDeals={12} rating={4.8} dealTimeMinutes={2520} />)
+    expect(screen.getByText('Deals take about 2 days')).toBeTruthy()
+    rerender(<TrustChips verified={false} completedDeals={0} rating={null} dealTimeMinutes={2520} />)
+    expect(screen.queryByText(/Deals take/)).toBeNull()
+  })
   it('renders nothing with nothing to say', () => {
     const { container } = render(<TrustChips verified={false} completedDeals={0} rating={5} />)
     expect(container.innerHTML).toBe('')

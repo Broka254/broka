@@ -407,6 +407,15 @@ class NotificationService {
       });
       return;
     }
+    // "Deal Complete" (api/core/push_subscribers.py, on release) asks the
+    // buyer for a review and names the review screen; it opened nothing.
+    // The review screen fills in the seller and listing from the deal.
+    if (type == 'deal_status' && data['screen'] == 'review') {
+      final dealId = data['deal_id'] as String?;
+      if (dealId == null || dealId.isEmpty) return;
+      nav.pushNamed('/review', arguments: {'deal_id': dealId});
+      return;
+    }
     if (type == 'new_message') {
       final role = data['myRole'] as String? ?? 'buyer';
       nav.pushNamed('/direct-chat', arguments: {

@@ -155,6 +155,20 @@ class ListingsRepository {
     }
   }
 
+  /// Takes the seller's own listing off BROKA (DELETE /listings/{id}). The
+  /// backend refuses, with a message to show, while a buyer's deal on it is
+  /// under way or an auction has bids.
+  Future<Result<void>> deleteListing(String listingId) async {
+    try {
+      await _client.delete('/listings/$listingId');
+      return const Success(null);
+    } on ApiException catch (e) {
+      return Failure(e.message, statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(e.toString());
+    }
+  }
+
   Future<Result<void>> expressInterest(String listingId, double? offerPrice) async {
     try {
       await _client.post('/listings/$listingId/interest', {'offer_price': offerPrice});

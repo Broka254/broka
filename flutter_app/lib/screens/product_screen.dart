@@ -16,6 +16,11 @@
 //    screen made up from the star rating and deal count. Since 2026-09-30
 //    also how long the seller's deals take, agreement to payout
 //    (widgets/seller_standing_tiles.dart, shared with their profile).
+//
+// Also 2026-09-30: a listing opened from a link, a notification or a chat
+// can be sold out or deleted - every list a buyer browses leaves those out.
+// It says which, instead of offering to negotiate for something the seller
+// no longer has; and a listing of several units says how many are left.
 //  * ZENO INSIGHT - opens Zeno about this listing (ZenoScreen.aboutListing),
 //    where the buyer asks what they need to know and Zeno offers to find
 //    another listing when this one doesn't fit. It was a panel that asked the
@@ -123,6 +128,12 @@ class _ProductScreenState extends State<ProductScreen> {
 
   bool get _isMine => _listing?.sellerId == ApiService.currentUserId;
   bool get _isAuction => _listing?.listingType == 'auction';
+
+  /// Deleted by its seller (the backend's "cancelled").
+  bool get _removed => _listing?.status == 'cancelled';
+
+  /// Nothing left to buy: deleted, or every unit sold or in a deal.
+  bool get _unavailable => _removed || (_listing?.soldOut ?? false);
 
   double? get _distanceKm {
     final myLat = ApiService.currentUserLat;
@@ -235,7 +246,7 @@ class _ProductScreenState extends State<ProductScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: _isMine ? null : _buildCTA(l),
+      bottomNavigationBar: _isMine ? null : (_unavailable ? _buildUnavailableBar() : _buildCTA(l)),
     );
   }
 
@@ -471,9 +482,11 @@ class _ProductScreenState extends State<ProductScreen> {
         _chip(l.category, Icons.category_rounded, BrokaColors.neonBlue),
         if (LandSize.describe(l.attributes) != null)
           _chip(LandSize.describe(l.attributes)!, Icons.straighten_rounded, BrokaColors.neonGreen),
-        if (l.quantity != null && l.quantity! > 1)
-          _chip('${PriceUnits.quantity(l.quantity!, l.priceUnit)} available',
-              Icons.inventory_2_outlined, BrokaColors.neonCyan),
+        if (_unitsLabel(l) case final units?)
+          KeyedSubtree(
+            key: const Key('units-left'),
+            child: _chip(units, Icons.inventory_2_outlined, BrokaColors.neonCyan),
+          ),
         if (l.locationName != null)
           _chip(l.locationName!, Icons.location_on_rounded, BrokaColors.gold),
         if (_distanceKm != null)
@@ -544,6 +557,18 @@ class _ProductScreenState extends State<ProductScreen> {
         ),
       ]),
     );
+  }
+
+  /// A listing of several units: "100 bags available", or "12 of 100 bags
+  /// left" once some are sold or in deals. The count left comes from the
+  /// single-listing read; a listing opened from a list shows the total.
+  /// Nothing for a single item, or when there is nothing left to buy.
+  String? _unitsLabel(Listing l) {
+    final total = l.quantity ?? 1;
+    if (total <= 1 || _unavailable) return null;
+    final left = l.unitsLeft;
+    if (left == null || left >= total) return '${PriceUnits.quantity(total, l.priceUnit)} available';
+    return '$left of ${PriceUnits.quantity(total, l.priceUnit)} left';
   }
 
   Widget _termTile({
@@ -1026,6 +1051,37 @@ class _ProductScreenState extends State<ProductScreen> {
   }
 
   // ── CTA ───────────────────────────────────────────────────────────────────
+
+  /// In place of the buy button when there is nothing left to buy.
+  Widget _buildUnavailableBar() => SafeArea(
+    top: false,
+    child: Container(
+      key: const Key('product-unavailable'),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: const BoxDecoration(
+        color: BrokaColors.bgMid,
+        border: Border(top: BorderSide(color: BrokaColors.border)),
+      ),
+      child: Row(children: [
+        Icon(_removed ? Icons.remove_shopping_cart_outlined : Icons.inventory_2_outlined,
+            color: BrokaColors.warning, size: 22),
+        const SizedBox(width: 12),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min, children: [
+          Text(_removed ? 'Removed by the seller' : 'Sold out',
+              style: const TextStyle(color: BrokaColors.textHigh,
+                  fontSize: 16, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 2),
+          Text(
+            _removed
+                ? 'This listing is no longer on BROKA.'
+                : "Every unit is sold or in a deal. It comes back if one falls through.",
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.35)),
+        ])),
+      ]),
+    ),
+  );
 
   Widget _buildCTA(Listing l) => SafeArea(
     top: false,

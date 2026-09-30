@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -50,41 +51,48 @@ class ReviewService:
         if deal.status not in REVIEWABLE_STATUSES:
             raise HTTPException(status_code=400, detail="Can only review after delivery is confirmed")
 
-        # Prevent duplicate reviews
-        er = await self.db.execute(
-            select(Review).where(Review.deal_id == deal_id, Review.reviewer_id == reviewer_id)
-        )
-        if er.scalar_one_or_none():
+        if await self._already_reviewed(deal_id, reviewer_id):
             raise HTTPException(status_code=409, detail="You have already reviewed this deal")
 
+        seller_id = deal.seller_id
         review = Review(
             deal_id=deal_id,
             reviewer_id=reviewer_id,
-            seller_id=deal.seller_id,
+            seller_id=seller_id,
             rating=rating,
             comment=comment[:1000],
         )
-        self.db.add(review)
-
-        # Update seller's aggregate rating
-        await self._update_seller_rating(deal.seller_id)
-
-        await record_audit(
-            self.db, reviewer_id, "review_submitted", "review", "",
-            detail=f"deal_id={deal_id} rating={rating}",
-        )
-        await self.db.commit()
+        # The check above is a courtesy; uq_reviews_deal_reviewer is the
+        # guard. Two submissions sent together (a double tap, two phones)
+        # both pass the check, and the second insert fails here - at the
+        # flush the rating average triggers, or at commit.
+        try:
+            self.db.add(review)
+            await self._update_seller_rating(seller_id)
+            await record_audit(
+                self.db, reviewer_id, "review_submitted", "review", "",
+                detail=f"deal_id={deal_id} rating={rating}",
+            )
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            raise HTTPException(status_code=409, detail="You have already reviewed this deal")
         await self.db.refresh(review)
 
         await publish(ReviewSubmitted(
             review_id=review.id,
             deal_id=deal_id,
-            seller_id=deal.seller_id,
+            seller_id=seller_id,
             reviewer_id=reviewer_id,
             rating=rating,
         ))
 
         return self._review_dict(review)
+
+    async def _already_reviewed(self, deal_id: str, reviewer_id: str) -> bool:
+        r = await self.db.execute(
+            select(Review.id).where(Review.deal_id == deal_id, Review.reviewer_id == reviewer_id))
+        return r.first() is not None
 
     async def get_seller_reviews(
         self, seller_id: str, limit: int = 20, offset: int = 0,

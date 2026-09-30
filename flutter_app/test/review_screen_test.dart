@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/reviews/presentation/review_prompt.dart';
 import 'package:broka/screens/review_screen.dart';
 import 'package:broka/services/api_service.dart';
+import 'package:broka/services/notification_service.dart';
 
 import 'support/fake_api.dart';
 
@@ -31,7 +33,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       onGenerateRoute: (s) => MaterialPageRoute(
         settings: RouteSettings(name: '/review', arguments: args),
-        builder: (_) => const ReviewScreen(),
+        builder: (_) => const ReviewScreen(animateBackground: false),
       ),
     ));
     await tester.pumpAndSettle();
@@ -83,5 +85,98 @@ void main() {
     await tester.tap(find.text('Submit Review'));
     await tester.pumpAndSettle();
     expect(find.text('You have already reviewed this deal'), findsOneWidget);
+  });
+
+  group('opened from the "Deal Complete" notification', () {
+    testWidgets('the notification opens the review screen for its deal', (tester) async {
+      final key = GlobalKey<NavigatorState>();
+      NotificationService.instance.navigatorKey = key;
+      RouteSettings? opened;
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: key,
+        home: const SizedBox(),
+        onGenerateRoute: (s) {
+          opened = s;
+          return MaterialPageRoute(builder: (_) => const SizedBox());
+        },
+      ));
+      // What api/core/push_subscribers.py sends the buyer on release.
+      await NotificationService.instance.navigateFromPayload({
+        'type': 'deal_status', 'deal_id': 'd1', 'status': 'released', 'screen': 'review',
+      });
+      await tester.pump();
+      expect(opened?.name, '/review');
+      expect(opened?.arguments, {'deal_id': 'd1'});
+    });
+
+    testWidgets('with only the deal id, it finds out who and what', (tester) async {
+      setFakeRoute((uri) => uri.path == '/reviews/my-deals'
+          ? {'deals': [_deal('d1', 'Samsung A54')]}
+          : null);
+      await open(tester, {'deal_id': 'd1'});
+      expect(find.text('Rate Grace Akinyi'), findsOneWidget);
+      expect(find.text('Samsung A54'), findsOneWidget);
+      expect(find.byKey(const Key('submit-review')), findsOneWidget);
+    });
+
+    testWidgets('a deal already reviewed says so', (tester) async {
+      setFakeRoute((uri) => uri.path == '/reviews/my-deals'
+          ? {'deals': [_deal('d1', 'Samsung A54', reviewed: true)]}
+          : null);
+      await open(tester, {'deal_id': 'd1'});
+      expect(find.byKey(const Key('review-closed')), findsOneWidget);
+      expect(find.textContaining("You've already reviewed Grace Akinyi"), findsOneWidget);
+      expect(find.byKey(const Key('submit-review')), findsNothing);
+    });
+  });
+
+  group('asked when the deal completes', () {
+    final opened = <RouteSettings>[];
+    setUp(opened.clear);
+
+    Future<void> prompt(WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(builder: (context) => TextButton(
+          onPressed: () => promptReviewIfDue(context, dealId: 'd1', sellerId: 'seller-1'),
+          child: const Text('released'),
+        )),
+        onGenerateRoute: (s) {
+          opened.add(s);
+          return MaterialPageRoute(builder: (_) => const SizedBox());
+        },
+      ));
+      await tester.tap(find.text('released'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a completed, unreviewed deal is offered for review', (tester) async {
+      setFakeRoute((uri) => uri.path == '/reviews/my-deals'
+          ? {'deals': [_deal('d1', 'Samsung A54')]}
+          : null);
+      await prompt(tester);
+      expect(find.byKey(const Key('review-prompt')), findsOneWidget);
+      expect(find.text('Rate Grace Akinyi'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('review-prompt-rate')));
+      await tester.pumpAndSettle();
+      // The review opens on that deal, straight to the form.
+      expect(opened.single.name, '/review');
+      expect(opened.single.arguments, {
+        'deal_id': 'd1', 'seller_id': 'seller-1',
+        'seller_name': 'Grace Akinyi', 'listing_name': 'Samsung A54',
+      });
+    });
+
+    testWidgets('nothing is asked for a deal already reviewed, or not yet released', (tester) async {
+      setFakeRoute((uri) => uri.path == '/reviews/my-deals'
+          ? {'deals': [_deal('d1', 'Samsung A54', reviewed: true)]}
+          : null);
+      await prompt(tester);
+      expect(find.byKey(const Key('review-prompt')), findsNothing);
+
+      setFakeRoute((uri) => uri.path == '/reviews/my-deals' ? {'deals': []} : null);
+      await prompt(tester);
+      expect(find.byKey(const Key('review-prompt')), findsNothing);
+      expect(opened, isEmpty);
+    });
   });
 }

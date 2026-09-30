@@ -619,6 +619,13 @@ class AuctionMeta(Base):
     # whose delivery fails permanently stops rather than being retried
     # every 60 seconds until it closes. See lifecycle.MAX_ENDING_SOON_ATTEMPTS.
     ending_soon_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    # When the last attempt was claimed. The counter alone did not stop a
+    # second worker whose tick came moments after the first's claim had
+    # committed: it read the new count and claimed the next attempt, and
+    # both sent. A claim is refused within lifecycle.ENDING_SOON_RETRY_AFTER
+    # of the previous one - shorter than the 60-second sweep, so the next
+    # tick's retry still goes through.
+    ending_soon_claimed_at = Column(DateTime, nullable=True)
 
 
 class Wishlist(Base):
@@ -812,6 +819,12 @@ class Deal(Base):
     # needless duplication, so this deliberately does not exist here.
     leak_flag        = Column(Boolean, default=False, nullable=False)
     leak_detected_at = Column(DateTime, nullable=True)
+
+    # How many of the listing's units this deal is for (Listing.quantity:
+    # 10 of the seller's 100 bags). NULL = one, which every deal before this
+    # column was. The units are taken from agreement until the deal is
+    # refunded or cancelled - api/domains/listings/stock.py.
+    quantity         = Column(Integer, nullable=True)
 
 
 class SellerMetrics(Base):
@@ -1015,6 +1028,14 @@ class Review(Base):
     rating      = Column(Integer, nullable=False)          # 1-5 stars
     comment     = Column(Text, default="")
     created_at  = Column(DateTime, default=datetime.utcnow)
+
+    # One review per deal per reviewer, held by the database: the service
+    # checks first, but two submissions sent together both pass that check
+    # (a double tap, two phones) and the seller's average counted the deal
+    # twice.
+    __table_args__ = (
+        Index("uq_reviews_deal_reviewer", "deal_id", "reviewer_id", unique=True),
+    )
 
 
 class FeaturedPayment(Base):
@@ -1312,6 +1333,8 @@ async def init_db():
             # lifecycle.claim_ending_soon_attempt can compare against a
             # number on existing rows rather than against NULL.
             "ALTER TABLE auction_meta ADD COLUMN ending_soon_attempts INTEGER NOT NULL DEFAULT 0",
+            # TIMESTAMP, not DATETIME: PostgreSQL has no DATETIME.
+            "ALTER TABLE auction_meta ADD COLUMN ending_soon_claimed_at TIMESTAMP",
             # Image assets (Online Stores phase 1). media_assets/media_blobs
             # are new tables; these point existing rows at them.
             "ALTER TABLE listings ADD COLUMN photo_ids TEXT",
@@ -1351,6 +1374,9 @@ async def init_db():
             # PostgreSQL has no DATETIME, and a failure here is swallowed.
             # NULL on every existing row: listings from before fees are free.
             "ALTER TABLE listings ADD COLUMN paid_until TIMESTAMP",
+            # Units per deal (Deal.quantity). NULL on every existing deal:
+            # each was for one unit.
+            "ALTER TABLE deals ADD COLUMN quantity INTEGER",
             # Data repair, not schema. Listings used to accept NaN and
             # Infinity (api/domains/listings/validation.py); PostgreSQL
             # stores them and every response containing such a row fails,
@@ -1485,6 +1511,11 @@ async def init_db():
             # either database, so listings made without a key are unaffected.
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_listings_seller_client_ref "
             "ON listings (seller_id, client_ref)",
+            # One review per (deal, reviewer) - see Review.__table_args__.
+            # Fails harmlessly, and leaves the service's own check as the
+            # only guard, on a database already holding a duplicate.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_deal_reviewer "
+            "ON reviews (deal_id, reviewer_id)",
         ]
         for stmt in index_patches:
             # Same SAVEPOINT scoping as the two blocks above - CREATE INDEX

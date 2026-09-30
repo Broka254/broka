@@ -6,7 +6,16 @@ import { describe, expect, it } from 'vitest'
 import { filtersQuery, readFilters, toProductCard } from './catalogue'
 import { CATEGORIES, canonicalCategory, categoryVisual } from './categories'
 import { buildConstellation, MESH_COUNT, STAR_COUNT, seededRandom } from './constellation'
-import { clip, conditionLabel, formatPrice, formatUnitPrice, placeLine, plural, yearOf } from './format'
+import {
+  clip,
+  conditionLabel,
+  formatDealTime,
+  formatPrice,
+  formatUnitPrice,
+  placeLine,
+  plural,
+  yearOf,
+} from './format'
 import { resolveImage, resolveSizes, srcSet } from './images'
 import nextConfig from '../../next.config'
 import {
@@ -52,6 +61,13 @@ describe('format', () => {
     expect(yearOf('nonsense')).toBeNull()
     expect(conditionLabel('refurbished')).toBe('Refurbished')
     expect(conditionLabel(null)).toBeNull()
+  })
+  it('says how long deals take in words a buyer reads', () => {
+    expect(formatDealTime(25)).toBe('under an hour')
+    expect(formatDealTime(60)).toBe('about 1 hour')
+    expect(formatDealTime(5 * 60 + 10)).toBe('about 5 hours')
+    expect(formatDealTime(24 * 60)).toBe('about 24 hours')
+    expect(formatDealTime(2520)).toBe('about 2 days')
   })
 })
 

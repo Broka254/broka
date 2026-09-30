@@ -131,7 +131,9 @@ export function productView(listing: Listing, storeSlug: string): ProductView {
     listing,
     path,
     url: absoluteUrl(path),
-    available: listing.status === 'active',
+    // The single-listing read also says when every unit is sold or in a
+    // deal while the listing is still active - stock catches up within minutes.
+    available: listing.status === 'active' && listing.available !== false,
     priceLabel: formatUnitPrice(listing.price, listing.price_unit),
     images,
     emoji: categoryVisual(listing.category).emoji,

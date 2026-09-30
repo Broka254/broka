@@ -25,6 +25,9 @@ import '../models/listing.dart';
 import '../widgets/zeno_avatar.dart';
 import '../widgets/zeno_streaming_text.dart';
 import '../widgets/protection_badge.dart';
+import '../widgets/units_stepper.dart';
+import '../features/reviews/presentation/review_prompt.dart';
+import '../utils/price_format.dart';
 
 class NegotiateScreen extends StatefulWidget {
   const NegotiateScreen({super.key, this.animateBackground = true});
@@ -658,7 +661,15 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       yes: 'Yes, release payment',
       yesColor: BrokaColors.neonGreen,
     )) return;
+    // Read before the intent: once released, the deal-status fetch no
+    // longer returns it.
+    final dealId = _dealStatus?['deal_id'] as String?;
     await _sendIntent('buyer_confirms_goods_ok', content: 'The goods are correct and in good condition.');
+    // Released: ask how it went while the goods are in hand. The backend
+    // decides whether it is due (released, not yet reviewed).
+    if (dealId != null && mounted) {
+      await promptReviewIfDue(context, dealId: dealId, sellerId: _listing?.sellerId);
+    }
   }
 
   /// Wrong item received.
@@ -1088,10 +1099,18 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       return;
     }
     final agreedPrice = _currentOffer ?? listing.price;
+    // A listing of several units: the agreed price is for how many of them?
+    // The backend takes that many from the seller's stock.
+    int? units;
+    if (hasUnits(listing)) {
+      units = await askUnitsForPrice(context, listing, formatKes(agreedPrice));
+      if (units == null || !mounted) return;
+    }
     await _send('I accept this deal. How do we proceed with payment?');
     try {
       final deal = await ApiService.finalizeDeal(
         listingId: listing.id, buyerId: buyerId, agreedPrice: agreedPrice,
+        quantity: units,
       );
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/direct-chat',

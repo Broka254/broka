@@ -1152,10 +1152,13 @@ class ApiService {
 
   // ── Deal ───────────────────────────────────────────────────────────────────
 
+  /// [quantity] is how many of the listing's units the deal is for (null:
+  /// one); the backend refuses more than are left.
   static Future<Map<String, dynamic>> finalizeDeal({
     required String listingId,
     required String buyerId,
     required double agreedPrice,
+    int? quantity,
   }) async {
     final response = await http.post(
       Uri.parse('$baseUrl/deal/finalize'),
@@ -1164,6 +1167,7 @@ class ApiService {
         'listing_id':   listingId,
         'buyer_id':     buyerId,
         'agreed_price': agreedPrice,
+        if (quantity != null) 'quantity': quantity,
       }),
     ).timeout(const Duration(seconds: 30));
     final data = jsonDecode(response.body) as Map<String, dynamic>;

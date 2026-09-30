@@ -205,7 +205,24 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
             await task_expire_buy_agent_watches()
         except Exception as exc:
             logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
+        try:
+            await task_sync_listing_stock()
+        except Exception as exc:
+            logger.error("[sweep] listing stock sync failed: %s", exc)
         await asyncio.sleep(interval_seconds)
+
+
+async def task_sync_listing_stock() -> int:
+    """Show again a listing whose deals were refunded or cancelled, and
+    mark one sold once every unit has been paid out (listings/stock.py).
+
+    A sweep rather than a hook in each place a deal ends: those are the
+    payout, refund and dispute paths, and a listing's visibility is not
+    worth touching money code for. Five minutes late is fine for it."""
+    from api.database import AsyncSessionLocal
+    from api.domains.listings.stock import sync_listing_stock
+    async with AsyncSessionLocal() as db:
+        return await sync_listing_stock(db)
 
 
 async def task_reconcile_econfirm_escrows(ctx: dict) -> None:

@@ -154,6 +154,65 @@ void main() {
     expect(beside('Avg Deal Time').data, '1.5d');
   });
 
+  group('deleting a product', () {
+    Map<String, dynamic> listing(String id, String name) => {
+          'id': id, 'name': name, 'category': 'Electronics', 'price': 32000,
+          'listing_type': 'direct', 'status': 'active', 'seller_id': 'seller-1', 'views': 4,
+        };
+
+    Future<void> openProducts(WidgetTester tester, {Object? onDelete}) async {
+      setFakeRoute((uri) {
+        if (uri.path == '/auth/user/seller-1') return {'id': 'seller-1', 'name': 'Grace Akinyi'};
+        if (uri.path == '/listings/') {
+          return [listing('listing-7', 'Samsung A54'), listing('listing-8', 'JBL Flip 6')];
+        }
+        if (uri.path == '/listings/listing-7') return onDelete;
+        if (uri.path == '/stores/mine') return const FakeResponse(null);
+        return null;
+      });
+      clearFakeRequests();
+      await tester.pumpWidget(const MaterialApp(home: SellerDashboardScreen(animateBackground: false)));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('dashboard-tab-1')));
+      await _settle(tester);
+      expect(find.text('Samsung A54'), findsOneWidget);
+    }
+
+    testWidgets('asks first, then takes it off the dashboard', (tester) async {
+      await openProducts(tester, onDelete: {'deleted': true, 'listing_id': 'listing-7'});
+
+      await tester.tap(find.byKey(const Key('delete-listing-listing-7')));
+      await _settle(tester);
+      expect(find.text('Delete this listing?'), findsOneWidget);
+      // Keep it: nothing is sent.
+      await tester.tap(find.text('Keep it'));
+      await _settle(tester);
+      expect(fakeRequests.where((r) => r.method == 'DELETE'), isEmpty);
+
+      await tester.tap(find.byKey(const Key('delete-listing-listing-7')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('confirm-delete-listing')));
+      await _settle(tester);
+      final sent = fakeRequests.singleWhere((r) => r.method == 'DELETE');
+      expect(sent.uri.path, '/listings/listing-7');
+      expect(find.text('Samsung A54'), findsNothing);
+      expect(find.text('JBL Flip 6'), findsOneWidget);
+      expect(find.text('"Samsung A54" deleted'), findsOneWidget);
+    });
+
+    testWidgets("says why when the backend won't", (tester) async {
+      const why = 'A buyer has a deal in progress on this listing. '
+          'You can delete it once that deal is finished.';
+      await openProducts(tester, onDelete: const FakeResponse({'detail': why}, statusCode: 409));
+      await tester.tap(find.byKey(const Key('delete-listing-listing-7')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('confirm-delete-listing')));
+      await _settle(tester);
+      expect(find.text(why), findsOneWidget);
+      expect(find.text('Samsung A54'), findsOneWidget);
+    });
+  });
+
   testWidgets('nothing overflows on a 320dp phone at a large text size', (tester) async {
     tester.view.physicalSize = const Size(320 * 2, 640 * 2);
     tester.view.devicePixelRatio = 2.0;

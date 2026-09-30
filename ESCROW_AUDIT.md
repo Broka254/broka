@@ -100,11 +100,30 @@ worse than no rating. Removed.
 confirmation, so every legacy deal counted twice. Now credited once, at
 release, where it's earned.
 
+## Listing stock at finalize (2026-09-30)
+
+`finalize_deal` didn't check the listing wasn't already committed: two
+buyers could both finalize on the same listing, and `listing.status =
+"pending"` was set without checking. It also set "pending" on the first
+agreement whatever the listing's quantity, so a seller of 100 bags vanished
+from every feed when one bag was agreed, and nothing set it back when that
+deal was refunded or cancelled.
+
+Now a deal takes `Deal.quantity` units (NULL = one), counted under the
+listing's row lock against `Listing.quantity` less the units already in
+deals that aren't refunded or cancelled; more than are left is a 409. The
+listing is hidden when the last unit goes, and the five-minute sweep puts it
+back on sale when a deal gives units back, or marks it completed once every
+unit is paid out (`api/domains/listings/stock.py`). No payout, refund or
+dispute path was touched. Auctions keep their own lifecycle (one item),
+but take the same lock: the close and a retry of the winner's deal could
+both be inside `finalize_deal` at once, neither saw the other's uncommitted
+deal, and the winner got two (`test_concurrent_sweeps_close_each_auction_
+exactly_once`, intermittently on PostgreSQL). The second now waits and
+returns the first's deal.
+
 ## Still open
 
-- **`finalize_deal` doesn't check the listing isn't already committed.** Two
-  buyers can both finalize on the same listing; `listing.status = "pending"`
-  is set without checking it wasn't already pending for someone else.
 - **A seller can name any `buyer_id`**, creating a deal obligation against a
   user who never agreed. Pre-existing and acknowledged in the code's own
   comment, but it's spam surface.

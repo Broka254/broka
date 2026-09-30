@@ -146,6 +146,9 @@ describe('product view', () => {
     expect(view.images[0]?.thumb).toBe(`${API_URL}/media/img/a/thumb.webp`)
     expect(view.available).toBe(false)
     expect(view.path).toBe('/store/clanix/p/l1')
+    // Still active, but every unit sold or in a deal.
+    expect(productView(listing({ available: false }), 'clanix').available).toBe(false)
+    expect(productView(listing(), 'clanix').available).toBe(true)
     expect(view.place).toBe('Town')
   })
 

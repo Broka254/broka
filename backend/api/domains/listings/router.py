@@ -915,6 +915,18 @@ async def get_listing(listing_id: str, db: AsyncSession = Depends(get_db)):
     return await svc.get_listing(listing_id)
 
 
+@router.delete("/{listing_id}")
+async def delete_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete your own listing: buyers no longer see it anywhere. Refused
+    while a buyer's deal on it is under way - see ListingService.delete_listing."""
+    svc = ListingService(db)
+    return await svc.delete_listing(listing_id, current_user["id"])
+
+
 @router.post("/{listing_id}/store")
 async def set_listing_store(
     listing_id: str,

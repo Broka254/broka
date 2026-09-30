@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import '../../../core/network/deal_ws_client.dart';
 import '../../../core/utils/result.dart';
 import '../../escrow/data/repositories/escrow_repository.dart';
+import '../../reviews/presentation/review_prompt.dart';
 
 class DealStatusScreen extends StatefulWidget {
   final String dealId;
@@ -97,6 +98,11 @@ class _DealStatusScreenState extends State<DealStatusScreen> {
       onFailure: (msg, _) => setState(() => _actionError = msg),
     );
     if (mounted) setState(() => _isActing = false);
+    // The deal is done: ask the buyer how it went while it's fresh.
+    if (result.isSuccess && widget.role == 'buyer' && mounted) {
+      await promptReviewIfDue(context, dealId: widget.dealId,
+          sellerId: _deal['seller_id'] as String?);
+    }
   }
 
   Future<void> _openDispute() async {
