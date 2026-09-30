@@ -30,6 +30,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../features/stores/data/store_cart.dart';
+import '../features/stores/presentation/store_cart_screen.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../main.dart';
 import '../models/listing.dart';
@@ -1091,57 +1093,131 @@ class _ProductScreenState extends State<ProductScreen> {
         color: BrokaColors.bgMid.withOpacity(0.97),
         border: const Border(top: BorderSide(color: BrokaColors.border)),
       ),
-      child: Row(children: [
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min, children: [
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(l.formattedPrice, style: const TextStyle(
-                color: BrokaColors.textHigh, fontSize: 20,
-                fontWeight: FontWeight.w800)),
-          ),
-          Text(
-            _isAuction
-                ? 'Escrow protected · 3% fee'
-                : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · Escrow protected',
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
-        ])),
-        const SizedBox(width: 12),
-        // The brand gradient, as on Home's primary actions. The label says
-        // what happens: a fixed price is not negotiated, it is agreed with
-        // the seller - through the same room, which knows it is fixed.
-        Semantics(
-          button: true,
-          child: GestureDetector(
-            key: const Key('product-cta'),
-            onTap: () async {
-              final authed = await requireAuth(context, reason: 'to start negotiating');
-              if (!authed || !mounted) return;
-              Navigator.pushNamed(context, '/negotiate',
-                  arguments: {'listing': l, 'role': 'buyer'});
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 15),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [BoxShadow(
-                    color: BrokaColors.gold.withOpacity(0.4), blurRadius: 14)],
-              ),
-              child: Text(
-                  _isAuction || l.priceNegotiable ? 'Start Negotiation' : 'Contact Seller',
-                  style: const TextStyle(color: Colors.white,
-                      fontWeight: FontWeight.w800, fontSize: 15)),
-            ),
-          ),
-        ),
-      ]),
+      // A store product is bought like one in a shop: Add to cart beside
+      // the main action, the price above both. Everything else keeps the
+      // one-row bar.
+      child: _sellsFromStore(l)
+          ? Column(mainAxisSize: MainAxisSize.min, children: [
+              _ctaPrice(l),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(child: _addToCartButton(l)),
+                const SizedBox(width: 10),
+                Expanded(child: _ctaButton(l)),
+              ]),
+            ])
+          : Row(children: [
+              Expanded(child: _ctaPrice(l)),
+              const SizedBox(width: 12),
+              _ctaButton(l),
+            ]),
     ),
   );
+
+  /// Direct sales from a store go in its cart; auctions have their own way.
+  bool _sellsFromStore(Listing l) => l.storeId != null && !_isAuction;
+
+  Widget _ctaPrice(Listing l) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min, children: [
+    FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Text(l.formattedPrice, style: const TextStyle(
+          color: BrokaColors.textHigh, fontSize: 20,
+          fontWeight: FontWeight.w800)),
+    ),
+    Text(
+      _isAuction
+          ? 'Escrow protected · 3% fee'
+          : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · Escrow protected',
+      maxLines: 1, overflow: TextOverflow.ellipsis,
+      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+  ]);
+
+  // The brand gradient, as on Home's primary actions. The label says what
+  // happens: a fixed price is not negotiated, it is agreed with the seller -
+  // through the same room, which knows it is fixed.
+  Widget _ctaButton(Listing l) => Semantics(
+    button: true,
+    child: GestureDetector(
+      key: const Key('product-cta'),
+      onTap: () async {
+        final authed = await requireAuth(context, reason: 'to start negotiating');
+        if (!authed || !mounted) return;
+        Navigator.pushNamed(context, '/negotiate',
+            arguments: {'listing': l, 'role': 'buyer'});
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 15),
+        alignment: _sellsFromStore(l) ? Alignment.center : null,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+              colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [BoxShadow(
+              color: BrokaColors.gold.withOpacity(0.4), blurRadius: 14)],
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+              _isAuction || l.priceNegotiable ? 'Start Negotiation' : 'Contact Seller',
+              style: const TextStyle(color: Colors.white,
+                  fontWeight: FontWeight.w800, fontSize: 15)),
+        ),
+      ),
+    ),
+  );
+
+  /// Add to cart, or - once it's in - how many and the way to the cart.
+  Widget _addToCartButton(Listing l) {
+    final cart = StoreCart.of(l.storeId!);
+    return ListenableBuilder(
+      listenable: cart,
+      builder: (context, _) {
+        final inCart = cart.quantityOf(l.id);
+        void openCart() => openStoreCart(context,
+            storeId: l.storeId!, storeName: l.storeName ?? 'Store',
+            animateBackground: widget.animateBackground);
+        return OutlinedButton.icon(
+          key: const Key('product-add-to-cart'),
+          onPressed: () {
+            if (inCart > 0) return openCart();
+            cart.add(CartItem.fromFields(
+              id: l.id,
+              name: l.name,
+              price: l.price,
+              category: l.category,
+              priceUnit: l.priceUnit,
+              quantity: l.quantity,
+              unitsLeft: l.unitsLeft,
+              cover: l.cover,
+              photos: l.photos,
+            ));
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(
+                content: const Text('Added to your cart'),
+                action: SnackBarAction(label: 'View cart', onPressed: openCart),
+              ));
+          },
+          style: OutlinedButton.styleFrom(
+            foregroundColor: BrokaColors.textHigh,
+            minimumSize: const Size.fromHeight(50),
+            side: const BorderSide(color: BrokaColors.gold, width: 1.4),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          icon: Icon(inCart > 0 ? Icons.shopping_cart_checkout_rounded
+              : Icons.add_shopping_cart_rounded, size: 19),
+          label: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(inCart > 0 ? 'In cart ($inCart)' : 'Add to cart',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
+          ),
+        );
+      },
+    );
+  }
 
   // ── Haversine ─────────────────────────────────────────────────────────────
 

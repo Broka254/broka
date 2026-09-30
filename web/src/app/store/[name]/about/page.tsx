@@ -7,13 +7,16 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound, permanentRedirect } from 'next/navigation'
 
-import { SiteFooter } from '@/components/SiteFooter'
-import { SiteHeader } from '@/components/SiteHeader'
+import { CartDrawer } from '@/components/CartDrawer'
+import { Icon } from '@/components/Icon'
 import { StoreDetails } from '@/components/StoreDetails'
+import { StoreFooter } from '@/components/StoreFooter'
+import { StoreHeader } from '@/components/StoreHeader'
 import { VisitBeacon } from '@/components/VisitBeacon'
+import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
 import { getStore } from '@/lib/api'
-import { absoluteUrl, storeDetailsPath, viaTag } from '@/lib/links'
+import { absoluteUrl, storeCartPath, storeDetailsPath, viaTag } from '@/lib/links'
 import { storeDescription, storePreviewImage, storeView } from '@/lib/storefront'
 
 type Props = {
@@ -53,24 +56,19 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
   const view = storeView(store)
   return (
     <>
-      <SiteHeader />
-      <main className="page">
-        <Link href={view.path} className={styles.back}>
-          <span className={styles.backLogo}>
-            {view.logo ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={view.logo} alt="" />
-            ) : (
-              <span aria-hidden="true">{view.initial}</span>
-            )}
-          </span>
-          ← Back to {store.name}
-        </Link>
+      <StoreHeader view={view} />
+      <main className={`page ${shop.storePage}`}>
+        <nav aria-label="Breadcrumb" className={shop.crumbs}>
+          <Link href={view.path}>{store.name}</Link>
+          <Icon name="chevron" size={14} />
+          <span aria-current="page">Store details</span>
+        </nav>
         <h1 className={styles.detailsTitle}>Store details</h1>
         <StoreDetails view={view} />
         <VisitBeacon storeId={store.id} via={via} />
       </main>
-      <SiteFooter />
+      <StoreFooter view={view} />
+      {store.is_active && <CartDrawer storeId={store.id} storeName={store.name} cartPath={storeCartPath(store.slug)} />}
     </>
   )
 }

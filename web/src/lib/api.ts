@@ -5,7 +5,8 @@ import 'server-only'
 
 import { PAGE_SIZE, REVALIDATE_SECONDS } from './config'
 import { API_URL } from './server-config'
-import type { Listing, SortKey, Store, StoreCategory } from './types'
+import { PRICE_BANDS } from './catalogue'
+import type { ConditionKey, Listing, PriceBandKey, SortKey, Store, StoreCategory } from './types'
 
 /** The API answered with an error, or didn't answer. */
 export class ApiUnavailableError extends Error {
@@ -51,6 +52,8 @@ export interface CatalogueQuery {
   q?: string
   category?: string
   sort?: SortKey
+  condition?: ConditionKey | null
+  price?: PriceBandKey | null
   offset?: number
   limit?: number
 }
@@ -63,6 +66,10 @@ export async function getStoreListings(storeId: string, query: CatalogueQuery = 
   if (query.q) params.set('search', query.q)
   if (query.category) params.set('category', query.category)
   if (query.sort && query.sort !== 'featured') params.set('sort', query.sort)
+  if (query.condition) params.set('condition', query.condition)
+  const band = PRICE_BANDS.find((b) => b.key === query.price)
+  if (band?.min != null) params.set('min_price', String(band.min))
+  if (band?.max != null) params.set('max_price', String(band.max))
   return (await apiGet<Listing[]>(`/stores/${storeId}/listings?${params}`, [`store-id:${storeId}`])) ?? []
 }
 

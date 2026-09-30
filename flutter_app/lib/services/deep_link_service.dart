@@ -16,6 +16,7 @@
 // returns to Home rather than closing the app.
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -25,7 +26,13 @@ import '../features/stores/data/repositories/stores_repository.dart';
 /// Where a link points.
 @immutable
 class StoreLinkTarget {
-  const StoreLinkTarget({required this.slug, this.listingId, this.via, this.details = false});
+  const StoreLinkTarget({
+    required this.slug,
+    this.listingId,
+    this.via,
+    this.details = false,
+    this.cart,
+  });
 
   final String slug;
 
@@ -39,7 +46,16 @@ class StoreLinkTarget {
   /// /store/ link opens the app, so one it didn't know opened nothing.
   final bool details;
 
+  /// A link to the store's cart (/store/<name>/cart?items=<id>:<qty>,...):
+  /// the web storefront's "check out in the app" - the products and how
+  /// many of each, to put in the phone's cart for this store. Null for any
+  /// other link; empty for a cart link without items.
+  final Map<String, int>? cart;
+
   bool get isProduct => listingId != null;
+
+  /// At most this many products come in through one link.
+  static const maxCartItems = 30;
 
   static const _hosts = {'broka.co.ke', 'www.broka.co.ke'};
   static final _slugPattern = RegExp(r'^[a-z0-9]+(?:-[a-z0-9]+)*$');
@@ -61,10 +77,28 @@ class StoreLinkTarget {
     if (parts.length == 3 && parts[2] == 'about') {
       return StoreLinkTarget(slug: slug, via: via, details: true);
     }
+    if (parts.length == 3 && parts[2] == 'cart') {
+      return StoreLinkTarget(slug: slug, via: via, cart: _cartItems(uri.queryParameters['items']));
+    }
     if (parts.length == 4 && parts[2] == 'p' && _idPattern.hasMatch(parts[3])) {
       return StoreLinkTarget(slug: slug, listingId: parts[3], via: via);
     }
     return null;
+  }
+
+  /// "l1:2,l2" -> {l1: 2, l2: 1}. Anything malformed is left out rather
+  /// than failing the whole link; quantities are 1-99.
+  static Map<String, int> _cartItems(String? raw) {
+    final items = <String, int>{};
+    for (final part in (raw ?? '').split(',')) {
+      if (items.length >= maxCartItems) break;
+      final bits = part.trim().split(':');
+      if (bits.isEmpty || !_idPattern.hasMatch(bits[0]) || bits.length > 2) continue;
+      final qty = bits.length == 2 ? int.tryParse(bits[1]) : 1;
+      if (qty == null || qty < 1) continue;
+      items[bits[0]] = qty > 99 ? 99 : qty;
+    }
+    return items;
   }
 
   @override
@@ -73,13 +107,16 @@ class StoreLinkTarget {
       other.slug == slug &&
       other.listingId == listingId &&
       other.via == via &&
-      other.details == details;
+      other.details == details &&
+      mapEquals(other.cart, cart);
 
   @override
-  int get hashCode => Object.hash(slug, listingId, via, details);
+  int get hashCode => Object.hash(slug, listingId, via, details, cart?.length);
 
   @override
-  String toString() => 'StoreLinkTarget($slug, $listingId, $via${details ? ', details' : ''})';
+  String toString() =>
+      'StoreLinkTarget($slug, $listingId, $via${details ? ', details' : ''}'
+      '${cart != null ? ', cart $cart' : ''})';
 }
 
 class DeepLinkService {
@@ -161,6 +198,7 @@ class DeepLinkService {
         'slug': target.slug,
         'via': target.via,
         if (target.details) 'view': 'details',
+        if (target.cart != null) ...{'view': 'cart', 'items': target.cart},
       });
     }
   }

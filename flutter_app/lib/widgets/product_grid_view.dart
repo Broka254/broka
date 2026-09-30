@@ -78,6 +78,14 @@ class ProductGridView extends StatefulWidget {
   /// existing caller already got.
   final EdgeInsets padding;
 
+  /// Builds each tile in place of ProductCard: a store's catalogue has its
+  /// own card, with Add to cart. Null (every other caller): ProductCard.
+  final Widget Function(BuildContext context, dynamic item)? itemBuilder;
+
+  /// Height [itemBuilder]'s card needs below its photo at a text scale of
+  /// 1, in place of ProductCard's (see _cardTextBlock).
+  final double? itemTextBlock;
+
   const ProductGridView({
     super.key,
     required this.fetchPage,
@@ -87,6 +95,8 @@ class ProductGridView extends StatefulWidget {
     this.sliver = false,
     this.controller,
     this.padding = const EdgeInsets.all(12),
+    this.itemBuilder,
+    this.itemTextBlock,
   });
 
   @override
@@ -251,7 +261,8 @@ class _ProductGridViewState extends State<ProductGridView> {
     final cardWidth =
         (width - widget.padding.horizontal - _crossAxisSpacing) / 2;
     if (cardWidth <= 0) return 0.68;
-    final tileHeight = cardWidth * _cardImageShare + _cardTextBlock * textScale;
+    final textBlock = widget.itemTextBlock ?? _cardTextBlock;
+    final tileHeight = cardWidth * _cardImageShare + textBlock * textScale;
     return cardWidth / tileHeight;
   }
 
@@ -267,6 +278,8 @@ class _ProductGridViewState extends State<ProductGridView> {
   Widget _card(int index) {
     _maybeLoadMore(index);
     final item = _items[index];
+    final builder = widget.itemBuilder;
+    if (builder != null) return builder(context, item);
     return ProductCard(
       item: item,
       onTap: () => widget.onTapItem?.call(item),

@@ -3,6 +3,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/screens/menu_screen.dart';
@@ -160,6 +161,25 @@ void main() {
       expect(find.text('5'), findsOneWidget);
       expect(find.text('Manage store'), findsOneWidget);
       expect(find.byTooltip('Share store link'), findsOneWidget);
+      // The name is the card's sign: no logo square with the initial in it.
+      final card = find.byKey(const Key('menu-store-card'));
+      expect(find.descendant(of: card, matching: find.text('C')), findsNothing);
+      expect(find.descendant(of: card, matching: find.byType(BrokaImage)), findsNothing);
+    });
+
+    testWidgets("the store's cover is the card's banner", (tester) async {
+      const cover = '/media/c1/medium.webp';
+      setFakeRoute(_account(myStore: {
+        ..._store,
+        'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+      }));
+      await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
+      await _settle(tester);
+      final card = find.byKey(const Key('menu-store-card'));
+      expect(find.descendant(of: card,
+          matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == cover)),
+          findsOneWidget);
+      expect(find.text('Clanix Electronics'), findsOneWidget);
     });
 
     testWidgets('a store that fails to load says so and can be retried',

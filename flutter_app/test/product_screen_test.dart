@@ -11,6 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/main.dart' show BrokaColors, ZoneGlowText;
+import 'package:broka/features/stores/data/store_cart.dart';
+import 'package:broka/features/stores/presentation/store_cart_screen.dart';
 import 'package:broka/models/listing.dart';
 import 'package:broka/screens/product_screen.dart';
 import 'package:broka/screens/zeno_screen.dart';
@@ -29,6 +31,8 @@ Listing _listing({
   int? quantity,
   int? unitsLeft,
   String? priceUnit,
+  String? storeId,
+  String listingType = 'direct',
 }) => Listing(
       id: 'listing-1',
       name: 'iPhone 13 128GB',
@@ -39,7 +43,7 @@ Listing _listing({
       deliveryAvailable: delivers,
       deliveryNote: deliveryNote,
       locationName: 'Westlands, Nairobi',
-      listingType: 'direct',
+      listingType: listingType,
       status: status,
       soldOut: soldOut,
       quantity: quantity,
@@ -49,6 +53,9 @@ Listing _listing({
       sellerId: sellerId,
       sellerName: 'Grace Akinyi',
       sellerCompletedDeals: 14,
+      storeId: storeId,
+      storeName: storeId == null ? null : 'Clanix Electronics',
+      storeSlug: storeId == null ? null : 'clanix',
     );
 
 const _standing = {
@@ -295,6 +302,36 @@ void main() {
     });
   });
 
+  group("a store's product", () {
+    setUp(StoreCart.resetAll);
+
+    testWidgets('goes in the store\'s cart beside the main action', (tester) async {
+      await open(tester, _listing(storeId: 's1', quantity: 5, unitsLeft: 3));
+      expect(find.byKey(const Key('product-cta')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('product-add-to-cart')));
+      await tester.pumpAndSettle();
+      final cart = StoreCart.of('s1');
+      expect(cart.quantityOf('listing-1'), 1);
+      // As many as are left, not as many as there ever were.
+      expect(cart.items.single.maxQuantity, 3);
+      expect(find.text('In cart (1)'), findsOneWidget);
+      expect(find.text('Added to your cart'), findsOneWidget);
+
+      // Once it's in, the button is the way to the cart.
+      await tester.tap(find.byKey(const Key('product-add-to-cart')));
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreCartScreen), findsOneWidget);
+      expect(cart.quantityOf('listing-1'), 1);
+    });
+
+    testWidgets('a personal listing or an auction has no cart', (tester) async {
+      await open(tester, _listing());
+      expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
+      await open(tester, _listing(storeId: 's1', listingType: 'auction'));
+      expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
+    });
+  });
+
   testWidgets("the seller's own listing has no buy button", (tester) async {
     ApiService.currentUserId = 'seller-1';
     await open(tester, _listing());
@@ -309,8 +346,10 @@ void main() {
     addTearDown(tester.view.reset);
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
-    await open(tester, _listing(negotiable: false, delivers: null, deliveryNote: null));
+    await open(tester, _listing(negotiable: false, delivers: null, deliveryNote: null,
+        storeId: 's1'));
     expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('product-add-to-cart')), findsOneWidget);
     // Scroll through every section so each one is laid out.
     for (var i = 0; i < 12; i++) {
       await tester.drag(find.byType(SingleChildScrollView), const Offset(0, -300));

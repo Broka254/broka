@@ -19,6 +19,10 @@ export interface StoreOwner {
   rating: number | null
   completed_deals: number
   member_since: string | null
+  /** A heartbeat in the last five minutes (API versions before it: absent). */
+  online?: boolean
+  /** "Active 3h ago"; null when the owner has never been seen. */
+  last_active?: string | null
 }
 
 export interface Store {
@@ -58,6 +62,8 @@ export interface Listing {
   price: number
   /** What one unit of `price` is ("bag"); null when it's for the whole item. */
   price_unit?: string | null
+  /** How many the seller has for sale; null reads as one. */
+  quantity?: number | null
   status: string
   listing_type: string
   condition: string | null
@@ -87,3 +93,7 @@ export interface Listing {
 }
 
 export type SortKey = 'featured' | 'newest' | 'price_low' | 'price_high'
+
+export type ConditionKey = 'new' | 'used' | 'refurbished'
+
+export type PriceBandKey = 'under1k' | 'to5k' | 'to20k' | 'to100k' | 'over100k'

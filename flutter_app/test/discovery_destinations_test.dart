@@ -16,6 +16,7 @@ import 'package:broka/features/discovery/domain/destination_visual.dart';
 import 'package:broka/features/stores/presentation/store_list_screen.dart';
 import 'package:broka/features/traders/presentation/trader_list_screen.dart';
 import 'package:broka/features/trending/presentation/trending_screen.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:broka/widgets/collapsing_screen_header.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:broka/widgets/product_card.dart';
@@ -397,6 +398,45 @@ void main() {
 
       expect(requested.last.queryParameters['search'], 'nothing');
       expect(find.text('No stores match "nothing"'), findsOneWidget);
+    });
+
+    testWidgets("a store's card: its chosen picture, whether the owner is on, Visit store",
+        (tester) async {
+      const cover = '/media/c1/medium.webp';
+      setFakeRoute((uri) => uri.path.startsWith('/stores')
+          ? [
+              {
+                ...fakeStoreJson(0),
+                'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+                'owner': {'verified': true, 'rating': 4.7, 'completed_deals': 9,
+                    'online': true, 'last_active': 'Active now'},
+              },
+              {
+                ...fakeStoreJson(1),
+                'owner': {'verified': false, 'completed_deals': 0, 'online': false,
+                    'last_active': 'Active 2d ago'},
+              },
+            ]
+          : null);
+      await tester.pumpWidget(host(const StoreListScreen()));
+      await _settle(tester);
+
+      final first = find.byKey(const Key('store-card-store-0'));
+      // The owner's cover picture, not a circle with the store's initial.
+      expect(find.descendant(of: first,
+          matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == cover)),
+          findsOneWidget);
+      expect(find.descendant(of: first, matching: find.text('S')), findsNothing);
+      expect(find.descendant(of: first, matching: find.text('Online now')), findsOneWidget);
+      expect(find.descendant(of: first, matching: find.text('4.7')), findsOneWidget);
+      expect(find.descendant(of: first, matching: find.text('9 products')), findsOneWidget);
+      expect(find.descendant(of: first, matching: find.text('Visit store')), findsOneWidget);
+      // Taller than the old 80dp row, the same full-width shape.
+      expect(tester.getSize(first).height, greaterThan(240));
+
+      final second = find.byKey(const Key('store-card-store-1'));
+      expect(find.descendant(of: second, matching: find.text('Active 2d ago')), findsOneWidget);
+      expect(find.descendant(of: second, matching: find.text('New seller')), findsOneWidget);
     });
   });
 }

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { filtersQuery, readFilters, toProductCard } from './catalogue'
+import { filtersQuery, panelActive, readFilters, toProductCard } from './catalogue'
 import { CATEGORIES, canonicalCategory, categoryVisual } from './categories'
 import { buildConstellation, MESH_COUNT, STAR_COUNT, seededRandom } from './constellation'
 import {
@@ -99,15 +99,23 @@ describe('categories', () => {
 
 describe('catalogue filters', () => {
   it('read and validate the URL', () => {
-    expect(readFilters({ q: '  samsung   phone ', category: 'electronics', sort: 'price_low' })).toEqual({
+    expect(
+      readFilters({ q: '  samsung   phone ', category: 'electronics', sort: 'price_low', condition: 'used', price: 'to5k' }),
+    ).toEqual({
       q: 'samsung phone',
       category: 'Electronics',
       sort: 'price_low',
+      condition: 'used',
+      price: 'to5k',
     })
-    expect(readFilters({ category: 'Gadgets', sort: 'cheapest', q: 'x'.repeat(300) })).toEqual({
+    expect(
+      readFilters({ category: 'Gadgets', sort: 'cheapest', q: 'x'.repeat(300), condition: 'broken', price: 'free' }),
+    ).toEqual({
       q: 'x'.repeat(100),
       category: null,
       sort: 'featured',
+      condition: null,
+      price: null,
     })
     expect(readFilters({ q: ['a', 'b'] }).q).toBe('a')
   })
@@ -116,6 +124,14 @@ describe('catalogue filters', () => {
     expect(filtersQuery({ q: 'tv', category: 'Home & Furniture', sort: 'newest' })).toBe(
       '?q=tv&category=Home+%26+Furniture&sort=newest',
     )
+    expect(filtersQuery({ q: '', category: null, sort: 'featured', condition: 'new', price: 'over100k' })).toBe(
+      '?condition=new&price=over100k',
+    )
+  })
+  it('say when the filter panel narrows anything', () => {
+    expect(panelActive({ q: 'tv', category: 'Electronics', sort: 'featured' })).toBe(false)
+    expect(panelActive({ q: '', category: null, sort: 'newest' })).toBe(true)
+    expect(panelActive({ q: '', category: null, sort: 'featured', price: 'under1k' })).toBe(true)
   })
 })
 
@@ -157,6 +173,16 @@ describe('product cards', () => {
     expect(card.href).toBe('/store/clanix/p/l1')
     expect(card.priceLabel).toBe('KES 18,000')
     expect(card.place).toBe('Starehe, Nairobi')
+    // What the cart needs: the price as a number, the condition, and how
+    // many there are (one for a single item).
+    expect(card.price).toBe(18000)
+    expect(card.condition).toBe('New')
+    expect(card.maxQuantity).toBe(1)
+    expect(toProductCard(listing({ quantity: 12, price_unit: 'bag' }), 'clanix', API)).toMatchObject({
+      maxQuantity: 12,
+      unit: 'bag',
+      priceLabel: 'KES 18,000 / bag',
+    })
   })
   it('fall back to an unconverted base64 photo, then the category emoji', () => {
     const b64 = 'iVBORw0KGgo' + 'A'.repeat(40)

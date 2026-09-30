@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
+from api.core.presence import online_status
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import is_live, live_clause
@@ -333,6 +334,9 @@ class StoreService:
         search: Optional[str] = None,
         category: Optional[str] = None,
         sort: Optional[str] = None,
+        condition: Optional[str] = None,
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
     ):
         store = await self._get_or_404(store_id)
         if not store.is_active:
@@ -358,6 +362,7 @@ class StoreService:
             store_id=store_id, category=listing_category,
             outside_categories=outside_categories, search=(search or "").strip() or None,
             sort=CATALOGUE_SORTS.get(sort or "featured"),
+            condition=condition, min_price=min_price, max_price=max_price,
             limit=limit, offset=offset, with_total=with_total,
         )
 
@@ -718,12 +723,18 @@ class StoreService:
         # The name is what a buyer needs to know who runs the store (the
         # store page's "Store details"). Still no id or phone: a store
         # page is public and indexed, and nothing on it needs either.
+        # Online is the chat header's rule (api/core/presence.py): a
+        # heartbeat in the last five minutes. An owner who has never sent
+        # one has no "last active" - "Recently active" would be a guess.
+        online, last_active = online_status(owner.last_seen)
         return {
             "name": (owner.name or "").strip() or None,
             "verified": bool(owner.is_verified),
             "rating": round(float(owner.rating), 1) if owner.rating is not None else None,
             "completed_deals": int(owner.completed_deals or 0),
             "member_since": owner.created_at.isoformat() if owner.created_at else None,
+            "online": online,
+            "last_active": last_active if owner.last_seen else None,
         }
 
     async def _store_dict(

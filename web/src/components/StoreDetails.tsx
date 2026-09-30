@@ -30,14 +30,14 @@ export function StoreDetails({ view }: { view: StoreView }) {
   return (
     <div className={styles.storeDetails}>
       <div className={`card ${styles.detailsCard} ${styles.summary}`}>
-        <div className={styles.summaryLogo}>
-          {view.logo ? (
-            // eslint-disable-next-line @next/next/no-img-element
+        {/* The store's own logo when it has one - never an initial in a
+            box standing in for it, which read as a missing picture. */}
+        {view.logo && (
+          <div className={styles.summaryLogo}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={view.logo} alt="" />
-          ) : (
-            <span aria-hidden="true">{view.initial}</span>
-          )}
-        </div>
+          </div>
+        )}
         <div>
           <p className={styles.ownerName}>{store.name}</p>
           {summaryLine && <p className={styles.mutedLine}>{summaryLine}</p>}

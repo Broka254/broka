@@ -15,12 +15,22 @@ class StoreOwnerFacts {
   final int completedDeals;
   final DateTime? memberSince;
 
+  /// The owner has had the app open in the last five minutes (the chat
+  /// header's rule, backend api/core/presence.py).
+  final bool online;
+
+  /// "Active 3h ago", or null when the owner has never been seen - no
+  /// guess stands in for it.
+  final String? lastActive;
+
   const StoreOwnerFacts({
     this.name,
     this.verified = false,
     this.rating,
     this.completedDeals = 0,
     this.memberSince,
+    this.online = false,
+    this.lastActive,
   });
 
   static StoreOwnerFacts? fromJson(Object? j) {
@@ -32,8 +42,13 @@ class StoreOwnerFacts {
       rating: (j['rating'] as num?)?.toDouble(),
       completedDeals: (j['completed_deals'] as num?)?.toInt() ?? 0,
       memberSince: DateTime.tryParse(j['member_since'] as String? ?? ''),
+      online: j['online'] as bool? ?? false,
+      lastActive: j['last_active'] as String?,
     );
   }
+
+  /// A rating counts only with deals behind it (Store details' rule).
+  double? get shownRating => completedDeals > 0 ? rating : null;
 }
 
 class Store {

@@ -4,9 +4,9 @@
 // four other screens, so a list layout for this one screen is a smaller,
 // safer duplication than adding a layout mode to a shared component.
 //
-// No rating/completed-deals shown on a store card, unlike TraderCard -
-// Store has no such field (spec §7/§19: never fabricate one), only a
-// real listingCount.
+// A store card shows its owner's real seller record (rating once there
+// are deals behind it, deals done) - never a store rating, which nothing
+// computes (spec §7/§19: never fabricate one).
 //
 // Destination-alignment pass (2026-09-18): restyled onto the same system as
 // Home and the Category Zones - ConstellationBackground, one CustomScrollView
@@ -21,6 +21,7 @@ import '../../../core/utils/result.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
+import '../../categories/domain/category_visual.dart';
 import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
@@ -209,6 +210,12 @@ class _StoreListScreenState extends State<StoreListScreen> {
   }
 }
 
+/// A store in the directory, as a shop window: the picture its owner chose
+/// to show (the cover, else a shop photo, else the logo), whether the owner
+/// is online, what and where it is, the seller's record, and Visit store.
+///
+/// Was a 52dp circle with the store's initial and three lines of small
+/// text - the same card as a trader's, and nothing to show it was a shop.
 class _StoreCard extends StatelessWidget {
   final Store store;
   final VoidCallback onTap;
@@ -216,56 +223,197 @@ class _StoreCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial = store.name.isNotEmpty ? store.name[0].toUpperCase() : '?';
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: BrokaColors.border),
+    final owner = store.owner;
+    final colors = CategoryVisuals.gradientFor(store.category);
+    final picture = store.coverSource ?? store.logo?.medium ?? store.logoUrl;
+    final rating = owner?.shownRating;
+    final deals = owner?.completedDeals ?? 0;
+    final products = '${store.listingCount} product${store.listingCount == 1 ? '' : 's'}';
+
+    final fallback = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [colors.first.withOpacity(0.55), const Color(0xFF1A1040), colors.last.withOpacity(0.45)],
         ),
-        child: Row(children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(26),
-            child: store.logoUrl != null
-                ? StoreMediaImage(dataUri: store.logoUrl, width: 52, height: 52)
-                : CircleAvatar(
-                    radius: 26,
-                    backgroundColor: BrokaColors.gold.withOpacity(0.15),
-                    child: Text(initial, style: const TextStyle(
-                        color: BrokaColors.gold, fontWeight: FontWeight.bold, fontSize: 20)),
+      ),
+      child: Center(
+        child: Text(CategoryVisuals.emojiFor(store.category),
+            style: const TextStyle(fontSize: 44)),
+      ),
+    );
+
+    return Semantics(
+      button: true,
+      label: 'Visit ${store.name}',
+      child: GestureDetector(
+        key: Key('store-card-${store.id}'),
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: BrokaColors.bgCard,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: BrokaColors.border),
+            boxShadow: [BoxShadow(color: colors.first.withOpacity(0.12), blurRadius: 16)],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            SizedBox(
+              height: 136,
+              child: Stack(fit: StackFit.expand, children: [
+                picture == null
+                    ? fallback
+                    : StoreMediaImage(dataUri: picture, placeholderBuilder: (_) => fallback),
+                // Dark at the foot, so the chips on the picture stay legible
+                // whatever the photo is.
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x66000000), Colors.transparent, Color(0xAA03040A)],
+                      stops: [0, 0.45, 1],
+                    ),
                   ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 15)),
-              if (store.category != null) ...[
-                const SizedBox(height: 3),
-                Text(store.category!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: BrokaColors.neonBlue, fontSize: 11.5, fontWeight: FontWeight.w600)),
-              ],
-              if (store.locationLine != null) ...[
-                const SizedBox(height: 3),
+                ),
+                if (owner != null && (owner.online || owner.lastActive != null))
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: _Pill(
+                      key: const Key('store-card-presence'),
+                      dot: owner.online ? BrokaColors.success : BrokaColors.textMid,
+                      label: owner.online ? 'Online now' : owner.lastActive!,
+                      color: owner.online ? BrokaColors.success : Colors.white70,
+                    ),
+                  ),
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: _Pill(label: products, color: Colors.white,
+                      icon: Icons.inventory_2_outlined),
+                ),
+                if (store.category != null)
+                  Positioned(
+                    left: 10,
+                    bottom: 10,
+                    child: _Pill(
+                      label: '${CategoryVisuals.emojiFor(store.category)}  ${store.category}',
+                      color: Colors.white,
+                    ),
+                  ),
+              ]),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  const Icon(Icons.location_on_outlined, size: 12, color: BrokaColors.textLow),
-                  const SizedBox(width: 2),
-                  Flexible(child: Text(store.locationLine!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: BrokaColors.textLow, fontSize: 11))),
+                  Flexible(
+                    child: Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: BrokaColors.textHigh,
+                            fontWeight: FontWeight.w800, fontSize: 17)),
+                  ),
+                  if (owner?.verified ?? false) ...[
+                    const SizedBox(width: 5),
+                    const Icon(Icons.verified_rounded, size: 17, color: BrokaColors.success,
+                        semanticLabel: 'Verified seller'),
+                  ],
                 ]),
-              ],
-              const SizedBox(height: 4),
-              Text('${store.listingCount} listing${store.listingCount == 1 ? '' : 's'}',
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-            ]),
-          ),
-          const Icon(Icons.chevron_right_rounded, color: BrokaColors.textLow),
-        ]),
+                if (store.locationLine != null) ...[
+                  const SizedBox(height: 4),
+                  Row(children: [
+                    const Icon(Icons.location_on_outlined, size: 14, color: BrokaColors.textMid),
+                    const SizedBox(width: 3),
+                    Flexible(child: Text(store.locationLine!, maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
+                  ]),
+                ],
+                const SizedBox(height: 8),
+                Wrap(spacing: 12, runSpacing: 4, children: [
+                  _Fact(icon: Icons.star_rounded, color: BrokaColors.zoneAmber,
+                      text: rating != null ? rating.toStringAsFixed(1) : 'New seller'),
+                  _Fact(icon: Icons.handshake_outlined, color: BrokaColors.neonCyan,
+                      text: '$deals deal${deals == 1 ? '' : 's'} done'),
+                  const _Fact(icon: Icons.shield_outlined, color: BrokaColors.success,
+                      text: 'Escrow protected'),
+                ]),
+                const SizedBox(height: 12),
+                Container(
+                  key: Key('visit-store-${store.id}'),
+                  height: 42,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.storefront_rounded, color: Colors.white, size: 18),
+                    SizedBox(width: 8),
+                    Text('Visit store', style: TextStyle(color: Colors.white,
+                        fontWeight: FontWeight.w800, fontSize: 14)),
+                    SizedBox(width: 4),
+                    Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 17),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
       ),
     );
   }
+}
+
+class _Pill extends StatelessWidget {
+  const _Pill({super.key, required this.label, required this.color, this.dot, this.icon});
+  final String label;
+  final Color color;
+  final Color? dot;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        constraints: const BoxConstraints(maxWidth: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withOpacity(0.18)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (dot != null) ...[
+            Container(width: 7, height: 7, decoration: BoxDecoration(color: dot,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: dot!, blurRadius: 5)])),
+            const SizedBox(width: 5),
+          ],
+          if (icon != null) ...[
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      );
+}
+
+class _Fact extends StatelessWidget {
+  const _Fact({required this.icon, required this.color, required this.text});
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(text, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12,
+            fontWeight: FontWeight.w600)),
+      ]);
 }

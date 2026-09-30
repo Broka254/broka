@@ -439,6 +439,34 @@ disorganised:
   cookie on the web server's side; the access token never reaches page
   scripts. Every state-changing request is CSRF-protected.
 
+**Shipped ahead of orders (2026-09-30): the shop layout and the cart.**
+Stores now look and work like a shop, in the app and on the web, with
+checkout going through the escrow that exists today until orders land:
+- **Cart**, one per store: on the phone (`store_cart.dart`, saved in the
+  app's preferences) and in the browser (`web/src/lib/cart.ts`,
+  localStorage). Add to cart on every product card and product page, a − n +
+  stepper capped at the listing's stock, a cart badge in the header, a cart
+  bar along the bottom, a cart drawer and a cart page (`/store/<name>/cart`).
+- **Checkout** hands each product to its deal room, where it is agreed with
+  the store and paid by M-Pesa into escrow. On the web, "Checkout in the
+  BROKA app" opens `/store/<name>/cart?items=<id>:<qty>,...` in the app,
+  which reads each product again (only this store's, still for sale) and
+  fills its own cart. iPhone and desktop visitors are told to finish on an
+  Android phone, never given the APK. **Still to build:** one payment for
+  the whole cart - the `orders` tables, `POST /orders` and the rest above.
+- **Store page**: the store's name in lights (moving aurora, shimmer) in
+  place of the logo square, the owner's online status, the seller's record,
+  a More button for Store details, a perks strip (escrow, M-Pesa, delivery
+  or pickup), Home's search pill and filter button (sort, condition, price
+  band - `GET /stores/{id}/listings` takes `condition`, `min_price`,
+  `max_price`), and shop product cards. The web adds a store-branded sticky
+  header, breadcrumbs, "More from this store" and a shop footer.
+- **Store cards** (directory, Menu, Seller Dashboard): the owner's cover
+  picture and the store's name instead of an initial in a box; the
+  directory card says whether the owner is online and has Visit store.
+  The owner's presence is in the store payload (`owner.online`,
+  `owner.last_active`), by the chat header's rule (`api/core/presence.py`).
+
 ### Phase 5 — Seller tools and finish
 
 - Store stats screen: visits by day and by source, top products, orders

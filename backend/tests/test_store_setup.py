@@ -410,6 +410,28 @@ class TestStorePayload:
         listed = next(s for s in directory if s["id"] == store["id"])
         assert listed["owner"] == owner
 
+    async def test_owner_online_status(self, client):
+        # The store cards say whether the owner is around, by the chat
+        # header's rule: a heartbeat in the last five minutes.
+        user_id, headers = await _register(client)
+        store = await _store(client, headers)
+        owner = (await client.get(f"/stores/{store['id']}")).json()["owner"]
+        assert owner["online"] is False
+        assert owner["last_active"] is None       # never seen: no guess
+
+        await client.patch("/auth/heartbeat", headers=headers)
+        owner = (await client.get(f"/stores/{store['id']}")).json()["owner"]
+        assert owner["online"] is True
+        assert owner["last_active"] == "Active now"
+
+        async with AsyncSessionLocal() as db:
+            (await db.get(User, user_id)).last_seen = datetime.utcnow() - timedelta(hours=3)
+            await db.commit()
+        directory = (await client.get("/stores", params={"limit": 100})).json()
+        owner = next(s for s in directory if s["id"] == store["id"])["owner"]
+        assert owner["online"] is False
+        assert owner["last_active"] == "Active 3h ago"
+
     async def test_the_web_page_shows_no_phone_numbers(self, client):
         from api.models.store import Store
         _, headers = await _register(client)
@@ -462,6 +484,31 @@ class TestCatalogue:
         paged = (await client.get(f"/stores/{sid}/listings",
                                   params={"with_total": True, "limit": 2})).json()
         assert paged["total"] == 5 and len(paged["items"]) == 2
+
+    async def test_condition_and_price_filters(self, client):
+        # The storefront's filter panel: condition and a price range, as on
+        # Home. Before them the store's catalogue took only search, category
+        # and sort, and a panel offering them would have filtered nothing.
+        _, headers = await _register(client)
+        sid = (await _store(client, headers))["id"]
+        for name, price, condition in [("New Phone", 30000, "new"), ("Used Phone", 12000, "used"),
+                                       ("Refurb Laptop", 25000, "refurbished")]:
+            listing = await _listing(client, headers, sid, name, price=price)
+            await _set_listing(listing["id"], condition=condition)
+
+        async def names(**params):
+            r = await client.get(f"/stores/{sid}/listings", params=params)
+            assert r.status_code == 200, r.text
+            return {item["name"] for item in r.json()}
+
+        assert await names(condition="used") == {"Used Phone"}
+        assert await names(max_price=25000) == {"Used Phone", "Refurb Laptop"}
+        assert await names(min_price=20000, max_price=26000) == {"Refurb Laptop"}
+        assert await names(condition="new", max_price=20000) == set()
+        bad = [{"condition": "broken"}, {"max_price": -1}]
+        for params in bad:
+            r = await client.get(f"/stores/{sid}/listings", params=params)
+            assert r.status_code == 422, params
 
     async def test_the_other_shelf_holds_what_the_rail_counts_there(self, client):
         # The rail counts free-text categories as "Other"; tapping "Other"

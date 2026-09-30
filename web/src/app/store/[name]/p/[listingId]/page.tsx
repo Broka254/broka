@@ -1,21 +1,30 @@
-// One product in a store: https://broka.co.ke/store/<name>/p/<id>.
-// Buying happens in the BROKA app for now (checkout on the web comes with
-// orders); this page is what a shared product link opens.
+// One product in a store: https://broka.co.ke/store/<name>/p/<id> - a shop's
+// product page: the path back through the store, the gallery, the price,
+// how many, Add to cart and Buy now, the seller, and more from the store.
+// Checkout is in the BROKA app for now (one web payment comes with orders);
+// this page is what a shared product link opens.
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound, permanentRedirect, redirect } from 'next/navigation'
 
 import { AppButton } from '@/components/AppButton'
+import { CartDrawer } from '@/components/CartDrawer'
 import { Gallery } from '@/components/Gallery'
+import { Icon } from '@/components/Icon'
+import { ProductBuyBox } from '@/components/ProductBuyBox'
+import { ProductCard } from '@/components/ProductCard'
 import { ShareButtons } from '@/components/ShareButtons'
-import { SiteFooter } from '@/components/SiteFooter'
-import { SiteHeader } from '@/components/SiteHeader'
+import { StoreFooter } from '@/components/StoreFooter'
+import { StoreHeader } from '@/components/StoreHeader'
 import { TrustChips } from '@/components/TrustChips'
 import { VisitBeacon } from '@/components/VisitBeacon'
+import shopStyles from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
-import { getListing, getStore } from '@/lib/api'
+import { getListing, getStore, getStoreListings } from '@/lib/api'
+import { filtersQuery, toProductCard } from '@/lib/catalogue'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
-import { productPath, storePath, viaTag } from '@/lib/links'
+import { productPath, storeCartPath, storePath, viaTag } from '@/lib/links'
+import { API_URL } from '@/lib/server-config'
 import {
   jsonLdScript,
   productJsonLd,
@@ -81,21 +90,26 @@ export default async function ProductPage({ params, searchParams }: Props) {
     listing.listing_type === 'auction' ? 'Auction' : null,
   ].filter((f): f is string => Boolean(f))
 
+  // More from the store, below the details: the product page isn't a dead
+  // end (STORES_UI_REVIEW.md M1).
+  const more = (await getStoreListings(store.id, { limit: 9 }).catch(() => []))
+    .filter((l) => l.id !== listing.id)
+    .slice(0, 8)
+    .map((l) => toProductCard(l, store.slug, API_URL))
+  const card = toProductCard(listing, store.slug, API_URL)
+  const cartPath = storeCartPath(store.slug)
+
   return (
     <>
-      <SiteHeader />
-      <main className="page">
-        <Link href={shop.path} className={styles.back}>
-          <span className={styles.backLogo}>
-            {shop.logo ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={shop.logo} alt="" />
-            ) : (
-              <span aria-hidden="true">{shop.initial}</span>
-            )}
-          </span>
-          ← More from {store.name}
-        </Link>
+      <StoreHeader view={shop} />
+      <main className={`page ${shopStyles.storePage}`}>
+        <nav aria-label="Breadcrumb" className={shopStyles.crumbs}>
+          <Link href={shop.path}>{store.name}</Link>
+          <Icon name="chevron" size={14} />
+          <Link href={`${shop.path}${filtersQuery({ category: listing.category })}`}>{listing.category}</Link>
+          <Icon name="chevron" size={14} />
+          <span aria-current="page">{listing.name}</span>
+        </nav>
 
         <div className={styles.productLayout}>
           <Gallery images={view.images} alt={listing.name} emoji={view.emoji} />
@@ -117,13 +131,40 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 This product isn&apos;t available any more. <Link href={shop.path}>See what else {store.name} has.</Link>
               </p>
             )}
-            {listing.description?.trim() && <p className={styles.productText}>{listing.description.trim()}</p>}
+
+            {view.available && listing.listing_type !== 'auction' && (
+              <ProductBuyBox
+                storeId={store.id}
+                cartPath={cartPath}
+                line={{
+                  id: card.id,
+                  name: card.name,
+                  price: card.price,
+                  unit: card.unit,
+                  image: card.image,
+                  emoji: card.emoji,
+                  href: card.href,
+                  max: card.maxQuantity,
+                }}
+              />
+            )}
+            <div className={shopStyles.protect}>
+              <Icon name="shield" size={22} />
+              <p>
+                <strong>Buyer protection.</strong> Pay by M-Pesa into BROKA escrow: the store is paid only after you
+                confirm you received the item.
+              </p>
+            </div>
+
+            {listing.description?.trim() && (
+              <section className={shopStyles.descr} aria-labelledby="descr-title">
+                <h2 id="descr-title">About this product</h2>
+                <p className={styles.productText}>{listing.description.trim()}</p>
+              </section>
+            )}
 
             <div className={styles.cta}>
-              {view.available && <AppButton label="Make an offer in the BROKA app" />}
-              <p className={styles.ctaNote}>
-                Pay through BROKA and your money is held safely until you confirm you&apos;ve received the item.
-              </p>
+              {view.available && <AppButton label="Make an offer in the BROKA app" className={shopStyles.offerLink} />}
               <ShareButtons storeId={store.id} url={view.url} title={listing.name} />
             </div>
 
@@ -141,13 +182,30 @@ export default async function ProductPage({ params, searchParams }: Props) {
             </div>
           </div>
         </div>
+
+        {more.length > 0 && (
+          <section className={shopStyles.moreFrom} aria-labelledby="more-title">
+            <div className={shopStyles.toolbar}>
+              <h2 id="more-title">More from {store.name}</h2>
+              <Link href={shop.path} className={shopStyles.seeAll}>
+                See all <Icon name="chevron" size={14} />
+              </Link>
+            </div>
+            <div className={shopStyles.grid}>
+              {more.map((p) => (
+                <ProductCard key={p.id} product={p} storeId={store.id} />
+              ))}
+            </div>
+          </section>
+        )}
         <VisitBeacon storeId={store.id} via={via} />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: jsonLdScript(productJsonLd(view, store.name)) }}
         />
       </main>
-      <SiteFooter />
+      <StoreFooter view={shop} />
+      <CartDrawer storeId={store.id} storeName={store.name} cartPath={cartPath} />
     </>
   )
 }

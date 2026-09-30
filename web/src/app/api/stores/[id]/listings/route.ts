@@ -24,6 +24,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       q: filters.q,
       category: filters.category ?? undefined,
       sort: filters.sort,
+      condition: filters.condition,
+      price: filters.price,
       offset,
       limit: PAGE_SIZE,
     })

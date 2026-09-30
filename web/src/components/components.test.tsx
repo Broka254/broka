@@ -2,16 +2,25 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProductCardData } from '@/lib/catalogue'
 import { storeView } from '@/lib/storefront'
 import type { ImageSizes, Store } from '@/lib/types'
 
+import { cart } from '@/lib/cart'
+
+import { AddToCart } from './AddToCart'
 import { AppButton } from './AppButton'
+import { CartButton } from './CartButton'
+import { CartDrawer } from './CartDrawer'
+import { CatalogueControls } from './CatalogueControls'
 import { CategoryPills } from './CategoryPills'
+import { CheckoutView } from './CheckoutView'
 import { OpenInApp } from './OpenInApp'
 import { ProductCard } from './ProductCard'
+import { Perks } from './Perks'
+import { ProductBuyBox } from './ProductBuyBox'
 import { ProductGrid } from './ProductGrid'
 import { ShareButtons } from './ShareButtons'
 import { SiteHeader } from './SiteHeader'
@@ -20,11 +29,14 @@ import { StoreHero } from './StoreHero'
 import { TrustChips } from './TrustChips'
 import { VisitBeacon } from './VisitBeacon'
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+const push = vi.fn()
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
 
 const card = (id: string, name = `Item ${id}`): ProductCardData => ({
   id,
   name,
+  price: 1000,
+  unit: null,
   priceLabel: 'KES 1,000',
   href: `/store/clanix/p/${id}`,
   image: null,
@@ -32,6 +44,23 @@ const card = (id: string, name = `Item ${id}`): ProductCardData => ({
   emoji: '📱',
   place: 'Starehe, Nairobi',
   isAuction: false,
+  condition: null,
+  maxQuantity: 1,
+})
+
+// Before each, not after: resetting while the last test's components are
+// still mounted would have them read the old cart straight back in.
+beforeEach(() => cart.reset())
+
+const lineOf = (p: ProductCardData) => ({
+  id: p.id,
+  name: p.name,
+  price: p.price,
+  unit: p.unit,
+  image: p.image,
+  emoji: p.emoji,
+  href: p.href,
+  max: p.maxQuantity,
 })
 
 const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; SM-A145F) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36'
@@ -73,23 +102,56 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreHero', () => {
-  it('is the name, what and where, and More details - no cover photo, no record chips', () => {
+  it('is the name in lights, what and where, the record and More - no logo square', () => {
     const { container } = render(<StoreHero view={storeView(shop())} />)
-    expect(screen.getByRole('heading', { name: /^Clanix/ })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
     expect(screen.getByRole('img', { name: 'Verified seller' })).toBeTruthy()
+    expect(screen.getByText('Verified store')).toBeTruthy()
     expect(screen.getByText('Electronics · Starehe, Nairobi')).toBeTruthy()
+    // No logo, no initial, no cover photo behind the name.
     expect(container.querySelectorAll('img')).toHaveLength(0)
-    expect(screen.getByText('ⓘ More details ›').getAttribute('href')).toBe('/store/clanix/about')
-    // The seller's record and what the store says about itself are on the
-    // Store details page.
-    for (const text of ['12 deals done', '4.8', 'On BROKA since 2025', 'Genuine phones and accessories.']) {
-      expect(screen.queryByText(text)).toBeNull()
-    }
+    expect(screen.queryByText('C')).toBeNull()
+    expect(screen.getByText('4.8')).toBeTruthy()
+    expect(screen.getByText('12 deals')).toBeTruthy()
+    expect(screen.getByText('3 products')).toBeTruthy()
+    expect(screen.getByText('More').closest('a')!.getAttribute('href')).toBe('/store/clanix/about')
+    expect(screen.queryByText('Genuine phones and accessories.')).toBeNull()
   })
 
-  it('shows no tick for a seller who is not verified', () => {
-    render(<StoreHero view={storeView(shop({ owner: { verified: false, rating: null, completed_deals: 0, member_since: null } }))} />)
+  it('says whether the owner is online, or when they last were', () => {
+    const owner = shop().owner!
+    const { rerender } = render(<StoreHero view={storeView(shop({ owner: { ...owner, online: true, last_active: 'Active now' } }))} />)
+    expect(screen.getByTestId('presence').textContent).toContain('Online now')
+    rerender(<StoreHero view={storeView(shop({ owner: { ...owner, online: false, last_active: 'Active 3h ago' } }))} />)
+    expect(screen.getByTestId('presence').textContent).toContain('Active 3h ago')
+    // Never seen: nothing, rather than a guess.
+    rerender(<StoreHero view={storeView(shop({ owner: { ...owner, online: false, last_active: null } }))} />)
+    expect(screen.queryByTestId('presence')).toBeNull()
+  })
+
+  it('fans out the first product photos beside the name', () => {
+    const { container } = render(
+      <StoreHero view={storeView(shop())} showcase={[{ ...card('a'), image: 'https://cdn/a.webp' }, card('b')]} />,
+    )
+    expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual(['https://cdn/a.webp'])
+  })
+
+  it('shows no tick and no rating for a new, unverified seller', () => {
+    render(<StoreHero view={storeView(shop({ owner: { verified: false, rating: 5, completed_deals: 0, member_since: null } }))} />)
     expect(screen.queryByRole('img', { name: 'Verified seller' })).toBeNull()
+    expect(screen.getByText('New seller')).toBeTruthy()
+    expect(screen.queryByText('5.0')).toBeNull()
+  })
+})
+
+describe('Perks', () => {
+  it('says what buying here means, and adds verified only for a verified seller', () => {
+    const { rerender } = render(<Perks verified={false} />)
+    expect(screen.getByText('Escrow protected')).toBeTruthy()
+    expect(screen.getByText('Pay with M-Pesa')).toBeTruthy()
+    expect(screen.queryByText('Verified seller')).toBeNull()
+    rerender(<Perks verified />)
+    expect(screen.getByText('Verified seller')).toBeTruthy()
   })
 })
 
@@ -174,18 +236,162 @@ describe('TrustChips', () => {
 
 describe('ProductCard', () => {
   it('links to the product and shows the emoji when there is no photo', () => {
-    render(<ProductCard product={card('p1', 'Samsung A15')} />)
-    const link = screen.getByRole('link')
-    expect(link.getAttribute('href')).toBe('/store/clanix/p/p1')
+    render(<ProductCard product={card('p1', 'Samsung A15')} storeId="s1" />)
+    expect(screen.getAllByRole('link')[0]!.getAttribute('href')).toBe('/store/clanix/p/p1')
     expect(screen.getByText('Samsung A15')).toBeTruthy()
     expect(screen.getByText('📱')).toBeTruthy()
+    // The store's location isn't repeated on every card.
+    expect(screen.queryByText('Starehe, Nairobi')).toBeNull()
   })
   it('uses the photo with its sizes when there is one', () => {
-    render(<ProductCard product={{ ...card('p2'), image: 'https://cdn/m.webp', imageSrcSet: 'https://cdn/t.webp 480w' }} />)
+    render(<ProductCard product={{ ...card('p2'), image: 'https://cdn/m.webp', imageSrcSet: 'https://cdn/t.webp 480w' }} storeId="s1" />)
     const img = screen.getByRole('img')
     expect(img.getAttribute('src')).toBe('https://cdn/m.webp')
     expect(img.getAttribute('srcset')).toBe('https://cdn/t.webp 480w')
     expect(img.getAttribute('loading')).toBe('lazy')
+  })
+  it('shows the condition, and an auction has no cart', () => {
+    const { rerender } = render(<ProductCard product={{ ...card('p3'), condition: 'Used' }} storeId="s1" />)
+    expect(screen.getByText('Used')).toBeTruthy()
+    expect(screen.getByText('Add to cart')).toBeTruthy()
+    rerender(<ProductCard product={{ ...card('p3'), isAuction: true }} storeId="s1" />)
+    expect(screen.queryByText('Add to cart')).toBeNull()
+    expect(screen.getByText('View auction')).toBeTruthy()
+  })
+})
+
+describe('Add to cart', () => {
+  it('becomes a stepper that stops at the stock, and - at one takes it out', () => {
+    render(
+      <>
+        <AddToCart storeId="s1" product={{ ...card('p1'), maxQuantity: 2 }} />
+        <CartButton storeId="s1" />
+      </>,
+    )
+    fireEvent.click(screen.getByText('Add to cart'))
+    expect(screen.queryByText('Add to cart')).toBeNull()
+    expect(screen.getByTestId('cart-count').textContent).toBe('1')
+    expect(screen.getByLabelText('Cart, 1 item')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('One more'))
+    expect(screen.getByTestId('cart-count').textContent).toBe('2')
+    expect((screen.getByLabelText('No more available') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('KES 2,000')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('One less'))
+    fireEvent.click(screen.getByLabelText('Remove Item p1'))
+    expect(screen.getByText('Add to cart')).toBeTruthy()
+    expect(screen.queryByTestId('cart-count')).toBeNull()
+  })
+})
+
+describe('Cart drawer', () => {
+  it('opens from the header, lists what is in the cart, and leads to checkout', () => {
+    cart.add('s1', lineOf(card('p1', 'Samsung A15')))
+    cart.add('s1', { ...lineOf(card('p2', 'Charger')), price: 500 })
+    render(
+      <>
+        <CartButton storeId="s1" />
+        <CartDrawer storeId="s1" storeName="Clanix" cartPath="/store/clanix/cart" />
+      </>,
+    )
+    // The bar along the bottom, before the drawer opens.
+    expect(screen.getByText('2 items in your cart')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('Cart, 2 items'))
+    const drawer = screen.getByRole('dialog', { name: 'Your cart (2)' })
+    expect(within(drawer).getByText('Samsung A15')).toBeTruthy()
+    expect(within(drawer).getByText('KES 1,500')).toBeTruthy()
+    expect(within(drawer).getByText('Checkout').closest('a')!.getAttribute('href')).toBe('/store/clanix/cart')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+  it('says so when the cart is empty', () => {
+    render(
+      <>
+        <CartButton storeId="s1" />
+        <CartDrawer storeId="s1" storeName="Clanix" cartPath="/store/clanix/cart" />
+      </>,
+    )
+    fireEvent.click(screen.getByLabelText('Cart'))
+    expect(screen.getByText('Your cart is empty')).toBeTruthy()
+    expect(screen.queryByText('Checkout')).toBeNull()
+  })
+})
+
+describe('Search and filters', () => {
+  it('search keeps the filters, and each filter is a link that keeps the rest', () => {
+    const { container } = render(
+      <CatalogueControls
+        basePath="/store/clanix"
+        storeName="Clanix"
+        filters={{ q: 'tv', category: 'Electronics', sort: 'price_low', condition: null, price: null }}
+      />,
+    )
+    const form = container.querySelector('form')!
+    expect(form.getAttribute('action')).toBe('/store/clanix')
+    expect([...form.querySelectorAll('input[type=hidden]')].map((i) => `${i.getAttribute('name')}=${i.getAttribute('value')}`)).toEqual([
+      'category=Electronics',
+      'sort=price_low',
+    ])
+    expect(screen.getByPlaceholderText('Search Clanix')).toBeTruthy()
+    // A filter applies: the button carries a dot.
+    expect(screen.getByTestId('filters-active')).toBeTruthy()
+    expect(screen.getByText('Used').getAttribute('href')).toBe('/store/clanix?q=tv&category=Electronics&sort=price_low&condition=used')
+    expect(screen.getByText('1K – 5K').getAttribute('href')).toBe('/store/clanix?q=tv&category=Electronics&sort=price_low&price=to5k')
+    expect(screen.getByText('Price: low to high').getAttribute('aria-current')).toBe('true')
+    expect(screen.getByText('Reset filters').getAttribute('href')).toBe('/store/clanix?q=tv&category=Electronics')
+  })
+  it('off the store page it is only a search of the store', () => {
+    render(<CatalogueControls basePath="/store/clanix" storeName="Clanix" />)
+    expect(screen.queryByLabelText('Filters')).toBeNull()
+    expect(screen.getByRole('search')).toBeTruthy()
+  })
+})
+
+describe('Product buy box', () => {
+  it('adds as many as chosen, and Buy now goes to the cart', () => {
+    push.mockClear()
+    const line = { ...lineOf(card('p1')), max: 5 }
+    render(<ProductBuyBox storeId="s1" line={line} cartPath="/store/clanix/cart" />)
+    fireEvent.click(screen.getByLabelText('One more'))
+    fireEvent.click(screen.getByText('Add to cart'))
+    expect(cart.lines('s1')[0]!.qty).toBe(2)
+    expect(screen.getByText(/2 in your cart/)).toBeTruthy()
+    fireEvent.click(screen.getByText('Buy now'))
+    expect(push).toHaveBeenCalledWith('/store/clanix/cart')
+    // Already in the cart: Buy now doesn't add more.
+    expect(cart.lines('s1')[0]!.qty).toBe(2)
+  })
+})
+
+describe('Checkout', () => {
+  const props = {
+    storeId: 's1',
+    storeName: 'Clanix',
+    storePath: '/store/clanix',
+    cartPath: '/store/clanix/cart',
+    storeUrl: 'https://broka.co.ke/store/clanix',
+  }
+  it('on Android, checks out in the app with the cart in the link', () => {
+    setUserAgent(ANDROID_UA)
+    cart.add('s1', { ...lineOf(card('p1')), max: 3 }, 2)
+    cart.add('s1', { ...lineOf(card('p2')), price: 250 })
+    render(<CheckoutView {...props} />)
+    expect(screen.getByTestId('cart-total').textContent).toBe('KES 2,250')
+    const go = screen.getByText('Checkout in the BROKA app').closest('a')!
+    expect(go.getAttribute('href')).toMatch(/^intent:\/\/broka\.co\.ke\/store\/clanix\/cart\?items=p1%3A2%2Cp2%3A1#Intent;/)
+    expect(go.getAttribute('href')).toContain('package=com.broka.app;')
+  })
+  it('elsewhere, says checkout is in the Android app - never an APK on an iPhone', () => {
+    setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1')
+    cart.add('s1', lineOf(card('p1')))
+    render(<CheckoutView {...props} />)
+    expect(screen.getByText('Checkout is in the BROKA app for Android.')).toBeTruthy()
+    expect(screen.queryByText('Get the Android app')).toBeNull()
+    expect(screen.getByText('Copy the store link')).toBeTruthy()
+  })
+  it('an empty cart leads back to the store', () => {
+    render(<CheckoutView {...props} />)
+    expect(screen.getByText('Your cart is empty')).toBeTruthy()
+    expect(screen.getByText('Continue shopping').closest('a')!.getAttribute('href')).toBe('/store/clanix')
   })
 })
 

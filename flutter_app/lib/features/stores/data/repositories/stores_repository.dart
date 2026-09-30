@@ -22,6 +22,20 @@ enum StoreSort {
   final String label;
 }
 
+/// The storefront's price filter: a band of prices, as shops offer them.
+enum StorePriceBand {
+  under1k('Under 1K', null, 1000),
+  to5k('1K – 5K', 1000, 5000),
+  to20k('5K – 20K', 5000, 20000),
+  to100k('20K – 100K', 20000, 100000),
+  over100k('100K+', 100000, null);
+
+  const StorePriceBand(this.label, this.min, this.max);
+  final String label;
+  final double? min;
+  final double? max;
+}
+
 class StoresRepository {
   final ApiClient _client;
   StoresRepository({ApiClient? client}) : _client = client ?? apiClient;
@@ -94,6 +108,8 @@ class StoresRepository {
     String? search,
     String? category,
     StoreSort sort = StoreSort.featured,
+    String? condition,
+    StorePriceBand? price,
   }) =>
       _guard(() async {
         final data = await _client.get('/stores/$storeId/listings', queryParams: {
@@ -102,8 +118,18 @@ class StoresRepository {
           if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
           if (category != null) 'category': category,
           if (sort != StoreSort.featured) 'sort': sort.value,
+          if (condition != null) 'condition': condition,
+          if (price?.min != null) 'min_price': price!.min!.toStringAsFixed(0),
+          if (price?.max != null) 'max_price': price!.max!.toStringAsFixed(0),
         }) as List;
         return data.map((e) => BrokaListing.fromJson(e as Map<String, dynamic>)).toList();
+      });
+
+  /// One listing, as the product screen reads it - for a cart link's
+  /// products (the web storefront's "check out in the app").
+  Future<Result<BrokaListing>> getListing(String listingId) => _guard(() async {
+        final data = await _client.get('/listings/$listingId');
+        return BrokaListing.fromJson(data as Map<String, dynamic>);
       });
 
   /// Every product in the owner's store, in every state (live, hidden

@@ -21,7 +21,7 @@ vi.mock('next/navigation', () => ({
   },
 }))
 
-const api = vi.hoisted(() => ({ getStore: vi.fn(), getListing: vi.fn() }))
+const api = vi.hoisted(() => ({ getStore: vi.fn(), getListing: vi.fn(), getStoreListings: vi.fn() }))
 vi.mock('@/lib/api', () => api)
 
 const { default: ProductPage, generateMetadata } = await import('./page')
@@ -50,6 +50,7 @@ describe('product page', () => {
   beforeEach(() => {
     api.getStore.mockReset()
     api.getListing.mockReset()
+    api.getStoreListings.mockReset().mockResolvedValue([])
   })
 
   it("a paused store's product link goes to the store page, keeping the tag", async () => {
@@ -71,6 +72,15 @@ describe('product page', () => {
   it('an open store renders the product', async () => {
     api.getStore.mockResolvedValue(store())
     api.getListing.mockResolvedValue(listing())
+    expect(await whereTo(props())).toBeNull()
+    // "More from the store" asks for a few of its products.
+    expect(api.getStoreListings).toHaveBeenCalledWith('s1', { limit: 9 })
+  })
+
+  it('renders even when "More from the store" cannot load', async () => {
+    api.getStore.mockResolvedValue(store())
+    api.getListing.mockResolvedValue(listing())
+    api.getStoreListings.mockRejectedValue(new Error('API asleep'))
     expect(await whereTo(props())).toBeNull()
   })
 })

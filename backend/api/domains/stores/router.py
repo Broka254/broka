@@ -257,15 +257,21 @@ async def get_store_listings(
     search: Optional[str] = Query(None, max_length=100),
     category: Optional[str] = None,
     sort: Literal["featured", "newest", "price_low", "price_high"] = "featured",
+    condition: Optional[Literal["new", "used", "refurbished"]] = None,
+    min_price: Optional[float] = Query(None, ge=0),
+    max_price: Optional[float] = Query(None, ge=0),
     limit: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
     with_total: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """The store's catalogue, in the same card format as Home. Public."""
+    """The store's catalogue, in the same card format as Home. Public.
+    condition and the price range are the storefront's filter panel - the
+    same filters Home's panel sends to /listings."""
     return await StoreService(db).list_store_listings(
         store_id, limit=limit, offset=offset, with_total=with_total,
         search=search, category=category, sort=sort,
+        condition=condition, min_price=min_price, max_price=max_price,
     )
 
 

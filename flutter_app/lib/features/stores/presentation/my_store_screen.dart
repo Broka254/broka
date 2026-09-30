@@ -512,13 +512,13 @@ class StoreLogo extends StatelessWidget {
         borderRadius: radius,
         child: source != null
             ? BrokaImage(source, fit: BoxFit.cover)
+            // A shop mark, not the store's initial: a letter in a box read
+            // as a missing profile picture ("the C").
             : Container(
                 alignment: Alignment.center,
                 decoration: const BoxDecoration(
                     gradient: LinearGradient(colors: kWizardCtaGradient)),
-                child: Text(store.name.isEmpty ? '?' : store.name.characters.first.toUpperCase(),
-                    style: TextStyle(color: Colors.white, fontSize: size * 0.42,
-                        fontWeight: FontWeight.w800)),
+                child: Icon(Icons.storefront_rounded, color: Colors.white, size: size * 0.5),
               ),
       ),
     );

@@ -7,7 +7,7 @@ import { useState } from 'react'
 import type { CatalogueFilters, ProductCardData } from '@/lib/catalogue'
 
 import { ProductCard } from './ProductCard'
-import styles from './store.module.css'
+import styles from './shop.module.css'
 
 export function ProductGrid({
   storeId,
@@ -34,6 +34,8 @@ export function ProductGrid({
     if (filters.q) params.set('q', filters.q)
     if (filters.category) params.set('category', filters.category)
     if (filters.sort !== 'featured') params.set('sort', filters.sort)
+    if (filters.condition) params.set('condition', filters.condition)
+    if (filters.price) params.set('price', filters.price)
     try {
       const res = await fetch(`/api/stores/${encodeURIComponent(storeId)}/listings?${params}`)
       if (!res.ok) throw new Error(String(res.status))
@@ -54,7 +56,7 @@ export function ProductGrid({
     <>
       <div className={styles.grid}>
         {items.map((p) => (
-          <ProductCard key={p.id} product={p} />
+          <ProductCard key={p.id} product={p} storeId={storeId} />
         ))}
       </div>
       {(hasMore || failed) && (
