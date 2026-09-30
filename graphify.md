@@ -169,8 +169,8 @@ Counts: admin 16, optional 2, public 51, token 4, user 111.
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
-| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:230) |
-| WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:77) |
+| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:233) |
+| WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:80) |
 | POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:274) |
 | POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:305) |
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:212) |
@@ -596,7 +596,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-83 files in `backend/tests/`.
+84 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -615,6 +615,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_call_state.py` — BROKA - Call State & Call-Token Endpoint Tests Run: pytest backend/tests/test_call_state.py -v
 - `test_calls_initiate.py` — BROKA - /calls/initiate authorization tests Run: pytest backend/tests/test_calls_initiate.py -v
 - `test_categories.py` — BROKA - Categories Endpoint Tests Run: pytest backend/tests/test_categories.py -v
+- `test_chat_media_images.py` — Photos sent in a negotiation chat (POST /media/upload, content_type=image) go through the same processing as listing photos (api/core/image…
 - `test_chat_settlement_econfirm.py` — Chat-intent settlement ("Yes, all good" / "I want a refund") must not settle an E-Confirm deal as if BROKA held the money.
 - `test_circuit_breaker.py` — Tests for the circuit breaker (new in v4.0).
 - `test_client_invariants.py` — Static guards on the Flutter client, run by the suite that actually executes.
@@ -875,6 +876,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing_publisher.dart` — Publishing a listing from the sell wizard: the photos' ids, the showcase, then POST /listings - in a form that is safe to repeat.
 - `local_chat_store.dart` — BROKA - Local Chat Store
 - `notification_service.dart` — BROKA - Notification Service (local notifications + FCM foreground/tap handling)
+- `photo_capture.dart` — Taking or picking a photo, the same way everywhere BROKA asks for one.
 - `photo_upload_tracker.dart` — Background uploads for the photos a user picks, one per file.
 - `realtime_stt.dart` — lib/services/realtime_stt.dart
 - `realtime_stt_manager.dart` — lib/services/realtime_stt_manager.dart
@@ -971,6 +973,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
+- `photo_capture_test.dart` — Store images are taken the way listing photos are (services/photo_capture.dart): BROKA's own camera first, the phone's camera only as the f…
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
@@ -979,6 +982,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
+- `sms_otp_autofill_test.dart` — The signup wizard's automatic OTP capture (Android SMS Retriever), end to end on the Dart side: a code the native bridge delivers must land…
 - `start_selling_test.dart` — A buyer who starts selling later is asked what signup asks (2026-09-26): a few items - nothing more to fill in - or a business, which goes…
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
@@ -1070,7 +1074,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The listing screen: the seller's standing, the deal's terms, and Zeno about it (2026-09-29)
+- `CHANGES.md` — The OTP reader, photos taken the listing way, and the stores on BROKA's colours (2026-09-30)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
