@@ -163,8 +163,20 @@ def test_receipts_do_not_promise_an_unimplemented_retry():
 
 
 
-def test_dashboard_only_reads_profile_fields_the_api_sends():
-    """Every `_profile['key']` the seller dashboard reads must exist.
+# What GET /auth/user/{id} is built from: the account's own or public dict,
+# plus the dicts get_user_profile merges in for sellers - deal stats, the deal
+# completion time, and the public standing.
+_PROFILE_SOURCES = [
+    pathlib.Path(__file__).resolve().parents[1] / "api" / rel
+    for rel in ("domains/auth/service.py", "core/fraud.py",
+                "domains/trust/deal_time.py", "domains/trust/public_standing.py")
+]
+
+
+@pytest.mark.parametrize("screen", ["seller_dashboard_screen", "user_profile_screen"])
+def test_screens_only_read_profile_fields_the_api_sends(screen):
+    """Every `_profile['key']` the seller dashboard and the profile screen
+    read must exist.
 
     This is the check that would have caught three fabricated metrics.
     The dashboard read `reliability_score` and `response_rate`; neither has
@@ -172,23 +184,22 @@ def test_dashboard_only_reads_profile_fields_the_api_sends():
     instead of failing they rendered invented numbers - a constant "85%"
     response rate for every seller on the platform, and a "Reliability"
     score that was silently just the rating again under a second label.
+    The profile screen carried the same two for longer, plus
+    `pending_deals` and `avg_deal_time_minutes` before the API sent it.
 
     A missing key in Dart is `null`, and `null` plus a plausible default is
     indistinguishable from real data at a glance. That is what makes this
     worth a structural test rather than a code review.
     """
-    dashboard = (LIB / "screens" / "seller_dashboard_screen.dart").read_text()
-    service = (
-        pathlib.Path(__file__).resolve().parents[1]
-        / "api" / "domains" / "auth" / "service.py"
-    ).read_text()
+    source = (LIB / "screens" / f"{screen}.dart").read_text()
+    payload = "\n".join(p.read_text() for p in _PROFILE_SOURCES)
 
-    keys = set(re.findall(r"_profile\?\['([a-z_]+)'\]", dashboard))
+    keys = set(re.findall(r"_profile\?\['([a-z_]+)'\]", _code_only(source)))
     assert keys, "no _profile reads found - the regex is stale, not the code"
 
-    missing = sorted(k for k in keys if f'"{k}"' not in service)
+    missing = sorted(k for k in keys if f'"{k}"' not in payload)
     assert not missing, (
-        "seller_dashboard_screen reads profile fields the auth service never "
+        f"{screen} reads profile fields the auth service never "
         f"returns: {missing}\n\n"
         "In Dart these come back null, and a `?? <default>` next to one "
         "renders a fabricated figure that looks exactly like a real one. "

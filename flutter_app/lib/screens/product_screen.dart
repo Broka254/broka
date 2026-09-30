@@ -13,7 +13,9 @@
 //  * The seller's standing - the seller dashboard's overall rating, deal
 //    completion rate and response time, in the dashboard's own colours
 //    (models/seller_standing.dart). It replaces a "credibility" score this
-//    screen made up from the star rating and deal count.
+//    screen made up from the star rating and deal count. Since 2026-09-30
+//    also how long the seller's deals take, agreement to payout
+//    (widgets/seller_standing_tiles.dart, shared with their profile).
 //  * ZENO INSIGHT - opens Zeno about this listing (ZenoScreen.aboutListing),
 //    where the buyer asks what they need to know and Zeno offers to find
 //    another listing when this one doesn't fit. It was a panel that asked the
@@ -32,9 +34,11 @@ import '../services/last_screen_tracker.dart';
 import '../utils/land_size.dart';
 import '../utils/price_unit.dart';
 import '../utils/auth_gate.dart';
+import '../utils/backend_time.dart';
 import '../widgets/broka_image.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/motion_widgets.dart';
+import '../widgets/seller_standing_tiles.dart';
 import '../widgets/zeno_avatar.dart';
 import 'zeno_screen.dart';
 
@@ -101,9 +105,10 @@ class _ProductScreenState extends State<ProductScreen> {
     if (mounted) setState(() => _sellerLoaded = true);
   }
 
-  /// The seller dashboard's rating, completion rate and response time, as
-  /// buyers are shown them. Null for a seller with no recent figures.
-  SellerStanding? get _standing => SellerStanding.fromJson(_sellerInfo?['seller_standing']);
+  /// The seller dashboard's rating, completion rate and response time, and
+  /// the seller's deal time, as buyers are shown them. Figures the seller
+  /// doesn't have yet are null.
+  SellerStanding get _standing => SellerStanding.fromProfile(_sellerInfo);
 
   /// Gallery sources, first photo first: the stored images' large size
   /// when the listing has them, else the legacy base64 photos. BrokaImage
@@ -611,30 +616,23 @@ class _ProductScreenState extends State<ProductScreen> {
     final verified = _sellerInfo?['is_verified'] as bool? ?? l.sellerVerified;
     final photo = _sellerInfo?['profile_photo'] as String? ?? l.sellerProfilePhoto;
     final location = _sellerInfo?['location_name'] as String? ?? l.locationName;
-    final lastSeen = _sellerInfo?['last_seen'] as String?;
     final memberSince = _sellerInfo?['created_at'] as String?;
 
-    String lastSeenLabel = 'Unknown';
-    if (lastSeen != null) {
-      try {
-        final dt = DateTime.parse(lastSeen);
-        final diff = DateTime.now().difference(dt);
-        lastSeenLabel = diff.inMinutes < 2
-            ? 'Online now'
-            : diff.inMinutes < 60
-                ? '${diff.inMinutes}m ago'
-                : diff.inHours < 24 ? '${diff.inHours}h ago' : '${diff.inDays}d ago';
-      } catch (_) {}
-    }
+    // The server's own reading of last_seen (api/core/presence.py), the one
+    // the chat header and inbox show. This screen parsed last_seen itself,
+    // as local time - it is naive UTC - so in Kenya every seller was "3h
+    // ago" at best (utils/backend_time.dart).
+    final online = _sellerInfo?['is_online'] == true;
+    final lastSeenLabel = online
+        ? 'Online now'
+        : (_sellerInfo?['last_seen_label'] as String? ?? 'Unknown');
 
     String memberLabel = '';
-    if (memberSince != null) {
-      try {
-        final dt = DateTime.parse(memberSince);
-        final months = ['Jan','Feb','Mar','Apr','May','Jun',
-                        'Jul','Aug','Sep','Oct','Nov','Dec'];
-        memberLabel = 'Since ${months[dt.month - 1]} ${dt.year}';
-      } catch (_) {}
+    final joined = parseBackendUtc(memberSince)?.toLocal();
+    if (joined != null) {
+      const months = ['Jan','Feb','Mar','Apr','May','Jun',
+                      'Jul','Aug','Sep','Oct','Nov','Dec'];
+      memberLabel = 'Since ${months[joined.month - 1]} ${joined.year}';
     }
 
     final initial = Center(child: Text(
@@ -689,14 +687,12 @@ class _ProductScreenState extends State<ProductScreen> {
                       width: 7, height: 7,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: lastSeenLabel == 'Online now'
-                            ? BrokaColors.neonGreen : BrokaColors.textMid,
+                        color: online ? BrokaColors.neonGreen : BrokaColors.textMid,
                       ),
                     ),
                     const SizedBox(width: 5),
                     Text(lastSeenLabel, style: TextStyle(
-                        color: lastSeenLabel == 'Online now'
-                            ? BrokaColors.neonGreen : BrokaColors.textMid,
+                        color: online ? BrokaColors.neonGreen : BrokaColors.textMid,
                         fontSize: 11)),
                   ]),
                 ])),
@@ -732,105 +728,13 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
-  /// The seller dashboard's rating, completion rate and response time, in
-  /// the dashboard's colours: green where the dashboard shades green.
+  /// The seller's standing, in the dashboard's colours: green where the
+  /// dashboard shades green.
   Widget _buildStanding() {
     if (!_sellerLoaded) {
-      return const ShimmerBox(height: 92, radius: BorderRadius.all(Radius.circular(14)));
+      return const ShimmerBox(height: 176, radius: BorderRadius.all(Radius.circular(14)));
     }
-    final s = _standing ?? const SellerStanding();
-    final rating = s.overallRating;
-    final dcr = s.dcr;
-    final reply = s.responseMinutes;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      IntrinsicHeight(
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Expanded(child: _standingTile(
-            key: const Key('standing-rating'),
-            label: 'RATING',
-            value: rating == null ? '—' : rating.toStringAsFixed(1),
-            suffix: rating == null ? null : '/10',
-            sub: rating == null ? 'Not rated yet' : 'BROKA rating',
-            band: s.ratingBand,
-          )),
-          const SizedBox(width: 8),
-          Expanded(child: _standingTile(
-            key: const Key('standing-dcr'),
-            label: 'COMPLETION',
-            value: dcr == null ? '—' : '${dcr.round()}%',
-            sub: dcr == null
-                ? 'No deals yet'
-                : (s.dcrProvisional ? 'Early - few deals' : 'of deals completed'),
-            band: s.dcrBand,
-          )),
-          const SizedBox(width: 8),
-          Expanded(child: _standingTile(
-            key: const Key('standing-response'),
-            label: 'REPLIES IN',
-            value: reply == null ? '—' : SellerStanding.formatMinutes(reply),
-            sub: reply == null ? 'Not measured yet' : 'typical reply',
-            band: s.responseBand,
-          )),
-        ]),
-      ),
-      const SizedBox(height: 6),
-      const Text('Measured by BROKA from the seller\'s deals and chats · updated daily',
-          style: TextStyle(color: BrokaColors.textMid, fontSize: 10)),
-    ]);
-  }
-
-  static Color _bandColor(StandingBand b) => switch (b) {
-    StandingBand.good => BrokaColors.neonGreen,
-    StandingBand.fair => BrokaColors.warning,
-    StandingBand.poor => BrokaColors.danger,
-    StandingBand.unknown => BrokaColors.textMid,
-  };
-
-  Widget _standingTile({
-    required Key key,
-    required String label,
-    required String value,
-    String? suffix,
-    required String sub,
-    required StandingBand band,
-  }) {
-    final color = _bandColor(band);
-    return Container(
-      key: key,
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [
-          Color.alphaBlend(color.withOpacity(0.10), BrokaColors.bgCard),
-          BrokaColors.cardGradColors.last,
-        ], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.35)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text(label, maxLines: 1, style: const TextStyle(
-              color: BrokaColors.textMid, fontSize: 9,
-              fontWeight: FontWeight.w700, letterSpacing: 1.1)),
-        ),
-        const SizedBox(height: 6),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text.rich(TextSpan(children: [
-            TextSpan(text: value, style: TextStyle(
-                color: color, fontSize: 21, fontWeight: FontWeight.w900, height: 1.0)),
-            if (suffix != null)
-              TextSpan(text: suffix, style: TextStyle(
-                  color: color.withOpacity(0.75), fontSize: 11, fontWeight: FontWeight.w700)),
-          ]), maxLines: 1),
-        ),
-        const SizedBox(height: 5),
-        Text(sub, maxLines: 2, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 10, height: 1.3)),
-      ]),
-    );
+    return SellerStandingTiles(standing: _standing);
   }
 
   // ── Map Preview ───────────────────────────────────────────────────────────

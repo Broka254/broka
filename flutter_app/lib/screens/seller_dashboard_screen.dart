@@ -13,6 +13,10 @@
 // Overview shows the store (open or paused, its link, products, the week's
 // visits, Manage) right under the seller's numbers, or the way to open one;
 // a store button in the header opens it from any tab. My Store links back.
+//
+// 2026-09-30: the average deal time - agreement to payout, over the seller's
+// recent completed deals - beside Deals Done in the header. Buyers see the
+// same figure on the seller's listings and profile.
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -321,6 +325,11 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   // beside it. If a genuine reply-rate is added to the profile payload,
   // reinstate the tile then - not before.
   int    get _completedDeals => (_profile?['completed_deals'] as num?)?.toInt() ?? 0;
+
+  /// Mean minutes from agreement to payout over recent completed deals
+  /// (backend trust/deal_time.py). Null before the first completed deal,
+  /// shown as a dash rather than a 0 that would read as instant.
+  double? get _dealTimeMinutes => (_profile?['avg_deal_time_minutes'] as num?)?.toDouble();
   /// Summed over loaded listings.
   ///
   /// The old fallback read `_profile['total_views']` when the list was
@@ -1041,6 +1050,10 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           _miniStat(_fmt(_totalViews),          'Total Views', BrokaColors.neonBlue),
           _vDivider(),
           _miniStat('$_completedDeals',         'Deals Done',  BrokaColors.neonGreen),
+          _vDivider(),
+          _miniStat(
+              _dealTimeMinutes == null ? '—' : SellerStanding.formatMinutes(_dealTimeMinutes!),
+              'Avg Deal Time', BrokaColors.gold),
           _vDivider(),
           _miniStat('$_featuredCount',          'Featured',    BrokaColors.neonCyan),
         ]),

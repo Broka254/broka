@@ -122,6 +122,38 @@ void main() {
     expect(opened, ['/store-explainer']);
   });
 
+  testWidgets('shows how long deals take, and a dash before the first one', (tester) async {
+    Map<String, dynamic>? timed;
+    setFakeRoute((uri) {
+      if (uri.path == '/auth/user/seller-1') {
+        return {'id': 'seller-1', 'name': 'Grace Akinyi', 'completed_deals': 3, ...?timed};
+      }
+      // The fake's default listings are not this screen's Listing shape.
+      if (uri.path == '/listings/') return <Object?>[];
+      if (uri.path == '/stores/mine') return const FakeResponse(null);
+      return null;
+    });
+    Future<void> openDashboard() async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(const MaterialApp(home: SellerDashboardScreen(animateBackground: false)));
+      await _settle(tester);
+      await tester.pump(const Duration(seconds: 2)); // the count-up
+    }
+
+    await openDashboard();
+    expect(find.text('Deals Done'), findsOneWidget);
+    Text beside(String label) => tester.widget<Text>(find.descendant(
+        of: find.ancestor(of: find.text(label), matching: find.byType(Column)).first,
+        matching: find.byType(Text)).first);
+    expect(beside('Deals Done').data, '3');
+    // No completed deal timed: a dash, not a 0 that reads as instant.
+    expect(beside('Avg Deal Time').data, '—');
+
+    timed = {'avg_deal_time_minutes': 2160.0, 'timed_deals': 3};
+    await openDashboard();
+    expect(beside('Avg Deal Time').data, '1.5d');
+  });
+
   testWidgets('nothing overflows on a 320dp phone at a large text size', (tester) async {
     tester.view.physicalSize = const Size(320 * 2, 640 * 2);
     tester.view.devicePixelRatio = 2.0;

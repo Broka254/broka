@@ -1,6 +1,8 @@
 // BROKA - Leave a Review Screen
 // Buyers open this to rate a seller (1-5 stars) and leave a comment.
-// One review per deal is enforced by the backend.
+// Only for a deal of theirs with the seller that completed (delivery
+// confirmed, escrow paid out), once per deal - the backend checks both on
+// every submission; this screen only lists the deals that qualify.
 //
 // Route args: Map<String, dynamic> with keys:
 //   deal_id      - if provided, skip deal-picker and review this deal directly
@@ -10,8 +12,10 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../core/utils/result.dart';
+import '../features/reviews/data/repositories/reviews_repository.dart';
+import '../features/reviews/domain/models/review.dart';
 import '../main.dart';
-import '../services/api_service.dart';
 
 enum _ReviewStep { loading, pickDeal, form, submitting, success }
 
@@ -30,7 +34,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   bool   _initialized = false;
 
   // Deal picker
-  List<Map<String, dynamic>> _deals       = [];
+  List<ReviewableDeal> _deals = [];
   String? _pickedDealId;
   String? _pickedListingName;
 
@@ -74,34 +78,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   Future<void> _loadDeals() async {
     setState(() => _step = _ReviewStep.loading);
-    try {
-      final all = await ApiService.getMyReviewableDeals();
-      // Filter by seller_id if known; fall back to all if empty (shouldn't happen)
-      final filtered = _sellerId.isNotEmpty
-          ? all.where((d) => d['seller_id'] == _sellerId).toList()
-          : all;
-      if (mounted) {
+    // The seller's deals only, when the screen was opened from their profile.
+    final result = await reviewsRepository.myReviewableDeals(
+        sellerId: _sellerId.isEmpty ? null : _sellerId);
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (all) {
         // If only one pending deal and it's not yet reviewed, skip picker
-        final pending = filtered.where((d) => d['already_reviewed'] != true).toList();
+        final pending = all.where((d) => !d.alreadyReviewed).toList();
         if (pending.length == 1) {
-          _pickedDealId      = pending.first['deal_id'] as String;
-          _pickedListingName = pending.first['listing_name'] as String? ?? '';
-          if (_sellerName == 'Seller') {
-            _sellerName = pending.first['seller_name'] as String? ?? 'Seller';
-          }
+          _pickedDealId      = pending.first.dealId;
+          _pickedListingName = pending.first.listingName;
+          if (_sellerName == 'Seller') _sellerName = pending.first.sellerName;
           setState(() { _deals = pending; _step = _ReviewStep.form; });
         } else {
-          setState(() { _deals = filtered; _step = _ReviewStep.pickDeal; });
+          setState(() { _deals = all; _step = _ReviewStep.pickDeal; });
         }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _errorMsg = 'Could not load your deals. Please try again.';
-          _step = _ReviewStep.pickDeal;
-        });
-      }
-    }
+      },
+      onFailure: (_, __) => setState(() {
+        _errorMsg = 'Could not load your deals. Please try again.';
+        _step = _ReviewStep.pickDeal;
+      }),
+    );
   }
 
   Future<void> _submit() async {
@@ -115,22 +113,22 @@ class _ReviewScreenState extends State<ReviewScreen> {
       return;
     }
     setState(() { _step = _ReviewStep.submitting; _errorMsg = null; });
-    try {
-      await ApiService.submitReview(
-        dealId:  id,
-        rating:  _rating,
-        comment: _commentCtrl.text.trim(),
-      );
-      HapticFeedback.heavyImpact();
-      if (mounted) setState(() => _step = _ReviewStep.success);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-        _errorMsg = e.toString().replaceFirst('Exception: ', '');
+    final result = await reviewsRepository.submitReview(
+      dealId:  id,
+      rating:  _rating,
+      comment: _commentCtrl.text.trim(),
+    );
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (_) {
+        HapticFeedback.heavyImpact();
+        setState(() => _step = _ReviewStep.success);
+      },
+      onFailure: (message, _) => setState(() {
+        _errorMsg = message;
         _step = _ReviewStep.form;
-      });
-      }
-    }
+      }),
+    );
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -198,7 +196,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   // ── Deal Picker ────────────────────────────────────────────────────────────
 
   Widget _buildDealPicker() {
-    final pending = _deals.where((d) => d['already_reviewed'] != true).toList();
+    final pending = _deals.where((d) => !d.alreadyReviewed).toList();
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 60),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -238,18 +236,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
           )
         else
           ...pending.map((d) {
-            final dId     = d['deal_id']      as String;
-            final seller  = d['seller_name']  as String? ?? 'Seller';
-            final listing = d['listing_name'] as String? ?? 'Listing';
-            final price   = (d['agreed_price'] as num?)?.toDouble() ?? 0;
-            final rawDate = d['created_at']   as String?;
-            String dateStr = '';
-            if (rawDate != null) {
-              try {
-                final dt = DateTime.parse(rawDate).toLocal();
-                dateStr = '${dt.day}/${dt.month}/${dt.year}';
-              } catch (_) {}
-            }
+            final dId     = d.dealId;
+            final seller  = d.sellerName;
+            final listing = d.listingName;
+            final price   = d.agreedPrice;
+            final done    = d.completedAt?.toLocal();
+            final dateStr = done == null ? '' : '${done.day}/${done.month}/${done.year}';
             final picked = _pickedDealId == dId;
             return GestureDetector(
               onTap: () => setState(() {

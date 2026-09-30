@@ -20,10 +20,11 @@
 // for a dedicated pass rather than silently left implied-fixed):
 // services/api_service.dart, auctions/domain/models/auction.dart,
 // buy_agent/domain/models/buy_agent_request.dart, models/models.dart,
-// core/network/deal_ws_client.dart, screens/review_screen.dart,
-// screens/boost_screen.dart, screens/user_profile_screen.dart,
-// screens/product_screen.dart, screens/negotiation_screen.dart,
-// screens/deal_receipt_history_screen.dart. This pass only fixed the two
+// core/network/deal_ws_client.dart, screens/boost_screen.dart,
+// screens/negotiation_screen.dart, screens/deal_receipt_history_screen.dart.
+// (screens/review_screen.dart, screens/user_profile_screen.dart and
+// screens/product_screen.dart were fixed on 2026-09-30 - the profile's
+// "Last active 3h ago" was this bug.) This pass only fixed the two
 // call sites feeding the specific freshness text the user reported
 // (models/listing.dart's `Listing.createdAt`, and BrokaListing's
 // createdAt as parsed by product_card.dart) - any of the files above that

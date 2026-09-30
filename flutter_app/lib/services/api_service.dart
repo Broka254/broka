@@ -1512,61 +1512,6 @@ class ApiService {
     return null;
   }
 
-  // ── Reviews ────────────────────────────────────────────────────────────────
-
-  static Future<void> submitReview({
-    required String dealId,
-    required int    rating,
-    String          comment = '',
-  }) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/reviews/'),
-      headers: _headers,
-      body: jsonEncode({'deal_id': dealId, 'rating': rating, 'comment': comment}),
-    ).timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-  }
-
-  static Future<Map<String, dynamic>> getReviewSummary(String sellerId) async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/reviews/summary/$sellerId'),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
-
-  static Future<List<Map<String, dynamic>>> getSellerReviews(
-      String sellerId, {int limit = 20, int offset = 0}) async {
-    final uri = Uri.parse('$baseUrl/reviews/$sellerId').replace(
-        queryParameters: {'limit': '$limit', 'offset': '$offset'});
-    final res = await http.get(uri, headers: _headers)
-        .timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return List<Map<String, dynamic>>.from(data['reviews'] as List);
-  }
-
-  static Future<List<Map<String, dynamic>>> getMyReviewableDeals() async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/reviews/my-deals'),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return List<Map<String, dynamic>>.from(data['deals'] as List);
-  }
-
-  static Future<bool> checkAlreadyReviewed(String dealId) async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/reviews/check/$dealId'),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) return false;
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return data['already_reviewed'] as bool? ?? false;
-  }
-
   // ── Featured Listing Boost ─────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getMyBoostableListings() async {

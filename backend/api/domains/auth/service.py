@@ -615,9 +615,15 @@ class AuthService:
         # extra query on every pure-buyer profile view. Kept out of
         # _user_dict/the bulk-listing path above (search results etc. call
         # that in a loop; this stays a single-profile-fetch-only cost).
+        #
+        # The deal completion time rides the same gate: every release path
+        # bumps completed_deals as it stamps released_at, so an account with
+        # no completed deal has nothing to time.
         if (user.completed_deals or 0) > 0:
             from api.core.fraud import seller_deal_stats
+            from api.domains.trust.deal_time import deal_completion_time
             d.update(await seller_deal_stats(user_id, self.db))
+            d.update(await deal_completion_time(self.db, user_id))
         # Volume 2 §3.6: DCR for the seller dashboard. Deliberately NOT
         # gated to completed_deals>0 like the block above - a SellerMetrics
         # row exists for any seller with >=1 listing (see

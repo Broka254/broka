@@ -13,6 +13,10 @@
 // opened far more often than a dashboard, and the live response time is a
 // scan of every recent message on the platform. Rank position and backlog
 // are not in it - they stay the seller's.
+//
+// The average deal completion time rides alongside: agreement to payout,
+// over the seller's recent completed deals, measured live on the profile
+// (backend/api/domains/trust/deal_time.py) - a few rows, not a scan.
 
 class SellerStanding {
   const SellerStanding({
@@ -21,6 +25,8 @@ class SellerStanding {
     this.dcrProvisional = false,
     this.responseMinutes,
     this.completedDeals = 0,
+    this.dealTimeMinutes,
+    this.timedDeals = 0,
   });
 
   /// 0-10.
@@ -39,6 +45,14 @@ class SellerStanding {
 
   final int completedDeals;
 
+  /// Mean minutes from a deal being agreed to the seller being paid, over
+  /// their recent completed deals. Null before the first one: "no deals
+  /// yet" is not "instant".
+  final double? dealTimeMinutes;
+
+  /// How many completed deals [dealTimeMinutes] is the mean of.
+  final int timedDeals;
+
   // The dashboard's bands (seller_dashboard_screen.dart, _buildTrendSection).
   static const ratingGood = 8.0;
   static const ratingPoor = 6.0;
@@ -49,6 +63,12 @@ class SellerStanding {
   static const responseGood = 30.0;
   static const responsePoor = 180.0;
 
+  /// Deal time is lower-is-better too. The buyer's money sits in escrow for
+  /// all of it: two days is a local handover done promptly, a week or more is
+  /// money held that long.
+  static const dealTimeGood = 2 * 1440.0;
+  static const dealTimePoor = 7 * 1440.0;
+
   static SellerStanding? fromJson(Object? json) {
     if (json is! Map) return null;
     double? d(String k) => (json[k] as num?)?.toDouble();
@@ -58,6 +78,22 @@ class SellerStanding {
       dcrProvisional: json['dcr_provisional'] == true,
       responseMinutes: d('median_response_minutes'),
       completedDeals: (json['completed_deals'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// The standing from a GET /auth/user/{id} body: the snapshot under
+  /// `seller_standing`, and the deal time beside it. Never null - a seller
+  /// with no snapshot yet still shows which figures are not in.
+  static SellerStanding fromProfile(Map<String, dynamic>? profile) {
+    final s = fromJson(profile?['seller_standing']) ?? const SellerStanding();
+    return SellerStanding(
+      overallRating: s.overallRating,
+      dcr: s.dcr,
+      dcrProvisional: s.dcrProvisional,
+      responseMinutes: s.responseMinutes,
+      completedDeals: s.completedDeals,
+      dealTimeMinutes: (profile?['avg_deal_time_minutes'] as num?)?.toDouble(),
+      timedDeals: (profile?['timed_deals'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -78,6 +114,13 @@ extension SellerStandingBands on SellerStanding {
     if (m == null) return StandingBand.unknown;
     if (m <= SellerStanding.responseGood) return StandingBand.good;
     return m >= SellerStanding.responsePoor ? StandingBand.poor : StandingBand.fair;
+  }
+
+  StandingBand get dealTimeBand {
+    final m = dealTimeMinutes;
+    if (m == null) return StandingBand.unknown;
+    if (m <= SellerStanding.dealTimeGood) return StandingBand.good;
+    return m >= SellerStanding.dealTimePoor ? StandingBand.poor : StandingBand.fair;
   }
 
   static StandingBand _band(double? v, double good, double poor) {

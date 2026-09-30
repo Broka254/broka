@@ -1,7 +1,8 @@
 // The listing screen on Home's visual system (2026-09-29): the constellation
 // and Home's header, the deal's terms where a buyer looks first, the seller
-// dashboard's rating / completion rate / response time for the seller, and
-// the Zeno Insight card opening Zeno about this listing.
+// dashboard's rating / completion rate / response time for the seller - and
+// since 2026-09-30 how long their deals take - and the Zeno Insight card
+// opening Zeno about this listing.
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -77,7 +78,10 @@ void main() {
     setFakeRoute((uri) {
       if (uri.path == '/auth/user/seller-1') {
         return {'id': 'seller-1', 'name': 'Grace Akinyi', 'is_verified': true,
-            'completed_deals': 14, 'seller_standing': _standing};
+            'completed_deals': 14, 'seller_standing': _standing,
+            'avg_deal_time_minutes': 150.0, 'timed_deals': 12,
+            'last_seen': '2026-09-30T13:05:00', 'is_online': false,
+            'last_seen_label': 'Active 12m ago'};
       }
       if (uri.path == '/zeno/assistant/turn') return {'reply': 'It comes with the box.', 'action': null};
       return null;
@@ -164,8 +168,10 @@ void main() {
       expect(textIn(tester, const Key('standing-rating')), contains('8.5/10'));
       expect(textIn(tester, const Key('standing-dcr')), allOf(contains('92%'), contains('of deals completed')));
       expect(textIn(tester, const Key('standing-response')), allOf(contains('25m'), contains('typical reply')));
-      // In the dashboard's colours: all three are in its green band.
-      for (final k in ['standing-rating', 'standing-dcr', 'standing-response']) {
+      expect(textIn(tester, const Key('standing-deal-time')),
+          allOf(contains('2.5h'), contains('agreed to paid · 12 deals')));
+      // In the dashboard's colours: all four are in its green band.
+      for (final k in ['standing-rating', 'standing-dcr', 'standing-response', 'standing-deal-time']) {
         expect(valueColour(tester, Key(k)), BrokaColors.neonGreen, reason: k);
       }
       // The made-up "credibility" score is gone.
@@ -176,7 +182,8 @@ void main() {
       setFakeRoute((uri) => uri.path == '/auth/user/seller-1'
           ? {'id': 'seller-1', 'name': 'Grace', 'seller_standing': {
               'overall_rating': 5.2, 'dcr': 75.0, 'dcr_provisional': true,
-              'median_response_minutes': 300.0, 'completed_deals': 3}}
+              'median_response_minutes': 300.0, 'completed_deals': 3},
+              'avg_deal_time_minutes': 12000.0, 'timed_deals': 1}
           : null);
       await open(tester, _listing());
       expect(textIn(tester, const Key('standing-dcr')), contains('Early - few deals'));
@@ -184,6 +191,10 @@ void main() {
       expect(valueColour(tester, const Key('standing-rating')), BrokaColors.danger);
       expect(valueColour(tester, const Key('standing-dcr')), BrokaColors.warning);
       expect(valueColour(tester, const Key('standing-response')), BrokaColors.danger);
+      // Over a week from agreement to payout, on one deal.
+      expect(textIn(tester, const Key('standing-deal-time')),
+          allOf(contains('8.3d'), contains('1 deal')));
+      expect(valueColour(tester, const Key('standing-deal-time')), BrokaColors.danger);
     });
 
     testWidgets('a seller with no figures yet is not given any', (tester) async {
@@ -192,7 +203,16 @@ void main() {
       expect(textIn(tester, const Key('standing-rating')), contains('Not rated yet'));
       expect(textIn(tester, const Key('standing-dcr')), contains('No deals yet'));
       expect(textIn(tester, const Key('standing-response')), contains('Not measured yet'));
+      expect(textIn(tester, const Key('standing-deal-time')), contains('No completed deals'));
       expect(find.text('10.0/10'), findsNothing);
+    });
+
+    testWidgets("last seen is the server's reading, not a UTC-shifted guess", (tester) async {
+      // last_seen is naive UTC; parsed here as local time, a seller active
+      // minutes ago in Kenya read "3h ago".
+      await open(tester, _listing());
+      expect(find.text('Active 12m ago'), findsOneWidget);
+      expect(find.textContaining('3h ago'), findsNothing);
     });
   });
 
