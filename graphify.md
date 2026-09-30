@@ -224,13 +224,13 @@ Counts: admin 16, optional 2, public 51, token 4, user 111.
 | GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:221) |
 | GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:226) |
 | PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:231) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:290) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:296) |
 | GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:255) |
-| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:273) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:335) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:354) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:279) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:341) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:360) |
 | POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:245) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:296) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:302) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -551,7 +551,7 @@ of a change.
 - **pricing** — domains: listings, trust; core: audit, config, events, idempotency, mpesa_stk, rate_limit, reconciliation; database, security
 - **reviews** — core: audit, events; database, security
 - **showcase** — domains: media, premium; core: fal_client, image_processing, rate_limit; database, security
-- **stores** — domains: auth, categories, listings, media; core: client_ip, config, rate_limit, text_search; database, security
+- **stores** — domains: auth, categories, listings, media; core: client_ip, config, presence, rate_limit, text_search; database, security
 - **traders** — core: geo, text_search; database
 - **trending** — domains: listings; database
 - **trust** — domains: listings; database
@@ -804,6 +804,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/features/stores/`
 
 - `data/repositories/stores_repository.dart` — BROKA — Stores Repository
+- `data/store_cart.dart` — A store's cart, kept on the phone.
 - `data/store_share.dart` — Sharing a store's link.
 - `domain/kenya_locations.dart` — Kenya's 47 counties and their subcounties, for location pickers.
 - `domain/models/store.dart` — BROKA — Store domain model
@@ -813,6 +814,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/setup/store_setup_controller.dart` — State behind the store setup wizard and the store's settings pages.
 - `presentation/setup/store_setup_screen.dart` — Store setup: one question per screen, on the constellation background, with the draft kept on the phone after every change.
 - `presentation/setup/store_setup_steps.dart` — The pages of the store setup wizard.
+- `presentation/store_cart_screen.dart` — A store's cart: what the buyer picked, how many, the total, and checkout.
 - `presentation/store_edit_screen.dart` — Editing one part of an open store, with the same page the setup wizard used for it.
 - `presentation/store_entry.dart` — Where "My Store" / "Open an online store" buttons go.
 - `presentation/store_home_screen.dart` — A store's home in the app - the "mini Jumia" a buyer lands on from a shared link, a product's store badge, or the store directory.
@@ -821,6 +823,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_media_image.dart` — BROKA — Store media image (Phase 6 hardening)
 - `presentation/widgets/menu_store_section.dart` — The Menu's "Online store" section.
 - `presentation/widgets/store_details_view.dart` — "Store details" - its own screen, opened from "More details" under the store's name or the info button in its bar.
+- `presentation/widgets/store_product_card.dart` — A product in a store's catalogue, as a shop shows it: the photo with its condition, the name, the price, and Add to cart - which turns into…
 - `presentation/widgets/store_share_card.dart` — The store's link, its QR code and one-tap sharing - on the "your store is live" screen and at the top of My Store.
 
 ### `flutter_app/lib/features/traders/`
@@ -1002,13 +1005,15 @@ Routes under `web/src/app/` (`:name` is a dynamic segment):
 | `/og/:file` | route | Link-preview images: https://broka.co.ke/og/<image id>.jpg |
 | `/` | page |  |
 | `/store/:name/about` | page | A store's details on the web: https://broka.co.ke/store/<name>/about. |
-| `/store/:name/p/:listingId` | page | One product in a store: https://broka.co.ke/store/<name>/p/<id>. |
-| `/store/:name` | page | A store's home on the web: https://broka.co.ke/store/<name>. |
+| `/store/:name/cart` | page | A store's cart and checkout on the web: https://broka.co.ke/store/<name>/cart. |
+| `/store/:name/p/:listingId` | page | One product in a store: https://broka.co.ke/store/<name>/p/<id> - a shop's product page: the path back through the store, the gallery, the… |
+| `/store/:name` | page | A store's home on the web: https://broka.co.ke/store/<name> - laid out as a shop's website: the store's own header (name, search, filters,… |
 
 Modules:
 
 - `web/src/lib/api.ts` — Reading from the BROKA API, on the server.
 - `web/src/lib/browser.ts` — Browser-only values for client components, read without a render on the server: on the server (and while hydrating) they're the fallback, t…
+- `web/src/lib/cart.ts` — A store's cart, kept in this browser (localStorage), and the cart drawer's open/closed state - shared by every component on the page throug…
 - `web/src/lib/catalogue.ts` — What the storefront's catalogue shows: filters read from the URL, and the data a product card needs.
 - `web/src/lib/categories.ts` — BROKA's 21 top-level categories with the emoji and colours the app uses for them (flutter_app/lib/features/categories/domain/category_visua…
 - `web/src/lib/config.ts` — Public deployment settings, read from the environment (see .env.example).
@@ -1020,20 +1025,29 @@ Modules:
 - `web/src/lib/server-config.ts` — Settings only the server may read.
 - `web/src/lib/storefront.ts` — Server-side view data for the store and product pages: images resolved against the API, link previews, and structured data for search engin…
 - `web/src/lib/types.ts` — The shapes the BROKA API returns, as far as the storefront reads them.
+- `web/src/components/AddToCart.tsx` — Add to cart on a product card, and the − n + stepper it becomes once the product is in the cart - the way shops show it.
 - `web/src/components/AppButton.tsx` — A button into the BROKA app for this page: on Android it opens the app (or the APK download when the app isn't installed); elsewhere it's t…
-- `web/src/components/CatalogueControls.tsx` — Search and sort for a store's catalogue.
+- `web/src/components/CartButton.tsx` — The cart in the store's header: how many items, and on a wide screen the total - one tap opens the cart drawer.
+- `web/src/components/CartDrawer.tsx` — The cart, sliding in from the side: what's in it, how many, the total, and the way to checkout.
+- `web/src/components/CatalogueControls.tsx` — Search and filters for a store's catalogue, drawn like the app's Home: a pill search field and, beside it, the filter button (with a dot wh…
 - `web/src/components/CategoryPills.tsx` — The store's categories, drawn like the app's home category rail: a gradient ring around the category's emoji, its name underneath, and here…
+- `web/src/components/CheckoutView.tsx` — The cart page: every product, how many, the total - and checkout.
 - `web/src/components/Constellation.tsx` — The glowing connected dots behind every page, as in the app.
 - `web/src/components/Gallery.tsx` — A product's photos: one large image and a strip of thumbnails.
 - `web/src/components/HomeLink.tsx` — A link to BROKA's home page.
+- `web/src/components/Icon.tsx` — The storefront's icons, as inline SVG: emoji and text glyphs (⌕, ✉, ⓘ) render differently on every phone and looked unfinished next to the…
 - `web/src/components/OpenInApp.tsx` — "Open in the BROKA app" for Android visitors.
-- `web/src/components/ProductCard.tsx`
+- `web/src/components/Perks.tsx` — What buying from a store on BROKA means, in the strip shops put under their banner.
+- `web/src/components/ProductBuyBox.tsx` — Buying on a product's page, as a shop offers it: how many, Add to cart, and Buy now (the cart, straight to checkout).
+- `web/src/components/ProductCard.tsx` — A product in the store's catalogue, as a shop shows it: the photo (a little zoom on hover) with its condition, the name, the price, and Add…
 - `web/src/components/ProductGrid.tsx` — The catalogue grid: the first page rendered on the server, more pages fetched on request through /api/stores/[id]/listings.
 - `web/src/components/ShareButtons.tsx` — Sharing a store or product from the web: WhatsApp (how most people here share), and the system share sheet or a copied link.
 - `web/src/components/SiteFooter.tsx`
 - `web/src/components/SiteHeader.tsx` — The logo is unoptimized because /_next/image on broka.co.ke is the BROKA website's image service, which doesn't have the storefront's files.
 - `web/src/components/StoreDetails.tsx` — "Store details": everything a visitor arriving from a shared link needs to know about a store before buying from it - which store it is, wh…
-- `web/src/components/StoreHero.tsx` — Who the store is, at a glance: logo, name (with a tick for a verified seller), what and where, "More details", and sharing.
+- `web/src/components/StoreFooter.tsx` — The foot of a store's pages, as a shop's website ends: the store, its departments, help with buying, and how paying works - then "powered b…
+- `web/src/components/StoreHeader.tsx` — The top of every store page, the way a shop's website starts: a thin bar with what buying here means, then the store's own header - its nam…
+- `web/src/components/StoreHero.tsx` — The top of the store: its name, large, over moving colour - aurora light in the store's category colours and BROKA's violet and blue, orbit…
 - `web/src/components/TrustChips.tsx` — The seller's real record: verified, completed deals, rating, deal time, since.
 - `web/src/components/VisitBeacon.tsx` — Counts this page view as a store visit, for the owner's stats, from the visitor's own browser (so crawlers that don't run scripts aren't co…
 
