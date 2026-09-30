@@ -37,6 +37,11 @@ class StoreProductCard extends StatelessWidget {
   /// itemTextBlock).
   static const double textBlock = 128;
 
+  /// The photo's height as a share of the card's width (ProductGridView's
+  /// itemImageShare): a little taller than Home's 0.85, so a shop's
+  /// products get more of the screen and the photo does the selling.
+  static const double imageShare = 0.95;
+
   static const _accent = Color(0xFFB69CFF);
 
   bool get _isAuction => listing.listingType == 'auction';
@@ -72,58 +77,78 @@ class StoreProductCard extends StatelessWidget {
       child: Text(CategoryVisuals.emojiFor(listing.category), style: const TextStyle(fontSize: 40)),
     );
 
+    // Home's product-card surface (widgets/product_card.dart): a thin
+    // violet-to-blue edge around the card gradient. This was a flat bgCard
+    // fill with a grey border - the one card in the app that didn't carry
+    // BROKA's colours.
     return Semantics(
       button: true,
       label: listing.name,
-      child: Material(
-        key: Key('store-product-${listing.id}'),
-        color: BrokaColors.bgCard.withOpacity(0.94),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: BrokaColors.border.withOpacity(0.9)),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          gradient: LinearGradient(
+            colors: listing.isFeatured
+                ? BrokaColors.brandGradient
+                : [BrokaColors.gold.withOpacity(0.45), BrokaColors.neonBlue.withOpacity(0.35)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(
-              child: Stack(fit: StackFit.expand, children: [
-                image == null || image.isEmpty
-                    ? placeholder
-                    : BrokaImage(image, fit: BoxFit.cover, placeholder: placeholder),
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: Wrap(spacing: 4, runSpacing: 4, children: [
-                    if (_isAuction) const _Badge('Auction', color: BrokaColors.danger),
-                    if (listing.isFeatured) const _Badge('Featured', color: BrokaColors.gold),
-                    if (_condition != null) _Badge(_condition!, color: BrokaColors.neonBlue),
-                  ]),
-                ),
-              ]),
+        child: Padding(
+          padding: const EdgeInsets.all(1.2),
+          child: Material(
+            key: Key('store-product-${listing.id}'),
+            color: Colors.transparent,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.8)),
+            clipBehavior: Clip.antiAlias,
+            child: Ink(
+              decoration: const BoxDecoration(gradient: BrokaColors.cardGradient),
+              child: InkWell(
+                onTap: onTap,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Expanded(
+                    child: Stack(fit: StackFit.expand, children: [
+                      image == null || image.isEmpty
+                          ? placeholder
+                          : BrokaImage(image, fit: BoxFit.cover, placeholder: placeholder),
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Wrap(spacing: 4, runSpacing: 4, children: [
+                          if (_isAuction) const _Badge('Auction', color: BrokaColors.danger),
+                          if (listing.isFeatured) const _Badge('Featured', color: BrokaColors.gold),
+                          if (_condition != null) _Badge(_condition!, color: BrokaColors.neonBlue),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      SizedBox(
+                        height: 36,
+                        child: Text(listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13.5,
+                                fontWeight: FontWeight.w600, height: 1.3)),
+                      ),
+                      const SizedBox(height: 4),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                            PriceUnits.priceLabel(listing.priceFormatted, listing.priceUnit),
+                            style: const TextStyle(color: _accent, fontSize: 16,
+                                fontWeight: FontWeight.w900)),
+                      ),
+                      const SizedBox(height: 8),
+                      _isAuction ? _viewButton() : _cartControl(context),
+                    ]),
+                  ),
+                ]),
+              ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                SizedBox(
-                  height: 36,
-                  child: Text(listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13.5,
-                          fontWeight: FontWeight.w600, height: 1.3)),
-                ),
-                const SizedBox(height: 4),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(PriceUnits.priceLabel(listing.priceFormatted, listing.priceUnit),
-                      style: const TextStyle(color: _accent, fontSize: 16,
-                          fontWeight: FontWeight.w900)),
-                ),
-                const SizedBox(height: 8),
-                _isAuction ? _viewButton() : _cartControl(context),
-              ]),
-            ),
-          ]),
+          ),
         ),
       ),
     );

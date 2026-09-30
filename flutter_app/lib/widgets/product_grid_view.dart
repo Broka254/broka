@@ -86,6 +86,11 @@ class ProductGridView extends StatefulWidget {
   /// 1, in place of ProductCard's (see _cardTextBlock).
   final double? itemTextBlock;
 
+  /// How much of a card's width its photo gets as height, in place of
+  /// ProductCard's (see _cardImageShare). A store's catalogue gives its
+  /// products a taller photo.
+  final double? itemImageShare;
+
   const ProductGridView({
     super.key,
     required this.fetchPage,
@@ -97,6 +102,7 @@ class ProductGridView extends StatefulWidget {
     this.padding = const EdgeInsets.all(12),
     this.itemBuilder,
     this.itemTextBlock,
+    this.itemImageShare,
   });
 
   @override
@@ -262,7 +268,8 @@ class _ProductGridViewState extends State<ProductGridView> {
         (width - widget.padding.horizontal - _crossAxisSpacing) / 2;
     if (cardWidth <= 0) return 0.68;
     final textBlock = widget.itemTextBlock ?? _cardTextBlock;
-    final tileHeight = cardWidth * _cardImageShare + textBlock * textScale;
+    final imageShare = widget.itemImageShare ?? _cardImageShare;
+    final tileHeight = cardWidth * imageShare + textBlock * textScale;
     return cardWidth / tileHeight;
   }
 

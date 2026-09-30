@@ -21,12 +21,17 @@ import '../../../../core/utils/result.dart';
 import '../../../../services/api_service.dart';
 import '../../../../services/image_upload_service.dart';
 import '../../../../services/photo_upload_tracker.dart';
+import '../../../../services/sell_photo_store.dart';
 import '../../data/repositories/stores_repository.dart';
 import '../../domain/kenya_locations.dart';
 import '../../domain/models/store.dart';
 import '../../domain/store_categories.dart';
 
 enum StoreSetupStep { name, link, category, location, logo, photos, email, review }
+
+/// The store wizard's and settings pages' picked images, in the app's own
+/// storage until the store is saved (see pickStoreImage).
+const storeDraftPhotos = KeptPhotos('store_draft');
 
 /// An image in the draft: a picked file (uploading, or uploaded), or an
 /// image the store already has.
@@ -334,6 +339,7 @@ class StoreSetupController extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_draftKey());
     } catch (_) {}
+    await storeDraftPhotos.clear();
   }
 
   static Future<bool> hasDraft() async {
@@ -810,6 +816,11 @@ class StoreSetupController extends ChangeNotifier {
       final result = await _repo.updateStore(store.id, payload);
       switch (result) {
         case Success(:final data):
+          // Uploaded and now the store's: the local copies have done their
+          // job. (An open store has no draft, so nothing else uses them.)
+          if (step == StoreSetupStep.logo || step == StoreSetupStep.photos) {
+            unawaited(storeDraftPhotos.clear());
+          }
           return (data, null);
         case Failure(:final message, :final statusCode):
           return (null, _problemFor(message, statusCode));

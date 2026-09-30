@@ -1,5 +1,8 @@
 // BROKA - Listing photo camera (in-app)
 //
+// Also the camera for every other photo the app takes - store images, chat
+// photos, a damaged-goods report - through services/photo_capture.dart.
+//
 // Why this exists: listing photos used to be taken with the phone's own
 // camera app (image_picker, ImageSource.camera). That hands the whole
 // screen to another app, and while it is open Android may kill BROKA to
@@ -35,11 +38,17 @@ class ListingCameraScreen extends StatefulWidget {
     required this.alreadyTaken,
     required this.maxPhotos,
     required this.onCaptured,
+    this.hint = defaultHint,
   });
+
+  /// What to photograph, shown over the preview until the first shot.
+  static const defaultHint =
+      'Good light, the whole item in frame. Take the front, the back, and any marks or damage.';
 
   /// Photos the listing already has, so the counter reads "3 of 6".
   final int alreadyTaken;
   final int maxPhotos;
+  final String hint;
 
   /// Called with each photo as it's taken (a file in the cache directory);
   /// the caller moves it somewhere durable and returns where it now is.
@@ -380,7 +389,8 @@ class _ListingCameraScreenState extends State<ListingCameraScreen>
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: Colors.white24),
             ),
-            child: Text('$_count of ${widget.maxPhotos} photos',
+            // A single shot (a logo, a chat photo) has nothing to count.
+            child: Text(widget.maxPhotos == 1 ? 'Photo' : '$_count of ${widget.maxPhotos} photos',
                 style: const TextStyle(color: Colors.white, fontSize: 12.5,
                     fontWeight: FontWeight.w700)),
           ),
@@ -399,10 +409,10 @@ class _ListingCameraScreenState extends State<ListingCameraScreen>
           color: Colors.black.withOpacity(0.5),
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Text(
-          'Good light, the whole item in frame. Take the front, the back, and any marks or damage.',
+        child: Text(
+          widget.hint,
           textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white, fontSize: 12, height: 1.35),
+          style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.35),
         ),
       );
 

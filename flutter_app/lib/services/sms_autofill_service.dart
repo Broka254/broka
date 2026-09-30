@@ -28,7 +28,6 @@
 // QuickType suggestion natively — so every method here is a safe no-op there.
 
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -44,7 +43,12 @@ class SmsAutofillService {
   static Stream<String>? _codeStream;
 
   /// True only where the SMS Retriever is available.
-  static bool get isSupported => !kIsWeb && Platform.isAndroid;
+  ///
+  /// defaultTargetPlatform rather than dart:io's Platform: the same answer on
+  /// a phone, and one a widget test can reach, which is how the signup
+  /// wizard's capture path is tested at all.
+  static bool get isSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   /// The 11-character app-signature hash this build's OTP SMS must end with.
   ///
@@ -80,6 +84,10 @@ class SmsAutofillService {
         .where((c) => c.isNotEmpty)
         .asBroadcastStream();
   }
+
+  /// Forgets the cached stream, so each test listens to its own mock.
+  @visibleForTesting
+  static void resetForTest() => _codeStream = null;
 
   /// Arms the retriever for the next incoming message.
   ///

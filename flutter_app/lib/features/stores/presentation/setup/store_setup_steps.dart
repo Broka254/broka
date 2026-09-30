@@ -4,9 +4,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../../../main.dart' show BrokaColors;
+import '../../../../services/photo_capture.dart';
 import '../../../../services/photo_upload_tracker.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/list_picker.dart';
@@ -492,46 +492,23 @@ class _LocationStepState extends State<LocationStep> {
 
 // ── Images ───────────────────────────────────────────────────────────────────
 
-/// Asks camera or gallery, then returns the picked file (or null).
-Future<File?> pickStoreImage(BuildContext context, {ImagePicker? picker}) async {
-  final source = await showModalBottomSheet<ImageSource>(
-    context: context,
-    backgroundColor: BrokaColors.bgMid,
-    shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-    builder: (sheet) => SafeArea(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(height: 8),
-        ListTile(
-          leading: const Icon(Icons.photo_camera_outlined, color: BrokaColors.gold),
-          title: const Text('Take a photo', style: TextStyle(color: BrokaColors.textHigh)),
-          onTap: () => Navigator.pop(sheet, ImageSource.camera),
-        ),
-        ListTile(
-          leading: const Icon(Icons.photo_library_outlined, color: BrokaColors.gold),
-          title: const Text('Choose from gallery', style: TextStyle(color: BrokaColors.textHigh)),
-          onTap: () => Navigator.pop(sheet, ImageSource.gallery),
-        ),
-        const SizedBox(height: 8),
-      ]),
-    ),
-  );
-  if (source == null) return null;
-  try {
-    final x = await (picker ?? ImagePicker()).pickImage(
-      source: source, maxWidth: 2400, maxHeight: 2400, imageQuality: 90,
-    );
-    return x == null ? null : File(x.path);
-  } on PlatformException catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          e.code.contains('denied')
-              ? 'BROKA needs permission to use your ${source == ImageSource.camera ? 'camera' : 'photos'}. '
-                'Allow it in your phone settings.'
-              : "Couldn't open the ${source == ImageSource.camera ? 'camera' : 'gallery'}.")));
-    }
-    return null;
+/// Asks camera or gallery, then returns the photo (or null), kept in the
+/// app's own storage like a listing photo.
+///
+/// The camera is BROKA's own (services/photo_capture.dart), as for listing
+/// photos: this used to open the phone's camera app, and Android often
+/// killed BROKA behind it - the wizard came back from a cold start without
+/// the photo. And the file used to stay in image_picker's cache, which
+/// Android may empty before a draft left overnight is picked up again.
+Future<File?> pickStoreImage(BuildContext context, {required String hint}) async {
+  final source = await PhotoCapture.askSource(context);
+  if (source == null || !context.mounted) return null;
+  if (source == PhotoSource.camera) {
+    return PhotoCapture.takePhoto(context, hint: hint,
+        keep: (photo) => storeDraftPhotos.keep(photo, moveOriginal: true));
   }
+  final picked = await PhotoCapture.pickFromGallery(context);
+  return picked == null ? null : storeDraftPhotos.keep(picked);
 }
 
 /// One image in the draft, with its upload progress or failure over it.
@@ -645,7 +622,8 @@ class LogoStep extends StatelessWidget {
   Widget build(BuildContext context) {
     final logo = c.logo;
     Future<void> pick() async {
-      final f = await pickStoreImage(context);
+      final f = await pickStoreImage(context,
+          hint: 'Your logo or shop sign, straight on and filling the frame, in good light.');
       if (f != null) c.setLogo(f);
     }
 
@@ -690,13 +668,32 @@ class PhotosStep extends StatelessWidget {
   Widget build(BuildContext context) {
     final cover = c.cover;
     Future<void> pickCover() async {
-      final f = await pickStoreImage(context);
+      final f = await pickStoreImage(context,
+          hint: 'Your shop front or your best display - it runs across the top of your store.');
       if (f != null) c.setCover(f);
     }
 
+    // Several at once from the camera, as listing photos are taken: each
+    // shot joins the grid and starts uploading while the next is framed.
     Future<void> addPhoto() async {
-      final f = await pickStoreImage(context);
-      if (f != null) c.addPhoto(f);
+      final source = await PhotoCapture.askSource(context);
+      if (source == null || !context.mounted) return;
+      if (source == PhotoSource.camera) {
+        await PhotoCapture.takePhotos(
+          context,
+          alreadyTaken: c.photos.length,
+          maxPhotos: StoreSetupController.maxPhotos,
+          hint: 'Your shop front, shelves and team - real photos build trust with buyers.',
+          onCaptured: (photo) async {
+            final kept = await storeDraftPhotos.keep(photo, moveOriginal: true);
+            c.addPhoto(kept);
+            return kept;
+          },
+        );
+        return;
+      }
+      final picked = await PhotoCapture.pickFromGallery(context);
+      if (picked != null) c.addPhoto(await storeDraftPhotos.keep(picked));
     }
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

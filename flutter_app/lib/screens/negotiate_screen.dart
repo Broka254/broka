@@ -7,7 +7,6 @@ import 'dart:convert';
 // Action buttons are driven entirely by the deal's DB state —
 // never by parsing AI text — so the correct choices are always shown.
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import '../services/broka_tts.dart';
 import '../services/zeno_voice_controller.dart';
 import '../widgets/zeno_voice_card.dart';
@@ -18,6 +17,7 @@ import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
+import '../services/photo_capture.dart';
 import '../models/models.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/local_chat_store.dart';
@@ -678,13 +678,13 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   }
 
   /// Goods arrived damaged — opens camera, sends image to Zeno for AI analysis.
+  ///
+  /// BROKA's own camera, as for listing photos (services/photo_capture.dart):
+  /// the phone's camera app could get BROKA killed behind it, losing the
+  /// report mid-dispute.
   Future<void> _goodsDamaged() async {
-    final picker = ImagePicker();
-    final XFile? photo = await picker.pickImage(
-      source:       ImageSource.camera,
-      imageQuality: 70,
-      maxWidth:     1280,
-    );
+    final photo = await PhotoCapture.takePhoto(context,
+        hint: 'Get the damage in frame, close and in good light - Zeno will look at this photo.');
     if (photo == null || !mounted) return;
 
     final bytes = await photo.readAsBytes();

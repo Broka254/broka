@@ -403,11 +403,13 @@ void main() {
     testWidgets("a store's card: its chosen picture, whether the owner is on, Visit store",
         (tester) async {
       const cover = '/media/c1/medium.webp';
+      const logo = '/media/l1/thumb.webp';
       setFakeRoute((uri) => uri.path.startsWith('/stores')
           ? [
               {
                 ...fakeStoreJson(0),
                 'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+                'logo': {'id': 'l1', 'thumb': logo, 'medium': logo, 'large': logo},
                 'owner': {'verified': true, 'rating': 4.7, 'completed_deals': 9,
                     'online': true, 'last_active': 'Active now'},
               },
@@ -433,6 +435,15 @@ void main() {
       expect(find.descendant(of: first, matching: find.text('Visit store')), findsOneWidget);
       // Taller than the old 80dp row, the same full-width shape.
       expect(tester.getSize(first).height, greaterThan(240));
+      // Visit store is a pill as wide as its words at the card's foot, not
+      // the bar across the whole card it was (louder than the picture).
+      final visit = tester.getSize(find.byKey(const Key('visit-store-store-0')));
+      expect(visit.width, lessThan(tester.getSize(first).width / 2));
+      expect(visit.height, inInclusiveRange(34, 44));
+      // A cover and a logo: the logo is the sign over the picture's edge.
+      expect(find.descendant(of: first,
+          matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == logo)),
+          findsOneWidget);
 
       final second = find.byKey(const Key('store-card-store-1'));
       expect(find.descendant(of: second, matching: find.text('Active 2d ago')), findsOneWidget);

@@ -11,17 +11,19 @@ import 'dart:math';
 
 import 'package:path_provider/path_provider.dart';
 
-class SellPhotoStore {
-  SellPhotoStore._();
+/// One folder of photos in the app's own storage, kept until whatever they
+/// are for is saved.
+class KeptPhotos {
+  const KeptPhotos(this.folder);
 
-  static const _folder = 'sell_draft';
+  final String folder;
 
   /// Overridable in tests (there is no platform channel there).
   static Future<Directory> Function() baseDirectory = getApplicationSupportDirectory;
 
-  static Future<Directory?> _dir() async {
+  Future<Directory?> _dir() async {
     try {
-      final dir = Directory('${(await baseDirectory()).path}${Platform.pathSeparator}$_folder');
+      final dir = Directory('${(await baseDirectory()).path}${Platform.pathSeparator}$folder');
       if (!dir.existsSync()) await dir.create(recursive: true);
       return dir;
     } catch (_) {
@@ -41,7 +43,7 @@ class SellPhotoStore {
   /// capture nobody else needs); a gallery pick is copied and left alone.
   /// If the copy can't be made the original is returned - a photo in the
   /// cache is still better than no photo.
-  static Future<File> keep(File photo, {bool moveOriginal = false}) async {
+  Future<File> keep(File photo, {bool moveOriginal = false}) async {
     final dir = await _dir();
     if (dir == null || photo.path.startsWith(dir.path)) return photo;
     try {
@@ -57,8 +59,8 @@ class SellPhotoStore {
     }
   }
 
-  /// Deletes [photo] if it is one of ours (a photo the seller removed).
-  static Future<void> discard(File photo) async {
+  /// Deletes [photo] if it is one of ours (a photo the user removed).
+  Future<void> discard(File photo) async {
     final dir = await _dir();
     if (dir == null || !photo.path.startsWith(dir.path)) return;
     try {
@@ -66,9 +68,8 @@ class SellPhotoStore {
     } catch (_) {}
   }
 
-  /// Deletes every kept photo except [keepPaths]. Called once a listing is
-  /// published or a draft discarded, so abandoned drafts don't pile up.
-  static Future<void> clear({Set<String> keepPaths = const {}}) async {
+  /// Deletes every kept photo except [keepPaths].
+  Future<void> clear({Set<String> keepPaths = const {}}) async {
     final dir = await _dir();
     if (dir == null) return;
     try {
@@ -81,4 +82,28 @@ class SellPhotoStore {
       }
     } catch (_) {}
   }
+}
+
+/// The sell wizard's photos.
+class SellPhotoStore {
+  SellPhotoStore._();
+
+  static const _photos = KeptPhotos('sell_draft');
+
+  /// Overridable in tests (there is no platform channel there).
+  static Future<Directory> Function() get baseDirectory => KeptPhotos.baseDirectory;
+  static set baseDirectory(Future<Directory> Function() value) =>
+      KeptPhotos.baseDirectory = value;
+
+  /// See [KeptPhotos.keep].
+  static Future<File> keep(File photo, {bool moveOriginal = false}) =>
+      _photos.keep(photo, moveOriginal: moveOriginal);
+
+  /// Deletes [photo] if it is one of ours (a photo the seller removed).
+  static Future<void> discard(File photo) => _photos.discard(photo);
+
+  /// Deletes every kept photo except [keepPaths]. Called once a listing is
+  /// published or a draft discarded, so abandoned drafts don't pile up.
+  static Future<void> clear({Set<String> keepPaths = const {}}) =>
+      _photos.clear(keepPaths: keepPaths);
 }

@@ -11,7 +11,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -20,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/photo_capture.dart';
 import '../widgets/message_receipt.dart';
 import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
@@ -167,9 +167,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   bool                _isPlaying   = false;
   String?             _playingUrl;
   DateTime?           _recordStart;
-
-  // Image picker
-  final ImagePicker _picker = ImagePicker();
 
   final _msgCtrl    = TextEditingController();
   final _scrollCtrl = ScrollController();
@@ -770,10 +767,20 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Image sharing ──────────────────────────────────────────────────────────
 
-  Future<void> _pickAndSendImage(ImageSource source) async {
+  /// A photo into the chat, taken with BROKA's own camera or picked from the
+  /// gallery the way listing photos are (services/photo_capture.dart). This
+  /// used to open the phone's camera app, which Android could kill BROKA
+  /// behind, dropping the user out of the conversation.
+  Future<void> _pickAndSendImage(PhotoSource source) async {
     try {
-      final picked = await _picker.pickImage(source: source, imageQuality: 70);
-      if (picked == null) return;
+      final File? picked;
+      if (source == PhotoSource.camera) {
+        picked = await PhotoCapture.takePhoto(context,
+            hint: 'Show it clearly, in good light - the other side sees exactly this.');
+      } else {
+        picked = await PhotoCapture.pickFromGallery(context);
+      }
+      if (picked == null || !mounted) return;
       final bytes = await picked.readAsBytes();
       final b64   = base64Encode(bytes);
       final dataUri = 'data:image/jpeg;base64,$b64';
@@ -800,42 +807,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     }
   }
 
-  void _showImageSourceSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: BrokaColors.bgMid,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(height: 8),
-        Container(width: 40, height: 4,
-            decoration: BoxDecoration(color: BrokaColors.border,
-                borderRadius: BorderRadius.circular(2))),
-        const SizedBox(height: 16),
-        ListTile(
-          leading: Container(width: 40, height: 40,
-              decoration: BoxDecoration(
-                color: BrokaColors.gold.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(10)),
-              child: const Icon(Icons.camera_alt_rounded,
-                  color: BrokaColors.gold, size: 20)),
-          title: const Text('Take Photo', style: TextStyle(color: BrokaColors.textHigh)),
-          onTap: () { Navigator.pop(context); _pickAndSendImage(ImageSource.camera); },
-        ),
-        ListTile(
-          leading: Container(width: 40, height: 40,
-              decoration: BoxDecoration(
-                color: BrokaColors.neonBlue.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10)),
-              child: const Icon(Icons.photo_library_rounded,
-                  color: BrokaColors.neonBlue, size: 20)),
-          title: const Text('Choose from Gallery',
-              style: TextStyle(color: BrokaColors.textHigh)),
-          onTap: () { Navigator.pop(context); _pickAndSendImage(ImageSource.gallery); },
-        ),
-        const SizedBox(height: 12),
-      ])),
-    );
+  Future<void> _showImageSourceSheet() async {
+    final source = await PhotoCapture.askSource(context);
+    if (source != null && mounted) await _pickAndSendImage(source);
   }
 
   // ── Voice playback ─────────────────────────────────────────────────────────

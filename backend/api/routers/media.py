@@ -2,8 +2,10 @@
 BROKA - Media Router
 Handles voice note and image uploads for negotiations.
 Files are stored as base64 in the NegotiationMessage row itself (no external
-object storage required). The Flutter client sends multipart/form-data with
-the file bytes and the negotiation metadata; we persist and broadcast.
+object storage required); an image is first processed like a listing photo
+(api/core/image_processing.py: validated, upright, metadata stripped). The
+Flutter client sends multipart/form-data with the file bytes and the
+negotiation metadata; we persist and broadcast.
 
 POST /media/upload
   Multipart body: listing_id, buyer_id (optional), role, content_type (audio|image), file
@@ -30,6 +32,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from api.core.image_processing import ImageRejected, process_image
 from api.database import get_db, NegotiationMessage, Listing, User
 from api.security import get_current_user, decode_access_token
 
@@ -267,8 +270,22 @@ async def upload_media(
         raise HTTPException(status_code=413,
             detail=f"File too large (max {MAX_VOICE_MB if content_type == 'audio' else MAX_IMAGE_MB} MB)")
 
+    if content_type == "image":
+        # Through the same processing as a listing photo: stored as sent,
+        # a phone shot reached the other side of the chat with its EXIF -
+        # GPS included, i.e. where the sender was standing - and any bytes
+        # at all could be passed off as an image. The largest listing size
+        # is kept; it is re-encoded from pixels, so upright and metadata-free.
+        try:
+            processed = await asyncio.to_thread(process_image, file_bytes)
+        except ImageRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        file_bytes = processed.variants["large"][0]
+        mime = "image/webp"
+    else:
+        mime = file.content_type or "audio/mp4"
+
     # Build data URI
-    mime = file.content_type or ("audio/mp4" if content_type == "audio" else "image/jpeg")
     b64  = base64.b64encode(file_bytes).decode()
     data_uri = f"data:{mime};base64,{b64}"
 

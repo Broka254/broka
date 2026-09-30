@@ -1,3 +1,44 @@
+# The OTP reader, photos taken the listing way, and the stores on BROKA's colours (2026-09-30)
+
+**The SMS code fills itself again** (`flutter_app/lib/screens/auth_screen.dart`).
+The SMS Retriever delivered the code, and the sign-up wizard threw it away:
+it only took a code on step 2, which stopped being the verify step when the
+account-type and seller questions went in front of the phone number (it is
+step 4). The check now names the step. A code that arrives before the verify
+step is showing - the server texts before it answers, so on a slow
+connection it often does - or while a resend is in flight is held and filled
+once the step can take it, and a request sent before the app signature was
+read waits for it rather than asking for a plain SMS the retriever can't
+match. `test/sms_otp_autofill_test.dart`.
+
+**Every photo is taken the way listing photos are**
+(`flutter_app/lib/services/photo_capture.dart`):
+
+- Store logo, cover and shop photos, chat photos and the damaged-goods report
+  used BROKA's own camera screen (`listing_camera_screen.dart`) instead of
+  the phone's camera app, which Android could kill BROKA behind; the phone's
+  camera is the fallback, at the sell wizard's size and quality, and a gallery
+  pick is sized as the cover step's is. Shop photos can be taken several at
+  a time, each uploading as the next is framed.
+- Store images are kept in the app's own storage (`KeptPhotos('store_draft')`,
+  beside the sell wizard's folder, never sharing it) until the store is
+  saved, not in the picker's cache Android may empty under a draft.
+- **Chat photos are processed like listing photos** (`api/routers/media.py`):
+  `POST /media/upload` stored an image exactly as sent - never checked to be
+  an image, EXIF intact, so a camera shot carried where it was taken to the
+  other side of the chat. It now goes through `process_image` (validated,
+  upright, metadata stripped) and is kept at the largest listing size, as
+  WebP. `tests/test_chat_media_images.py`.
+
+**Online stores**: the directory's store card is on Home's product-card
+system (gradient edge, taller picture, the logo as the shop's sign, the
+record as chips), and Visit store is a pill beside the product count instead
+of a bar across the whole card. A store's own page has the app's search field
+(the old 44px pill was the last one left) with a matching filter button,
+BROKA's violet, blue and cyan in place of the category's colours and pink,
+Home's card edge on its products, and more of the screen for them: 8dp sides
+instead of 12 and a photo 0.95 of the card's width (`ProductGridView.itemImageShare`).
+
 # The listing screen: the seller's standing, the deal's terms, and Zeno about it (2026-09-29)
 
 **The listing screen** (`flutter_app/lib/screens/product_screen.dart`) is on

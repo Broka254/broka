@@ -13,6 +13,7 @@ import 'package:broka/features/stores/presentation/widgets/store_product_card.da
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/deep_link_service.dart';
 import 'package:broka/widgets/broka_image.dart';
+import 'package:broka/widgets/broka_search_field.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -189,6 +190,39 @@ void main() {
 
       final visit = backend.requests.singleWhere((r) => r.url.path == '/stores/s1/visit');
       expect(jsonDecode(visit.body), {'via': 'whatsapp'});
+    });
+
+    testWidgets("the search box is the app's own, readable one", (tester) async {
+      await _pumpStore(tester, _Backend());
+      // The shared field (16px text, 54dp) rather than the old 44dp pill
+      // with 14px text people couldn't read back.
+      final field = find.byKey(const Key('store-search'));
+      expect(find.ancestor(of: field, matching: find.byType(BrokaSearchField)), findsOneWidget);
+      expect(find.text('Search Clanix Electronics'), findsOneWidget);
+      // The filter button stands as tall as the field beside it.
+      final fieldBox = tester.getSize(find.byType(BrokaSearchField));
+      expect(tester.getSize(find.byKey(const Key('store-filter'))).height, fieldBox.height);
+
+      // Typing, then the clear button, searches and then shows everything.
+      await tester.enterText(field, 'tecno');
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreProductCard), findsOneWidget);
+      await tester.tap(find.byTooltip('Clear'));
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreProductCard), findsNWidgets(3));
+    });
+
+    testWidgets('the catalogue gets more of the screen than Home gives a card', (tester) async {
+      await _pumpStore(tester, _Backend());
+      final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+      final card = tester.getSize(find.byType(StoreProductCard).first);
+      // 8dp sides (was 12) and 12dp between the two columns...
+      expect(card.width, closeTo((width - 16 - 12) / 2, 0.5));
+      // ...and a photo 0.95 of the card's width tall (Home's cards: 0.85).
+      expect(card.height,
+          closeTo(card.width * StoreProductCard.imageShare + StoreProductCard.textBlock, 0.5));
+      expect(StoreProductCard.imageShare, greaterThan(0.85));
     });
 
     testWidgets('an owner who is away shows when they were last active', (tester) async {

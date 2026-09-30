@@ -34,6 +34,7 @@ import '../../../core/utils/result.dart';
 import '../../../main.dart' show BrokaColors;
 import '../../../services/api_service.dart';
 import '../../../utils/price_format.dart';
+import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
 import '../../categories/domain/category_visual.dart';
@@ -365,8 +366,11 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
               sliver: true,
               controller: _grid,
               fetchPage: _fetchPage,
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+              // More of the screen to the products: 8dp sides instead of
+              // 12, and a taller photo per card (StoreProductCard.imageShare).
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
               itemTextBlock: StoreProductCard.textBlock,
+              itemImageShare: StoreProductCard.imageShare,
               itemBuilder: (_, item) => StoreProductCard(
                 listing: item as BrokaListing,
                 cart: cart,
@@ -411,101 +415,84 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
     );
   }
 
-  /// Home's search control (home_screen.dart, _searchRow): the same pill,
-  /// border and filter button with its dot - here the field types in place,
-  /// searching this store only.
-  Widget _searchRow(Store store) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-        child: Row(children: [
-          Expanded(
-            child: Container(
-              height: 44,
-              padding: const EdgeInsets.only(left: 14, right: 4),
+  /// The search box every other screen with one inside it uses
+  /// (widgets/broka_search_field.dart), searching this store only, and the
+  /// filter button beside it at the same height.
+  ///
+  /// This was the last copy of Home's old 44px header pill - 14px typed text
+  /// under a 12.5px dim hint, small enough that people couldn't read back
+  /// what they had typed (the reason the Zones, Traders and Stores moved to
+  /// the shared field), with its own colours.
+  Widget _searchRow(Store store) {
+    final height = BrokaSearchField.heightFor(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(children: [
+        Expanded(
+          child: BrokaSearchField(
+            fieldKey: const Key('store-search'),
+            controller: _searchCtrl,
+            hintText: 'Search ${store.name}',
+            onChanged: _onSearchChanged,
+            onSubmitted: (v) {
+              _searchDebounce?.cancel();
+              setState(() => _search = v.trim());
+            },
+            onCleared: () {
+              _searchDebounce?.cancel();
+              setState(() => _search = '');
+            },
+          ),
+        ),
+        const SizedBox(width: 10),
+        Semantics(
+          button: true,
+          label: 'Filters',
+          child: GestureDetector(
+            key: const Key('store-filter'),
+            onTap: () => setState(() => _filtersOpen = !_filtersOpen),
+            behavior: HitTestBehavior.opaque,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: height,
+              height: height,
               decoration: BoxDecoration(
-                color: BrokaColors.bgCard.withOpacity(0.86),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
-              ),
-              child: Row(children: [
-                const Icon(Icons.search_rounded, size: 18, color: BrokaColors.textMid),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: TextField(
-                    key: const Key('store-search'),
-                    controller: _searchCtrl,
-                    onChanged: (v) {
-                      _onSearchChanged(v);
-                      setState(() {});
-                    },
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (v) {
-                      _searchDebounce?.cancel();
-                      setState(() => _search = v.trim());
-                    },
-                    style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14),
-                    cursorColor: BrokaColors.gold,
-                    decoration: InputDecoration.collapsed(
-                      hintText: 'Search ${store.name}',
-                      hintStyle: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5),
-                    ),
-                  ),
+                color: _filtersOpen
+                    ? BrokaColors.gold.withOpacity(0.2)
+                    : BrokaColors.bgCard.withOpacity(0.92),
+                borderRadius: BorderRadius.circular(height / 2),
+                border: Border.all(
+                  color: _filtersOpen || _filtersActive
+                      ? BrokaColors.gold
+                      : BrokaColors.neonBlue.withOpacity(0.45),
+                  width: 1.2,
                 ),
-                if (_searchCtrl.text.isNotEmpty)
-                  IconButton(
-                    tooltip: 'Clear',
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.close_rounded, color: BrokaColors.textMid, size: 18),
-                    onPressed: () {
-                      _searchCtrl.clear();
-                      _searchDebounce?.cancel();
-                      setState(() => _search = '');
-                    },
+              ),
+              child: Stack(clipBehavior: Clip.none, children: [
+                Center(
+                  child: Icon(Icons.tune_rounded,
+                      color: _filtersOpen || _filtersActive ? _accent : BrokaColors.textMid,
+                      size: 22),
+                ),
+                if (_filtersActive)
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: Container(
+                      key: const Key('store-filters-active-dot'),
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                          color: BrokaColors.gold, shape: BoxShape.circle),
+                    ),
                   ),
               ]),
             ),
           ),
-          const SizedBox(width: 8),
-          Semantics(
-            button: true,
-            label: 'Filters',
-            child: GestureDetector(
-              key: const Key('store-filter'),
-              onTap: () => setState(() => _filtersOpen = !_filtersOpen),
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: _filtersOpen
-                      ? BrokaColors.gold.withOpacity(0.2)
-                      : BrokaColors.bgCard.withOpacity(0.86),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _filtersOpen ? BrokaColors.gold : BrokaColors.border),
-                ),
-                child: Stack(clipBehavior: Clip.none, children: [
-                  Center(
-                    child: Icon(Icons.tune_rounded,
-                        color: _filtersOpen || _filtersActive ? BrokaColors.gold : BrokaColors.textMid,
-                        size: 18),
-                  ),
-                  if (_filtersActive)
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Container(
-                        key: const Key('store-filters-active-dot'),
-                        width: 7,
-                        height: 7,
-                        decoration: const BoxDecoration(
-                            color: BrokaColors.gold, shape: BoxShape.circle),
-                      ),
-                    ),
-                ]),
-              ),
-            ),
-          ),
-        ]),
-      );
+        ),
+      ]),
+    );
+  }
 
   /// Home's filter panel, for one store: sort, condition and a price band.
   Widget _filterPanel() {
@@ -640,8 +627,9 @@ class _StoreBar extends StatelessWidget {
             onPressed: onCart,
             icon: Badge(
               isLabelVisible: cartCount > 0,
-              backgroundColor: BrokaColors.neonPink,
-              label: Text('$cartCount', key: const Key('store-cart-count')),
+              backgroundColor: BrokaColors.gold,
+              label: Text('$cartCount', key: const Key('store-cart-count'),
+                  style: const TextStyle(color: Colors.white)),
               child: const Icon(Icons.shopping_cart_outlined),
             ),
           ),
@@ -712,7 +700,6 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
   Widget build(BuildContext context) {
     final store = widget.store;
     final owner = store.owner;
-    final colors = CategoryVisuals.gradientFor(store.category);
     final place = [store.category, store.locationLine]
         .whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     final verified = owner?.verified ?? false;
@@ -727,8 +714,9 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(26),
             boxShadow: [
-              BoxShadow(color: colors.first.withOpacity(0.35), blurRadius: 30, spreadRadius: -4),
-              BoxShadow(color: BrokaColors.gold.withOpacity(0.25), blurRadius: 40,
+              BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.30), blurRadius: 30,
+                  spreadRadius: -4),
+              BoxShadow(color: BrokaColors.gold.withOpacity(0.28), blurRadius: 40,
                   offset: const Offset(0, 12), spreadRadius: -10),
             ],
           ),
@@ -740,7 +728,7 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
                   child: AnimatedBuilder(
                     animation: _t,
                     builder: (_, __) => CustomPaint(
-                      painter: _AuroraPainter(t: _t.value, accent: colors),
+                      painter: _AuroraPainter(t: _t.value),
                     ),
                   ),
                 ),
@@ -852,13 +840,17 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
   }
 }
 
-/// Moving aurora: soft blobs of the store's category colours and BROKA's
-/// violet and blue drifting under a field of twinkling stars, with a sheen
-/// sweeping across. [t] runs 0 to 1 and loops seamlessly.
+/// Moving aurora: soft blobs of BROKA's own violet, blue and cyan (the
+/// splash logo's gradient) drifting under a field of twinkling stars, with
+/// a sheen sweeping across. [t] runs 0 to 1 and loops seamlessly.
+///
+/// Was tinted by the store's category - amber for food, green for farming,
+/// with pink through every one - so a store's first screen was the one
+/// place in the app that didn't look like BROKA. The category still shows,
+/// in words under the name and on the category rail.
 class _AuroraPainter extends CustomPainter {
-  _AuroraPainter({required this.t, required this.accent});
+  _AuroraPainter({required this.t});
   final double t;
-  final List<Color> accent;
 
   static final _stars = () {
     final rnd = math.Random(11);
@@ -872,14 +864,14 @@ class _AuroraPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0B0820));
+    canvas.drawRect(Offset.zero & size, Paint()..color = BrokaColors.bgMid);
     final a = t * 2 * math.pi;
     final blobs = [
-      (accent.first, 0.15, 0.25, 0.70),
-      (BrokaColors.neonPurple, 0.85, 0.15, 0.75),
+      (BrokaColors.gold, 0.15, 0.25, 0.70),
+      (BrokaColors.goldDim, 0.85, 0.15, 0.75),
       (BrokaColors.neonBlue, 0.70, 0.95, 0.65),
-      (accent.last, 0.05, 1.00, 0.55),
-      (BrokaColors.neonPink, 0.50, 0.50, 0.40),
+      (BrokaColors.neonCyan, 0.05, 1.00, 0.55),
+      (BrokaColors.neonPurple, 0.50, 0.50, 0.40),
     ];
     for (var i = 0; i < blobs.length; i++) {
       final (color, x, y, r) = blobs[i];
@@ -911,7 +903,7 @@ class _AuroraPainter extends CustomPainter {
           ..strokeWidth = 1.2
           ..shader = SweepGradient(colors: [
             Colors.white.withOpacity(0),
-            (i.isEven ? BrokaColors.neonCyan : BrokaColors.neonPink).withOpacity(0.55),
+            (i.isEven ? BrokaColors.neonCyan : BrokaColors.neonBlue).withOpacity(0.55),
             Colors.white.withOpacity(0),
           ], transform: GradientRotation(a * 2)).createShader(ring),
       );
@@ -947,7 +939,7 @@ class _AuroraPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_AuroraPainter old) => old.t != t || old.accent != accent;
+  bool shouldRepaint(_AuroraPainter old) => old.t != t;
 }
 
 class _GlassChip extends StatelessWidget {
@@ -1041,14 +1033,13 @@ class _MoreButton extends StatelessWidget {
             padding: const EdgeInsets.all(1.5),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(22),
-              gradient: const LinearGradient(
-                  colors: [BrokaColors.neonPink, BrokaColors.gold, BrokaColors.neonBlue]),
+              gradient: const LinearGradient(colors: BrokaColors.brandGradient),
               boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.55), blurRadius: 16)],
             ),
             child: Container(
               padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
               decoration: BoxDecoration(
-                color: const Color(0xFF140E2E).withOpacity(0.92),
+                color: BrokaColors.bgMid.withOpacity(0.92),
                 borderRadius: BorderRadius.circular(21),
               ),
               child: const Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1194,16 +1185,15 @@ class _CartBar extends StatelessWidget {
               child: Ink(
                 padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                      colors: [Color(0xFF2A1A5E), Color(0xFF0E1B3D)]),
+                  gradient: BrokaColors.cardGradient,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: BrokaColors.gold.withOpacity(0.6)),
                   boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.3), blurRadius: 18)],
                 ),
                 child: Row(children: [
                   Badge(
-                    backgroundColor: BrokaColors.neonPink,
-                    label: Text('${cart.count}'),
+                    backgroundColor: BrokaColors.neonBlue,
+                    label: Text('${cart.count}', style: const TextStyle(color: Colors.white)),
                     child: const Icon(Icons.shopping_cart_rounded, color: Colors.white),
                   ),
                   const SizedBox(width: 14),

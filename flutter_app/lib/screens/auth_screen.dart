@@ -112,6 +112,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// every OTP request in this session.
   String? _appSignature;
   StreamSubscription<String>? _smsSub;
+  /// A code the SMS Retriever delivered before the verify step could take
+  /// it - see [_onSmsCode].
+  String? _pendingSmsCode;
   Timer? _resendTimer;
 
   // Selfie (step 4)
@@ -205,6 +208,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     // screen that no longer shows it.
     _otpExpiryTimer?.cancel();
     SmsAutofillService.stop();
+    _pendingSmsCode = null;
     setState(() {
       _isLogin = toLogin;
       _error   = null;
@@ -257,6 +261,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           if (mounted) {
             setState(() { _loading = false; _skippedOtp = false; });
             _animateStep(_sVerify);
+            _applyPendingSmsCode();
           }
         } catch (e) {
           if (mounted) {
@@ -571,8 +576,15 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// precisely the "sometimes it fills, sometimes it doesn't" behaviour this
   /// replaces.
   Future<void> _sendOtp() async {
+    // A code held back from an earlier request is for a code this one
+    // replaces (or for a number the user has since corrected).
+    _pendingSmsCode = null;
     await SmsAutofillService.start();
     _listenForSmsCode();
+    // Normally prefetched in initState; asked again if that hadn't answered
+    // yet, since a request sent without it gets a plain SMS the retriever
+    // can never match.
+    _appSignature ??= await SmsAutofillService.appSignature();
     final data = await ApiService.requestOtp(_fullPhone, appSignature: _appSignature);
     _startResendCooldown();
     final expiry = data['expires_in_seconds'];
@@ -582,11 +594,37 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// Pipes a captured code straight into the field. No prompt, no
   /// confirmation — the code is filled and submitted for the user.
   void _listenForSmsCode() {
-    _smsSub ??= SmsAutofillService.codes().listen((code) {
-      if (!mounted || _step != 2) return;
-      _otpCtrl.text = code;
+    _smsSub ??= SmsAutofillService.codes().listen(_onSmsCode);
+  }
+
+  /// Checked against the step constants, not a number: this was `_step != 2`,
+  /// which stopped meaning the verify step when the account-type questions
+  /// were put in front of it, and from then on every captured code was
+  /// dropped - the reported "the SMS reader doesn't work".
+  void _onSmsCode(String code) {
+    if (!mounted || _isLogin) return;
+    if (_step == _sVerify && !_loading) {
       // OtpCodeField's onCompleted fires off the controller change and calls
       // _nextStep(), so there is deliberately nothing else to do here.
+      _otpCtrl.text = code;
+    } else if (_step == _sPhone || _step == _sVerify) {
+      // The server sends the SMS before it answers the request, so on a slow
+      // connection the code arrives while the phone step is still waiting
+      // (or a resend is): filling it now would reach a field that isn't
+      // there yet, or one whose submit is blocked by the spinner.
+      _pendingSmsCode = code;
+    }
+  }
+
+  /// Fills a code [_onSmsCode] held back, once the verify step can take it.
+  void _applyPendingSmsCode() {
+    final code = _pendingSmsCode;
+    _pendingSmsCode = null;
+    if (code == null) return;
+    // After the frame: the verify step's field is built by the setState that
+    // just switched to it, and only a mounted field submits on completion.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_isLogin && _step == _sVerify && !_loading) _otpCtrl.text = code;
     });
   }
 
@@ -599,7 +637,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     } catch (e) {
       if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        _applyPendingSmsCode();
+      }
     }
   }
 
