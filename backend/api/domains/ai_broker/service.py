@@ -1114,7 +1114,7 @@ class AIBrokerService:
             "Content-Type":  "application/json",
             # Optional attribution headers OpenRouter uses for its public
             # leaderboards - harmless to omit, but free to include.
-            "HTTP-Referer":  "https://broka-dbjd.onrender.com",
+            "HTTP-Referer":  "https://broka.co.ke",
             "X-Title":       "BROKA",
         }
         async with httpx.AsyncClient(timeout=25) as c:

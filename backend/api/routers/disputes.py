@@ -81,8 +81,8 @@ CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET", "")
 SHORTCODE       = os.getenv("MPESA_SHORTCODE", "174379")
 B2C_INITIATOR   = os.getenv("MPESA_B2C_INITIATOR", "")
 B2C_CREDENTIAL  = os.getenv("MPESA_B2C_CREDENTIAL", "")
-B2C_TIMEOUT_URL = os.getenv("MPESA_B2C_TIMEOUT_URL", "https://broka-dbjd.onrender.com/mpesa/b2c/timeout")
-B2C_RESULT_URL  = os.getenv("MPESA_B2C_RESULT_URL",  "https://broka-dbjd.onrender.com/mpesa/b2c/result")
+B2C_TIMEOUT_URL = os.getenv("MPESA_B2C_TIMEOUT_URL", "https://api.broka.co.ke/mpesa/b2c/timeout")
+B2C_RESULT_URL  = os.getenv("MPESA_B2C_RESULT_URL",  "https://api.broka.co.ke/mpesa/b2c/result")
 
 BASE_URL   = "https://api.safaricom.co.ke" if MPESA_ENV == "production" else "https://sandbox.safaricom.co.ke"
 OAUTH_URL  = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
@@ -210,7 +210,7 @@ async def _call_openrouter(system: str, messages: List[dict]) -> str:
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type":  "application/json",
-                "HTTP-Referer":  "https://broka-dbjd.onrender.com",
+                "HTTP-Referer":  "https://broka.co.ke",
                 "X-Title":       "BROKA",
             },
             json={

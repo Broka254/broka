@@ -115,21 +115,21 @@ class Settings:
     mpesa_shortcode: str = field(default_factory=lambda: os.getenv("MPESA_SHORTCODE", "174379"))
     mpesa_passkey: str = field(default_factory=lambda: os.getenv("MPESA_PASSKEY", ""))
     mpesa_callback_url: str = field(default_factory=lambda: os.getenv(
-        "MPESA_CALLBACK_URL", "https://broka-dbjd.onrender.com/mpesa/callback"
+        "MPESA_CALLBACK_URL", "https://api.broka.co.ke/mpesa/callback"
     ))
     mpesa_verify_callback_url: str = field(default_factory=lambda: os.getenv(
-        "MPESA_VERIFY_CALLBACK_URL", "https://broka-dbjd.onrender.com/verify/callback"
+        "MPESA_VERIFY_CALLBACK_URL", "https://api.broka.co.ke/verify/callback"
     ))
     mpesa_featured_callback_url: str = field(default_factory=lambda: os.getenv(
-        "MPESA_FEATURED_CALLBACK_URL", "https://broka-dbjd.onrender.com/featured/callback"
+        "MPESA_FEATURED_CALLBACK_URL", "https://api.broka.co.ke/featured/callback"
     ))
     mpesa_b2c_initiator: str = field(default_factory=lambda: os.getenv("MPESA_B2C_INITIATOR", ""))
     mpesa_b2c_credential: str = field(default_factory=lambda: os.getenv("MPESA_B2C_CREDENTIAL", ""))
     mpesa_b2c_timeout_url: str = field(default_factory=lambda: os.getenv(
-        "MPESA_B2C_TIMEOUT_URL", "https://broka-dbjd.onrender.com/mpesa/b2c/timeout"
+        "MPESA_B2C_TIMEOUT_URL", "https://api.broka.co.ke/mpesa/b2c/timeout"
     ))
     mpesa_b2c_result_url: str = field(default_factory=lambda: os.getenv(
-        "MPESA_B2C_RESULT_URL", "https://broka-dbjd.onrender.com/mpesa/b2c/result"
+        "MPESA_B2C_RESULT_URL", "https://api.broka.co.ke/mpesa/b2c/result"
     ))
 
     # ── E-Confirm API v2 (marketplace escrow — replaces direct-Daraja deal
@@ -266,7 +266,7 @@ class Settings:
     r2_bucket: str = field(default_factory=lambda: os.getenv("R2_BUCKET", "").strip())
     media_public_base_url: str = field(default_factory=lambda: os.getenv(
         "MEDIA_PUBLIC_BASE_URL", "").strip().rstrip("/"))
-    # This API's own public address, e.g. https://broka-dbjd.onrender.com.
+    # This API's own public address, e.g. https://api.broka.co.ke.
     # Only used to make database-stored image URLs absolute, which the web
     # storefront and link previews need. Unset, those URLs are relative
     # ("/media/i/...") and the app resolves them against its API base.

@@ -15,15 +15,17 @@ import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
 
 class ApiService {
-  // The Azure Container App (broka-api). Render (broka-dbjd.onrender.com)
-  // stays up as the fallback: point a build back at it with
-  // --dart-define=API_URL=... and API_WS_URL=... together. The WebSocket
+  // api.broka.co.ke, a custom domain on the Railway service (broka-api). The
+  // compiled-in address stays on installed phones for good, so it names our
+  // domain, not a host's: moving hosts again is a DNS change, not a release.
+  // Point a build elsewhere with --dart-define=API_URL=... and
+  // API_WS_URL=... together. The WebSocket
   // default lives in deal_ws_client.dart and auction_ws_client.dart, and a
   // build that moves only one sends requests to one backend and live deal
   // and auction updates to the other (test/api_endpoints_test.dart).
   static const String baseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://broka-api.redhill-7a4b8acc.southafricanorth.azurecontainerapps.io',
+    defaultValue: 'https://api.broka.co.ke',
   );
 
   static String? _token;

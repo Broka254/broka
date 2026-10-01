@@ -1,12 +1,12 @@
 """
 BROKA - M-Pesa Router (Daraja API v2 - M-Pesa Express / STK Push)
 
-ENV VARS REQUIRED (set in Render dashboard):
+ENV VARS REQUIRED (set in the host's dashboard - Railway):
   MPESA_CONSUMER_KEY    - from Safaricom Daraja portal (BROKA sandbox app)
   MPESA_CONSUMER_SECRET - from Safaricom Daraja portal (BROKA sandbox app)
   MPESA_SHORTCODE       - 174379 (sandbox default)
   MPESA_PASSKEY         - bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919
-  MPESA_CALLBACK_URL    - https://broka-dbjd.onrender.com/mpesa/callback
+  MPESA_CALLBACK_URL    - https://api.broka.co.ke/mpesa/callback
   MPESA_ENV             - sandbox | production
 """
 
@@ -51,7 +51,7 @@ PASSKEY        = os.getenv("MPESA_PASSKEY", "")
 # haven't set the secret yet. See mpesa_callback()/mpesa_callback_secured()
 # below.
 CALLBACK_SECRET = os.getenv("MPESA_CALLBACK_SECRET", "")
-_DEFAULT_CALLBACK_BASE = "https://broka-dbjd.onrender.com/mpesa/callback"
+_DEFAULT_CALLBACK_BASE = "https://api.broka.co.ke/mpesa/callback"
 if os.getenv("MPESA_CALLBACK_URL"):
     # Deployer set this explicitly - always respect it verbatim.
     CALLBACK_URL = os.getenv("MPESA_CALLBACK_URL", _DEFAULT_CALLBACK_BASE)

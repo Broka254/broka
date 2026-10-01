@@ -49,7 +49,7 @@ MAX_AHEAD = 12 * MONTH + timedelta(days=1)
 PENDING_WINDOW = timedelta(minutes=2)
 QUERY_AFTER = timedelta(seconds=20)
 
-_DEFAULT_API_BASE = "https://broka-dbjd.onrender.com"
+_DEFAULT_API_BASE = "https://api.broka.co.ke"
 
 
 def callback_url() -> str:

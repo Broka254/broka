@@ -22,7 +22,7 @@ class AuctionWsClient {
   // did) fails silently at the WebSocket layer, not at compile time.
   static const String _baseWsUrl = String.fromEnvironment(
     'API_WS_URL',
-    defaultValue: 'wss://broka-api.redhill-7a4b8acc.southafricanorth.azurecontainerapps.io',
+    defaultValue: 'wss://api.broka.co.ke',
   );
 
   static const Duration _pingInterval = Duration(seconds: 25);

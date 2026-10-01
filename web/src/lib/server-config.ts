@@ -2,12 +2,11 @@
 import 'server-only'
 
 /**
- * The BROKA API: the Azure Container App. Render (broka-dbjd.onrender.com)
- * stays up as the fallback; switch back with BROKA_API_URL (a redeploy, no
- * code change).
+ * The BROKA API: api.broka.co.ke, a custom domain on the Railway service.
+ * Point elsewhere with BROKA_API_URL (a redeploy, no code change).
  */
 export const API_URL = (
-  process.env.BROKA_API_URL?.trim() || 'https://broka-api.redhill-7a4b8acc.southafricanorth.azurecontainerapps.io'
+  process.env.BROKA_API_URL?.trim() || 'https://api.broka.co.ke'
 ).replace(/\/+$/, '')
 
 /**

@@ -698,7 +698,7 @@ async def _call_openrouter(system: str, messages: List[dict],
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type":  "application/json",
-                "HTTP-Referer":  "https://broka-dbjd.onrender.com",
+                "HTTP-Referer":  "https://broka.co.ke",
                 "X-Title":       "BROKA",
             },
             json={

@@ -46,7 +46,7 @@ PASSKEY         = os.getenv("MPESA_PASSKEY", "")
 CALLBACK_SECRET = os.getenv("MPESA_CALLBACK_SECRET", "")
 CALLBACK_URL    = os.getenv(
     "MPESA_VERIFY_CALLBACK_URL",
-    "https://broka-dbjd.onrender.com/verify/callback",
+    "https://api.broka.co.ke/verify/callback",
 )
 BASE_URL  = "https://api.safaricom.co.ke" if MPESA_ENV == "production" else "https://sandbox.safaricom.co.ke"
 OAUTH_URL = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
