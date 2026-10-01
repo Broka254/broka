@@ -37,7 +37,8 @@ class Purpose:
     SUBSCRIPTION = "subscription"   # premium/payments.py
     BOOST = "boost"                 # routers/featured.py
     VERIFICATION = "verification"   # routers/verify.py
-    ALL = (LISTING_FEE, SUBSCRIPTION, BOOST, VERIFICATION)
+    TEST = "test"                   # payments/test_charge.py: KES 10, buys nothing
+    ALL = (LISTING_FEE, SUBSCRIPTION, BOOST, VERIFICATION, TEST)
 
 
 class ZetuPayStatus:
@@ -62,8 +63,8 @@ class ZetuPayPayment(Base):
     target_id           = sa.Column(sa.String, nullable=False, index=True)
     related_id          = sa.Column(sa.String, nullable=True)
     status              = sa.Column(sa.String(16), nullable=False, default=ZetuPayStatus.INITIATED)
-    provider_payment_id = sa.Column(sa.String, nullable=True)     # ZetuPay's id, from its 202
-    wave_transaction_id = sa.Column(sa.String, nullable=True)     # the transaction that paid it
+    provider_payment_id = sa.Column(sa.String, nullable=True)     # ZetuPay's paymentKey, from its 202
+    wave_transaction_id = sa.Column(sa.String, nullable=True)     # ZetuPay's payment id (202, then webhook)
     mpesa_receipt       = sa.Column(sa.String, nullable=True)
     failure_reason      = sa.Column(sa.String, nullable=True)
     created_at          = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)

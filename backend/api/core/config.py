@@ -152,8 +152,9 @@ class Settings:
     # ── ZetuPay (money users pay BROKA: listing fees, plans, boosts, badges) ──
     # Never deal money: buyer-to-seller payments stay on E-Confirm above.
     # Off, those charges keep using Daraja (core/mpesa_stk.py) as before.
-    # The key and the webhook secret are server-only; repr=False keeps them
-    # out of any log line or traceback that prints the settings object.
+    # The Secret Key is server-only - it authenticates BROKA's calls and is
+    # what ZetuPay signs its webhooks with; repr=False keeps it out of any
+    # log line or traceback that prints the settings object.
     zetupay_enabled: bool = field(default_factory=lambda: os.getenv(
         "ZETUPAY_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
@@ -162,10 +163,6 @@ class Settings:
     ).strip().rstrip("/"))
     zetupay_secret_key: str = field(repr=False, default_factory=lambda: os.getenv(
         "ZETUPAY_SECRET_KEY", ""
-    ).strip())
-    # What ZetuPay sends in the x-zetupay-secret header of its webhooks.
-    zetupay_webhook_secret: str = field(repr=False, default_factory=lambda: os.getenv(
-        "ZETUPAY_WEBHOOK_SECRET", ""
     ).strip())
     zetupay_timeout_seconds: float = field(default_factory=lambda: float(
         os.getenv("ZETUPAY_TIMEOUT_SECONDS", "20")
@@ -573,8 +570,7 @@ def validate_startup() -> None:
 
     # ── Check ZetuPay ──────────────────────────────────────────────────────────
     # Switched on without its key, every listing fee, plan and boost fails
-    # at the prompt; without the webhook secret every payment's result is
-    # refused and nothing a user pays is ever applied.
+    # at the prompt, and no webhook's signature can be checked.
     from api.core.zetupay import CONTRACT_VERIFIED
     zetupay_live = s.zetupay_enabled and CONTRACT_VERIFIED
     if s.zetupay_enabled and not CONTRACT_VERIFIED:
@@ -585,24 +581,23 @@ def validate_startup() -> None:
             "is not verified - BROKA's charges stay on Daraja until it is."
         )
     if zetupay_live:
-        missing = [name for name, value in (
-            ("ZETUPAY_SECRET_KEY", s.zetupay_secret_key),
-            ("ZETUPAY_WEBHOOK_SECRET", s.zetupay_webhook_secret),
-        ) if not value]
-        if missing and s.is_production:
+        if not s.zetupay_secret_key and s.is_production:
             raise RuntimeError(
-                f"FATAL: ZETUPAY_ENABLED is true but {', '.join(missing)} "
-                "is not set. Set it, or set ZETUPAY_ENABLED=false to collect "
-                "BROKA's own charges through Daraja as before."
+                "FATAL: ZETUPAY_ENABLED is true but ZETUPAY_SECRET_KEY is not set. "
+                "Set it, or set ZETUPAY_ENABLED=false to collect BROKA's own "
+                "charges through Daraja as before."
             )
-        if missing:
-            logger.warning("[startup] ZetuPay is on without %s", ", ".join(missing))
+        if not s.zetupay_secret_key:
+            logger.warning("[startup] ZetuPay is on without ZETUPAY_SECRET_KEY")
         if s.is_production and not s.zetupay_base_url.startswith("https://"):
             raise RuntimeError("FATAL: ZETUPAY_BASE_URL must be https.")
-        if s.is_production and not s.zetupay_secret_key.startswith("sk_live_"):
-            # A test key in production takes no real money - every charge
-            # would "succeed" without a shilling reaching BROKA.
-            logger.warning("[startup] ZETUPAY_SECRET_KEY is not a live (sk_live_) key")
+        if s.zetupay_secret_key and not s.zetupay_secret_key.startswith("sk_live_"):
+            # ZetuPay signs every webhook with the wallet's LIVE key, even
+            # for payments made with a test key: with any other key here no
+            # webhook verifies, and payments land only through the status
+            # poll and the sweep.
+            logger.error("[startup] ZETUPAY_SECRET_KEY is not the live (sk_live_) key - "
+                         "ZetuPay's webhook signatures will not verify")
     logger.info("[startup] ZetuPay is %s", "ON" if zetupay_live else "off")
 
     # ── Refuse SQLite in production (issue #10) ───────────────────────────────

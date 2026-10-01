@@ -561,7 +561,9 @@ them the fee is most of what BROKA earns from the listing.
 | `GET /premium/payments/{id}` | owner | pending / success / failed, and `paid_until`; asks Safaricom itself when the callback is late |
 | `POST /premium/callback/{MPESA_CALLBACK_SECRET}` | Safaricom | The prompt's result (`MPESA_PREMIUM_CALLBACK_URL` overrides the address) |
 | `GET /pricing/categories` | public | The category table above |
-| `POST /payments/zetupay/webhook` | ZetuPay (`x-zetupay-secret`) | A payment's result, while `ZETUPAY_ENABLED` is on: listing fees, plans, boosts and badges are then charged through ZetuPay, and the status routes above ask ZetuPay instead of Safaricom ([ZETUPAY.md](ZETUPAY.md)) |
+| `POST /payments/zetupay/webhook` | ZetuPay (`x-zetupay-signature`) | A successful payment, while `ZETUPAY_ENABLED` is on: listing fees, plans, boosts and badges are then charged through ZetuPay, and the status routes above ask ZetuPay instead of Safaricom ([ZETUPAY.md](ZETUPAY.md)) |
+| `POST /payments/zetupay/test-charge` | admin | `{phone_number}`: KES 10 through ZetuPay, buying nothing - the going-live check. Takes `X-Idempotency-Key` |
+| `GET /payments/zetupay/payments/{reference}` | admin | Where a ZetuPay payment stands, asking ZetuPay first if it is unfinished |
 
 `price` is the price of one unit; `quantity` the units in the listing.
 

@@ -28,11 +28,13 @@ One payment:
                    * what a payment buys is its domain's business: the
                      domain's zetupay_settled()/zetupay_failed() run under the
                      same lock and commit with it.
-  refresh()      The app's status poll, and the sweep, ask ZetuPay when the
-                 webhook is late. A payment is never failed for being slow,
-                 and a success that arrives after a failure - a prompt that
-                 timed out here and was paid anyway - is still applied: the
-                 money is real.
+  refresh()      The app's status poll, and the sweep, ask ZetuPay by the
+                 payment's paymentKey. ZetuPay sends webhooks for successes
+                 only, so asking is how a cancelled or failed prompt is
+                 learnt of. A payment is never failed for being slow, and a
+                 success that arrives after a failure - a prompt that timed
+                 out here and was paid anyway, which only its webhook can
+                 report - is still applied: the money is real.
 """
 from __future__ import annotations
 
@@ -41,7 +43,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,8 +60,10 @@ PROVIDER = "zetupay"
 # A prompt still on the phone blocks another for the same thing this long -
 # two prompts both approved would take the money twice.
 PENDING_WINDOW = timedelta(minutes=2)
-# The status poll asks ZetuPay itself once a webhook is this late.
-QUERY_AFTER = timedelta(seconds=20)
+# The status poll asks ZetuPay once a payment is this old: ZetuPay suggests
+# polling every 5 seconds for up to 2 minutes, since a failed prompt sends no
+# webhook.
+QUERY_AFTER = timedelta(seconds=5)
 # The sweep asks about payments older than a prompt's life and younger than
 # a day; past that a person reconciles from ZetuPay's dashboard.
 SWEEP_AFTER = timedelta(minutes=2)
@@ -74,6 +78,7 @@ _PREFIX = {
     Purpose.SUBSCRIPTION: "PL",
     Purpose.BOOST: "BS",
     Purpose.VERIFICATION: "VB",
+    Purpose.TEST: "TS",
 }
 # Crockford base32: no I, L, O or U to misread off an M-PESA message.
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -111,6 +116,8 @@ def _domain(purpose: str):
         from api.routers import featured as module
     elif purpose == Purpose.VERIFICATION:
         from api.routers import verify as module
+    elif purpose == Purpose.TEST:
+        from api.domains.payments import test_charge as module
     else:
         raise ValueError(f"no domain for purpose {purpose!r}")
     return module
@@ -162,7 +169,7 @@ async def start(
     await db.commit()
 
     try:
-        accepted = await zetupay.stk_push(phone, payment.amount, payment.reference, description)
+        accepted = await zetupay.stk_push(phone, payment.amount, payment.reference)
     except zetupay.ZetuPayUnavailable as exc:
         logger.warning("[zetupay] no prompt for %s (%s): %s", payment.reference, purpose, exc)
         locked = await _locked(db, ZetuPayPayment.id == payment.id)
@@ -177,7 +184,8 @@ async def start(
     locked = await _locked(db, ZetuPayPayment.id == payment.id)
     if locked.status == S.INITIATED:
         locked.status = S.PROCESSING
-    locked.provider_payment_id = locked.provider_payment_id or accepted.provider_id
+    locked.provider_payment_id = locked.provider_payment_id or accepted.payment_key
+    locked.wave_transaction_id = locked.wave_transaction_id or accepted.wave_transaction_id
     locked.updated_at = datetime.utcnow()
     await db.commit()
     return locked
@@ -219,9 +227,7 @@ def _outcome(payment: Optional[ZetuPayPayment], event: zetupay.ZetuPayEvent) -> 
     if payment is None:
         return "unknown_reference" if event.status == zetupay.SUCCESS else "ignored"
     if event.status == zetupay.FAILED:
-        unsettled = payment.status in (S.INITIATED, S.PROCESSING)
-        timed_out = payment.status == S.FAILED and payment.failure_reason == TIMED_OUT
-        return "failed" if unsettled or timed_out else "ignored"
+        return "failed" if payment.status in (S.INITIATED, S.PROCESSING) else "ignored"
     if not zetupay.amount_matches(event, payment.amount):
         return "amount_mismatch"
     if payment.status != S.SUCCESS:
@@ -289,9 +295,9 @@ async def apply_event(db: AsyncSession, event: zetupay.ZetuPayEvent, source: str
     return outcome
 
 
-async def _ask(db: AsyncSession, reference: str) -> Optional[str]:
+async def _ask(db: AsyncSession, reference: str, payment_key: str) -> Optional[str]:
     try:
-        event = await zetupay.transaction_status(reference)
+        event = await zetupay.transaction_status(payment_key, reference)
     except zetupay.ZetuPayUnavailable as exc:
         logger.info("[zetupay] status of %s not known: %s", reference, exc)
         return None
@@ -308,29 +314,62 @@ async def refresh(db: AsyncSession, purpose: str, target_id: str) -> None:
             ZetuPayPayment.purpose == purpose, ZetuPayPayment.target_id == target_id,
         )
     )).scalar_one_or_none()
-    if (payment is None or payment.status not in (S.INITIATED, S.PROCESSING)
+    if (payment is None or not payment.provider_payment_id
+            or payment.status not in (S.INITIATED, S.PROCESSING)
             or datetime.utcnow() - payment.created_at < QUERY_AFTER):
         return
-    await _ask(db, payment.reference)
+    await _ask(db, payment.reference, payment.provider_payment_id)
+
+
+async def status_by_reference(db: AsyncSession, reference: str) -> Optional[ZetuPayPayment]:
+    """The payment under `reference`, after asking ZetuPay if it is still
+    unfinished. For the admin lookup; re-read, since asking can roll back."""
+    row = (await db.execute(
+        select(ZetuPayPayment.status, ZetuPayPayment.provider_payment_id)
+        .where(ZetuPayPayment.reference == reference)
+    )).one_or_none()
+    if row is None:
+        return None
+    status, payment_key = row
+    if status in (S.INITIATED, S.PROCESSING) and payment_key:
+        await _ask(db, reference, payment_key)
+    return (await db.execute(
+        select(ZetuPayPayment).where(ZetuPayPayment.reference == reference)
+        .execution_options(populate_existing=True)
+    )).scalar_one()
+
+
+def payment_dict(payment: ZetuPayPayment) -> dict:
+    return {
+        "reference": payment.reference,
+        "purpose": payment.purpose,
+        "amount": payment.amount,
+        "status": payment.status,
+        "payment_key": payment.provider_payment_id,
+        "wave_transaction_id": payment.wave_transaction_id,
+        "mpesa_receipt": payment.mpesa_receipt,
+        "failure_reason": payment.failure_reason,
+        "created_at": payment.created_at.isoformat() if payment.created_at else None,
+        "settled_at": payment.settled_at.isoformat() if payment.settled_at else None,
+    }
 
 
 async def reconcile_stale(db: AsyncSession, now: Optional[datetime] = None) -> int:
-    """The sweep: ask ZetuPay about payments whose webhook never came,
-    including prompts that timed out here and may have been paid. Returns
-    how many it settled or failed."""
+    """The sweep: ask ZetuPay about unfinished payments nobody is polling -
+    a lost webhook, or a prompt cancelled after the app stopped asking.
+    Returns how many it settled or failed. A prompt that timed out here has
+    no paymentKey to ask about; its success webhook still lands."""
     now = now or datetime.utcnow()
-    references = (await db.execute(
-        select(ZetuPayPayment.reference).where(
+    rows = (await db.execute(
+        select(ZetuPayPayment.reference, ZetuPayPayment.provider_payment_id).where(
             ZetuPayPayment.created_at <= now - SWEEP_AFTER,
             ZetuPayPayment.created_at >= now - SWEEP_UNTIL,
-            or_(
-                ZetuPayPayment.status.in_((S.INITIATED, S.PROCESSING)),
-                and_(ZetuPayPayment.status == S.FAILED, ZetuPayPayment.failure_reason == TIMED_OUT),
-            ),
+            ZetuPayPayment.status.in_((S.INITIATED, S.PROCESSING)),
+            ZetuPayPayment.provider_payment_id.is_not(None),
         ).order_by(ZetuPayPayment.created_at).limit(SWEEP_BATCH)
-    )).scalars().all()
+    )).all()
     changed = 0
-    for reference in references:
-        if await _ask(db, reference) in ("applied", "failed", "amount_mismatch"):
+    for reference, payment_key in rows:
+        if await _ask(db, reference, payment_key) in ("applied", "failed", "amount_mismatch"):
             changed += 1
     return changed
