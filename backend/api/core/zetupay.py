@@ -41,6 +41,13 @@ from api.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# False until every path and field below has been checked against ZetuPay's
+# API reference. Until then ZETUPAY_ENABLED is ignored and BROKA's charges
+# stay on Daraja (payments/service.enabled): a guessed request format would
+# turn every listing fee, plan, boost and badge into a failed prompt - or a
+# prompt for the wrong thing - the moment someone switched the flag on.
+CONTRACT_VERIFIED = False
+
 STK_PUSH_PATH = "/mpesa/stk-push"
 STATUS_PATH = "/transactions/{reference}"
 

@@ -16,6 +16,7 @@ What must hold:
     arrives anyway is still applied;
   * deal money never comes near ZetuPay: E-Confirm keeps it.
 """
+import asyncio
 import dataclasses
 import json
 import uuid
@@ -32,11 +33,12 @@ from main import app
 from api.core import config, mpesa_stk, zetupay
 from api.core.config import settings
 from api.database import (
-    AsyncSessionLocal, AuditLog, Listing, SellerTier, User,
-    VerificationPayment, init_db, reset_engine,
+    AsyncSessionLocal, AuditLog, Deal, DealStatus, Listing, ListingStatus, MpesaTransaction,
+    SellerTier, User, VerificationPayment, init_db, reset_engine,
 )
 from api.domains.listings.paid import MONTH
 from api.domains.payments import service
+from api.models.external_escrow import EConfirmEscrowStatus, ExternalEscrow
 from api.models.listing_payment import ListingPayment
 from api.models.subscription import Subscription, SubscriptionPayment
 from api.models.zetupay import Purpose, ZetuPayPayment, ZetuPayTransaction
@@ -86,6 +88,9 @@ def _settings(monkeypatch, **changes):
 
 @pytest.fixture
 def zetupay_on(monkeypatch):
+    # As if core/zetupay.py's contract had been checked against ZetuPay's
+    # reference: these tests are about BROKA's side of the payment.
+    monkeypatch.setattr(zetupay, "CONTRACT_VERIFIED", True)
     return _settings(
         monkeypatch, zetupay_enabled=True, zetupay_secret_key="sk_test_unit",
         zetupay_webhook_secret=WEBHOOK_SECRET, mpesa_callback_secret=MPESA_SECRET,
@@ -740,6 +745,7 @@ class TestSettings:
         assert "sk_live_hidden" not in repr(s) and "whsec_hidden" not in repr(s)
 
     def test_production_refuses_zetupay_without_its_secrets(self, monkeypatch):
+        monkeypatch.setattr(zetupay, "CONTRACT_VERIFIED", True)
         prod = dataclasses.replace(
             settings, env="production", secret_key="x" * 40, zac_secret="zac-" + "y" * 40,
             mpesa_callback_secret="m" * 32, econfirm_api_key="ek",
@@ -748,3 +754,151 @@ class TestSettings:
         monkeypatch.setattr(config, "settings", prod)
         with pytest.raises(RuntimeError, match="ZETUPAY_WEBHOOK_SECRET"):
             config.validate_startup()
+
+    def test_the_flag_alone_never_stops_production_from_starting(self, monkeypatch):
+        """While the contract is unverified the flag does nothing - and
+        refusing to start over it would take deals down with it."""
+        prod = dataclasses.replace(
+            settings, env="production", secret_key="x" * 40, zac_secret="zac-" + "y" * 40,
+            mpesa_callback_secret="m" * 32, econfirm_api_key="ek",
+            zetupay_enabled=True, zetupay_secret_key="", zetupay_webhook_secret="",
+        )
+        monkeypatch.setattr(config, "settings", prod)
+        try:
+            config.validate_startup()
+        except RuntimeError as exc:
+            assert "ZETUPAY" not in str(exc), exc
+
+
+# ── The unverified contract is never used ───────────────────────────────────
+
+class TestUnverifiedContract:
+    @pytest.mark.asyncio
+    async def test_the_flag_keeps_charges_on_daraja_until_the_contract_is_verified(
+            self, client, monkeypatch):
+        assert zetupay.CONTRACT_VERIFIED is False, \
+            "verified only once checked against ZetuPay's API reference - see ZETUPAY.md"
+        _settings(monkeypatch, zetupay_enabled=True, zetupay_secret_key="sk_live_x",
+                  zetupay_webhook_secret=WEBHOOK_SECRET, listing_fees_enabled=True,
+                  mpesa_callback_secret=MPESA_SECRET)
+        daraja = []
+
+        async def daraja_push(phone, amount, account_reference, description, callback_url):
+            daraja.append(amount)
+            return {"CheckoutRequestID": f"ws_CO_{uuid.uuid4().hex}", "ResponseCode": "0"}
+
+        async def no_zetupay(*_a, **_k):
+            raise AssertionError("ZetuPay must not be asked while its contract is unverified")
+
+        monkeypatch.setattr(mpesa_stk, "stk_push", daraja_push)
+        monkeypatch.setattr(zetupay, "stk_push", no_zetupay)
+
+        _, h = await _user()
+        listing = await _listing(client, h)
+        r = await _pay_fee(client, h, listing["id"])
+        assert r.status_code == 200, r.text
+        assert daraja == [r.json()["amount"]]
+        async with AsyncSessionLocal() as db:
+            row = await db.get(ListingPayment, r.json()["payment_id"])
+        assert row.provider == "daraja" and row.checkout_request_id
+
+
+# ── An E-Confirm deal is out of ZetuPay's reach ──────────────────────────────
+
+def _row(obj) -> dict:
+    return {c.key: getattr(obj, c.key) for c in obj.__table__.columns}
+
+
+class TestEConfirmDealsAreUntouched:
+    @pytest.mark.asyncio
+    async def test_no_zetupay_success_can_fund_or_move_a_deal(self, client, fees_on, zp):
+        seller, seller_h = await _user()
+        buyer, buyer_h = await _user()
+        async with AsyncSessionLocal() as db:
+            listing = Listing(seller_id=seller.id, name=f"Phone {uuid.uuid4().hex[:6]}",
+                              category="Electronics", price=10000, lat=-1.29, lng=36.82,
+                              status=ListingStatus.pending)
+            db.add(listing)
+            await db.commit()
+            # Agreed and waiting for the buyer's money: the state a stray
+            # "payment succeeded" would do the most damage in.
+            deal = Deal(listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id,
+                        agreed_price=10000, commission=449, status=DealStatus.agreed)
+            db.add(deal)
+            await db.commit()
+            escrow = ExternalEscrow(
+                deal_id=deal.id, provider_transaction_id=f"ec-{uuid.uuid4().hex[:10]}",
+                status=EConfirmEscrowStatus.PENDING, amount=10449,
+                buyer_email="b@x.test", seller_email="s@x.test", receiver_phone="+254700000000",
+            )
+            db.add(escrow)
+            await db.commit()
+            before = (_row(deal), _row(escrow))
+            deal_id, escrow_tx = deal.id, escrow.provider_transaction_id
+
+        # Successes naming the deal, E-Confirm's transaction, and the deal's
+        # amount, with no BROKA reference: none is a BROKA charge.
+        for reference in (deal_id, escrow_tx, None):
+            body = _event(reference, 10449)
+            if reference is None:
+                del body["data"]["reference"]
+            outcome = (await _webhook(client, body)).json()["outcome"]
+            assert outcome in ("unknown_reference", "ignored"), (reference, outcome)
+        # And a genuine BROKA charge by the same buyer, paid.
+        own = await _listing(client, buyer_h)
+        paid = (await _pay_fee(client, buyer_h, own["id"])).json()
+        charge = await _charge(Purpose.LISTING_FEE, paid["payment_id"])
+        assert (await _webhook(client, _event(charge.reference, paid["amount"]))).json()["outcome"] == "applied"
+
+        async with AsyncSessionLocal() as db:
+            deal = await db.get(Deal, deal_id)
+            escrow = (await db.execute(select(ExternalEscrow).where(
+                ExternalEscrow.deal_id == deal_id))).scalar_one()
+            mpesa_rows = (await db.execute(select(func.count()).select_from(MpesaTransaction).where(
+                MpesaTransaction.deal_id == deal_id))).scalar()
+            charges_for_deal = (await db.execute(select(func.count()).select_from(ZetuPayPayment).where(
+                (ZetuPayPayment.target_id == deal_id) | (ZetuPayPayment.related_id == deal_id)))).scalar()
+        assert (_row(deal), _row(escrow)) == before
+        assert mpesa_rows == 0 and charges_for_deal == 0
+
+
+# ── Two copies of one webhook at the same instant ────────────────────────────
+
+class TestConcurrentDelivery:
+    @pytest.mark.asyncio
+    async def test_two_identical_webhooks_at_once_apply_once(self, client, fees_on, zp, announced):
+        _, h = await _user()
+        listing = await _listing(client, h)
+        paid = (await _pay_fee(client, h, listing["id"], months=2)).json()
+        charge = await _charge(Purpose.LISTING_FEE, paid["payment_id"])
+        body = _event(charge.reference, paid["amount"], wave=f"wave_race_{uuid.uuid4().hex[:6]}")
+
+        first, second = await asyncio.gather(_webhook(client, body), _webhook(client, body))
+        assert {first.status_code, second.status_code} == {200}
+        assert sorted([first.json()["outcome"], second.json()["outcome"]]) == ["applied", "duplicate"]
+
+        status = await _fee_status(client, h, paid["payment_id"])
+        until = datetime.fromisoformat(status["paid_until"])
+        assert abs((until - datetime.utcnow()) - 2 * MONTH) < timedelta(minutes=1), "two months, not four"
+        assert len(announced) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_webhook_racing_the_status_poll_applies_once(self, client, fees_on, zp, announced):
+        _, h = await _user()
+        listing = await _listing(client, h)
+        paid = (await _pay_fee(client, h, listing["id"])).json()
+        charge = await _charge(Purpose.LISTING_FEE, paid["payment_id"])
+        await _age(charge.id)
+        body = _event(charge.reference, paid["amount"], wave=f"wave_race_{uuid.uuid4().hex[:6]}")
+        zp.status[charge.reference] = body["data"]
+
+        hook, poll = await asyncio.gather(_webhook(client, body), _fee_status(client, h, paid["payment_id"]))
+        assert hook.status_code == 200 and poll["status"] in ("pending", "success")
+        status = await _fee_status(client, h, paid["payment_id"])
+        until = datetime.fromisoformat(status["paid_until"])
+        assert abs((until - datetime.utcnow()) - MONTH) < timedelta(minutes=1)
+        assert len(announced) == 1
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(select(ZetuPayTransaction).where(
+                ZetuPayTransaction.wave_transaction_id == body["data"]["waveTransactionId"]))).scalars().all()
+        assert [r.outcome for r in rows] == ["applied"]

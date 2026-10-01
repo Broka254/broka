@@ -17,46 +17,71 @@ and `Purpose` has no value for deal money - `start()` refuses anything else.
 
 ## Switching it on
 
+**Not yet.** The request format in `core/zetupay.py` has not been checked
+against ZetuPay's API reference, so `CONTRACT_VERIFIED` there is `False`, and
+while it is, `ZETUPAY_ENABLED` is ignored: the four charges stay on Daraja,
+startup logs an error, and nothing else changes (startup does not fail over
+it - that would take deals down too).
+
 `ZETUPAY_ENABLED` (default `false`). Off, the four charges go through Daraja
 (`core/mpesa_stk.py` and the two legacy routers) exactly as before. On, every
 new charge goes through ZetuPay; payments already started on Daraja still
 settle through Safaricom's callbacks.
 
-1. Check the wire format against ZetuPay's API reference (below).
-2. In Render, set `ZETUPAY_SECRET_KEY` (`sk_live_...`) and
-   `ZETUPAY_WEBHOOK_SECRET` (the value ZetuPay will send in
-   `x-zetupay-secret`). Both are server-only: never in the app, the web
-   storefront, logs or Git. `Settings` keeps them out of its `repr`.
+1. Check every row of the table below against ZetuPay's current API
+   reference; correct `core/zetupay.py` and `tests/test_zetupay.py` to the
+   exact contract, including how webhooks are authenticated (below); then
+   set `CONTRACT_VERIFIED = True` in the same change.
+2. Set `ZETUPAY_SECRET_KEY` (`sk_live_...`), and whatever webhook credential
+   ZetuPay's reference specifies, where the API's environment is configured
+   (Azure, and `render.yaml` while Render still runs). Server-only: never in
+   the app, the web storefront, logs or Git. `Settings` keeps them out of its
+   `repr`.
 3. In ZetuPay's dashboard, set the transaction webhook to
-   `https://api.broka.co.ke/payments/zetupay/webhook` with that secret.
-4. Set `ZETUPAY_ENABLED=true` in `render.yaml`. Production refuses to start
-   with it on and either secret missing, and warns on a key that is not
-   `sk_live_`.
+   `https://api.broka.co.ke/payments/zetupay/webhook`.
+4. Set `ZETUPAY_ENABLED=true`. Production then refuses to start with a
+   secret missing, and warns on a key that is not `sk_live_`.
+5. Pay one KES 10 charge and follow it to the end (see "First live payment").
 
 The app needs no change: it calls the same endpoints and polls the same
 status routes.
 
 ## Check before switching on
 
-ZetuPay's documentation could not be reached when this was built (the hosts
-were outside the build environment's network). What BROKA was told is built
-in as stated: the base URL, the secret key, the 202 "processing" answer to
-an STK push, `x-zetupay-secret` on webhooks, and `waveTransactionId`. The
-rest is an assumption, all of it in `core/zetupay.py`:
+ZetuPay's documentation could not be reached when this was built (its hosts
+are outside the build environment's network policy, and no public index
+carries its API reference). What BROKA was told is built in as stated: the
+base URL, the secret key, the 202 "processing" answer to an STK push,
+`x-zetupay-secret` on webhooks, and `waveTransactionId`. Everything else is
+an assumption, all of it in `core/zetupay.py`:
 
 | What | Assumed | Where |
 |---|---|---|
 | STK push | `POST /mpesa/stk-push`, body `{phone, amount, reference, description}`; 200/201/202 = accepted | `STK_PUSH_PATH`, `stk_push()` |
 | Status | `GET /transactions/{reference}`; 404 = unknown | `STATUS_PATH`, `transaction_status()` |
 | Auth | `Authorization: Bearer <secret key>` | `_headers()` |
+| `paymentKey` | **not handled** - nothing here knows what it is | - |
 | Amounts | whole KES | `stk_push()` |
+| Webhook auth | `x-zetupay-secret` compared with `ZETUPAY_WEBHOOK_SECRET`, a separate setting. **Unconfirmed**: ZetuPay may send the secret key itself, or something else | `webhook_secret_ok()` |
 | Webhook fields | `reference`, `status`, `amount`, `currency`, `waveTransactionId`, `mpesaReceiptNumber`, flat or under `data` | `_REFERENCE` ... `_RECEIPT` |
 | Statuses | success / completed / paid; failed / cancelled / expired / timeout; anything else is still pending | `_SUCCESS`, `_FAILED` |
+| Subscriptions | ZetuPay's subscription API is not used | - |
 
 The webhook reader accepts the usual alternative spellings of each field, so
 a webhook still parses if a name differs; the STK push body must match
-exactly. ZetuPay's own subscription (auto-renewal) API is not used yet - see
-"Plans" below.
+exactly. Once the reference is in hand, narrow the readers to its exact
+names.
+
+## First live payment
+
+Only after all of the above. One KES 10 charge: the smallest listing fee is
+KES 9 and the cheapest plan KES 199, so the simplest is a temporary price,
+or a listing whose quote is about KES 10. Check, in order: the prompt
+reaches the phone; `zetupay_payments` goes `processing`, then `success` with
+a `wave_transaction_id` and receipt; one `zetupay_transactions` row with
+outcome `applied`; the domain row is `success` and the listing is live;
+resending the same webhook from ZetuPay's dashboard answers `duplicate` and
+changes nothing; nothing in `deals` or `external_escrows` changed.
 
 ## A payment
 

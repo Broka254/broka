@@ -575,7 +575,16 @@ def validate_startup() -> None:
     # Switched on without its key, every listing fee, plan and boost fails
     # at the prompt; without the webhook secret every payment's result is
     # refused and nothing a user pays is ever applied.
-    if s.zetupay_enabled:
+    from api.core.zetupay import CONTRACT_VERIFIED
+    zetupay_live = s.zetupay_enabled and CONTRACT_VERIFIED
+    if s.zetupay_enabled and not CONTRACT_VERIFIED:
+        # Logged, not fatal, and checked first: the flag does nothing yet,
+        # and refusing to start over it would take deals down too.
+        logger.error(
+            "[startup] ZETUPAY_ENABLED is set, but core/zetupay.py's API contract "
+            "is not verified - BROKA's charges stay on Daraja until it is."
+        )
+    if zetupay_live:
         missing = [name for name, value in (
             ("ZETUPAY_SECRET_KEY", s.zetupay_secret_key),
             ("ZETUPAY_WEBHOOK_SECRET", s.zetupay_webhook_secret),
@@ -594,7 +603,7 @@ def validate_startup() -> None:
             # A test key in production takes no real money - every charge
             # would "succeed" without a shilling reaching BROKA.
             logger.warning("[startup] ZETUPAY_SECRET_KEY is not a live (sk_live_) key")
-    logger.info("[startup] ZetuPay is %s", "ON" if s.zetupay_enabled else "off")
+    logger.info("[startup] ZetuPay is %s", "ON" if zetupay_live else "off")
 
     # ── Refuse SQLite in production (issue #10) ───────────────────────────────
     if s.is_production and "sqlite" in s.database_url:

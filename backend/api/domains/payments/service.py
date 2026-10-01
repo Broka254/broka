@@ -80,7 +80,9 @@ _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def enabled() -> bool:
-    return settings.zetupay_enabled
+    """ZETUPAY_ENABLED - honoured only once core/zetupay.py's API contract
+    is marked verified."""
+    return settings.zetupay_enabled and zetupay.CONTRACT_VERIFIED
 
 
 def new_reference(purpose: str) -> str:
