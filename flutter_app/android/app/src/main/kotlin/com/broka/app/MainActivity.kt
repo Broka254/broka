@@ -1,7 +1,9 @@
 package com.broka.app
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -45,18 +47,35 @@ class MainActivity : FlutterFragmentActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "start" -> {
+                        // The service runs with the microphone type, which
+                        // Android 14+ refuses without RECORD_AUDIO - by
+                        // throwing inside the service, which kills the app.
+                        // Dart starts it only once the mic is open; this is
+                        // the backstop. false = not started, the call goes
+                        // on without screen-lock protection.
+                        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                                != PackageManager.PERMISSION_GRANTED) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
                         val peerName = call.argument<String>("peerName") ?: "Call"
                         val isVideo = call.argument<Boolean>("isVideo") ?: false
                         val intent = Intent(this, CallForegroundService::class.java).apply {
                             putExtra(CallForegroundService.EXTRA_PEER_NAME, peerName)
                             putExtra(CallForegroundService.EXTRA_IS_VIDEO, isVideo)
                         }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            startForegroundService(intent)
-                        } else {
-                            startService(intent)
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            // Android 12+ refuses a foreground service
+                            // started while the app is in the background.
+                            result.success(false)
                         }
-                        result.success(null)
                     }
                     "stop" -> {
                         stopService(Intent(this, CallForegroundService::class.java))

@@ -148,7 +148,17 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       if (mounted) setState(() => _errorMsg = msg);
     };
     _svc.onLocalMediaReady = () {
-      if (mounted) setState(() => _localMediaReady = true);
+      if (!mounted) return;
+      // The mic (and camera, if granted) is open, so the permissions are
+      // in place - only now can the foreground service start. It used to
+      // start before WebRtcService had even asked for the microphone, and
+      // on Android 14+ a microphone foreground service without that
+      // permission throws inside the service and the OS kills the app: the
+      // app closed the moment a call was placed or answered, and MIUI
+      // showed "BROKA should be granted Microphone access".
+      CallForegroundService.start(
+          peerName: _peerName, isVideo: _isVideo && !_svc.cameraUnavailable);
+      setState(() => _localMediaReady = true);
     };
     _svc.onRemoteStreamConnected = () {
       // Remote media of SOME kind is flowing. Deliberately does NOT flip
@@ -189,9 +199,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     };
 
     if (_isCaller) {
-      // Caller starts immediately - also guards the call against dropping
-      // if the screen locks/backgrounds mid-call (see CallForegroundService).
-      CallForegroundService.start(peerName: _peerName, isVideo: _isVideo);
+      // Caller starts immediately. The foreground service that keeps the
+      // call alive through a screen lock starts from onLocalMediaReady.
       // iOS equivalent: registering with CallKit is what grants the call
       // audio session and keeps the app alive when backgrounded/locked.
       CallKitService.instance.reportOutgoingCall(
@@ -202,7 +211,6 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // in-chat incoming-call dialog) - don't make them decide again.
       _accepted = true;
       RingtoneService.instance.stop();
-      CallForegroundService.start(peerName: _peerName, isVideo: _isVideo);
       CallKitService.instance.reportOutgoingCall(
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
       _svc.start();
@@ -783,8 +791,6 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                   if (_accepted) return;
                   RingtoneService.instance.stop();
                   setState(() => _accepted = true);
-                  CallForegroundService.start(
-                      peerName: _peerName, isVideo: _isVideo);
                   CallKitService.instance.reportOutgoingCall(
                       roomId: _svc.roomId, peerName: _peerName, isVideo: _isVideo);
                   _svc.start();

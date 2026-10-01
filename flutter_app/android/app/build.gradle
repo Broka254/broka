@@ -69,6 +69,11 @@ dependencies {
     // See SmsRetrieverBridge.kt. This is the phone-auth slice of Play
     // Services only, not the full auth artifact, so it adds very little.
     implementation "com.google.android.gms:play-services-auth-api-phone:18.1.0"
+
+    // Theme.AppCompat for res/values/styles.xml (see the comment there).
+    // Declared directly so the themes don't depend on what the plugins
+    // happen to pull in.
+    implementation "androidx.appcompat:appcompat:1.6.1"
 }
 
 // FCM (calling-hardening pass). This plugin hard-fails the build if

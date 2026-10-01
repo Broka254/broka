@@ -36,8 +36,8 @@ relay plus authoritative call-session state:
 - **`flutter_app/lib/services/call_foreground_service.dart`** +
   **`android/.../CallForegroundService.kt`** — keeps the mic/camera alive
   through backgrounding and screen lock via a real Android foreground
-  service, for both the caller (from the moment they call) and the callee
-  (from the moment they accept).
+  service, for both parties, from the moment the microphone is granted and
+  open (see **The app closed on every call**, 2026-10-01).
 
 ## Authoritative state machine
 
@@ -525,3 +525,35 @@ Two faults on the same path, fixed here:
 Covered by `flutter_app/test/incoming_call_notification_test.dart`, which
 fails against the previous code. **Not device-verified**: that needs an APK
 on a phone.
+
+
+---
+
+# The app closed on every call (2026-10-01)
+
+Placing or answering a call closed the app at once; on Xiaomi phones MIUI
+then showed "BROKA should be granted Microphone access to function
+properly".
+
+The call screen started `CallForegroundService` - declared with the
+`microphone` type - before `WebRtcService` had asked for the microphone. On
+Android 14+ a microphone foreground service without `RECORD_AUDIO` throws
+`SecurityException` inside the service, and the OS kills the process; the
+permission dialog never got a chance to appear, so it happened on every
+call. A video call with the camera denied crashed the same way through the
+`camera` type.
+
+- `voip_call_screen.dart` starts the service from `onLocalMediaReady`: the
+  permissions have been granted and the mic (and camera) are open. It claims
+  the camera only when the camera is in use (`cameraUnavailable`).
+- `MainActivity` refuses to start the service without `RECORD_AUDIO`, and
+  catches Android 12+'s refusal to start one from the background.
+- `CallForegroundService` claims the `camera` type only with the camera
+  granted, catches a refused `startForeground` and stops instead of
+  crashing, and is no longer `START_STICKY`: a service recreated after the
+  process died has no call behind it, and starting a microphone service
+  from the background is itself refused on Android 14+.
+
+Covered by `flutter_app/test/voip_call_permissions_test.dart`, which fails
+against the previous code. **Not device-verified**: that needs an APK on a
+phone.

@@ -137,8 +137,17 @@ class SmsRetrieverBridge(private val context: Context) : EventChannel.StreamHand
         val client = SmsRetriever.getClient(context)
         client.startSmsRetriever()
             .addOnSuccessListener {
-                registerReceiver()
-                onResult(true)
+                // A throw in a Play Services callback is uncaught and kills
+                // the app; a receiver that can't register only means the
+                // code gets typed.
+                val registered = try {
+                    registerReceiver()
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "could not register the SMS receiver", e)
+                    false
+                }
+                onResult(registered)
             }
             .addOnFailureListener { e ->
                 // Play Services missing or out of date. The Dart side treats
@@ -162,10 +171,24 @@ class SmsRetrieverBridge(private val context: Context) : EventChannel.StreamHand
     private fun registerReceiver() {
         val r = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
+                // The receiver is exported (see registerReceiver below), so
+                // any app can send this action with whatever extras it
+                // likes, and an exception escaping onReceive kills the
+                // app. A broadcast that can't be read is ignored.
+                try {
+                    handle(intent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "unreadable SMS Retriever broadcast", e)
+                }
+            }
+
+            private fun handle(intent: Intent?) {
                 if (intent?.action != SmsRetriever.SMS_RETRIEVED_ACTION) return
                 val extras: Bundle = intent.extras ?: return
 
-                val status = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // The typed getParcelable only from Android 14: Android 13's
+                // is buggy (androidx's BundleCompat avoids it there too).
+                val status = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     extras.getParcelable(SmsRetriever.EXTRA_STATUS, Status::class.java)
                 } else {
                     @Suppress("DEPRECATION")

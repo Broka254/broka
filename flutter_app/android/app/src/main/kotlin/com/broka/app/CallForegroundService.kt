@@ -1,5 +1,6 @@
 package com.broka.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,10 +8,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 /**
@@ -41,6 +44,7 @@ class CallForegroundService : Service() {
     companion object {
         const val EXTRA_PEER_NAME = "peerName"
         const val EXTRA_IS_VIDEO = "isVideo"
+        private const val TAG = "BrokaCallService"
         private const val CHANNEL_ID = "broka_call_service"
         private const val NOTIFICATION_ID = 7721
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L // 30 min safety cap
@@ -49,19 +53,37 @@ class CallForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val peerName = intent?.getStringExtra(EXTRA_PEER_NAME) ?: "Call"
-        val isVideo = intent?.getBooleanExtra(EXTRA_IS_VIDEO, false) ?: false
+        // A null intent is the system recreating the service after the
+        // process died. The call died with the process (its peer connection
+        // and signalling lived in Dart), so there is nothing to keep alive -
+        // and starting a microphone service from the background is refused
+        // on Android 14+, which would crash the app again on the way up.
+        if (intent == null) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        val peerName = intent.getStringExtra(EXTRA_PEER_NAME) ?: "Call"
+        val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
 
-        startForegroundWithNotification(peerName, isVideo)
+        if (!startForegroundWithNotification(peerName, isVideo)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         acquireWakeLock()
 
-        // If the OS kills the process under memory pressure it may try to
-        // recreate the service - in practice this service's lifetime is
-        // short and tightly paired with the call screen calling stop().
-        return START_STICKY
+        // Not sticky: see the null-intent case above.
+        return START_NOT_STICKY
     }
 
-    private fun startForegroundWithNotification(peerName: String, isVideo: Boolean) {
+    private fun isGranted(permission: String): Boolean =
+        checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * @return false if Android refused the foreground service. The service
+     *         must then stop: the call carries on, just without protection
+     *         from the screen locking.
+     */
+    private fun startForegroundWithNotification(peerName: String, isVideo: Boolean): Boolean {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -93,15 +115,29 @@ class CallForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val type = if (isVideo) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        // On Android 14+ each type is only allowed while its runtime
+        // permission is granted; asking for one that isn't throws
+        // SecurityException right here and the OS kills the whole app (MIUI
+        // then shows "BROKA should be granted Microphone access"). So the
+        // camera type is claimed only when the camera was actually granted:
+        // a video call whose camera was denied runs audio-only.
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                if (isVideo && isGranted(Manifest.permission.CAMERA)) {
+                    type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+                startForeground(NOTIFICATION_ID, notification, type)
             } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                startForeground(NOTIFICATION_ID, notification)
             }
-            startForeground(NOTIFICATION_ID, notification, type)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            true
+        } catch (e: Exception) {
+            // SecurityException (microphone not granted, or the app went to
+            // the background before the service came up) or, on Android
+            // 12+, ForegroundServiceStartNotAllowedException.
+            Log.w(TAG, "call service refused: ${e.message}")
+            false
         }
     }
 

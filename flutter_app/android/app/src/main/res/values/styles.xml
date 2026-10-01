@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+    <!-- AppCompat parents, not @android:style/Theme.Black: on Android 8 and
+         below the fingerprint prompt (local_auth, biometric sign-in) is an
+         AppCompat dialog, and opening it from a non-AppCompat theme throws
+         "You need to use a Theme.AppCompat theme" and kills the app.
+         NormalTheme is the one the activity runs under after the first
+         frame, so it is the one that matters; both are dark and
+         title-less, as before. -->
+    <style name="LaunchTheme" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@drawable/launch_background</item>
     </style>
-    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+    <style name="NormalTheme" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
     </style>
 </resources>

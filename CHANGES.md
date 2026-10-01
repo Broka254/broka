@@ -1,3 +1,34 @@
+# The app no longer closes when a call starts (2026-10-01)
+
+**Calls** (`flutter_app/lib/screens/voip_call_screen.dart`,
+`android/.../CallForegroundService.kt`, `MainActivity.kt`). Placing or
+answering a voice or video call closed the app; MIUI then said "BROKA should
+be granted Microphone access". The call's foreground service, declared with
+the microphone type, was started before the app had asked for the
+microphone, and Android 14+ kills an app whose microphone service runs
+without that permission. It now starts once the microphone is granted and
+open, claims the camera only when the camera is in use, and the native side
+refuses or stops instead of crashing if a permission is still missing. See
+CALLING.md. `test/voip_call_permissions_test.dart`.
+
+Two more ways the app could close on its own:
+
+- **Fingerprint sign-in on Android 7 and 8** (`res/values/styles.xml`). The
+  fingerprint prompt there is an AppCompat dialog, and the app's themes
+  were not AppCompat themes, which local_auth documents as a crash. Both
+  themes are now `Theme.AppCompat.NoActionBar` (still dark, no title bar),
+  with `androidx.appcompat` declared in `app/build.gradle`.
+- **The SMS code reader** (`SmsRetrieverBridge.kt`). Its receiver is
+  exported, so any app can send it a broadcast, and anything thrown while
+  reading one killed BROKA; it now logs and ignores what it can't read.
+  It also stops using Android 13's buggy typed `getParcelable`.
+
+**Not device-verified**, and the Android build itself was not run (no
+Android SDK in the environment this was written in): the Kotlin was
+compiled against the Android 15 framework and the Flutter embedding, with
+stand-ins for the androidx and Play Services classes.
+
+
 # The OTP reader, photos taken the listing way, and the stores on BROKA's colours (2026-09-30)
 
 **The SMS code fills itself again** (`flutter_app/lib/screens/auth_screen.dart`).

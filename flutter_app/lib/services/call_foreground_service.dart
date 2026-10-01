@@ -24,8 +24,11 @@ class CallForegroundService {
   CallForegroundService._();
   static const MethodChannel _channel = MethodChannel('com.broka.app/call_service');
 
-  /// Call once the call attempt begins (ringing/dialling) and keep it
-  /// running for the whole call. Must be paired with [stop].
+  /// Call once the call's microphone is open - never before the microphone
+  /// permission is granted (Android 14+ kills the app for a microphone
+  /// service without it) - and keep it running for the whole call. Pass
+  /// [isVideo] only when the camera is actually in use. Must be paired with
+  /// [stop].
   static Future<void> start({required String peerName, required bool isVideo}) async {
     try {
       await _channel.invokeMethod('start', {
