@@ -1005,6 +1005,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
 - `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
+- `voip_call_permissions_test.dart` — The app closed the moment a call was placed or answered.
 - `zeno_about_listing_test.dart` — Zeno, opened from a listing's "Ask Zeno" card (2026-09-29): the listing pinned under the header, questions about it, its id on every turn s…
 - `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
@@ -1090,7 +1091,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The OTP reader, photos taken the listing way, and the stores on BROKA's colours (2026-09-30)
+- `CHANGES.md` — The app no longer closes when a call starts (2026-10-01)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
