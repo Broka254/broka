@@ -4,6 +4,7 @@ SQLite for local dev; PostgreSQL for production (Render).
 """
 
 import os
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import (
@@ -16,7 +17,10 @@ import uuid
 
 
 def _build_db_url() -> str:
-    url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./broka.db")
+    # Stripped: a value pasted into a hosting dashboard often carries a
+    # trailing newline, which lands in the database name and fails every
+    # connection.
+    url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./broka.db").strip()
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql+asyncpg://", 1)
     elif url.startswith("postgresql://") and "+asyncpg" not in url:
@@ -24,9 +28,51 @@ def _build_db_url() -> str:
     return url
 
 
+# Supabase's transaction pooler listens on 6543. It, and PgBouncer in
+# transaction mode, give each transaction whichever server connection is
+# free, so a statement asyncpg prepared on one is missing on the next.
+# Through such a pooler init_db() passed and then queries failed with
+# 'prepared statement "__asyncpg_stmt_..." does not exist' (or "already
+# exists", when two clients' statements met on one server connection).
+_TRANSACTION_POOLER_PORT = 6543
+
+
+def _asyncpg_url_and_args(url: str) -> tuple[str, dict]:
+    """The URL asyncpg accepts, and the connect_args the pooler needs.
+
+    asyncpg takes every query parameter as a keyword argument and raises
+    TypeError on one it doesn't know. libpq's `sslmode=require`, in Azure's
+    connection strings and most hosting guides, crashed the first connection
+    and so stopped startup before the port opened; `pgbouncer=true`, in
+    Supabase's Prisma string, did the same.
+    """
+    u = make_url(url)
+    query = dict(u.query)
+    sslmode = query.pop("sslmode", None)
+    if sslmode is not None:
+        query.setdefault("ssl", sslmode)   # asyncpg takes the same mode names
+    pooled = (
+        str(query.pop("pgbouncer", "")).lower() == "true"
+        or u.port == _TRANSACTION_POOLER_PORT
+    )
+    connect_args = {}
+    if pooled:
+        connect_args = {
+            "statement_cache_size": 0,            # asyncpg's own cache
+            "prepared_statement_cache_size": 0,   # SQLAlchemy's
+            # Unique names: two clients' "__asyncpg_stmt_1__" would otherwise
+            # meet on one server connection.
+            "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4()}__",
+        }
+    return u.set(query=query).render_as_string(hide_password=False), connect_args
+
+
 def _build_engine_and_factory(url: str):
     is_sqlite = url.startswith("sqlite")
-    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    if is_sqlite:
+        connect_args = {"check_same_thread": False}
+    else:
+        url, connect_args = _asyncpg_url_and_args(url)
 
     # Pool tuning only applies to real network-hop databases - SQLite is a
     # single local file, no connection pool concept applies the same way,

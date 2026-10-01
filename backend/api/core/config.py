@@ -474,6 +474,51 @@ class Settings:
     def cloudflare_turn_configured(self) -> bool:
         return bool(self.cloudflare_turn_key_id and self.cloudflare_turn_api_token)
 
+    # Set by the platform, not by us: the Container App revision on Azure,
+    # the deployed commit on Render. GET /ready shows which one answered.
+    revision: str = field(default_factory=lambda: (
+        os.getenv("CONTAINER_APP_REVISION") or os.getenv("RENDER_GIT_COMMIT", "")
+    ))
+
+    @property
+    def ai_configured(self) -> bool:
+        return bool(self.gemini_api_key or self.openrouter_api_key or self.deepseek_api_key)
+
+    @property
+    def sms_configured(self) -> bool:
+        return bool(
+            (self.mobitech_api_key and self.mobitech_sender_name)
+            or (self.at_username and self.at_api_key)
+        )
+
+    @property
+    def database_host(self) -> str:
+        """DATABASE_URL's host, never its password; "sqlite" for SQLite."""
+        url = self.database_url.strip()
+        if url.startswith("sqlite"):
+            return "sqlite"
+        return urlparse(url).hostname or "unknown"
+
+    @property
+    def database_provider(self) -> str:
+        """Which service DATABASE_URL names, read from its host.
+
+        GET /ready shows it. When a new revision fails to start, Azure keeps
+        serving the old one with the old DATABASE_URL, and this is how to see
+        that from a browser without reading the secret.
+        """
+        host = self.database_host
+        if host == "sqlite":
+            return "sqlite"
+        if host.endswith((".supabase.co", ".supabase.com")):
+            return "supabase"
+        if host.endswith(".postgres.database.azure.com"):
+            return "azure"
+        # dpg-... alone is Render's internal hostname.
+        if host.endswith(".render.com") or host.startswith("dpg-"):
+            return "render"
+        return "postgres"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -571,9 +616,7 @@ def validate_startup() -> None:
         )
 
     # ── Warn if no SMS provider is configured in production ───────────────────
-    _has_mobitech = bool(s.mobitech_api_key and s.mobitech_sender_name)
-    _has_at       = bool(s.at_username and s.at_api_key)
-    if s.is_production and not (_has_mobitech or _has_at):
+    if s.is_production and not s.sms_configured:
         logger.warning(
             "[startup] ⚠  No SMS provider configured (MOBITECH_API_KEY/"
             "MOBITECH_SENDER_NAME or AT_USERNAME/AT_API_KEY) — phone OTPs "
@@ -706,9 +749,13 @@ def validate_startup() -> None:
         )
 
     logger.info(
-        "[startup] ✓ Config validated  env=%s  db=%s  redis=%s  sentry=%s",
+        "[startup] ✓ Config validated  env=%s  db=%s (%s)  redis=%s  sentry=%s  "
+        "ai=%s  sms=%s  email=%s",
         s.env,
-        "postgres" if "postgres" in s.database_url else "sqlite",
+        s.database_provider, s.database_host,
         "yes" if s.redis_enabled else "no",
         "yes" if s.sentry_dsn else "no",
+        "yes" if s.ai_configured else "no",
+        "yes" if s.sms_configured else "no",
+        "yes" if s.email_enabled else "no",
     )

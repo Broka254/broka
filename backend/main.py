@@ -533,6 +533,18 @@ async def ready():
             # "rust" when the broka_native extension is in use, else "python"
             # (api/core/native.py) - how to confirm a deploy carries it.
             "native":           native.BACKEND,
+            # Which revision answered and what it was configured with. Azure
+            # keeps serving the last healthy revision when a new one fails
+            # to start, so a settings change can look ignored; this shows
+            # it. Names and yes/no only, never a value.
+            "revision":         settings.revision or None,
+            "config": {
+                "env":      settings.env,
+                "database": settings.database_provider,
+                "ai":       settings.ai_configured,
+                "sms":      settings.sms_configured,
+                "email":    settings.email_enabled,
+            },
         },
     )
 
