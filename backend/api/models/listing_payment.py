@@ -47,6 +47,9 @@ class ListingPayment(Base):
     merchant_request_id = sa.Column(sa.String, nullable=True)
     mpesa_receipt       = sa.Column(sa.String, nullable=True)
     status              = sa.Column(sa.String, nullable=False, default=ListingPaymentStatus.PENDING)
+    # Which M-Pesa rail took it: "daraja" (checkout_request_id, Safaricom's
+    # callback) or "zetupay" (api/domains/payments, settled by its webhook).
+    provider            = sa.Column(sa.String(16), nullable=False, default="daraja", server_default="daraja")
     failure_reason      = sa.Column(sa.String, nullable=True)
     processed           = sa.Column(sa.Boolean, nullable=False, default=False)
     quote               = sa.Column(sa.Text, nullable=True)       # the engine's quote, JSON

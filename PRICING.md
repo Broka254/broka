@@ -561,6 +561,7 @@ them the fee is most of what BROKA earns from the listing.
 | `GET /premium/payments/{id}` | owner | pending / success / failed, and `paid_until`; asks Safaricom itself when the callback is late |
 | `POST /premium/callback/{MPESA_CALLBACK_SECRET}` | Safaricom | The prompt's result (`MPESA_PREMIUM_CALLBACK_URL` overrides the address) |
 | `GET /pricing/categories` | public | The category table above |
+| `POST /payments/zetupay/webhook` | ZetuPay (`x-zetupay-secret`) | A payment's result, while `ZETUPAY_ENABLED` is on: listing fees, plans, boosts and badges are then charged through ZetuPay, and the status routes above ask ZetuPay instead of Safaricom ([ZETUPAY.md](ZETUPAY.md)) |
 
 `price` is the price of one unit; `quantity` the units in the listing.
 
@@ -591,7 +592,9 @@ skips a listing that isn't live. Its seller still sees it: its private page
 says where its fee stands, and the Seller Dashboard lists it under "Listings
 buyers can't see" with **Pay** or **Renew**.
 
-**The payment** (`api/domains/pricing/payments.py`):
+**The payment** (`api/domains/pricing/payments.py`; with `ZETUPAY_ENABLED`,
+the prompt and its result go through ZetuPay instead of Safaricom, under the
+same rules - [ZETUPAY.md](ZETUPAY.md)):
 
 - The amount is the server's quote at the moment of paying, never the app's.
   Featured placement (short-term sellers only) can ride on the same prompt.

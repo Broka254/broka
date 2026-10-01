@@ -16,6 +16,10 @@ FLOW:
   2. POST /featured/callback      - Safaricom callback → mark listing.is_featured + featured_until
   3. GET  /featured/status/{id}   - app polls until confirmed/failed
   4. GET  /featured/my-listings   - returns seller's own listings (id + name + is_featured + featured_until)
+
+With ZETUPAY_ENABLED, step 1 asks ZetuPay for the prompt instead and step 2
+is ZetuPay's webhook (POST /payments/zetupay/webhook), which settles the
+FeaturedPayment through zetupay_settled() below.
 """
 
 import os
@@ -29,9 +33,14 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from api.core import mpesa_stk
+from api.core.rate_limit import stk_limiter
+from api.core.zetupay import ZetuPayUnavailable
 from api.database import get_db, Listing, FeaturedPayment, MpesaStatus, SellerTier, User
 from api.domains.listings.paid import is_live
+from api.domains.payments import service as zetupay_charges
 from api.domains.pricing.service import FEATURED_NOT_FOR_LONG_TERM
+from api.models.zetupay import Purpose
 from api.security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -196,6 +205,9 @@ async def boost_listing(
             detail="Pay this listing's fee first - buyers can't see it yet.",
         )
 
+    if zetupay_charges.enabled():
+        return await _boost_with_zetupay(db, current_user["id"], listing, req.plan, req.phone_number)
+
     phone = _normalize_phone(req.phone_number)
     amount = plan["price"]
 
@@ -234,6 +246,92 @@ async def boost_listing(
         "amount":             amount,
         "days":               plan["days"],
     }
+
+
+async def _boost_with_zetupay(
+    db: AsyncSession, user_id: str, listing: Listing, plan_key: str, phone_number: str,
+) -> dict:
+    """The boost's prompt through ZetuPay. Same answer as the Daraja path,
+    with checkout_request_id holding the ZetuPay reference."""
+    plan = BOOST_PLANS[plan_key]
+    # The strict check, before any prompt: a mistyped number prompts a
+    # stranger for money.
+    phone = mpesa_stk.normalize_phone(phone_number)
+    if phone is None:
+        raise HTTPException(status_code=400, detail="Enter a Safaricom number, e.g. 0712 345 678.")
+    # Per user: every call prompts a phone for money.
+    await stk_limiter.check_and_record(user_id)
+    if await zetupay_charges.prompt_pending(db, user_id, Purpose.BOOST, listing.id):
+        raise HTTPException(status_code=409, detail=(
+            "An M-Pesa prompt for this boost is already on your phone. "
+            "Finish it, or try again in two minutes."
+        ))
+
+    reference = zetupay_charges.new_reference(Purpose.BOOST)
+    payment = FeaturedPayment(
+        user_id=user_id, listing_id=listing.id, plan=plan_key, phone=phone,
+        amount=plan["price"], checkout_request_id=reference,
+        status=MpesaStatus.pending, provider=zetupay_charges.PROVIDER,
+    )
+    db.add(payment)
+    await db.flush()
+    try:
+        await zetupay_charges.start(
+            db, user_id=user_id, purpose=Purpose.BOOST, amount=plan["price"], phone=phone,
+            target_id=payment.id, related_id=listing.id, reference=reference,
+            description=f"BROKA boost {plan['days']}d",
+        )
+    except ZetuPayUnavailable as exc:
+        raise HTTPException(status_code=502, detail=zetupay_charges.unavailable_detail(exc))
+    return {
+        "message":            "Payment prompt sent. Enter your M-Pesa PIN.",
+        "checkout_request_id": reference,
+        "plan_label":         plan["label"],
+        "amount":             plan["price"],
+        "days":               plan["days"],
+    }
+
+
+def _extend_featured(listing: Listing, plan_key: str) -> None:
+    """Feature the listing for the plan's days, from the end of any boost
+    still running - boosting early loses nothing."""
+    plan = BOOST_PLANS.get(plan_key, {"days": 7})
+    now = datetime.utcnow()
+    base = listing.featured_until if (listing.featured_until and listing.featured_until > now) else now
+    listing.is_featured = True
+    listing.featured_until = base + timedelta(days=plan["days"])
+
+
+async def zetupay_settled(db: AsyncSession, payment_id: str, receipt: str | None) -> None:
+    """ZetuPay confirmed this boost (domains/payments holds the ZetuPay
+    payment's lock, so this runs once per payment)."""
+    payment = (await db.execute(
+        select(FeaturedPayment).where(FeaturedPayment.id == payment_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if payment is None or payment.status == MpesaStatus.success:
+        return
+    payment.status = MpesaStatus.success
+    payment.mpesa_receipt = receipt
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == payment.listing_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if listing is not None:
+        _extend_featured(listing, payment.plan)
+    await db.commit()
+
+
+async def zetupay_failed(db: AsyncSession, payment_id: str, reason: str) -> None:
+    payment = (await db.execute(
+        select(FeaturedPayment).where(FeaturedPayment.id == payment_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if payment is None or payment.status != MpesaStatus.pending:
+        return
+    payment.status = MpesaStatus.failed
+    logger.info("Boost payment failed for listing %s: %s", payment.listing_id, reason)
+    await db.commit()
 
 
 @router.post("/callback")
@@ -275,7 +373,10 @@ async def _process_boost_callback(payload: dict, db: AsyncSession) -> dict:
 
         result = await db.execute(
             select(FeaturedPayment).where(
-                FeaturedPayment.checkout_request_id == checkout_id
+                FeaturedPayment.checkout_request_id == checkout_id,
+                # A ZetuPay row's checkout_request_id is its ZetuPay
+                # reference: only ZetuPay's webhook may settle it.
+                FeaturedPayment.provider != zetupay_charges.PROVIDER,
             )
         )
         payment = result.scalar_one_or_none()
@@ -298,12 +399,7 @@ async def _process_boost_callback(payload: dict, db: AsyncSession) -> dict:
             )
             listing = lresult.scalar_one_or_none()
             if listing:
-                plan = BOOST_PLANS.get(payment.plan, {"days": 7})
-                now  = datetime.utcnow()
-                # Extend existing featured period if already active
-                base = listing.featured_until if (listing.featured_until and listing.featured_until > now) else now
-                listing.is_featured   = True
-                listing.featured_until = base + timedelta(days=plan["days"])
+                _extend_featured(listing, payment.plan)
         else:
             payment.status = MpesaStatus.failed
             logger.info("Boost payment failed for listing %s: %s",
@@ -334,6 +430,13 @@ async def boost_status(
         .limit(1)
     )
     payment = result.scalar_one_or_none()
+    if (payment is not None and payment.provider == zetupay_charges.PROVIDER
+            and payment.status == MpesaStatus.pending):
+        # The webhook is late: ask ZetuPay. The id is read first - a
+        # refresh can roll back, expiring every object loaded before it.
+        payment_id = payment.id
+        await zetupay_charges.refresh(db, Purpose.BOOST, payment_id)
+        payment = await db.get(FeaturedPayment, payment_id, populate_existing=True)
 
     # Check listing featured state
     lresult = await db.execute(select(Listing).where(Listing.id == listing_id))

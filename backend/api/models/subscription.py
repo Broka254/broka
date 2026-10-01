@@ -63,6 +63,7 @@ class SubscriptionPayment(Base):
     merchant_request_id = sa.Column(sa.String, nullable=True)
     mpesa_receipt       = sa.Column(sa.String, nullable=True)
     status              = sa.Column(sa.String, nullable=False, default=SubscriptionPaymentStatus.PENDING)
+    provider            = sa.Column(sa.String(16), nullable=False, default="daraja", server_default="daraja")
     failure_reason      = sa.Column(sa.String, nullable=True)
     processed           = sa.Column(sa.Boolean, nullable=False, default=False)
     created_at          = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)

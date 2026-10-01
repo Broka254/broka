@@ -98,6 +98,18 @@ services:
                              # the app build with the Premium screen is required.
       - key: MPESA_PREMIUM_CALLBACK_URL
         sync: false          # Optional. Unset = /premium/callback/<MPESA_CALLBACK_SECRET>
+      - key: ZETUPAY_ENABLED
+        value: "false"       # true: listing fees, plans, boosts and badges are charged through
+                             # ZetuPay instead of Daraja (backend/api/domains/payments/). Never
+                             # deal money - that stays on E-Confirm. Set the two secrets below
+                             # first: production refuses to start with this on and either unset.
+      - key: ZETUPAY_BASE_URL
+        value: "https://pay.zetupay.co.ke/api/v1"
+      - key: ZETUPAY_SECRET_KEY
+        sync: false          # sk_live_... - backend-only, never in the app or the storefront
+      - key: ZETUPAY_WEBHOOK_SECRET
+        sync: false          # What ZetuPay sends in x-zetupay-secret on
+                             # https://api.broka.co.ke/payments/zetupay/webhook
       - key: JSON_LOGS
         value: "true"        # v4.0: structured JSON logs for Render log viewer
       - key: ENV

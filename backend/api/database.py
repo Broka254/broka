@@ -1051,6 +1051,9 @@ class FeaturedPayment(Base):
     merchant_request_id = Column(String, nullable=True)
     mpesa_receipt       = Column(String, nullable=True)
     status              = Column(Enum(MpesaStatus), default=MpesaStatus.pending)
+    # "daraja", or "zetupay" (api/domains/payments) - whose
+    # checkout_request_id is then the ZetuPay reference, never Safaricom's.
+    provider            = Column(String(16), nullable=False, default="daraja", server_default="daraja")
     created_at          = Column(DateTime, default=datetime.utcnow)
 
 
@@ -1066,6 +1069,9 @@ class VerificationPayment(Base):
     merchant_request_id = Column(String, nullable=True)
     mpesa_receipt       = Column(String, nullable=True)
     status              = Column(Enum(MpesaStatus), default=MpesaStatus.pending)
+    # "daraja", or "zetupay" (api/domains/payments) - whose
+    # checkout_request_id is then the ZetuPay reference, never Safaricom's.
+    provider            = Column(String(16), nullable=False, default="daraja", server_default="daraja")
     created_at          = Column(DateTime, default=datetime.utcnow)
 
 
@@ -1185,6 +1191,7 @@ async def init_db():
         ("api.models.media", ("MediaAsset", "MediaBlob")),
         ("api.models.listing_payment", ("ListingPayment",)),
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
+        ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))
@@ -1377,6 +1384,12 @@ async def init_db():
             # Units per deal (Deal.quantity). NULL on every existing deal:
             # each was for one unit.
             "ALTER TABLE deals ADD COLUMN quantity INTEGER",
+            # Which rail took a payment to BROKA (api/domains/payments):
+            # every existing row went through Daraja.
+            "ALTER TABLE listing_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
+            "ALTER TABLE subscription_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
+            "ALTER TABLE featured_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
+            "ALTER TABLE verification_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
             # Data repair, not schema. Listings used to accept NaN and
             # Infinity (api/domains/listings/validation.py); PostgreSQL
             # stores them and every response containing such a row fails,

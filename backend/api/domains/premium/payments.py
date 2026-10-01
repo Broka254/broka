@@ -19,7 +19,10 @@ What a payment does to the subscription (_apply):
 
 Settled once, under a row lock, by Safaricom's callback or by the status
 poll asking Safaricom itself - the same shape as pricing/payments.py, and
-for the same reasons (see its docstring).
+for the same reasons (see its docstring). With ZETUPAY_ENABLED the prompt
+goes through ZetuPay (domains/payments) and its webhook settles the row
+through zetupay_settled() - a renewal is another payment for the same plan,
+and _apply extends it.
 """
 from __future__ import annotations
 
@@ -34,11 +37,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.core import mpesa_stk
 from api.core.audit import record_audit
 from api.core.config import settings
+from api.core.zetupay import ZetuPayUnavailable
+from api.domains.payments import service as zetupay_charges
 from api.domains.pricing.plans import PLAN_PERIODS, PREMIUM_BY_ID, PremiumPlan, period_prices
 from api.domains.premium.entitlements import MONTH, active_subscription, plan_of
 from api.models.subscription import (
     Subscription, SubscriptionPayment, SubscriptionPaymentStatus as S,
 )
+from api.models.zetupay import Purpose
 
 logger = logging.getLogger(__name__)
 
@@ -134,20 +140,31 @@ async def start(
     )
     db.add(payment)
     await db.flush()
-    try:
-        reply = await mpesa_stk.stk_push(
-            phone, payment.amount, account_reference="BROKAPremium",
-            description=f"{plan.name} {months}mo", callback_url=callback_url(),
-        )
-    except mpesa_stk.MpesaUnavailable as exc:
-        payment.status, payment.processed, payment.failure_reason = S.FAILED, True, "prompt_not_sent"
-        await db.commit()
-        logger.warning("[premium] no prompt for payment=%s: %s", payment.id, exc)
-        raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
+    if zetupay_charges.enabled():
+        payment.provider = zetupay_charges.PROVIDER
+        try:
+            await zetupay_charges.start(
+                db, user_id=user_id, purpose=Purpose.SUBSCRIPTION, amount=payment.amount,
+                phone=phone, target_id=payment.id, related_id=plan.id,
+                description=f"BROKA {plan.name} {months}mo",
+            )
+        except ZetuPayUnavailable as exc:
+            raise HTTPException(status_code=502, detail=zetupay_charges.unavailable_detail(exc))
+    else:
+        try:
+            reply = await mpesa_stk.stk_push(
+                phone, payment.amount, account_reference="BROKAPremium",
+                description=f"{plan.name} {months}mo", callback_url=callback_url(),
+            )
+        except mpesa_stk.MpesaUnavailable as exc:
+            payment.status, payment.processed, payment.failure_reason = S.FAILED, True, "prompt_not_sent"
+            await db.commit()
+            logger.warning("[premium] no prompt for payment=%s: %s", payment.id, exc)
+            raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
 
-    payment.checkout_request_id = reply["CheckoutRequestID"]
-    payment.merchant_request_id = reply.get("MerchantRequestID")
-    await db.commit()
+        payment.checkout_request_id = reply["CheckoutRequestID"]
+        payment.merchant_request_id = reply.get("MerchantRequestID")
+        await db.commit()
     return {
         "payment_id": payment.id, "status": payment.status, "plan_id": plan.id,
         "months": months, "amount": payment.amount,
@@ -222,12 +239,32 @@ async def process_callback(db: AsyncSession, payload: dict) -> None:
     await _settle(db, payment, result.receipt)
 
 
+async def zetupay_settled(db: AsyncSession, payment_id: str, receipt: Optional[str]) -> None:
+    """ZetuPay confirmed the payment for this row (domains/payments holds
+    the ZetuPay payment's lock); see pricing/payments.zetupay_settled."""
+    payment = await _locked_payment(db, SubscriptionPayment.id == payment_id)
+    if payment is None or payment.status == S.SUCCESS:
+        return
+    await _settle(db, payment, receipt)
+
+
+async def zetupay_failed(db: AsyncSession, payment_id: str, reason: str) -> None:
+    payment = await _locked_payment(db, SubscriptionPayment.id == payment_id)
+    if payment is None or payment.processed:
+        return
+    await _fail(db, payment, reason)
+
+
 async def payment_status(db: AsyncSession, user_id: str, payment_id: str) -> dict:
     """Where a plan payment stands - asking Safaricom when the callback is
     late, never writing a slow one off (see pricing/payments.py)."""
     payment = await db.get(SubscriptionPayment, payment_id)
     if payment is None or payment.user_id != user_id:
         raise HTTPException(status_code=404, detail="Payment not found")
+
+    if payment.status == S.PENDING and payment.provider == zetupay_charges.PROVIDER:
+        await zetupay_charges.refresh(db, Purpose.SUBSCRIPTION, payment.id)
+        payment = await db.get(SubscriptionPayment, payment_id, populate_existing=True)
 
     if (payment.status == S.PENDING and payment.checkout_request_id
             and datetime.utcnow() - payment.created_at >= QUERY_AFTER):

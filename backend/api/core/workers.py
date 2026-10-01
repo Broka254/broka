@@ -174,6 +174,10 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
         except Exception as exc:
             logger.error("[sweep] E-Confirm reconciliation failed: %s", exc)
         try:
+            await task_reconcile_zetupay_payments({})
+        except Exception as exc:
+            logger.error("[sweep] ZetuPay reconciliation failed: %s", exc)
+        try:
             await task_check_dispute_timers()
         except Exception as exc:
             logger.error("[sweep] dispute timer check failed: %s", exc)
@@ -263,6 +267,21 @@ async def task_reconcile_econfirm_escrows(ctx: dict) -> None:
                     escrow.deal_id, exc,
                 )
         logger.info("[sweep] econfirm reconciliation: checked=%d failed=%d", checked, failed)
+
+
+async def task_reconcile_zetupay_payments(ctx: dict | None = None) -> None:
+    """Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts,
+    badges) whose webhook never came - a lost delivery, or a prompt that
+    timed out here and was paid anyway. Without this, such a payment is
+    only applied if the user happens to poll its status again.
+    domains/payments/service.reconcile_stale bounds the batch and the age."""
+    from api.database import AsyncSessionLocal
+    from api.domains.payments.service import reconcile_stale
+
+    async with AsyncSessionLocal() as session:
+        changed = await reconcile_stale(session)
+    if changed:
+        logger.info("[sweep] ZetuPay reconciliation settled or failed %d payment(s)", changed)
 
 
 async def task_backfill_media(ctx: dict | None = None) -> None:

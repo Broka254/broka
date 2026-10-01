@@ -14,6 +14,10 @@ FLOW:
   1. POST /verify/purchase   - STK Push → save VerificationPayment record
   2. POST /verify/callback   - Safaricom callback → mark user.is_verified + tier
   3. GET  /verify/status     - app polls this until payment confirmed/failed
+
+With ZETUPAY_ENABLED, step 1 asks ZetuPay for the prompt instead and step 2
+is ZetuPay's webhook (POST /payments/zetupay/webhook), which settles the
+VerificationPayment through zetupay_settled() below.
 """
 
 import os
@@ -27,7 +31,12 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from api.core import mpesa_stk
+from api.core.rate_limit import stk_limiter
+from api.core.zetupay import ZetuPayUnavailable
 from api.database import get_db, User, VerificationPayment, MpesaStatus
+from api.domains.payments import service as zetupay_charges
+from api.models.zetupay import Purpose
 from api.security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -136,6 +145,9 @@ async def purchase_verification(
                 detail=f"Already {tier_info['label']} until {user.verify_expires_at.strftime('%b %Y')}"
             )
 
+    if zetupay_charges.enabled():
+        return await _purchase_with_zetupay(db, current["id"], payload.tier, payload.phone_number)
+
     amount = tier_info["price"]
     phone  = _fmt_phone(payload.phone_number)
     pwd, ts = _password_and_ts()
@@ -198,6 +210,89 @@ async def purchase_verification(
     }
 
 
+async def _purchase_with_zetupay(db: AsyncSession, user_id: str, tier: str, phone_number: str) -> dict:
+    """The badge's prompt through ZetuPay. Same answer as the Daraja path,
+    with checkout_request_id holding the ZetuPay reference."""
+    tier_info = VERIFY_TIERS[tier]
+    # The strict check, before any prompt: a mistyped number prompts a
+    # stranger for money.
+    phone = mpesa_stk.normalize_phone(phone_number)
+    if phone is None:
+        raise HTTPException(status_code=400, detail="Enter a Safaricom number, e.g. 0712 345 678.")
+    # Per user: every call prompts a phone for money.
+    await stk_limiter.check_and_record(user_id)
+    if await zetupay_charges.prompt_pending(db, user_id, Purpose.VERIFICATION, tier):
+        raise HTTPException(status_code=409, detail=(
+            "An M-Pesa prompt for this badge is already on your phone. "
+            "Finish it, or try again in two minutes."
+        ))
+
+    reference = zetupay_charges.new_reference(Purpose.VERIFICATION)
+    vpay = VerificationPayment(
+        user_id=user_id, tier=tier, phone=phone, amount=float(tier_info["price"]),
+        checkout_request_id=reference, status=MpesaStatus.pending,
+        provider=zetupay_charges.PROVIDER,
+    )
+    db.add(vpay)
+    await db.flush()
+    try:
+        await zetupay_charges.start(
+            db, user_id=user_id, purpose=Purpose.VERIFICATION, amount=tier_info["price"],
+            phone=phone, target_id=vpay.id, related_id=tier, reference=reference,
+            description=f"BROKA {tier_info['label']}",
+        )
+    except ZetuPayUnavailable as exc:
+        raise HTTPException(status_code=502, detail=zetupay_charges.unavailable_detail(exc))
+    return {
+        "checkout_request_id": reference,
+        "customer_message":    "Check your phone to complete payment",
+        "amount":              tier_info["price"],
+        "tier":                tier,
+        "tier_label":          tier_info["label"],
+    }
+
+
+def _grant_badge(user: User, tier: str) -> None:
+    tier_info = VERIFY_TIERS.get(tier, VERIFY_TIERS["basic"])
+    user.is_verified       = True
+    user.verify_tier       = tier
+    user.verify_expires_at = datetime.utcnow() + timedelta(days=tier_info["months"] * 30)
+
+
+async def zetupay_settled(db: AsyncSession, payment_id: str, receipt: str | None) -> None:
+    """ZetuPay confirmed this badge (domains/payments holds the ZetuPay
+    payment's lock, so this runs once per payment)."""
+    vpay = (await db.execute(
+        select(VerificationPayment).where(VerificationPayment.id == payment_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if vpay is None or vpay.status == MpesaStatus.success:
+        return
+    vpay.status = MpesaStatus.success
+    vpay.mpesa_receipt = receipt
+    user = (await db.execute(
+        select(User).where(User.id == vpay.user_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if user is not None:
+        _grant_badge(user, vpay.tier)
+        logger.info("[verify] user %s verified via ZetuPay - tier=%s until=%s",
+                    user.id, vpay.tier, user.verify_expires_at)
+    await db.commit()
+
+
+async def zetupay_failed(db: AsyncSession, payment_id: str, reason: str) -> None:
+    vpay = (await db.execute(
+        select(VerificationPayment).where(VerificationPayment.id == payment_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if vpay is None or vpay.status != MpesaStatus.pending:
+        return
+    vpay.status = MpesaStatus.failed
+    logger.info("[verify] ZetuPay payment %s failed: %s", payment_id, reason)
+    await db.commit()
+
+
 @router.post("/callback")
 async def verification_callback(request_data: dict, db: AsyncSession = Depends(get_db)):
     """
@@ -242,7 +337,10 @@ async def _process_verification_callback(request_data: dict, db: AsyncSession) -
 
         vpay_r = await db.execute(
             select(VerificationPayment).where(
-                VerificationPayment.checkout_request_id == cid
+                VerificationPayment.checkout_request_id == cid,
+                # A ZetuPay row's checkout_request_id is its ZetuPay
+                # reference: only ZetuPay's webhook may settle it.
+                VerificationPayment.provider != zetupay_charges.PROVIDER,
             )
         )
         vpay = vpay_r.scalar_one_or_none()
@@ -258,15 +356,10 @@ async def _process_verification_callback(request_data: dict, db: AsyncSession) -
             vpay.mpesa_receipt = receipt
 
             # Upgrade the user
-            tier_info = VERIFY_TIERS.get(vpay.tier, VERIFY_TIERS["basic"])
-            months    = tier_info["months"]
-
             user_r = await db.execute(select(User).where(User.id == vpay.user_id))
             user   = user_r.scalar_one_or_none()
             if user:
-                user.is_verified        = True
-                user.verify_tier        = vpay.tier
-                user.verify_expires_at  = datetime.utcnow() + timedelta(days=months * 30)
+                _grant_badge(user, vpay.tier)
                 logger.info(
                     "[verify] ✅ User %s verified - tier=%s expires=%s receipt=%s",
                     user.id, vpay.tier, user.verify_expires_at, receipt,
@@ -300,6 +393,14 @@ async def check_status(
         .order_by(VerificationPayment.created_at.desc())
     )
     vpay = vpay_r.scalars().first()
+    if (vpay is not None and vpay.provider == zetupay_charges.PROVIDER
+            and vpay.status == MpesaStatus.pending):
+        # The webhook is late: ask ZetuPay. The id is read first - a
+        # refresh can roll back, expiring every object loaded before it.
+        vpay_id = vpay.id
+        await zetupay_charges.refresh(db, Purpose.VERIFICATION, vpay_id)
+        vpay = await db.get(VerificationPayment, vpay_id, populate_existing=True)
+        user = await db.get(User, current["id"], populate_existing=True)
 
     return {
         "is_verified":       user.is_verified,

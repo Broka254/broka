@@ -14,6 +14,10 @@ finds it processed and does nothing. The amount Safaricom reports is
 checked against the amount asked for: this is the route an unauthenticated
 forged callback would take (see routers/mpesa.py).
 
+With ZETUPAY_ENABLED the prompt goes through ZetuPay instead
+(domains/payments), whose webhook settles the row through
+zetupay_settled() - the same _settle(), under the same lock.
+
 This is BROKA's own revenue, not escrow: no deal, no ledger entry. Money
 that arrives for a listing that has since been sold or withdrawn is still
 recorded - and a person is told, through the audit log and a
@@ -35,10 +39,13 @@ from api.core import mpesa_stk
 from api.core.audit import record_audit
 from api.core.config import settings
 from api.core.events import ListingCreated, publish
+from api.core.zetupay import ZetuPayUnavailable
 from api.database import Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import ENDING_SOON, MONTH, fee_applies, fee_state
+from api.domains.payments import service as zetupay_charges
 from api.domains.pricing import engine, service
 from api.models.listing_payment import ListingPayment, ListingPaymentStatus as S
+from api.models.zetupay import Purpose
 
 logger = logging.getLogger(__name__)
 
@@ -166,22 +173,35 @@ async def start_payment(
     db.add(payment)
     await db.flush()
 
-    try:
-        reply = await mpesa_stk.stk_push(
-            phone, payment.amount, account_reference="BROKAListing",
-            description=f"List {months}mo", callback_url=callback_url(),
-        )
-    except mpesa_stk.MpesaUnavailable as exc:
-        payment.status = S.FAILED
-        payment.processed = True
-        payment.failure_reason = "prompt_not_sent"
-        await db.commit()
-        logger.warning("[listing_fee] no prompt for payment=%s: %s", payment.id, exc)
-        raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
+    if zetupay_charges.enabled():
+        # Settled by ZetuPay's webhook (domains/payments), never by
+        # Safaricom's callback: the row has no checkout_request_id to match.
+        payment.provider = zetupay_charges.PROVIDER
+        try:
+            await zetupay_charges.start(
+                db, user_id=user_id, purpose=Purpose.LISTING_FEE, amount=payment.amount,
+                phone=phone, target_id=payment.id, related_id=listing.id,
+                description=f"BROKA listing {months}mo",
+            )
+        except ZetuPayUnavailable as exc:
+            raise HTTPException(status_code=502, detail=zetupay_charges.unavailable_detail(exc))
+    else:
+        try:
+            reply = await mpesa_stk.stk_push(
+                phone, payment.amount, account_reference="BROKAListing",
+                description=f"List {months}mo", callback_url=callback_url(),
+            )
+        except mpesa_stk.MpesaUnavailable as exc:
+            payment.status = S.FAILED
+            payment.processed = True
+            payment.failure_reason = "prompt_not_sent"
+            await db.commit()
+            logger.warning("[listing_fee] no prompt for payment=%s: %s", payment.id, exc)
+            raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
 
-    payment.checkout_request_id = reply["CheckoutRequestID"]
-    payment.merchant_request_id = reply.get("MerchantRequestID")
-    await db.commit()
+        payment.checkout_request_id = reply["CheckoutRequestID"]
+        payment.merchant_request_id = reply.get("MerchantRequestID")
+        await db.commit()
     return {
         "payment_id": payment.id,
         "status": payment.status,
@@ -292,6 +312,23 @@ async def process_callback(db: AsyncSession, payload: dict) -> None:
     await _settle(db, payment, result.receipt)
 
 
+async def zetupay_settled(db: AsyncSession, payment_id: str, receipt: Optional[str]) -> None:
+    """ZetuPay confirmed the payment for this row (domains/payments holds
+    the ZetuPay payment's lock). A row failed earlier - its prompt timed out
+    here, then was paid - is settled too: the money arrived."""
+    payment = await _locked_payment(db, ListingPayment.id == payment_id)
+    if payment is None or payment.status == S.SUCCESS:
+        return
+    await _settle(db, payment, receipt)
+
+
+async def zetupay_failed(db: AsyncSession, payment_id: str, reason: str) -> None:
+    payment = await _locked_payment(db, ListingPayment.id == payment_id)
+    if payment is None or payment.processed:
+        return
+    await _fail(db, payment, reason)
+
+
 def _payment_dict(payment: ListingPayment, listing: Optional[Listing]) -> dict:
     return {
         "payment_id": payment.id,
@@ -315,6 +352,10 @@ async def payment_status(db: AsyncSession, user_id: str, payment_id: str) -> dic
     payment = await db.get(ListingPayment, payment_id)
     if payment is None or payment.user_id != user_id:
         raise HTTPException(status_code=404, detail="Payment not found")
+
+    if payment.status == S.PENDING and payment.provider == zetupay_charges.PROVIDER:
+        await zetupay_charges.refresh(db, Purpose.LISTING_FEE, payment.id)
+        payment = await db.get(ListingPayment, payment_id, populate_existing=True)
 
     if (payment.status == S.PENDING and payment.checkout_request_id
             and datetime.utcnow() - payment.created_at >= QUERY_AFTER):

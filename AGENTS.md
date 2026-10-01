@@ -88,7 +88,10 @@ You don't have to: CI regenerates and commits it on every push to `main`.
   before it (they expire; async code can't lazy-load) - select plain columns.
 
 **Money** (`backend/api/domains/escrow/`, `backend/api/routers/mpesa.py`,
-`backend/api/core/workers.py`)
+`backend/api/core/workers.py`, `backend/api/domains/payments/`)
+- Deal money (buyer to seller) is E-Confirm's; money users pay BROKA (fees,
+  plans, boosts, badges) is ZetuPay's when `ZETUPAY_ENABLED`, else Daraja's.
+  Never route one through the other (`ZETUPAY.md`).
 - Change a deal's status only under its row lock (`lock_deal_if_status`),
   re-checking the state after taking it.
 - E-Confirm deals: E-Confirm holds the money, not BROKA. Never settle them
@@ -144,6 +147,7 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Deals, escrow, payments | `backend/api/domains/escrow/`, `backend/api/routers/mpesa.py`, `ESCROW_AUDIT.md` |
 | Disputes | `backend/api/domains/disputes/`, `DISPUTE_AUDIT.md` |
 | Fees, commission, premium and store plans | `backend/api/domains/pricing/`, `PRICING.md` |
+| Collecting BROKA's own charges (ZetuPay: fees, plans, boosts, badges) | `backend/api/domains/payments/`, `backend/api/core/zetupay.py`, `ZETUPAY.md` |
 | Auctions | `backend/api/domains/auctions/`, `AUCTIONS.md` |
 | Stores and the web storefront | `backend/api/domains/stores/`, `web/`, `STORES_PLAN.md` |
 | Images | `backend/api/domains/media/`, `backend/api/core/image_processing.py` |

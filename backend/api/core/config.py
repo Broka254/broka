@@ -149,6 +149,28 @@ class Settings:
         os.getenv("ECONFIRM_MAX_POLL_SECONDS", "180")
     ))
 
+    # ── ZetuPay (money users pay BROKA: listing fees, plans, boosts, badges) ──
+    # Never deal money: buyer-to-seller payments stay on E-Confirm above.
+    # Off, those charges keep using Daraja (core/mpesa_stk.py) as before.
+    # The key and the webhook secret are server-only; repr=False keeps them
+    # out of any log line or traceback that prints the settings object.
+    zetupay_enabled: bool = field(default_factory=lambda: os.getenv(
+        "ZETUPAY_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    zetupay_base_url: str = field(default_factory=lambda: os.getenv(
+        "ZETUPAY_BASE_URL", "https://pay.zetupay.co.ke/api/v1"
+    ).strip().rstrip("/"))
+    zetupay_secret_key: str = field(repr=False, default_factory=lambda: os.getenv(
+        "ZETUPAY_SECRET_KEY", ""
+    ).strip())
+    # What ZetuPay sends in the x-zetupay-secret header of its webhooks.
+    zetupay_webhook_secret: str = field(repr=False, default_factory=lambda: os.getenv(
+        "ZETUPAY_WEBHOOK_SECRET", ""
+    ).strip())
+    zetupay_timeout_seconds: float = field(default_factory=lambda: float(
+        os.getenv("ZETUPAY_TIMEOUT_SECONDS", "20")
+    ))
+
     # ── SMS (phone OTP + nudges) ─────────────────────────────────────────────
     # Two providers are supported behind api.core.sms.get_sms_provider();
     # Mobitech takes priority when configured, Africa's Talking is the
@@ -548,6 +570,31 @@ def validate_startup() -> None:
         "[startup] E-Confirm %s configured",
         "is" if s.econfirm_api_key else "is NOT",
     )
+
+    # ── Check ZetuPay ──────────────────────────────────────────────────────────
+    # Switched on without its key, every listing fee, plan and boost fails
+    # at the prompt; without the webhook secret every payment's result is
+    # refused and nothing a user pays is ever applied.
+    if s.zetupay_enabled:
+        missing = [name for name, value in (
+            ("ZETUPAY_SECRET_KEY", s.zetupay_secret_key),
+            ("ZETUPAY_WEBHOOK_SECRET", s.zetupay_webhook_secret),
+        ) if not value]
+        if missing and s.is_production:
+            raise RuntimeError(
+                f"FATAL: ZETUPAY_ENABLED is true but {', '.join(missing)} "
+                "is not set. Set it, or set ZETUPAY_ENABLED=false to collect "
+                "BROKA's own charges through Daraja as before."
+            )
+        if missing:
+            logger.warning("[startup] ZetuPay is on without %s", ", ".join(missing))
+        if s.is_production and not s.zetupay_base_url.startswith("https://"):
+            raise RuntimeError("FATAL: ZETUPAY_BASE_URL must be https.")
+        if s.is_production and not s.zetupay_secret_key.startswith("sk_live_"):
+            # A test key in production takes no real money - every charge
+            # would "succeed" without a shilling reaching BROKA.
+            logger.warning("[startup] ZETUPAY_SECRET_KEY is not a live (sk_live_) key")
+    logger.info("[startup] ZetuPay is %s", "ON" if s.zetupay_enabled else "off")
 
     # ── Refuse SQLite in production (issue #10) ───────────────────────────────
     if s.is_production and "sqlite" in s.database_url:
