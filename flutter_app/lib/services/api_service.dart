@@ -1198,7 +1198,10 @@ class ApiService {
     // dialog showed "KES 0" (commission missing) and crashed with
     // "type 'Null' is not a subtype of type 'String' in type cast" the
     // moment Pay tried to read an id that was never there.
-    if (response.statusCode != 200) {
+    // Any 2xx: POST /deal/finalize answers 201 Created. Checking for 200
+    // alone turned every agreed deal into "Could not finalize deal" while
+    // the deal sat created on the server, so nobody ever reached Pay.
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception(data['detail'] ?? 'Could not finalize deal');
     }
     return data;

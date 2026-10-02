@@ -228,6 +228,37 @@ void main() {
       expect(sent['agreed_price'], 10500);
     });
 
+    // The backend answers finalize with 201 Created; the app took anything
+    // but 200 as a failure, so every agreed deal showed "Could not finalize
+    // deal" and the Pay panel never appeared.
+    testWidgets('a finalized deal (201) opens the pay panel', (tester) async {
+      setFakeRoute((uri) {
+        if (uri.path == '/deal/finalize') {
+          return const FakeResponse(
+              {'deal_id': 'deal-1', 'agreed_price': 3500, 'commission': 122.15, 'status': 'agreed'},
+              statusCode: 201);
+        }
+        if (uri.path.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+        return null;
+      });
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (_) => MaterialPageRoute(
+          settings: RouteSettings(arguments: {
+            'listing': Listing.fromJson({...fakeListingJson(1, price: 3500), 'listing_type': 'direct', 'status': 'active'}),
+            'role': 'buyer',
+          }),
+          builder: (_) => const NegotiationScreen(animateBackground: false),
+        ),
+      ));
+      await _settle(tester);
+      await tester.tap(find.byTooltip('Agree the deal'));
+      await _settle(tester);
+      await tester.tap(find.text('Confirm'));
+      await _settle(tester);
+      expect(find.textContaining('Could not finalize'), findsNothing);
+      expect(find.textContaining('Pay into escrow'), findsOneWidget);
+    });
+
     // A seller who went from Zeno's room to the direct chat arrived without
     // the buyer's id: the call went out with no callee_id, the backend
     // refused it, and every call ended in "Could not start the call".
