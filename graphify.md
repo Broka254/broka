@@ -988,6 +988,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
+- `notification_init_test.dart` — The incoming-call notification for a closed app was never posted.
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `photo_capture_test.dart` — Store images are taken the way listing photos are (services/photo_capture.dart): BROKA's own camera first, the phone's camera only as the f…
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
@@ -1091,7 +1092,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The app no longer closes when a call starts (2026-10-01)
+- `CHANGES.md` — Calls to a closed app show up; voice notes say when they fail (2026-10-02)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
