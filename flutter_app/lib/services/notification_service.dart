@@ -138,8 +138,11 @@ class NotificationService {
   // is running (see showIncomingCall).
   static const int _flagInsistent = 4;
 
+  /// [requestPermission] is false from the FCM background isolate: there
+  /// is no Activity there to ask from.
   Future<void> initialize({
     required GlobalKey<NavigatorState> navKey,
+    bool requestPermission = true,
   }) async {
     navigatorKey = navKey;
 
@@ -168,6 +171,8 @@ class NotificationService {
     final settings =
         InitializationSettings(android: androidInit, iOS: iosInit);
 
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
     try {
       await _plugin.initialize(
         settings,
@@ -177,17 +182,28 @@ class NotificationService {
       );
 
       // Register channels (Android 8+). No-op elsewhere.
-      final android = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
       await android?.createNotificationChannel(_messageChannel);
       await android?.createNotificationChannel(_callChannel);
-      // Android 13+ runtime permission.
-      await android?.requestNotificationsPermission();
 
       _ready = true;
       debugPrint('[Notifications] Local notifications ready.');
     } catch (e) {
       debugPrint('[Notifications] init failed: $e');
+      return;
+    }
+
+    // Android 13+ runtime permission - asked only once the plugin is ready,
+    // and a failure here leaves it ready. It used to sit inside the try
+    // above, before _ready: in the FCM background isolate there is no
+    // Activity, the plugin throws asking for the permission, and _ready
+    // stayed false, so the incoming-call notification for an app that was
+    // closed was never posted. Posting without the permission is harmless
+    // (Android just doesn't show it), so nothing else depends on the answer.
+    if (!requestPermission) return;
+    try {
+      await android?.requestNotificationsPermission();
+    } catch (e) {
+      debugPrint('[Notifications] permission request failed: $e');
     }
   }
 

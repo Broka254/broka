@@ -164,6 +164,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   final AudioRecorder _recorder    = AudioRecorder();
   final AudioPlayer   _player      = AudioPlayer();
   bool                _isRecording = false;
+  // Between the mic tap and the recorder running (the permission prompt
+  // can sit in between): a second tap must not start a second recording.
+  bool                _startingRecording = false;
   bool                _isPlaying   = false;
   String?             _playingUrl;
   DateTime?           _recordStart;
@@ -701,32 +704,62 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Voice notes ────────────────────────────────────────────────────────────
 
+  void _voiceNoteError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _startRecording() async {
-    // Zeno may be listening from its session across screens: a voice note
-    // takes the microphone from it rather than share it.
-    await ZenoVoiceController.releaseMicrophone();
-    final ok = await _recorder.hasPermission();
-    if (!ok) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Microphone permission required')));
+    if (_isRecording || _startingRecording) return;
+    _startingRecording = true;
+    try {
+      // Zeno may be listening from its session across screens: a voice note
+      // takes the microphone from it rather than share it.
+      await ZenoVoiceController.releaseMicrophone();
+      final ok = await _recorder.hasPermission();
+      if (!ok) {
+        _voiceNoteError('Microphone permission required');
+        return;
       }
-      return;
+      final dir  = await getTemporaryDirectory();
+      final path = '${dir.path}/broka_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
+      // Left the chat while the recorder started: dispose() has already
+      // queued the recorder's cancel, which runs after this start.
+      if (!mounted) return;
+      setState(() { _isRecording = true; _recordStart = DateTime.now(); });
+    } catch (e) {
+      // The recorder refused (the microphone held by a call or another app,
+      // no storage). This used to escape unhandled: the mic button simply
+      // did nothing, with no word why.
+      debugPrint('[VoiceNote] could not start recording: $e');
+      _voiceNoteError('Could not start recording. Please try again.');
+    } finally {
+      _startingRecording = false;
     }
-    final dir  = await getTemporaryDirectory();
-    final path = '${dir.path}/broka_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
-    setState(() { _isRecording = true; _recordStart = DateTime.now(); });
   }
 
   Future<void> _stopAndSendVoice() async {
     if (!_isRecording) return;
-    final path = await _recorder.stop();
-    setState(() => _isRecording = false);
-    if (path == null) return;
+    final started = _recordStart;
+    // Back to the input bar first, whatever the recorder does: a stop that
+    // threw used to leave the recording bar up with nothing behind it, and
+    // this also turns a second tap on send into a no-op.
+    setState(() { _isRecording = false; _recordStart = null; });
+    String? path;
+    try {
+      path = await _recorder.stop();
+    } catch (e) {
+      debugPrint('[VoiceNote] could not stop recording: $e');
+    }
+    if (path == null) {
+      _voiceNoteError('Could not save the voice note. Please try again.');
+      return;
+    }
+    if (!mounted) return;
 
-    final duration = _recordStart != null
-        ? DateTime.now().difference(_recordStart!).inSeconds
+    final duration = started != null
+        ? DateTime.now().difference(started).inSeconds
         : 0;
 
     // Add optimistic bubble
@@ -761,8 +794,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Future<void> _cancelRecording() async {
-    await _recorder.cancel();
+    // As in _stopAndSendVoice: the bar goes whatever cancel() does.
     setState(() { _isRecording = false; _recordStart = null; });
+    try {
+      await _recorder.cancel();
+    } catch (e) {
+      debugPrint('[VoiceNote] could not cancel recording: $e');
+    }
   }
 
   // ── Image sharing ──────────────────────────────────────────────────────────
@@ -1207,7 +1245,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _pollTimer?.cancel();
     _heartbeatTimer?.cancel();
     _presenceRefreshTimer?.cancel();
-    _recorder.cancel();
+    // Not awaited, so a recorder that throws would otherwise surface as an
+    // unhandled error.
+    _recorder.cancel().catchError((Object e) {
+      debugPrint('[VoiceNote] cancel on leaving the chat failed: $e');
+    });
     _player.dispose();
     _ws?.sink.close();
     super.dispose();

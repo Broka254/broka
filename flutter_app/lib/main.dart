@@ -78,7 +78,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // separately, in the main isolate, via onMessageOpenedApp/
     // getInitialMessage once the app actually comes to the foreground.
     final svc = NotificationService.instance;
-    await svc.initialize(navKey: GlobalKey<NavigatorState>());
+    await svc.initialize(
+        navKey: GlobalKey<NavigatorState>(), requestPermission: false);
     await svc.showIncomingCall(
       roomId: message.data['roomId'] as String? ?? '',
       callerName: message.data['callerName'] as String? ?? 'Someone',

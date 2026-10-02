@@ -557,3 +557,18 @@ call. A video call with the camera denied crashed the same way through the
 Covered by `flutter_app/test/voip_call_permissions_test.dart`, which fails
 against the previous code. **Not device-verified**: that needs an APK on a
 phone.
+
+
+---
+
+# Incoming calls to a closed app were never shown (2026-10-02)
+
+`NotificationService.initialize()` set its ready flag only after asking for
+the notification permission. In the FCM background isolate there is no
+Activity to ask from, the plugin throws, and the flag stayed false - so
+`showIncomingCall` returned without posting, and a call to a phone whose app
+was closed never appeared. The permission is now asked for after the service
+is ready, and the background handler passes `requestPermission: false`.
+Covered by `flutter_app/test/notification_init_test.dart`. Needs a configured
+Firebase project to matter on a device (FCM_SETUP_REMAINING.md).
+

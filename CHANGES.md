@@ -1,3 +1,25 @@
+# Calls to a closed app show up; voice notes say when they fail (2026-10-02)
+
+**Incoming-call notification from FCM** (`lib/services/notification_service.dart`).
+`initialize()` asked for the notification permission inside the same `try`
+that marks the service ready. The FCM background isolate - the one that posts
+the call when the app is closed - has no Activity, the plugin throws when
+asked for a permission without one, so the service never became ready and
+`showIncomingCall` posted nothing. The permission is now asked for after the
+service is ready, a failure there leaves it ready, and the background handler
+doesn't ask at all. (This path only runs once Firebase is configured; see
+FCM_SETUP_REMAINING.md.) `test/notification_init_test.dart`.
+
+**Voice notes in the chat** (`lib/screens/negotiation_screen.dart`). A recorder
+that refused to start (microphone held by a call or another app) threw
+unhandled and the mic button did nothing; a stop or cancel that threw left the
+recording bar on screen with nothing behind it. Each now says what failed and
+returns to the input bar; a second tap while the recorder is starting no
+longer starts a second recording; leaving the chat mid-start no longer calls
+`setState` on a disposed screen. `test/negotiation_screens_test.dart`
+("Voice notes").
+
+
 # The app no longer closes when a call starts (2026-10-01)
 
 **Calls** (`flutter_app/lib/screens/voip_call_screen.dart`,

@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/models/listing.dart';
@@ -227,6 +228,132 @@ void main() {
       expect(sent['agreed_price'], 10500);
     });
   });
+
+  // A recorder that failed used to fail silently: a start that threw escaped
+  // unhandled and the mic button did nothing, and a stop or cancel that
+  // threw left the recording bar up with nothing behind it.
+  group('Voice notes', () {
+    late _FakeRecorder recorder;
+    late RecordPlatform realRecorder;
+
+    setUp(() {
+      realRecorder = RecordPlatform.instance;
+      recorder = _FakeRecorder();
+      RecordPlatform.instance = recorder;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('plugins.flutter.io/path_provider'),
+              (_) async => Directory.systemTemp.path);
+    });
+    tearDown(() => RecordPlatform.instance = realRecorder);
+
+    final mic = find.byTooltip('Record a voice note');
+
+    testWidgets('a recorder that will not start says so', (tester) async {
+      recorder.startError = PlatformException(code: 'record', message: 'mic busy');
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+
+      await tester.tap(mic);
+      await _settle(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Could not start recording. Please try again.'), findsOneWidget);
+      expect(mic, findsOneWidget, reason: 'still on the input bar');
+    });
+
+    testWidgets('a second tap while starting does not start a second recording',
+        (tester) async {
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+
+      await tester.tap(mic);
+      await tester.tap(mic, warnIfMissed: false);
+      await _settle(tester);
+
+      expect(recorder.calls.where((c) => c == 'start'), hasLength(1));
+    });
+
+    testWidgets('a recorder that will not stop does not leave the bar up',
+        (tester) async {
+      recorder.stopError = PlatformException(code: 'record', message: 'stop failed');
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+
+      await tester.tap(mic);
+      await _settle(tester);
+      expect(mic, findsNothing, reason: 'recording');
+
+      await tester.tap(find.byType(ChatSendButton));
+      await _settle(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(mic, findsOneWidget, reason: 'back on the input bar');
+      expect(find.text('Could not save the voice note. Please try again.'), findsOneWidget);
+    });
+
+    testWidgets('a recorder that will not cancel does not leave the bar up',
+        (tester) async {
+      recorder.cancelError = PlatformException(code: 'record', message: 'cancel failed');
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+
+      await tester.tap(mic);
+      await _settle(tester);
+      expect(mic, findsNothing, reason: 'recording');
+
+      await tester.tap(find.byTooltip('Discard the recording'));
+      await _settle(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(mic, findsOneWidget, reason: 'back on the input bar');
+    });
+  });
+}
+
+/// Stands in for the record plugin's platform side. Its state stream lives
+/// on an event channel named after a random recorder id, which a channel
+/// mock can't address.
+class _FakeRecorder extends RecordPlatform {
+  Object? startError;
+  Object? stopError;
+  Object? cancelError;
+  final calls = <String>[];
+
+  @override
+  Future<void> create(String recorderId) async {}
+
+  @override
+  Future<bool> hasPermission(String recorderId, {bool request = true}) async => true;
+
+  @override
+  Future<void> start(String recorderId, RecordConfig config,
+      {required String path}) async {
+    calls.add('start');
+    if (startError != null) throw startError!;
+  }
+
+  @override
+  Future<String?> stop(String recorderId) async {
+    calls.add('stop');
+    if (stopError != null) throw stopError!;
+    return null;
+  }
+
+  @override
+  Future<void> cancel(String recorderId) async {
+    calls.add('cancel');
+    if (cancelError != null) throw cancelError!;
+  }
+
+  @override
+  Future<void> dispose(String recorderId) async {}
+
+  @override
+  Stream<RecordState> onStateChanged(String recorderId) => const Stream.empty();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 void _smallPhone(WidgetTester tester) {
