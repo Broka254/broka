@@ -511,7 +511,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           setState(() => _pendingAction = null);
           _markDirectChatSeen();
           Navigator.pushReplacementNamed(context, '/direct-chat',
-              arguments: {'listing': _listing, 'role': _role});
+              arguments: {'listing': _listing, 'role': _role, 'buyer_id': _buyerId});
           return;
         }
         setState(() => _pendingAction = reply.zenoAction);
@@ -1216,7 +1216,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           onTap: () {
             _markDirectChatSeen();
             Navigator.pushReplacementNamed(context, '/direct-chat',
-                arguments: {'listing': _listing, 'role': _role});
+                arguments: {'listing': _listing, 'role': _role, 'buyer_id': _buyerId});
           },
         ),
         if (_directChatUnreadCount > 0)
@@ -1469,7 +1469,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       case 'SWITCH_TO_DIRECT_CHAT':
         _markDirectChatSeen();
         Navigator.pushReplacementNamed(context, '/direct-chat',
-            arguments: {'listing': _listing, 'role': _role});
+            arguments: {'listing': _listing, 'role': _role, 'buyer_id': _buyerId});
         return;
 
       case 'START_AUDIO_CALL':

@@ -227,6 +227,49 @@ void main() {
       expect(sent['quantity'], 3);
       expect(sent['agreed_price'], 10500);
     });
+
+    // A seller who went from Zeno's room to the direct chat arrived without
+    // the buyer's id: the call went out with no callee_id, the backend
+    // refused it, and every call ended in "Could not start the call".
+    testWidgets('a seller coming from Zeno can call the buyer', (tester) async {
+      ApiService.currentUserId = 'seller-1';
+      setFakeRoute((uri) {
+        if (uri.path == '/calls/initiate') {
+          return {'status': 'sent', 'room_id': 'room-1', 'call_token': 't'};
+        }
+        if (uri.path.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+        return null;
+      });
+      final listing = Listing.fromJson({
+        ...fakeListingJson(1), 'listing_type': 'fixed', 'status': 'active',
+      });
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (settings) => MaterialPageRoute(
+          settings: settings.name == '/'
+              ? RouteSettings(name: '/', arguments: {
+                  'listing': listing, 'role': 'seller', 'buyer_id': 'buyer-9',
+                })
+              : settings,
+          builder: (_) => switch (settings.name) {
+            '/direct-chat' => const NegotiationScreen(animateBackground: false),
+            '/voip-call' => const Scaffold(body: Text('calling')),
+            _ => const NegotiateScreen(animateBackground: false),
+          },
+        ),
+      ));
+      await _settle(tester);
+
+      await tester.tap(find.byTooltip('Chat directly'));
+      await _settle(tester);
+      await tester.tap(find.byTooltip('Voice call'));
+      await _settle(tester);
+      await tester.tap(find.text('Call Now'));
+      await _settle(tester);
+
+      final sent = fakeRequests.singleWhere((r) => r.uri.path == '/calls/initiate').json as Map;
+      expect(sent['callee_id'], 'buyer-9');
+      expect(find.text('calling'), findsOneWidget);
+    });
   });
 
   // A recorder that failed used to fail silently: a start that threw escaped

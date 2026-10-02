@@ -1228,8 +1228,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       } catch (_) {}
     }
     if (!mounted) return;
+    // buyer_id names the thread for a seller. Dropping it here (and on the
+    // way back from Zeno's room) left the seller in a chat with no buyer:
+    // an empty history, "Buyer" in the header, and every call refused with
+    // 400 because /calls/initiate had no callee_id to ring.
     Navigator.pushReplacementNamed(context, '/negotiate',
-        arguments: {'listing': _listing, 'role': _role});
+        arguments: {'listing': _listing, 'role': _role, 'buyer_id': _buyerId});
   }
 
   @override
