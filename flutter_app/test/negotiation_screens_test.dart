@@ -163,7 +163,9 @@ void main() {
       expect(find.text('Xavier Bravin'), findsOneWidget);
       expect(find.byTooltip('Voice call'), findsOneWidget);
       expect(find.byTooltip('Video call'), findsOneWidget);
-      expect(find.byTooltip('Agree the deal'), findsOneWidget);
+      // No "agree the deal" step: the buyer pays straight from the chat.
+      expect(find.byTooltip('Agree the deal'), findsNothing);
+      expect(find.byKey(const Key('pay-now')), findsOneWidget);
       expect(find.byTooltip('Ask Zeno'), findsOneWidget);
       expect(find.byType(ChatComposerPill), findsOneWidget);
 
@@ -186,77 +188,89 @@ void main() {
     });
 
     // A listing of several units: the buyer says how many, up to what is
-    // left, pays the unit price for each, and the deal carries the count
+    // left, in the pay window itself, and the payment carries the count
     // (the backend takes that many from the seller's stock).
-    testWidgets('agreeing a deal on several units asks how many', (tester) async {
+    testWidgets('paying for several units asks how many', (tester) async {
       final bags = Listing.fromJson({
         ...fakeListingJson(1, price: 3500),
         'listing_type': 'direct', 'status': 'active',
         'quantity': 100, 'units_left': 3, 'price_unit': 'bag',
       });
       setFakeRoute((uri) {
-        if (uri.path == '/deal/finalize') {
-          return {'deal_id': 'deal-1', 'agreed_price': 10500, 'commission': 366.45};
+        if (uri.path.startsWith('/deal/pay-quote/')) {
+          final q = uri.queryParameters;
+          final price = double.tryParse(q['agreed_price'] ?? '') ?? 3500;
+          return {'deal_id': null, 'goods_amount': price, 'merchant_commission': price * 0.0349,
+                  'provider_fee': price * 0.01, 'total_to_pay': price * 1.0449,
+                  'agreed_price': price, 'amount_paid': 0, 'balance': price, 'min_part_payment': 100};
         }
+        if (uri.path == '/deal/pay') return {'deal_id': 'deal-1', 'total_to_pay': 10971.45};
         if (uri.path.startsWith('/negotiate/deal-status')) return {'has_deal': false};
         return null;
       });
       await tester.pumpWidget(MaterialApp(
-        onGenerateRoute: (_) => MaterialPageRoute(
-          settings: RouteSettings(arguments: {'listing': bags, 'role': 'buyer'}),
-          builder: (_) => const NegotiationScreen(animateBackground: false),
+        onGenerateRoute: (s) => MaterialPageRoute(
+          settings: RouteSettings(name: s.name, arguments: {'listing': bags, 'role': 'buyer'}),
+          builder: (_) => s.name == '/escrow-payment'
+              ? const Scaffold(body: Text('payment screen'))
+              : const NegotiationScreen(animateBackground: false),
         ),
       ));
       await _settle(tester);
 
-      await tester.tap(find.byTooltip('Agree the deal'));
+      await tester.tap(find.byKey(const Key('pay-now')));
       await _settle(tester);
-      expect(find.text('Finalize Deal?'), findsOneWidget);
       for (var i = 0; i < 4; i++) {
         await tester.tap(find.byTooltip('More'));
         await _settle(tester);
       }
       // Three are left, so three is the most.
       expect(tester.widget<Text>(find.byKey(const Key('units-value'))).data, '3');
-      expect(tester.widget<Text>(find.byKey(const Key('finalize-price'))).data,
-          'Price: KES 3,500 × 3 = KES 10,500');
+      expect(tester.widget<TextField>(find.byKey(const Key('escrow-pay-amount'))).controller!.text, '10500');
 
-      await tester.tap(find.text('Confirm'));
+      await tester.enterText(find.byKey(const Key('escrow-pay-phone')), '0712345678');
+      await tester.tap(find.byKey(const Key('escrow-pay-confirm')));
       await _settle(tester);
-      final sent = fakeRequests.singleWhere((r) => r.uri.path == '/deal/finalize').json as Map;
+      final sent = fakeRequests.singleWhere((r) => r.uri.path == '/deal/pay').json as Map;
       expect(sent['quantity'], 3);
       expect(sent['agreed_price'], 10500);
+      expect(sent.containsKey('amount'), isFalse); // the whole of it
+      expect(find.text('payment screen'), findsOneWidget);
     });
 
-    // The backend answers finalize with 201 Created; the app took anything
-    // but 200 as a failure, so every agreed deal showed "Could not finalize
-    // deal" and the Pay panel never appeared.
-    testWidgets('a finalized deal (201) opens the pay panel', (tester) async {
+    // The pay window opened only after a fee quote came back from E-Confirm,
+    // and stopped at "Could not get a payment quote right now" when it
+    // didn't. A quote is a preview: the buyer still pays.
+    testWidgets('a quote that fails does not stop the buyer paying', (tester) async {
       setFakeRoute((uri) {
-        if (uri.path == '/deal/finalize') {
-          return const FakeResponse(
-              {'deal_id': 'deal-1', 'agreed_price': 3500, 'commission': 122.15, 'status': 'agreed'},
-              statusCode: 201);
-        }
+        if (uri.path.startsWith('/deal/pay-quote/')) return const FakeResponse.error(statusCode: 502);
+        if (uri.path == '/deal/pay') return {'deal_id': 'deal-1', 'total_to_pay': 3657.15};
         if (uri.path.startsWith('/negotiate/deal-status')) return {'has_deal': false};
         return null;
       });
       await tester.pumpWidget(MaterialApp(
-        onGenerateRoute: (_) => MaterialPageRoute(
-          settings: RouteSettings(arguments: {
+        onGenerateRoute: (s) => MaterialPageRoute(
+          settings: RouteSettings(name: s.name, arguments: {
             'listing': Listing.fromJson({...fakeListingJson(1, price: 3500), 'listing_type': 'direct', 'status': 'active'}),
             'role': 'buyer',
           }),
-          builder: (_) => const NegotiationScreen(animateBackground: false),
+          builder: (_) => s.name == '/escrow-payment'
+              ? const Scaffold(body: Text('payment screen'))
+              : const NegotiationScreen(animateBackground: false),
         ),
       ));
       await _settle(tester);
-      await tester.tap(find.byTooltip('Agree the deal'));
+      await tester.tap(find.byKey(const Key('pay-now')));
       await _settle(tester);
-      await tester.tap(find.text('Confirm'));
+
+      expect(find.textContaining('shown on your M-Pesa prompt'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('escrow-pay-amount')), '3500');
+      await tester.enterText(find.byKey(const Key('escrow-pay-phone')), '0712345678');
+      await tester.tap(find.byKey(const Key('escrow-pay-confirm')));
       await _settle(tester);
-      expect(find.textContaining('Could not finalize'), findsNothing);
-      expect(find.textContaining('Pay into escrow'), findsOneWidget);
+      final sent = fakeRequests.singleWhere((r) => r.uri.path == '/deal/pay').json as Map;
+      expect(sent['amount'], 3500);
+      expect(find.text('payment screen'), findsOneWidget);
     });
 
     // A seller who went from Zeno's room to the direct chat arrived without

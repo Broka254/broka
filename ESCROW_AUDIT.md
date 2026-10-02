@@ -150,6 +150,28 @@ was ruled out: a buyer turned away at the pay button may not come back.
 - **Ledger.** Funding is now idempotent per payment reference rather than per
   deal (a deal paid twice is credited twice, a redelivered event once).
 
+## Paying in one step (2026-10-02)
+
+Nothing stands between a buyer and the M-Pesa prompt but the prompt:
+
+- **No "finalize".** `POST /deal/pay` opens the deal if there isn't one (at
+  the price agreed in chat, else the listing's) and sends the prompt; later
+  payments through it top the same deal up. `GET /deal/pay-quote/{listing_id}`
+  previews the cost and creates nothing. The chats show the buyer a Pay
+  button from the start.
+- **The fee quote is a preview, never a gate.** When E-Confirm can't quote
+  its fee, the published rate (`ESCROW_PROVIDER_FEE_RATE`, 1%) is shown as an
+  estimate, and the app pays without any quote at all if it must: E-Confirm's
+  prompt shows the total before the PIN.
+- **No email needed.** E-Confirm wants both parties' emails; a user without
+  one is sent as `user-<id>@ECONFIRM_FALLBACK_EMAIL_DOMAIN`.
+- **The payer's number** defaults to the account's, is normalised to 2547...,
+  and is refused before any deal or prompt if it isn't a Kenyan mobile.
+- **E-Confirm's reason is shown** when it refuses to set up or fund a payment,
+  and `GET /admin/diagnostics/econfirm` asks E-Confirm for a fee (moving no
+  money) and returns exactly what came back - to tell a wrong key or base URL
+  from E-Confirm being down.
+
 ## Release, reminders and refund requests (2026-10-02)
 
 The rules live in `api/domains/escrow/protection.py`; the numbers in

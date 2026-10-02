@@ -97,6 +97,58 @@ async def finalize_deal(
     )
 
 
+class PayIn(BaseModel):
+    listing_id: str
+    # The buyer's M-Pesa number; their account's phone when left out.
+    payer_phone: Optional[str] = Field(None, max_length=20)
+    # Goods money for this payment; all of it when left out.
+    amount: Optional[float] = Field(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False)
+    # The price agreed in chat, when there is one - used only if this
+    # payment opens the deal. The listing's price otherwise.
+    agreed_price: Optional[float] = Field(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False)
+    quantity: Optional[int] = Field(None, ge=1, le=1_000_000)
+
+
+@router.get("/pay-quote/{listing_id}")
+async def pay_quote(
+    listing_id: str,
+    amount: Optional[float] = Query(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False),
+    agreed_price: Optional[float] = Query(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False),
+    quantity: Optional[int] = Query(None, ge=1, le=1_000_000),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What paying for this listing now costs - the buyer's deal if they
+    have one, a new one at the agreed (or listed) price if not. Creates
+    nothing. Never fails because E-Confirm can't quote its fee: that is
+    estimated instead (fee_estimated)."""
+    return await EscrowService(db).quote_for_listing(
+        listing_id, current_user["id"], amount=amount, agreed_price=agreed_price, quantity=quantity)
+
+
+@router.post("/pay")
+async def pay(
+    body: PayIn,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    idempotency_result: IdempotencyResult = Depends(idempotency_guard),
+):
+    """The buyer pays into escrow from the chat, in one step: the deal is
+    opened if there isn't one yet (no separate "finalize"), then the M-Pesa
+    prompt is sent. Part payments and top-ups go through here too."""
+    if idempotency_result.cached:
+        return idempotency_result.response
+    result = await EscrowService(db).pay_for_listing(
+        body.listing_id, current_user["id"],
+        payer_phone=body.payer_phone, amount=body.amount,
+        agreed_price=body.agreed_price, quantity=body.quantity,
+        request_ip=client_ip_or_none(request),
+    )
+    await idempotency_result.store(result)
+    return result
+
+
 @router.get("/{deal_id}/fee-quote")
 async def get_fee_quote(
     deal_id: str,

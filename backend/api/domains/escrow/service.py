@@ -247,6 +247,18 @@ def protection_fields(deal: Deal, payments, category: Optional[str] = None) -> d
     }
 
 
+def _fallback_email(user: User) -> str:
+    """A BROKA address for a user with no email (see _create_external_escrow)."""
+    return f"user-{user.id}@{settings.econfirm_fallback_email_domain}"
+
+
+def _provider_reason(exc: EConfirmAPIError) -> str:
+    """E-Confirm's message on a refused create or fund call, short enough
+    for a dialog."""
+    reason = str(getattr(exc, "message", "") or "").strip() or f"HTTP {exc.status_code}"
+    return reason[:200]
+
+
 class EscrowService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -441,33 +453,148 @@ class EscrowService:
             amount, balance, part_payments_allowed=listing_type != ListingType.auction)
         commission = payment_commission(deal, payments, goods, balance)
 
-        try:
-            quote = await get_escrow_provider().get_fee_quote(goods)
-        except EConfirmConnectionError as exc:
-            logger.warning("[escrow] fee quote connection error deal=%s: %s", deal_id, exc)
-            raise HTTPException(status_code=503, detail="Payment provider is temporarily unavailable — please try again shortly")
-        except EConfirmAPIError as exc:
-            logger.warning("[escrow] fee quote rejected deal=%s status=%d", deal_id, exc.status_code)
-            raise HTTPException(status_code=502, detail="Could not get a payment quote right now")
-        except EConfirmError as exc:
-            logger.error("[escrow] fee quote error deal=%s: %s", deal_id, exc)
-            raise HTTPException(status_code=502, detail="Could not get a payment quote right now")
-
-        provider_fee = money(quote.fee_amount)
+        provider_fee, estimated = await self._provider_fee(goods)
         total = add_money(goods, commission, provider_fee)
         return {
             "deal_id": deal_id,
             "goods_amount": goods,
             "merchant_commission": commission,
             "provider_fee": provider_fee,
+            "fee_estimated": estimated,
             "total_to_pay": total,
-            "currency": quote.currency,
+            "currency": "KES",
             "agreed_price": deal.agreed_price,
             "amount_paid": amount_paid(payments),
             "balance": balance,
             "min_part_payment": (policy.MIN_PART_PAYMENT_KES
                                  if listing_type != ListingType.auction else balance),
         }
+
+    @staticmethod
+    async def _provider_fee(goods: float) -> tuple[float, bool]:
+        """E-Confirm's fee on `goods`, and whether it is an estimate.
+
+        A preview, never a gate. This used to raise when E-Confirm's
+        fee-quote call failed, and the app stopped at "Could not get a
+        payment quote right now" before the buyer ever reached the M-Pesa
+        prompt - for a figure E-Confirm itself puts on that prompt anyway.
+        When E-Confirm can't be asked, the published rate stands in
+        (settings.escrow_provider_fee_rate, PRICING.md).
+        """
+        try:
+            quote = await get_escrow_provider().get_fee_quote(goods)
+            return money(quote.fee_amount), False
+        except Exception as exc:
+            logger.warning("[escrow] fee quote unavailable, estimating: %s: %s",
+                           type(exc).__name__, exc)
+            return pct_of(goods, settings.escrow_provider_fee_rate), True
+
+    # ── Paying from the chat: one step, no "finalize" ─────────────────────
+
+    async def _payable_deal_for(self, listing: Listing, buyer_id: str) -> Optional[Deal]:
+        """The buyer's live deal on this listing, or None if there is none
+        yet. A live deal that can't take a payment (a dispute) is a 409."""
+        deal = await self.deals.get_active_by_listing_buyer(listing.id, buyer_id)
+        if deal is not None and deal.status not in (DealStatus.agreed,) + _TOP_UP_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="This deal is being sorted out in a dispute - payments are paused until it is resolved",
+            )
+        return deal
+
+    @staticmethod
+    def _new_deal_price(listing: Listing, agreed_price: Optional[float], quantity: Optional[int]) -> float:
+        """The price a deal opened by a payment starts at: what the app says
+        was agreed (the offer on the table), else the listing's price for
+        the units. The seller can correct it (POST /deal/{id}/price) - the
+        same trust POST /deal/finalize always gave this number."""
+        if agreed_price is not None:
+            return validate_agreed_price(agreed_price)
+        return validate_agreed_price((listing.price or 0) * (quantity or 1))
+
+    async def quote_for_listing(
+        self, listing_id: str, buyer_id: str, *, amount: Optional[float] = None,
+        agreed_price: Optional[float] = None, quantity: Optional[int] = None,
+    ) -> dict:
+        """GET /deal/pay-quote/{listing_id}: what paying now costs, whether
+        or not a deal exists yet - nothing is created."""
+        listing = (await self.db.execute(select(Listing).where(Listing.id == listing_id))).scalar_one_or_none()
+        if listing is None:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.seller_id == buyer_id:
+            raise HTTPException(status_code=400, detail="This is your own listing")
+        deal = await self._payable_deal_for(listing, buyer_id)
+        if deal is not None:
+            payments = await self.external_escrows.list_for_deal(deal.id)
+            if balance_due(deal, payments) <= 0:
+                return {"deal_id": deal.id, "paid_in_full": True,
+                        "agreed_price": deal.agreed_price, "amount_paid": amount_paid(payments),
+                        "balance": 0.0}
+            quote = await self.get_fee_quote(deal.id, buyer_id, amount=amount)
+            quote["paid_in_full"] = False
+            return quote
+        if listing.listing_type == ListingType.auction:
+            raise HTTPException(status_code=400, detail="This is an auction - place a bid to buy it")
+        price = self._new_deal_price(listing, agreed_price, quantity)
+        goods = validate_payment_amount(amount, price, part_payments_allowed=True)
+        commission = payment_commission(
+            Deal(agreed_price=price, commission=_commission(price, listing.listing_type)),
+            [], goods, price)
+        provider_fee, estimated = await self._provider_fee(goods)
+        return {
+            "deal_id": None,
+            "paid_in_full": False,
+            "goods_amount": goods,
+            "merchant_commission": commission,
+            "provider_fee": provider_fee,
+            "fee_estimated": estimated,
+            "total_to_pay": add_money(goods, commission, provider_fee),
+            "currency": "KES",
+            "agreed_price": price,
+            "amount_paid": 0.0,
+            "balance": price,
+            "min_part_payment": policy.MIN_PART_PAYMENT_KES,
+        }
+
+    async def pay_for_listing(
+        self, listing_id: str, buyer_id: str, *, payer_phone: Optional[str] = None,
+        amount: Optional[float] = None, agreed_price: Optional[float] = None,
+        quantity: Optional[int] = None, request_ip: Optional[str] = None,
+    ) -> dict:
+        """POST /deal/pay: the buyer pays into escrow from the chat. Opens
+        the deal if there isn't one (what POST /deal/finalize did as a
+        separate step most buyers didn't understand), then sends the M-Pesa
+        prompt - the same fund_deal_escrow every payment goes through."""
+        listing = (await self.db.execute(select(Listing).where(Listing.id == listing_id))).scalar_one_or_none()
+        if listing is None:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.seller_id == buyer_id:
+            raise HTTPException(status_code=400, detail="This is your own listing")
+        if not payer_phone:
+            payer_phone = (await self.db.execute(
+                select(User.phone).where(User.id == buyer_id))).scalar_one_or_none() or ""
+        # Checked before a deal is opened, so a mistyped number leaves nothing behind.
+        from api.core.mpesa_stk import normalize_phone
+        if normalize_phone(payer_phone) is None:
+            raise HTTPException(status_code=422, detail="Enter an M-Pesa number like 0712 345 678")
+        deal = await self._payable_deal_for(listing, buyer_id)
+        if deal is None:
+            if listing.listing_type == ListingType.auction:
+                raise HTTPException(status_code=400, detail="This is an auction - place a bid to buy it")
+            created = await self.finalize_deal(
+                listing_id=listing_id, buyer_id=buyer_id,
+                agreed_price=self._new_deal_price(listing, agreed_price, quantity),
+                current_user_id=buyer_id, request_ip=request_ip, quantity=quantity,
+            )
+            deal_id = created["deal_id"]
+        else:
+            deal_id = deal.id
+        result = await self.fund_deal_escrow(
+            deal_id=deal_id, buyer_id=buyer_id, payer_phone=payer_phone,
+            request_ip=request_ip, amount=amount,
+        )
+        result.setdefault("deal_id", deal_id)
+        return result
 
     # ── E-Confirm: create + fund (Phase 6 / Phase 7) ───────────────────────
 
@@ -509,6 +636,14 @@ class EscrowService:
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.buyer_id != buyer_id:
             raise HTTPException(status_code=403, detail="Only the buyer can fund this deal")
+        # 07XX / +2547XX / 2547XX -> 2547XXXXXXXX, the form M-Pesa prompts
+        # go to; anything that isn't a Kenyan mobile is refused before a
+        # prompt could reach a stranger.
+        from api.core.mpesa_stk import normalize_phone
+        normalized = normalize_phone(payer_phone)
+        if normalized is None:
+            raise HTTPException(status_code=422, detail="Enter an M-Pesa number like 0712 345 678")
+        payer_phone = normalized
 
         payments = await self.external_escrows.list_for_deal(deal_id)
         escrow = payments[-1] if payments else None
@@ -666,7 +801,7 @@ class EscrowService:
             await self.db.commit()
             raise HTTPException(
                 status_code=422,
-                detail="The payment provider rejected this request — please check the phone number and try again",
+                detail=f"The payment provider rejected this request: {_provider_reason(exc)}",
             )
         except Exception as exc:
             # Ambiguous — we do NOT know if E-Confirm received this STK
@@ -776,16 +911,14 @@ class EscrowService:
         seller = r.scalar_one_or_none()
         if not buyer or not seller:
             raise HTTPException(status_code=404, detail="Buyer or seller account not found")
-        if not buyer.email or not seller.email:
-            # Phase 6 point 5: "Verify both required identities/contact
-            # details exist." User.email is nullable in this schema
-            # (phone is the required login identifier — see
-            # api/database.py's User model), so this is a real, expected
-            # case, not a defensive-only check.
-            raise HTTPException(
-                status_code=422,
-                detail="Both buyer and seller need an email on file before this deal can be funded through escrow",
-            )
+        # E-Confirm wants an email for each party, and BROKA signs people up
+        # by phone - most have none. Refusing here stopped those buyers at
+        # "Both buyer and seller need an email", which they could do nothing
+        # about when it was the SELLER's that was missing. A BROKA address
+        # stands in (settings.econfirm_fallback_email_domain); E-Confirm's
+        # mail for it reaches BROKA, not the user.
+        buyer_email = buyer.email or _fallback_email(buyer)
+        seller_email = seller.email or _fallback_email(seller)
 
         r = await self.db.execute(select(Listing).where(Listing.id == deal.listing_id))
         listing = r.scalar_one_or_none()
@@ -806,8 +939,8 @@ class EscrowService:
                     amount=amount,
                     merchant_commission_amount=commission,
                     currency="KES",
-                    buyer_email=buyer.email,
-                    seller_email=seller.email,
+                    buyer_email=buyer_email,
+                    seller_email=seller_email,
                     receiver_phone=seller.phone,
                 )
                 await self.db.commit()  # persist the "we attempted this" marker before calling out (Phase 9)
@@ -824,8 +957,8 @@ class EscrowService:
         try:
             result = await get_escrow_provider().create_escrow(
                 amount=amount,
-                buyer_email=buyer.email,
-                seller_email=seller.email,
+                buyer_email=buyer_email,
+                seller_email=seller_email,
                 receiver_phone=seller.phone,
                 description=description,
                 commission_amount=commission,
@@ -849,7 +982,13 @@ class EscrowService:
             escrow.last_error = f"create_rejected:HTTP_{exc.status_code}"
             await self.external_escrows.save(escrow)
             await self.db.commit()
-            raise HTTPException(status_code=422, detail="The payment provider could not set up this escrow — please contact support")
+            # E-Confirm's own reason ("invalid phone", "amount below
+            # minimum"): it is what tells a buyer, or whoever is testing the
+            # integration, what to change. No secret is in a create request.
+            raise HTTPException(
+                status_code=422,
+                detail=f"The payment provider could not set up this payment: {_provider_reason(exc)}",
+            )
 
         if not result.provider_transaction_id:
             escrow.last_error = "create_transaction returned no transaction id"

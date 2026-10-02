@@ -173,6 +173,33 @@ async def ledger_integrity(
     return report
 
 
+@router.get("/diagnostics/econfirm")
+async def econfirm_diagnostics(
+    amount: float = Query(1000, gt=0, le=1_000_000),
+    admin: User = Depends(require_admin),
+):
+    """Is E-Confirm reachable with this deployment's key? Asks for the fee
+    on `amount` - a read that moves no money - and returns what came back,
+    including E-Confirm's own error, so a failed payment can be told apart
+    from a wrong key, a wrong base URL or E-Confirm being down."""
+    from api.core.config import settings
+    from api.core.econfirm_client import EConfirmAPIError, EConfirmClient, EConfirmError
+    out = {
+        "configured": bool(settings.econfirm_api_key),
+        "base_url": settings.econfirm_base_url,
+        "call": f"GET /fee-quote?amount={int(round(amount))}",
+    }
+    try:
+        out["response"] = await EConfirmClient().fee_quote(amount)
+        out["ok"] = True
+    except EConfirmAPIError as exc:
+        out.update(ok=False, error="rejected", status_code=exc.status_code,
+                   message=exc.message, provider_detail=exc.provider_detail)
+    except EConfirmError as exc:
+        out.update(ok=False, error=type(exc).__name__, message=str(exc))
+    return out
+
+
 @router.post("/deals/{deal_id}/econfirm-refunded")
 async def econfirm_refunded(
     deal_id: str,

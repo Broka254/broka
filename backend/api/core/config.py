@@ -154,6 +154,12 @@ class Settings:
     econfirm_max_poll_seconds: float = field(default_factory=lambda: float(
         os.getenv("ECONFIRM_MAX_POLL_SECONDS", "180")
     ))
+    # E-Confirm wants an email for buyer and seller; users who signed up by
+    # phone have none, and get user-<id>@<this domain> instead
+    # (domains/escrow/service.py, _fallback_email).
+    econfirm_fallback_email_domain: str = field(default_factory=lambda: os.getenv(
+        "ECONFIRM_FALLBACK_EMAIL_DOMAIN", "broka.co.ke"
+    ))
 
     # ── ZetuPay (money users pay BROKA: listing fees, plans, boosts, badges) ──
     # Never deal money: buyer-to-seller payments stay on E-Confirm above.

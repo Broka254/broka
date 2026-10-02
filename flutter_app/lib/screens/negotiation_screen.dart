@@ -30,7 +30,6 @@ import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/units_stepper.dart';
 import '../widgets/zeno_avatar.dart';
-import '../utils/price_format.dart';
 import '../services/ringtone_service.dart';
 import 'voip_call_screen.dart';
 import '../models/models.dart';
@@ -1382,97 +1381,23 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── M-Pesa deal ───────────────────────────────────────────────────────────
 
-  Future<void> _finalizeDeal() async {
+  /// Pays into escrow in one step: no "agree the deal" first - the first
+  /// payment opens the deal on the server (POST /deal/pay), and later ones
+  /// top it up. See escrow_actions.dart.
+  Future<void> _payNow() async {
     final listing = _listing;
     if (listing == null) return;
-    // A listing of several units (100 bags at KES 3,500 a bag): the buyer
-    // says how many, and pays the unit price for each.
     final multi = hasUnits(listing);
-    var units = 1;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setDialog) => AlertDialog(
-        backgroundColor: BrokaColors.bgMid,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: BrokaColors.neonBlue, width: 1)),
-        title: const Text('Finalize Deal?',
-            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w800)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('Listing: ${listing.name}',
-              style: const TextStyle(color: BrokaColors.textMid)),
-          if (multi) ...[
-            const SizedBox(height: 12),
-            UnitsStepper(value: units, max: unitsAvailable(listing), unit: listing.priceUnit,
-                onChanged: (v) => setDialog(() => units = v)),
-          ],
-          const SizedBox(height: 8),
-          Text(
-            units > 1
-                ? 'Price: ${listing.formattedPrice} × $units = ${formatKes(listing.price * units)}'
-                : 'Price: ${listing.formattedPrice}',
-            key: const Key('finalize-price'),
-            style: const TextStyle(color: BrokaColors.neonGreen, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          // Negotiated deals: BROKA's 3.49% (never under KES 20) plus the
-          // escrow provider's 1% (PRICING.md). The payment screen shows the
-          // exact amounts.
-          const Text('BROKA fee 3.49% (min. KES 20) + escrow 1%',
-              style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel', style: TextStyle(color: BrokaColors.textLow))),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: BrokaColors.neonBlue, foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-            child: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.w800))),
-        ],
-      )),
+    await showEscrowPayDialog(
+      context,
+      listingId: listing.id,
+      listingName: listing.name,
+      // A deal handed over from Zeno's room carries the price agreed there.
+      agreedPrice: (_dealInfo?['agreed_price'] as num?)?.toDouble(),
+      unitPrice: multi ? listing.price : null,
+      maxUnits: multi ? unitsAvailable(listing) : 1,
+      unitLabel: listing.priceUnit,
     );
-    if (confirm != true) return;
-    try {
-      final deal = await ApiService.finalizeDeal(
-        listingId: listing.id,
-        buyerId: ApiService.currentUserId ?? '',
-        agreedPrice: listing.price * units,
-        quantity: multi ? units : null,
-      );
-      if (mounted) setState(() => _dealInfo = deal);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not finalize deal: $e',
-            style: const TextStyle(color: Colors.white)),
-          backgroundColor: Colors.redAccent));
-      }
-    }
-  }
-
-  /// 2026-09: pays through E-Confirm escrow instead of the old direct-
-  /// Daraja STK push (which only ever escrowed BROKA's commission, not the
-  /// goods price — see mpesa.py's stk-push). Fetches a real fee quote
-  /// before showing any amount (Phase 5 of the integration: never guess
-  /// this number client-side) and hands off to the provider-neutral
-  /// econfirm_payment_screen.dart instead of mpesa_confirmation_screen.dart.
-  /// No password field: the fund endpoint authorizes via the existing JWT
-  /// (must already be this deal's buyer), matching Phase 7 of the spec.
-  Future<void> _showPaymentDialog() async {
-    final deal = _dealInfo;
-    if (deal == null) return;
-    final dealId = (deal['id'] ?? deal['deal_id']) as String?;
-    if (dealId == null || dealId.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("This deal couldn't be loaded properly. Try finalizing again."),
-        ));
-      }
-      return;
-    }
-    // Shared with Zeno's room (its "Pay balance"): all at once, or part
-    // now and the rest later - see escrow_actions.dart.
-    await showEscrowPayDialog(context, dealId: dealId, listingName: _listing?.name ?? '');
   }
 
   // ── Utility ────────────────────────────────────────────────────────────────
@@ -1549,7 +1474,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       animate: widget.animateBackground,
       child: Column(children: [
         _buildHeader(),
-        if (_dealInfo != null) _buildPaymentPanel(),
+        // Every buyer can pay from here: there is no "finalize" step before
+        // it any more (auctions are paid from the auction screen).
+        if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
+          _buildPaymentPanel(),
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
             : _buildMessages()),
@@ -1651,17 +1579,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           tooltip: 'Video call',
           onTap: () => _initiateCall('video'),
         ),
-        // Finalize - relocated from the deleted language row, where it was
-        // the only control that actually did anything. It belongs with the
-        // other thread-level actions, not stranded among dead chips.
-        if (_role == 'buyer' && _dealInfo == null) ...[
-          const SizedBox(width: 5),
-          BrokaHeaderButton(
-            icon: Icons.handshake_rounded,
-            tooltip: 'Agree the deal',
-            onTap: _finalizeDeal,
-          ),
-        ],
         const SizedBox(width: 5),
         // Zeno, a tap away, with its unread replies counted.
         Stack(clipBehavior: Clip.none, children: [
@@ -1690,8 +1607,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // ── Payment Panel ──────────────────────────────────────────────────────────
 
   Widget _buildPaymentPanel() {
-    final deal = _dealInfo;
-    if (deal == null) return const SizedBox();
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 4),
       padding: const EdgeInsets.all(14),
@@ -1700,13 +1615,15 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45))),
       child: Row(children: [
-        const Icon(Icons.check_circle_rounded, color: BrokaColors.neonGreen, size: 20),
+        const Icon(Icons.lock_rounded, color: BrokaColors.neonGreen, size: 20),
         const SizedBox(width: 10),
-        const Expanded(child: Text('Deal agreed! Pay into escrow - all at once or in parts.',
+        const Expanded(child: Text(
+            "Pay securely - the seller is paid only after you've received the item.",
             style: TextStyle(color: BrokaColors.neonGreen,
                 fontSize: 12, fontWeight: FontWeight.w600))),
         GestureDetector(
-          onTap: _showPaymentDialog,
+          key: const Key('pay-now'),
+          onTap: _payNow,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(color: BrokaColors.neonGreen,

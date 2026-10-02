@@ -735,8 +735,8 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   Future<void> _payBalance() async {
     final dealId = _dealId;
     if (dealId == null) return;
-    await showEscrowPayDialog(context, dealId: dealId, listingName: _listing?.name ?? '');
-    await _afterDealAction(true);
+    await _afterDealAction(await showEscrowPayDialog(context,
+        dealId: dealId, listingId: _listing?.id, listingName: _listing?.name ?? ''));
   }
 
   Future<void> _requestRefund() async {
@@ -963,6 +963,16 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
     // ── BUYER ───────────────────────────────────────────────────────────────
     if (_role == 'buyer') {
+      // Nothing paid yet: pay straight into escrow - the payment opens the
+      // deal, there is nothing to "finalize" first.
+      if (!_hasFundedDeal && _listing != null && _listing!.listingType != 'auction') {
+        chips.add(_chip(
+          label: 'Pay securely',
+          icon: Icons.lock_rounded,
+          gradient: const [BrokaColors.neonGreen, BrokaColors.success],
+          onTap: () => _payNow(agreedPrice: _currentOffer),
+        ));
+      }
       // ── paid: goods not yet confirmed arrived ──────────────────────────
       // Release (with the delivery check), pay the balance of a part-paid
       // deal, or ask for a refund - which, before the seller has marked it
@@ -1246,45 +1256,23 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     ));
   }
 
-  Future<void> _acceptDeal() async {
+  /// Pays into escrow in one step - the first payment opens the deal on
+  /// the server, so there is no "finalize" to understand first.
+  /// [agreedPrice] is the offer on the table, when there is one.
+  Future<void> _payNow({double? agreedPrice}) async {
     final listing = _listing;
-    if (listing == null) return;
-    // The buyer for this deal must always be the actual buyer of this
-    // thread, regardless of which role tapped Accept - using
-    // currentUserId unconditionally was wrong when the SELLER accepted,
-    // since it would finalize a deal with buyer_id == the seller's own id.
-    final buyerId = _role == 'buyer' ? (ApiService.currentUserId ?? '') : (_buyerId ?? '');
-    if (buyerId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('No buyer is attached to this conversation yet.'),
-      ));
-      return;
-    }
-    final agreedPrice = _currentOffer ?? listing.price;
-    // A listing of several units: the agreed price is for how many of them?
-    // The backend takes that many from the seller's stock.
-    int? units;
-    if (hasUnits(listing)) {
-      units = await askUnitsForPrice(context, listing, formatKes(agreedPrice));
-      if (units == null || !mounted) return;
-    }
-    await _send('I accept this deal. How do we proceed with payment?');
-    try {
-      final deal = await ApiService.finalizeDeal(
-        listingId: listing.id, buyerId: buyerId, agreedPrice: agreedPrice,
-        quantity: units,
-      );
-      if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/direct-chat',
-          arguments: {'listing': listing, 'role': _role, 'buyer_id': buyerId, 'deal': deal});
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not finalize deal: $e', style: const TextStyle(color: Colors.white)),
-        backgroundColor: Colors.redAccent,
-      ));
-      }
-    }
+    if (listing == null || _role != 'buyer') return;
+    final multi = hasUnits(listing);
+    final opened = await showEscrowPayDialog(
+      context,
+      listingId: listing.id,
+      listingName: listing.name,
+      agreedPrice: agreedPrice,
+      unitPrice: multi ? (agreedPrice ?? listing.price) : null,
+      maxUnits: multi ? unitsAvailable(listing) : 1,
+      unitLabel: listing.priceUnit,
+    );
+    await _afterDealAction(opened);
   }
 
   // ── BUILD ──────────────────────────────────────────────────────────────────
@@ -1540,40 +1528,24 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
   // "Make Offer" and "Escrow" are gone - typing a number is already picked
   // up as a real offer by the relay classifier, and Zeno already explains
-  // escrow contextually when it's relevant, so both buttons were just
-  // duplicating what conversation already does. "Accept" stays, but only
-  // shows once there's an actual number on the table, and only as a small
-  // contextual link rather than a permanent row of buttons.
+  // escrow contextually when it's relevant. Once a number is on the table
+  // the buyer can pay it straight into escrow - this used to be "Tap to
+  // finalize", a step most buyers didn't understand, before they could pay.
   Widget _buildActionBar() {
-    if (_currentOffer == null) return const SizedBox.shrink();
+    if (_currentOffer == null || _role != 'buyer' || _hasFundedDeal) return const SizedBox.shrink();
+    if (_listing?.listingType == 'auction') return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
       child: GestureDetector(
-        onTap: () => _confirmAcceptDeal(),
+        onTap: () => _payNow(agreedPrice: _currentOffer),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_outline, size: 15, color: BrokaColors.success),
+          const Icon(Icons.lock_outline_rounded, size: 15, color: BrokaColors.success),
           const SizedBox(width: 5),
-          Text('Ready to accept KES ${_currentOffer!.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => "${m[1]},")}? Tap to finalize',
+          Text('Agreed on ${formatKes(_currentOffer!)}? Pay it into escrow',
               style: const TextStyle(color: BrokaColors.success, fontSize: 12, fontWeight: FontWeight.w700)),
         ]),
       ),
     );
-  }
-
-  Future<void> _confirmAcceptDeal() async {
-    final confirm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-      backgroundColor: BrokaColors.bgCard,
-      title: const Text('Finalize this deal?', style: TextStyle(color: BrokaColors.textHigh)),
-      content: Text('KES ${_currentOffer!.toStringAsFixed(0)} for ${_listing?.name ?? 'this item'}. This moves you to payment.',
-          style: const TextStyle(color: BrokaColors.textMid)),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not yet')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: BrokaColors.success),
-            child: const Text('Finalize')),
-      ],
-    ));
-    if (confirm == true) await _acceptDeal();
   }
 
   /// Places a call from Zeno's proposal.

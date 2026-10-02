@@ -100,6 +100,9 @@ services:
                              # the app build with the Premium screen is required.
       - key: MPESA_PREMIUM_CALLBACK_URL
         sync: false          # Optional. Unset = /premium/callback/<MPESA_CALLBACK_SECRET>
+      - key: ECONFIRM_FALLBACK_EMAIL_DOMAIN
+        value: "broka.co.ke"   # E-Confirm needs both parties' emails; a user without one is
+                               # sent as user-<id>@this domain (domains/escrow/service.py).
       - key: ZETUPAY_ENABLED
         value: "false"       # true: listing fees, plans, boosts and badges are charged through
                              # ZetuPay instead of Daraja (backend/api/domains/payments/, ZETUPAY.md).

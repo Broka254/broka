@@ -618,3 +618,124 @@ class TestChatDealStatus:
         r = await client.get(f"/negotiate/deal-status/{listing_id}",
                              params={"buyer_id": buyer.id}, headers=_auth(stranger))
         assert r.json() == {"has_deal": False}
+
+
+# ── Paying from the chat in one step (no finalize) ─────────────────────────
+
+async def _listing(price: float = 50000, *, seller_email: bool = True):
+    seller = await _user("Seller Sue")
+    if not seller_email:
+        async with AsyncSessionLocal() as db:
+            (await db.execute(select(User).where(User.id == seller.id))).scalar_one().email = None
+            await db.commit()
+    listing = Listing(seller_id=seller.id, name=f"Item {_tag()}", category="Electronics", price=price,
+                      lat=-1.29, lng=36.82, status=ListingStatus.active)
+    async with AsyncSessionLocal() as db:
+        db.add(listing)
+        await db.commit()
+        await db.refresh(listing)
+    return listing, seller
+
+
+async def _phone_buyer(email: bool = True) -> User:
+    """A buyer as signup makes them: a real Kenyan number, maybe no email."""
+    u = User(name="Buyer Ben", phone=f"+2547{uuid.uuid4().int % 10**8:08d}", password_hash="x",
+             email=f"{_tag()}@x.test" if email else None)
+    async with AsyncSessionLocal() as db:
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+    return u
+
+
+class TestPayInOneStep:
+    @pytest.mark.asyncio
+    async def test_paying_opens_the_deal_and_sends_the_prompt(self, client, econfirm):
+        listing, _ = await _listing(50000)
+        buyer = await _phone_buyer()
+        r = await client.post("/deal/pay", json={"listing_id": listing.id}, headers=_auth(buyer))
+        assert r.status_code == 200, r.text
+        deal_id = r.json()["deal_id"]
+        # No finalize call: the deal exists, at the listing's price, and the
+        # whole of it went to E-Confirm, prompting the buyer's own number.
+        deal = await _row(deal_id)
+        assert deal.agreed_price == 50000
+        assert econfirm.created[0]["amount"] == 50000
+        assert (await _status(client, deal_id, buyer))["deal_status"] == "paid"
+
+    @pytest.mark.asyncio
+    async def test_the_agreed_offer_is_the_price_and_a_part_can_be_paid(self, client, econfirm):
+        listing, _ = await _listing(50000)
+        buyer = await _phone_buyer()
+        r = await client.post("/deal/pay", json={
+            "listing_id": listing.id, "agreed_price": 45000, "amount": 20000,
+            "payer_phone": "0712 345 678",
+        }, headers=_auth(buyer))
+        assert r.status_code == 200, r.text
+        deal_id = r.json()["deal_id"]
+        await _status(client, deal_id, buyer)
+        # The rest through the same button: the existing deal is topped up.
+        r = await client.post("/deal/pay", json={"listing_id": listing.id}, headers=_auth(buyer))
+        assert r.status_code == 200, r.text
+        assert r.json()["deal_id"] == deal_id
+        s = await _status(client, deal_id, buyer)
+        assert s["amount_paid"] == 45000 and s["balance"] == 0
+        assert [c["amount"] for c in econfirm.created] == [20000, 25000]
+
+    @pytest.mark.asyncio
+    async def test_people_without_an_email_can_still_pay(self, client, econfirm):
+        listing, seller = await _listing(30000, seller_email=False)
+        buyer = await _phone_buyer(email=False)
+        r = await client.post("/deal/pay", json={"listing_id": listing.id}, headers=_auth(buyer))
+        assert r.status_code == 200, r.text
+        assert econfirm.created[0]["buyer_email"] == f"user-{buyer.id}@broka.co.ke"
+        assert econfirm.created[0]["seller_email"] == f"user-{seller.id}@broka.co.ke"
+
+    @pytest.mark.asyncio
+    async def test_a_fee_quote_e_confirm_cannot_give_does_not_stop_payment(self, client, econfirm):
+        from api.core.econfirm_client import EConfirmAPIError
+
+        async def refuses(amount):
+            raise EConfirmAPIError(404, "Not Found")
+        econfirm.get_fee_quote = refuses
+        listing, _ = await _listing(40000)
+        buyer = await _phone_buyer()
+        r = await client.get(f"/deal/pay-quote/{listing.id}", headers=_auth(buyer))
+        assert r.status_code == 200, r.text
+        q = r.json()
+        assert q["fee_estimated"] is True
+        assert q["provider_fee"] == 400  # the published 1%
+        assert q["total_to_pay"] == pytest.approx(40000 + q["merchant_commission"] + 400)
+        assert (await client.post("/deal/pay", json={"listing_id": listing.id},
+                                  headers=_auth(buyer))).status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_e_confirm_s_reason_reaches_the_buyer(self, client, econfirm):
+        from api.core.econfirm_client import EConfirmAPIError
+
+        async def refuses(**kw):
+            raise EConfirmAPIError(422, "receiver_phone is not a valid M-Pesa number")
+        econfirm.create_escrow = refuses
+        listing, _ = await _listing(40000)
+        buyer = await _phone_buyer()
+        r = await client.post("/deal/pay", json={"listing_id": listing.id}, headers=_auth(buyer))
+        assert r.status_code == 422
+        assert "receiver_phone is not a valid M-Pesa number" in r.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_a_number_that_is_not_m_pesa_is_refused_before_any_prompt(self, client, econfirm):
+        listing, _ = await _listing(40000)
+        buyer = await _phone_buyer()
+        r = await client.post("/deal/pay", json={"listing_id": listing.id, "payer_phone": "12345"},
+                              headers=_auth(buyer))
+        assert r.status_code == 422
+        assert econfirm.created == []
+        async with AsyncSessionLocal() as db:
+            opened = (await db.execute(select(Deal).where(Deal.listing_id == listing.id))).scalars().all()
+        assert opened == []
+
+    @pytest.mark.asyncio
+    async def test_a_seller_cannot_pay_for_their_own_listing(self, client, econfirm):
+        listing, seller = await _listing(40000)
+        r = await client.post("/deal/pay", json={"listing_id": listing.id}, headers=_auth(seller))
+        assert r.status_code == 400

@@ -16,6 +16,8 @@ import 'package:flutter/material.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
+import '../../../services/api_service.dart';
+import '../../../widgets/units_stepper.dart';
 import '../../../utils/price_format.dart';
 import '../data/repositories/escrow_repository.dart';
 
@@ -118,39 +120,65 @@ class _YesNo extends StatelessWidget {
 
 // ── Paying ──────────────────────────────────────────────────────────────────
 
-/// Pay into escrow: the whole balance, or part of it now and the rest
-/// later (a deal's price can be paid in several payments). Fetches a real
-/// quote for whatever amount is entered - the total is never guessed here.
-/// Returns true once the M-Pesa prompt is on its way and the payment screen
-/// is open.
+/// Pay into escrow, in one step: no deal has to be "finalized" first - the
+/// first payment opens it (POST /deal/pay). The whole price, or part of it
+/// now and the rest later through the same button.
+///
+/// [listingId] is what the chats pass; [dealId] alone still works for a
+/// deal that already exists. [agreedPrice] is the offer agreed in chat, if
+/// any (the listing's price otherwise); [unitPrice] and [maxUnits] let a
+/// buyer of several units say how many before the deal opens.
+///
+/// Nothing here can stop the buyer reaching the M-Pesa prompt but the
+/// prompt itself: a quote that fails leaves the amount to fill in and the
+/// total to the prompt. Returns true once the prompt is on its way and the
+/// payment screen is open.
 Future<bool> showEscrowPayDialog(
   BuildContext context, {
-  required String dealId,
+  String? dealId,
+  String? listingId,
   String listingName = '',
+  double? agreedPrice,
+  double? unitPrice,
+  int maxUnits = 1,
+  String? unitLabel,
+  String? defaultPhone,
   EscrowRepository? repository,
 }) async {
+  assert(dealId != null || listingId != null);
   final repo = repository ?? escrowRepository;
+  var units = 1;
+  double? priceFor() => maxUnits > 1 && unitPrice != null ? unitPrice * units : agreedPrice;
+
+  Future<Result<Map<String, dynamic>>> quoteFor(double? amount) => listingId != null
+      ? repo.payQuote(listingId, amount: amount, agreedPrice: priceFor(), quantity: maxUnits > 1 ? units : null)
+      : repo.feeQuote(dealId!, amount: amount);
+
   showDialog(
     context: context,
     barrierDismissible: false,
     builder: (_) => const Center(child: CircularProgressIndicator(color: BrokaColors.neonGreen)),
   );
-  final first = await repo.feeQuote(dealId);
+  final first = await quoteFor(null);
   if (!context.mounted) return false;
   Navigator.pop(context); // the spinner
-  if (first is Failure<Map<String, dynamic>>) {
-    _snack(context, first.message, error: true);
+
+  Map<String, dynamic>? quote = first is Success<Map<String, dynamic>> ? first.data : null;
+  if (quote?['paid_in_full'] == true) {
+    _snack(context, 'Paid in full - ${formatKes(_num(quote!['amount_paid']) ?? 0)} is held in escrow. '
+        'Release it from Zeno once you have the item.');
     return false;
   }
-  var quote = first.data;
-  final balance = _num(quote['balance']) ?? _num(quote['goods_amount']) ?? 0;
-  final paid = _num(quote['amount_paid']) ?? 0;
-  final price = _num(quote['agreed_price']) ?? balance;
-  final minPart = _num(quote['min_part_payment']) ?? balance;
-  final partsAllowed = minPart < balance;
+  // A quote is a preview. Without one, the buyer still pays: the amount is
+  // theirs to fill in, and E-Confirm's prompt shows the total.
+  final existingDeal = quote?['deal_id'] as String? ?? dealId;
+  final showUnits = existingDeal == null && maxUnits > 1;
+  var balance = _num(quote?['balance']) ?? priceFor() ?? 0;
+  final paid = _num(quote?['amount_paid']) ?? 0;
+  final minPart = _num(quote?['min_part_payment']) ?? 100;
 
-  final amountCtrl = TextEditingController(text: balance.toStringAsFixed(0));
-  final phoneCtrl = TextEditingController();
+  final amountCtrl = TextEditingController(text: balance > 0 ? balance.toStringAsFixed(0) : '');
+  final phoneCtrl = TextEditingController(text: defaultPhone ?? ApiService.currentUserPhone ?? '');
   final key = _idempotencyKey();
   var paying = false;
   var quoting = false;
@@ -170,7 +198,7 @@ Future<bool> showEscrowPayDialog(
           final a = entered();
           if (a == null || a <= 0) return;
           setDlg(() => quoting = true);
-          final q = await repo.feeQuote(dealId, amount: a);
+          final q = await quoteFor(a);
           if (!ctx.mounted) return;
           setDlg(() {
             quoting = false;
@@ -178,54 +206,77 @@ Future<bool> showEscrowPayDialog(
               quote = q.data;
               error = null;
             } else {
-              error = (q as Failure<Map<String, dynamic>>).message;
+              // Not a stop: the amount is still payable, the total just
+              // isn't known until the prompt shows it.
+              quote = null;
             }
           });
         });
       }
 
-      final goods = _num(quote['goods_amount']) ?? 0;
-      final commission = _num(quote['merchant_commission']) ?? 0;
-      final fee = _num(quote['provider_fee']) ?? 0;
-      final total = _num(quote['total_to_pay']) ?? goods + commission + fee;
+      final goods = _num(quote?['goods_amount']);
+      final commission = _num(quote?['merchant_commission']);
+      final fee = _num(quote?['provider_fee']);
+      final total = _num(quote?['total_to_pay']);
+      final estimated = quote?['fee_estimated'] == true;
 
       return AlertDialog(
         backgroundColor: BrokaColors.bgMid,
         shape: _dialogShape(BrokaColors.neonGreen),
-        title: _title('🔒', paid > 0 ? 'Add a payment' : 'Pay & Secure in Escrow'),
+        title: _title('🔒', paid > 0 ? 'Add a payment' : 'Pay securely'),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (paid > 0) ...[
-              _note('Paid so far: ${formatKes(paid)} of ${formatKes(price)}. Balance: ${formatKes(balance)}.',
-                  color: BrokaColors.textMid),
+            _note(
+              paid > 0
+                  ? 'Paid so far: ${formatKes(paid)}. Balance: ${formatKes(balance)}.'
+                  : 'Your money is held in escrow - the seller gets it only after you confirm '
+                      "you've received the item.",
+              color: BrokaColors.textMid,
+            ),
+            if (showUnits) ...[
               const SizedBox(height: 10),
+              UnitsStepper(
+                value: units,
+                max: maxUnits,
+                unit: unitLabel,
+                onChanged: (v) => setDlg(() {
+                  units = v;
+                  balance = priceFor() ?? balance;
+                  amountCtrl.text = balance.toStringAsFixed(0);
+                  requote();
+                }),
+              ),
             ],
+            const SizedBox(height: 10),
             TextField(
               key: const Key('escrow-pay-amount'),
               controller: amountCtrl,
-              enabled: partsAllowed && !paying,
+              enabled: !paying,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: const TextStyle(color: BrokaColors.textHigh),
               onChanged: (_) => requote(),
               decoration: InputDecoration(
                 labelText: 'Amount to pay now (KES)',
-                helperText: partsAllowed
-                    ? 'Pay it all, or part now (at least ${formatKes(minPart)}) and the rest later.'
-                    : null,
+                helperText: 'Pay it all, or part now (at least ${formatKes(minPart)}) and the rest later.',
                 helperMaxLines: 2,
                 prefixIcon: const Icon(Icons.payments_outlined, color: BrokaColors.neonGreen, size: 20),
               ),
             ),
             const SizedBox(height: 12),
-            _box([
-              _row('Item price (this payment)', goods),
-              _row('BROKA commission', commission),
-              _row('Payment processing fee', fee),
-              const Divider(color: BrokaColors.border, height: 16),
-              _row(quoting ? 'Total to pay (updating...)' : 'Total to pay', total, emphasize: true),
-            ]),
+            if (goods != null && commission != null && fee != null && total != null)
+              _box([
+                _row('Item price (this payment)', goods),
+                _row('BROKA commission', commission),
+                _row(estimated ? 'Escrow fee (about)' : 'Escrow fee', fee),
+                const Divider(color: BrokaColors.border, height: 16),
+                _row(quoting ? 'Total (updating...)' : (estimated ? 'Total (about)' : 'Total to pay'), total,
+                    emphasize: true),
+              ])
+            else
+              _note('The total, with fees, is shown on your M-Pesa prompt before you enter your PIN.'),
             const SizedBox(height: 14),
             TextField(
+              key: const Key('escrow-pay-phone'),
               controller: phoneCtrl,
               keyboardType: TextInputType.phone,
               style: const TextStyle(color: BrokaColors.textHigh),
@@ -235,8 +286,6 @@ Future<bool> showEscrowPayDialog(
                 prefixIcon: Icon(Icons.phone_android_rounded, color: BrokaColors.neonGreen, size: 20),
               ),
             ),
-            const SizedBox(height: 10),
-            _note('Your money is held in escrow until you release it to the seller.'),
             if (error != null) ...[
               const SizedBox(height: 10),
               Text(error!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
@@ -249,7 +298,8 @@ Future<bool> showEscrowPayDialog(
             child: const Text('Cancel', style: TextStyle(color: BrokaColors.textLow)),
           ),
           ElevatedButton(
-            onPressed: paying || quoting
+            key: const Key('escrow-pay-confirm'),
+            onPressed: paying
                 ? null
                 : () async {
                     final phone = phoneCtrl.text.trim();
@@ -259,17 +309,25 @@ Future<bool> showEscrowPayDialog(
                       return;
                     }
                     if (phone.isEmpty) {
-                      setDlg(() => error = 'Enter your phone number');
+                      setDlg(() => error = 'Enter your M-Pesa number');
                       return;
                     }
                     setDlg(() {
                       paying = true;
                       error = null;
                     });
-                    final r = await repo.fund(dealId,
-                        payerPhone: phone,
-                        amount: (amount - balance).abs() < 0.01 ? null : amount,
-                        idempotencyKey: key);
+                    // The whole balance is sent as "no amount", which every
+                    // backend version reads as "all of it".
+                    final whole = balance > 0 && (amount - balance).abs() < 0.01;
+                    final r = listingId != null
+                        ? await repo.payForListing(listingId,
+                            payerPhone: phone,
+                            amount: whole ? null : amount,
+                            agreedPrice: priceFor(),
+                            quantity: showUnits ? units : null,
+                            idempotencyKey: key)
+                        : await repo.fund(dealId!,
+                            payerPhone: phone, amount: whole ? null : amount, idempotencyKey: key);
                     if (r is Failure<Map<String, dynamic>>) {
                       setDlg(() {
                         paying = false;
@@ -282,8 +340,8 @@ Future<bool> showEscrowPayDialog(
                     if (context.mounted) {
                       opened = true;
                       Navigator.pushNamed(context, '/escrow-payment', arguments: {
-                        'deal_id': dealId,
-                        'amount': _num(sent['total_to_pay']) ?? total,
+                        'deal_id': sent['deal_id'] ?? dealId,
+                        'amount': _num(sent['total_to_pay']) ?? total ?? amount,
                         'phone': phone,
                         'listing_name': listingName,
                       });

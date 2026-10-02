@@ -55,6 +55,29 @@ class EscrowRepository {
       _call(() => _client.get('/deal/$dealId/fee-quote',
           queryParams: amount == null ? null : {'amount': amount.toStringAsFixed(2)}));
 
+  /// What paying for a listing now costs - the buyer's deal if they have
+  /// one, a new one otherwise. Creates nothing.
+  Future<Result<Map<String, dynamic>>> payQuote(String listingId,
+          {double? amount, double? agreedPrice, int? quantity}) =>
+      _call(() => _client.get('/deal/pay-quote/$listingId', queryParams: {
+            if (amount != null) 'amount': amount.toStringAsFixed(2),
+            if (agreedPrice != null) 'agreed_price': agreedPrice.toStringAsFixed(2),
+            if (quantity != null) 'quantity': '$quantity',
+          }));
+
+  /// Pays into escrow for a listing in one step: opens the deal if there
+  /// isn't one (no "finalize"), then sends the M-Pesa prompt.
+  Future<Result<Map<String, dynamic>>> payForListing(String listingId,
+          {required String payerPhone, double? amount, double? agreedPrice, int? quantity,
+          String? idempotencyKey}) =>
+      _call(() => _client.post('/deal/pay', {
+            'listing_id': listingId,
+            'payer_phone': payerPhone,
+            if (amount != null) 'amount': amount,
+            if (agreedPrice != null) 'agreed_price': agreedPrice,
+            if (quantity != null) 'quantity': quantity,
+          }, headers: idempotencyKey == null ? null : {'X-Idempotency-Key': idempotencyKey}));
+
   /// Pays [amount] into escrow (the whole balance when null). Less than the
   /// balance is a part payment; this same call adds the rest later.
   Future<Result<Map<String, dynamic>>> fund(String dealId,
