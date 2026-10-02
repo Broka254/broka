@@ -18,7 +18,10 @@ Incoming VoIP call alerts require a Firebase project. This takes ~10 minutes.
 3. App nickname: `BROKA`
 4. Click **Register app**
 5. Download **google-services.json**
-6. Move it to: `android/app/google-services.json`  ← replace the placeholder
+6. Move it to: `android/app/google-services.json` (local builds; git-ignored)
+7. For the APK CI releases: paste the file's contents into the GitHub
+   repository secret `GOOGLE_SERVICES_JSON` (Settings → Secrets and
+   variables → Actions)
 
 ---
 

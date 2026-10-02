@@ -82,13 +82,17 @@ own Firebase project is set up.
 1. **Create a Firebase project** (Firebase console — free, no card
    needed for FCM on the Spark plan).
 2. **Register the Android app** in that project with package name
-   `com.broka.app`, download the resulting `google-services.json`, and
-   place it at `flutter_app/android/app/google-services.json`. It's
-   already git-ignored — never commit it.
-3. **Set `FIREBASE_SERVICE_ACCOUNT_JSON`** on Render (backend push
-   sending) — a *service account* JSON from the same Firebase project's
-   project settings, not the Android app's `google-services.json` (they
-   are different files serving different purposes).
+   `com.broka.app` and download the resulting `google-services.json`.
+   It's git-ignored — never commit it. For the released APK, paste its
+   contents into the GitHub repository secret `GOOGLE_SERVICES_JSON`
+   (Settings → Secrets and variables → Actions); CI's "Firebase config"
+   step writes it to `flutter_app/android/app/` before the build. For a
+   local build, place the file there yourself.
+3. **Set `FIREBASE_SERVICE_ACCOUNT_JSON`** on the Railway service
+   `broka-api` (backend push sending) — a *service account* JSON from the
+   same Firebase project's project settings, not the Android app's
+   `google-services.json` (they are different files serving different
+   purposes).
 4. **Run `flutter pub get`** and confirm the `firebase_core`/
    `firebase_messaging` versions above actually resolve for this
    project — adjust if not.
