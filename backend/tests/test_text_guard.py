@@ -289,8 +289,11 @@ async def test_direct_message_with_a_number_is_audited_without_the_number(client
     assert message.buyer_id == buyer_id and audit.actor_id == buyer_id
     assert "kinds=messaging_app,phone" in audit.detail
     assert "role=buyer" in audit.detail
-    # The audit log must not become a copy of people's phone numbers.
-    assert "345" not in audit.detail and "678" not in audit.detail
+    # The audit log must not become a copy of people's phone numbers. The
+    # listing id is taken out first: a random UUID contains "345" or "678"
+    # about one time in a hundred, which failed this test with nothing wrong.
+    rest = audit.detail.replace(listing_id, "")
+    assert "345" not in rest and "678" not in rest
 
 
 @pytest.mark.asyncio
