@@ -214,6 +214,13 @@ class _MenuScreenState extends State<MenuScreen> {
           onTap: () => _open('/settings'),
         ),
         MenuTile(
+          icon: Icons.call_rounded,
+          tint: BrokaColors.neonGreen,
+          title: 'Calls',
+          subtitle: 'Voice and video calls with buyers and sellers',
+          onTap: () => _open('/call-history'),
+        ),
+        MenuTile(
           icon: Icons.receipt_long_rounded,
           tint: BrokaColors.neonBlue,
           title: 'Payment receipts',

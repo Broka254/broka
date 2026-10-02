@@ -182,6 +182,7 @@ class ZenoActionRunner {
       'callToken': info['call_token'],
       'isCaller': true,
       'peerName': c.peerName,
+      'peerId': c.peerId,
       'listingName': c.listingName,
       'listingId': c.listingId,
       'buyerId': c.buyerId,

@@ -29,13 +29,14 @@ from typing import Dict, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from api.database import get_db, User, Listing, NegotiationMessage
 from api.security import get_current_user, create_call_token, decode_call_token
 import httpx
 
 from api.core.client_ip import client_ip as resolve_client_ip
+from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
 from api.core import cloudflare_turn_client, call_state
 from api.core.cloudflare_turn_client import CloudflareTurnError
@@ -818,6 +819,108 @@ async def _push_missed_call(db: AsyncSession, session, listing, buyer_id: str) -
         callee.fcm_token = None
         await db.commit()
         logger.info("[calls] FCM_TOKEN_CLEARED user=%s reason=unregistered", callee.id)
+
+
+# ── Call history ──────────────────────────────────────────────────────────────
+
+CALL_HISTORY_MAX_LIMIT = 100
+
+
+@router.get("/history")
+async def get_call_history(
+    limit:  int           = Query(default=50, ge=1, le=CALL_HISTORY_MAX_LIMIT),
+    before: Optional[str] = Query(default=None),
+    db:      AsyncSession = Depends(get_db),
+    current: dict         = Depends(get_current_user),
+):
+    """The signed-in user's calls, newest first - the app's Call history.
+
+    Read from the call cards log-result already writes into each thread
+    (msg_type "call"), so a call is in the history exactly when it is in
+    the chat; there is no second record to drift from the first. Only
+    threads the user is in: their own as a buyer (buyer_id) and every
+    buyer's on their listings as the seller. A NULL buyer_id belongs to no
+    thread (log-result always derives one) and is never shown.
+
+    Direction is the viewer's, from the caller's role stored on the card
+    (`role`) - not from `sender_id`, which is whichever side happened to
+    log the result first, the callee as often as the caller.
+
+    The other person's name and photo come once per person in `people`,
+    not once per call: a photo is an inline base64 image, and fifty calls
+    with the same buyer would otherwise carry it fifty times.
+
+    `before` pages backwards: pass the previous page's `next_before`.
+    """
+    uid = current["id"]
+    q = (
+        select(NegotiationMessage, Listing)
+        .join(Listing, Listing.id == NegotiationMessage.listing_id)
+        .where(
+            NegotiationMessage.msg_type == "call",
+            # A call card is written to both sides (log-result); never a
+            # copy addressed to one of them.
+            NegotiationMessage.recipient_role.is_(None),
+            NegotiationMessage.buyer_id.isnot(None),
+            or_(NegotiationMessage.buyer_id == uid, Listing.seller_id == uid),
+        )
+    )
+    if before:
+        try:
+            cursor = parse_iso_to_naive_utc(before)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="before must be an ISO 8601 time")
+        q = q.where(NegotiationMessage.created_at < cursor)
+    rows = (await db.execute(
+        q.order_by(NegotiationMessage.created_at.desc(), NegotiationMessage.id.desc())
+         .limit(limit + 1)
+    )).all()
+    more = len(rows) > limit
+    rows = rows[:limit]
+
+    calls = []
+    people_ids: set = set()
+    for msg, listing in rows:
+        my_role = "seller" if listing.seller_id == uid else "buyer"
+        peer_id = msg.buyer_id if my_role == "seller" else listing.seller_id
+        people_ids.add(peer_id)
+        outcome = (msg.content or "").strip().lower()
+        outgoing = msg.role == my_role
+        calls.append({
+            "id":            msg.id,
+            "listing_id":    listing.id,
+            "listing_name":  listing.name,
+            "buyer_id":      msg.buyer_id,
+            "my_role":       my_role,
+            "peer_id":       peer_id,
+            "direction":     "outgoing" if outgoing else "incoming",
+            "outcome":       outcome,
+            # The callee never picked up. "cancelled" only says the caller
+            # gave up first - to the person called it is still a missed call.
+            "missed":        (not outgoing) and outcome in ("missed", "cancelled"),
+            "call_type":     msg.call_type or "audio",
+            "duration_secs": msg.duration_secs,
+            "created_at":    (msg.created_at.isoformat() + "Z") if msg.created_at else None,
+        })
+
+    people = {}
+    if people_ids:
+        from api.core.presence import online_status
+        users = (await db.execute(select(User).where(User.id.in_(people_ids)))).scalars().all()
+        for u in users:
+            is_on, last_seen = online_status(u.last_seen)
+            people[u.id] = {
+                "name":      u.name,
+                "photo":     u.profile_photo,
+                "is_online": is_on,
+                "last_seen": last_seen,
+            }
+
+    return {
+        "calls":       calls,
+        "people":      people,
+        "next_before": calls[-1]["created_at"] if more and calls else None,
+    }
 
 
 # ── WebSocket relay ────────────────────────────────────────────────────────────

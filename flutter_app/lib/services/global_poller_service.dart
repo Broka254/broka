@@ -384,6 +384,9 @@ class GlobalPollerService {
         'listingId': thread['listing_id'],
         'buyerId':   thread['buyer_id'],
         'myRole':    myRole,
+        // Zeno wrote it, so it is in Zeno's room: a tap there, not on the
+        // direct chat, where it isn't shown.
+        if (lastRole == 'broker') 'screen': 'zeno',
       },
     );
   }

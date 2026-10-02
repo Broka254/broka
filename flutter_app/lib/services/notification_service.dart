@@ -413,6 +413,7 @@ class NotificationService {
         'callToken':   callInfo['call_token'] as String? ?? '',
         'isCaller':    false,
         'peerName':    callInfo['caller_name'] as String? ?? 'Someone',
+        'peerId':      callInfo['caller_id'] as String?,
         'listingName': data['listingName'] as String? ?? 'your listing',
         'listingId':   listingId,
         'buyerId':     buyerId,
@@ -440,7 +441,10 @@ class NotificationService {
     }
     if (type == 'new_message' || type == 'missed_call') {
       final role = data['myRole'] as String? ?? 'buyer';
-      nav.pushNamed('/direct-chat', arguments: {
+      // A message from Zeno is read in Zeno's room; everything else - the
+      // other person's messages, a missed call - in the direct chat.
+      final route = data['screen'] == 'zeno' ? '/negotiate' : '/direct-chat';
+      nav.pushNamed(route, arguments: {
         'listingId': data['listingId'] as String?,
         'role':      role,
         'buyer_id':  data['buyerId'] as String?,

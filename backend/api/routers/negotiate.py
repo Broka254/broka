@@ -3617,6 +3617,49 @@ async def _thread_unread_and_seen(
     return unread, seen
 
 
+def _zeno_read_role(role: str) -> str:
+    """The ThreadReadState role holding one side's Zeno-room watermark.
+
+    Its own row, not the side's direct-chat watermark: reading Zeno's
+    replies must not mark the other person's direct messages read (or
+    tell them "seen"), and the reverse. read-status and the receipt
+    broadcast only ever look at "buyer" and "seller", so this one is
+    never shown to the other side - whether, or when, someone reads what
+    Zeno told them privately is theirs alone.
+    """
+    return f"zeno_{role}"
+
+
+async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role: str) -> int:
+    """Zeno's messages to this side of the thread that it hasn't seen yet.
+
+    What the inbox needs to open the right screen: a thread the user keeps
+    in the direct chat opens there, unless Zeno has said something new in
+    the Zeno room since they were last in it (and the reverse, by
+    `unread`). Counted after the side's Zeno watermark; a side that has
+    never marked one - every thread from before it existed - falls back to
+    its direct-chat watermark, so Zeno's old replies don't all count as
+    new and pull the user away from the chat they were using.
+    """
+    rows = await db.execute(select(ThreadReadState).where(
+        ThreadReadState.listing_id == listing_id,
+        ThreadReadState.buyer_id   == buyer_id,
+        ThreadReadState.role.in_((_zeno_read_role(my_role), my_role)),
+    ))
+    marks = {r.role: r.last_read_at for r in rows.scalars().all()}
+    since = marks.get(_zeno_read_role(my_role)) or marks.get(my_role)
+    q = select(func.count(NegotiationMessage.id)).where(
+        NegotiationMessage.listing_id == listing_id,
+        NegotiationMessage.buyer_id   == buyer_id,
+        NegotiationMessage.role       == "broker",
+        or_(NegotiationMessage.recipient_role.is_(None),
+            NegotiationMessage.recipient_role == my_role),
+    )
+    if since:
+        q = q.where(NegotiationMessage.created_at > since)
+    return (await db.execute(q)).scalar() or 0
+
+
 async def _touch_watermark(
     db: AsyncSession, listing_id: str, buyer_id: str, role: str,
     *, delivered: bool, read: bool,
@@ -3721,6 +3764,29 @@ async def mark_thread_read(
         db, listing_id, effective_buyer_id, role, delivered=True, read=True)
     await _announce_receipt(listing_id, effective_buyer_id, role, current["id"],
                             delivered_at=now, read_at=now)
+    return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
+
+
+@router.post("/{listing_id}/zeno-read")
+async def mark_zeno_read(
+    listing_id: str,
+    payload: MarkReadRequest,
+    db: AsyncSession = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """The caller has just seen Zeno's messages in this thread's Zeno room.
+
+    Moves only their Zeno watermark (see _zeno_read_role): the direct
+    chat's unread count and the other side's ticks are untouched, and
+    nothing is announced to the other side.
+    """
+    role, effective_buyer_id = await _resolve_role_and_buyer(
+        listing_id, payload.buyer_id, db, current)
+    if not effective_buyer_id:
+        raise HTTPException(status_code=400, detail="buyer_id required")
+    now = await _touch_watermark(
+        db, listing_id, effective_buyer_id, _zeno_read_role(role),
+        delivered=True, read=True)
     return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
 
 
@@ -3861,6 +3927,7 @@ async def get_inbox(
         is_on, last_seen_str = _online_str(seller.last_seen)
         unread, last_seen_flag = await _thread_unread_and_seen(
             db, lid, user_id, "buyer", last_msg)
+        zeno_unread = await _zeno_unread(db, lid, user_id, "buyer")
         threads.append({
             "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
             "listing_id":        listing.id,
@@ -3905,6 +3972,11 @@ async def get_inbox(
             # never made from the poller at all. Sending both keeps every
             # existing reader of `unread` working.
             "unread_count":      unread,
+            # `unread` counts the other person's direct-chat messages only;
+            # this is Zeno's to this viewer, unseen in the Zeno room. The
+            # inbox opens whichever of the two screens the user last used
+            # for the thread, unless only the other one has news.
+            "zeno_unread":       zeno_unread,
             "last_message_seen": last_seen_flag,
             "time_ago":          _time_ago(last_msg.created_at),
             "my_role":           "buyer",
@@ -3988,6 +4060,7 @@ async def get_inbox(
             counterpart_photo = buyer_info.profile_photo if buyer_info else None
             unread, last_seen_flag = await _thread_unread_and_seen(
                 db, lid, bid, "seller", last_msg)
+            zeno_unread = await _zeno_unread(db, lid, bid, "seller")
 
             threads.append({
                 "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
@@ -4030,6 +4103,7 @@ async def get_inbox(
                 # existing reader of `unread` working.
                 "unread_count":      unread,
                 "unread":            unread,
+                "zeno_unread":       zeno_unread,
                 "last_message_seen": last_seen_flag,
                 "time_ago":          _time_ago(last_msg.created_at),
                 "my_role":           "seller",

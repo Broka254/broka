@@ -1,7 +1,16 @@
-// BROKA - Polished In-App VoIP Call Screen
-// Multi-ring ripple animation · call quality badge · per-state gradients
-// Incoming call full-screen takeover · smooth state transitions
+// BROKA - In-App VoIP Call Screen
 // Supports both audio and video calls (see WebRtcService.callType).
+//
+// On Home's visual system (2026-10-02): the constellation behind everything,
+// a glow in the call's state colour around the person, the brand gradient
+// on their ring, and the controls in a card like Home's. It was a flat black
+// screen whose hints and button labels were drawn in the app's dimmest text
+// colour - "they may not pick up" and "Mute" were close to invisible.
+//
+// It shows who is on the other end by name. A seller calling a buyer saw
+// "Buyer": the direct chat passed that word instead of the buyer's name.
+// Callers pass the name and, as `peerId`, who it is - and when all they have
+// is a placeholder ("Buyer", "Seller"...) the screen looks the person up.
 
 import 'dart:async';
 import 'dart:convert';
@@ -9,6 +18,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../main.dart';
+import '../widgets/chat_parts.dart' show kChatGradient;
+import '../widgets/constellation_background.dart';
 import '../services/webrtc_service.dart';
 import '../services/api_service.dart';
 import '../services/ringtone_service.dart';
@@ -17,7 +28,18 @@ import '../services/call_foreground_service.dart';
 import '../services/callkit_service.dart';
 
 class VoipCallScreen extends StatefulWidget {
-  const VoipCallScreen({super.key});
+  const VoipCallScreen({super.key, this.animateBackground = true});
+
+  /// False renders the constellation as one still frame - for tests.
+  final bool animateBackground;
+
+  /// Names that say which side someone is on, not who they are. A call
+  /// screen headed "Buyer" told a seller nothing about which of their
+  /// buyers they were ringing.
+  static const _placeholderNames = {'', 'buyer', 'seller', 'user', 'someone'};
+
+  static bool isPlaceholderName(String name) =>
+      _placeholderNames.contains(name.trim().toLowerCase());
   @override
   State<VoipCallScreen> createState() => _VoipCallScreenState();
 }
@@ -28,6 +50,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   late WebRtcService _svc;
   String _peerName    = '';
   String? _peerPhoto;          // inline base64; falls back to initials
+  // Who the other person is, so a placeholder name can be replaced with
+  // theirs (_resolvePeer). Empty from call sites that don't know.
+  String _peerId      = '';
   // Peer presence at dial time. null == unknown (older call sites).
   bool? _peerOnline;
   String _listingName = '';
@@ -97,6 +122,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     final callToken = args['callToken'] as String? ?? '';
     _peerName    = args['peerName']    as String? ?? 'User';
     _peerPhoto   = args['peerPhoto']   as String?;
+    _peerId      = args['peerId']      as String? ?? '';
     _peerOnline  = args['peerOnline']  as bool?;
     _listingName = args['listingName'] as String? ?? '';
     _isCaller    = args['isCaller']    as bool?   ?? true;
@@ -105,6 +131,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _callerRole  = args['callerRole']  as String? ?? 'buyer';
     _callType    = args['callType']    as String? ?? 'audio';
     final autoAccept = args['autoAccept'] as bool? ?? false;
+    unawaited(_resolvePeer());
 
     // Whichever path got us here, the ringing notification (if any) has
     // done its job - take it down before anything else so it can't keep
@@ -258,6 +285,35 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     );
   }
 
+  /// Fills in the other person's name and photo when the call site could
+  /// only pass a placeholder - the chat's profile fetch hadn't answered yet,
+  /// say. Best-effort: on any failure the screen keeps what it was given.
+  Future<void> _resolvePeer() async {
+    if (_peerId.isEmpty) return;
+    final needName = VoipCallScreen.isPlaceholderName(_peerName);
+    final needPhoto = _peerPhoto == null || _peerPhoto!.isEmpty;
+    if (!needName && !needPhoto) return;
+    try {
+      final info = await ApiService.getUserProfile(_peerId);
+      if (!mounted) return;
+      final name = (info['name'] as String?)?.trim() ?? '';
+      final photo = info['profile_photo'] as String?;
+      setState(() {
+        if (needName && name.isNotEmpty) _peerName = name;
+        if (needPhoto && photo != null && photo.isNotEmpty) _peerPhoto = photo;
+        _peerOnline ??= info['is_online'] as bool?;
+      });
+    } catch (_) {}
+  }
+
+  /// "Buyer" or "Seller" - which side of the deal the OTHER person is on.
+  /// callerRole is always the caller's role, whoever opened this screen.
+  String get _peerRoleLabel {
+    final callerIsBuyer = _callerRole == 'buyer';
+    final peerIsBuyer = _isCaller ? !callerIsBuyer : callerIsBuyer;
+    return peerIsBuyer ? 'Buyer' : 'Seller';
+  }
+
   @override
   void dispose() {
     RingtoneService.instance.stop();
@@ -285,6 +341,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   String get _initials => _peerName.trim().split(' ')
       .map((w) => w.isEmpty ? '' : w[0].toUpperCase()).take(2).join();
 
+  String get _displayName => _peerName.trim().isEmpty ? _peerRoleLabel : _peerName.trim();
+
   /// Avatar body: failure icon > profile photo > initials.
   ///
   /// Initials are a placeholder for a missing photo, not a design choice -
@@ -301,8 +359,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// degrade to the initials instead of an exception box.
   Widget _buildAvatarContent() {
     if (_callState == CallState.failed) {
-      return const Center(
-        child: Icon(Icons.call_end_rounded, color: Colors.redAccent, size: 36),
+      return const ColoredBox(
+        color: BrokaColors.bgCard,
+        child: Center(
+          child: Icon(Icons.call_end_rounded, color: BrokaColors.danger, size: 40),
+        ),
       );
     }
     final photo = _peerPhoto;
@@ -338,13 +399,23 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     return _initialsAvatar();
   }
 
-  Widget _initialsAvatar() => Center(
-        child: Text(
-          _initials,
-          style: TextStyle(
-            color: _stateColor,
-            fontSize: 32,
-            fontWeight: FontWeight.w900,
+  // On the chat gradient, as the Inbox and the chat header draw someone
+  // without a photo.
+  Widget _initialsAvatar() => DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft, end: Alignment.bottomRight,
+            colors: kChatGradient,
+          ),
+        ),
+        child: Center(
+          child: Text(
+            _initials.isEmpty ? '?' : _initials,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 38,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       );
@@ -352,9 +423,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   Color get _stateColor {
     switch (_callState) {
       case CallState.connected:  return BrokaColors.neonGreen;
-      case CallState.recovering: return BrokaColors.gold;
-      case CallState.failed:     return Colors.redAccent;
-      case CallState.ended:      return BrokaColors.textLow;
+      // Amber, not the violet of "setting up": the call was up and is
+      // trying to come back, which the user should be able to tell apart.
+      case CallState.recovering: return BrokaColors.warning;
+      case CallState.failed:     return BrokaColors.danger;
+      case CallState.ended:      return BrokaColors.textMid;
       // Both "the far end has been alerted" states share one colour, so the
       // avatar ring visibly changes the moment the call actually reaches
       // them - gold = still our side, blue = their phone is ringing.
@@ -408,7 +481,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         return _peerOnline == false ? 'Trying to reach them…' : 'Ringing…';
       case CallState.ringing:     return 'Connecting…';
       case CallState.recovering:  return 'Reconnecting…';
-      case CallState.ended:       return 'Call ended';
+      case CallState.ended:
+        return _everConnected ? 'Call ended · $_durationLabel' : 'Call ended';
       case CallState.failed:      return _errorMsg ?? 'Call failed';
       default:                    return '';
     }
@@ -419,8 +493,15 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// "Their phone is ringing" because the whole point of splitting the two
   /// states is telling the user the call has left the building.
   String? get _stateDetail {
+    if (!_isCaller && !_accepted &&
+        (_callState == CallState.ringing || _callState == CallState.connecting)) {
+      return _listingName.isEmpty ? null : 'About $_listingName';
+    }
     if (_callState == CallState.connecting && _isCaller) {
       return 'Setting up the call';
+    }
+    if (_callState == CallState.recovering) {
+      return 'The connection dropped - hold on';
     }
     if (_callState == CallState.calling && _isCaller) {
       return _peerOnline == false
@@ -436,44 +517,37 @@ class _VoipCallScreenState extends State<VoipCallScreen>
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
+  bool get _isIncoming => !_isCaller && !_accepted &&
+      (_callState == CallState.ringing || _callState == CallState.connecting);
+
+  bool get _isOver =>
+      _callState == CallState.ended || _callState == CallState.failed;
+
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    // A small phone, or a big text size on any phone: a smaller face and
+    // tighter gaps, so the controls stay on screen.
+    final narrow = size.width < 360 || size.height < 640;
     return Scaffold(
       backgroundColor: BrokaColors.bg,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Background layer: full-bleed remote video once it's flowing,
-          // otherwise the existing state-tinted gradient.
-          if (_showRemoteVideo)
+          // Background: full-bleed remote video once it's flowing; otherwise
+          // the constellation every other screen sits on, with a glow in
+          // the call's state colour behind the person.
+          if (_showRemoteVideo) ...[
             RTCVideoView(
               _svc.remoteRenderer,
               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            )
-          else
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 600),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    _stateColor.withOpacity(0.10),
-                    BrokaColors.bg,
-                    BrokaColors.bg,
-                    BrokaColors.bg,
-                  ],
-                ),
-              ),
             ),
-
-          // Scrims so the top bar / controls stay legible over arbitrary
-          // video content behind them.
-          if (_showRemoteVideo) ...[
+            // Scrims so the top bar / controls stay legible over arbitrary
+            // video content behind them.
             Positioned(
               top: 0, left: 0, right: 0, height: 170,
               child: IgnorePointer(
-                child: Container(
+                child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter, end: Alignment.bottomCenter,
@@ -484,33 +558,64 @@ class _VoipCallScreenState extends State<VoipCallScreen>
               ),
             ),
             Positioned(
-              bottom: 0, left: 0, right: 0, height: 230,
+              bottom: 0, left: 0, right: 0, height: 260,
               child: IgnorePointer(
-                child: Container(
+                child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter, end: Alignment.topCenter,
-                      colors: [Colors.black.withOpacity(0.6), Colors.transparent],
+                      colors: [Colors.black.withOpacity(0.65), Colors.transparent],
                     ),
                   ),
                 ),
               ),
             ),
-          ],
+          ] else
+            ConstellationBackground(
+              animate: widget.animateBackground,
+              child: IgnorePointer(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 600),
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      center: const Alignment(0, -0.32),
+                      radius: 0.9,
+                      colors: [
+                        _stateColor.withOpacity(0.22),
+                        _stateColor.withOpacity(0.0),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
 
           SafeArea(
-            child: Column(children: [
-              _buildTopBar(),
-              const Spacer(flex: 2),
-              if (!_showRemoteVideo) _buildRippleAvatar(),
-              const SizedBox(height: 22),
-              _buildPeerInfo(),
-              const SizedBox(height: 20),
-              _buildStateRow(),
-              const Spacer(flex: 3),
-              _buildControls(),
-              const SizedBox(height: 48),
-            ]),
+            // Fills the screen, and scrolls rather than overflowing when a
+            // large text size makes it taller than a small phone.
+            child: LayoutBuilder(
+              builder: (context, box) => SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: box.maxHeight),
+                  child: IntrinsicHeight(
+                    child: Column(children: [
+                      _buildTopBar(),
+                      const Spacer(flex: 2),
+                      if (!_showRemoteVideo) _buildRippleAvatar(narrow),
+                      SizedBox(height: narrow ? 14 : 26),
+                      _buildPeerInfo(narrow),
+                      SizedBox(height: narrow ? 12 : 18),
+                      _buildStateRow(),
+                      const Spacer(flex: 3),
+                      SizedBox(height: narrow ? 12 : 20),
+                      _buildControls(narrow),
+                      SizedBox(height: narrow ? 12 : 24),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
           ),
 
           // Local camera PIP - visible as soon as our own camera is ready,
@@ -524,7 +629,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // ── Local camera preview (PIP) ───────────────────────────────────────────
 
   Widget _buildLocalPreview() => Positioned(
-    top: 96, right: 16,
+    top: 64, right: 16,
     child: SafeArea(
       bottom: false,
       child: GestureDetector(
@@ -533,9 +638,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           width: 96, height: 132,
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(18),
             color: BrokaColors.bgCard,
-            border: Border.all(color: Colors.white.withOpacity(0.25)),
+            border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.45), width: 1.2),
             boxShadow: [
               BoxShadow(color: Colors.black.withOpacity(0.45),
                   blurRadius: 14, offset: const Offset(0, 4)),
@@ -549,7 +654,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                 )
               : const Center(
                   child: Icon(Icons.videocam_off_rounded,
-                      color: BrokaColors.textLow, size: 22),
+                      color: BrokaColors.textMid, size: 22),
                 ),
         ),
       ),
@@ -559,62 +664,78 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // ── Top bar ───────────────────────────────────────────────────────────────
 
   Widget _buildTopBar() => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
     child: Row(children: [
-      // Secure badge
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: BrokaColors.border),
+      const Flexible(
+        child: _TopChip(
+          icon: Icons.lock_rounded,
+          label: 'End-to-end encrypted',
+          color: BrokaColors.neonGreen,
         ),
-        child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.lock_outline_rounded,
-              size: 10, color: BrokaColors.neonGreen),
-          SizedBox(width: 5),
-          Text('END-TO-END ENCRYPTED',
-              style: TextStyle(color: BrokaColors.neonGreen,
-                  fontSize: 8, fontWeight: FontWeight.w800,
-                  letterSpacing: 1.1)),
-        ]),
       ),
-      const Spacer(),
-      // Live / quality badge
-      if (_callState == CallState.connected)
-        _QualityBadge(quality: _quality),
+      const SizedBox(width: 8),
+      // Live quality once there is a call to measure; until then, what
+      // kind of call this is.
+      if (_callState == CallState.connected && _quality != CallQuality.unknown)
+        _QualityBadge(quality: _quality)
+      else
+        _TopChip(
+          icon: _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+          label: _isVideo ? 'Video call' : 'Voice call',
+          color: BrokaColors.neonBlue,
+        ),
     ]),
   );
 
-  // ── Ripple avatar ─────────────────────────────────────────────────────────
+  // ── Avatar ────────────────────────────────────────────────────────────────
 
-  Widget _buildRippleAvatar() {
+  Widget _buildRippleAvatar(bool narrow) {
+    final face = narrow ? 100.0 : 128.0;
+    final box  = face + (narrow ? 72 : 96);
     return AnimatedBuilder(
       animation: Listenable.merge([_ringCtrl, _connectedCtrl]),
       builder: (_, __) {
         return SizedBox(
-          width: 180, height: 180,
+          width: box, height: box,
           child: Stack(alignment: Alignment.center, children: [
-            // 3 expanding ripple rings (only while not connected)
-            if (_isRinging) ...[
+            // Ripples in the state colour while the call is being put
+            // through - they stop the moment it connects.
+            if (_isRinging)
               for (int i = 0; i < 3; i++)
                 _RippleRing(
                   progress: (_ringCtrl.value + i / 3) % 1.0,
                   color: _stateColor,
-                  maxRadius: 88,
+                  minRadius: face / 2 + 6,
+                  maxRadius: box / 2,
                 ),
-            ],
-            // Static outer ring (connected state)
+            // A steady halo once connected.
             if (_callState == CallState.connected)
               Container(
-                width: 150, height: 150,
+                width: face + 34, height: face + 34,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                      color: BrokaColors.neonGreen.withOpacity(0.2), width: 2),
+                      color: BrokaColors.neonGreen.withOpacity(0.28), width: 1.5),
                 ),
               ),
-            // Avatar bounce-in on connect
+            // The brand ring: the chat gradient, turning while the call is
+            // being put through, still once it is up.
+            Transform.rotate(
+              angle: _isRinging ? _ringCtrl.value * 2 * 3.141592653589793 : 0,
+              child: Container(
+                width: face + 12, height: face + 12,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: SweepGradient(colors: _isOver
+                      ? [_stateColor, _stateColor]
+                      : [...kChatGradient, BrokaColors.neonCyan, kChatGradient.first]),
+                  boxShadow: [BoxShadow(
+                      color: _stateColor.withOpacity(0.35),
+                      blurRadius: 26, spreadRadius: 2)],
+                ),
+              ),
+            ),
+            // The face - a bounce on connect.
             ScaleTransition(
               scale: CurvedAnimation(
                 parent: _callState == CallState.connected
@@ -622,152 +743,280 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                 curve: Curves.elasticOut,
               ),
               child: Container(
-                width: 100, height: 100,
-                decoration: BoxDecoration(
+                width: face, height: face,
+                padding: const EdgeInsets.all(3),
+                decoration: const BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [
-                      _stateColor.withOpacity(0.35),
-                      _stateColor.withOpacity(0.12),
-                    ],
-                    begin: Alignment.topLeft, end: Alignment.bottomRight,
-                  ),
-                  border: Border.all(
-                      color: _stateColor.withOpacity(0.7), width: 2),
-                  boxShadow: [BoxShadow(
-                      color: _stateColor.withOpacity(0.25),
-                      blurRadius: 24, spreadRadius: 6)],
+                  color: BrokaColors.bg,
                 ),
                 // Real face when we have one, initials only as a fallback.
-                // ClipOval + the 100x100 box means the photo fills the same
-                // circle the initials used, inside the existing state-tinted
-                // ring - so the ring still carries call state and the photo
-                // carries identity.
-                child: ClipOval(
-                  child: SizedBox.expand(
-                    child: _buildAvatarContent(),
+                child: ClipOval(child: SizedBox.expand(child: _buildAvatarContent())),
+              ),
+            ),
+            // Online, as the chat header shows it - only when we know.
+            if (_peerOnline == true && !_isOver)
+              Positioned(
+                left: box / 2 + face * 0.30,
+                top: box / 2 + face * 0.30,
+                child: Container(
+                  width: 18, height: 18,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: BrokaColors.neonGreen,
+                    border: Border.all(color: BrokaColors.bg, width: 3),
                   ),
                 ),
               ),
-            ),
           ]),
         );
       },
     );
   }
 
-  // ── Peer info ─────────────────────────────────────────────────────────────
+  // ── Who, and about what ───────────────────────────────────────────────────
 
-  Widget _buildPeerInfo() => Column(children: [
-    Text(_peerName,
-        style: const TextStyle(color: BrokaColors.textHigh,
-            fontSize: 26, fontWeight: FontWeight.w800)),
-    if (_listingName.isNotEmpty) ...[
-      const SizedBox(height: 6),
+  Widget _buildPeerInfo(bool narrow) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 24),
+    child: Column(children: [
+      Text(
+        _displayName,
+        key: const Key('call-peer-name'),
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: BrokaColors.textHigh,
+          fontSize: narrow ? 24 : 28,
+          fontWeight: FontWeight.w800,
+          shadows: const [Shadow(color: Colors.black54, blurRadius: 12)],
+        ),
+      ),
+      const SizedBox(height: 10),
+      // Which side of the deal they're on, and the listing - a card like
+      // Home's chips rather than bare grey text.
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
+          color: BrokaColors.bgCard.withOpacity(0.86),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: BrokaColors.border),
         ),
-        child: Text(_listingName,
-            style: const TextStyle(color: BrokaColors.textMid, fontSize: 11),
-            maxLines: 1, overflow: TextOverflow.ellipsis),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [
+                kChatGradient.first.withOpacity(0.35),
+                kChatGradient.last.withOpacity(0.25),
+              ]),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(_peerRoleLabel.toUpperCase(),
+                style: const TextStyle(color: Colors.white, fontSize: 9.5,
+                    fontWeight: FontWeight.w800, letterSpacing: 1.0)),
+          ),
+          if (_listingName.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            const Icon(Icons.sell_outlined, size: 13, color: BrokaColors.textMid),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(_listingName,
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh,
+                      fontSize: 12.5, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ]),
       ),
-    ],
-  ]);
+    ]),
+  );
 
-  // ── State label row ───────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────
 
   Widget _buildStateRow() {
     final isConnected = _callState == CallState.connected;
     final detail = _stateDetail;
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      AnimatedDefaultTextStyle(
-        duration: const Duration(milliseconds: 300),
-        style: TextStyle(
-          color: _callState == CallState.failed
-              ? Colors.redAccent : _stateColor,
-          fontSize:     isConnected ? 22 : 14,
-          fontWeight:   isConnected ? FontWeight.w900 : FontWeight.w500,
-          letterSpacing: isConnected ? 3.0 : 0.5,
-          fontFamily:   'monospace',
-        ),
-        child: Text(_stateLabel, textAlign: TextAlign.center),
-      ),
-      // Only present pre-connection, and animated so the jump from
-      // "Setting up the call" to "Their phone is ringing" reads as
-      // progress rather than a flicker.
-      AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: detail == null
-            ? const SizedBox(height: 0, width: 0)
-            : Padding(
-                key: ValueKey(detail),
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  detail,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: BrokaColors.textLow,
-                    fontSize: 11,
-                    letterSpacing: 0.4,
-                  ),
+    final color = _stateColor;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: color.withOpacity(0.45)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            // A dot that breathes while the call is being put through.
+            AnimatedBuilder(
+              animation: _ringCtrl,
+              builder: (_, __) => Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: color.withOpacity(_isRinging
+                      ? 0.45 + 0.55 * (1 - (_ringCtrl.value * 2 - 1).abs())
+                      : 1.0),
                 ),
               ),
-      ),
-    ]);
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 300),
+                // On the theme's body style: on its own it would drop the
+                // app's font for the platform default. (Not the ambient
+                // DefaultTextStyle - this context is above the Scaffold's
+                // Material, where that is the yellow-underlined fallback.)
+                style: (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).merge(TextStyle(
+                  color: color,
+                  fontSize: isConnected ? 17 : 13.5,
+                  fontWeight: isConnected ? FontWeight.w800 : FontWeight.w600,
+                  letterSpacing: isConnected ? 1.6 : 0.3,
+                  // Steady digits, so the timer doesn't jitter as it counts.
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                )),
+                // A failure says what to do about it ("Enable it in
+                // Settings > Apps > BROKA > Permissions"): room for all of it.
+                child: Text(_stateLabel, textAlign: TextAlign.center,
+                    maxLines: _callState == CallState.failed ? 5 : 2,
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ),
+          ]),
+        ),
+        // Only present pre-connection, and animated so the jump from
+        // "Setting up the call" to "Their phone is ringing" reads as
+        // progress rather than a flicker. In the readable text colour: it
+        // was drawn in the dimmest one, where "they may not pick up" all
+        // but disappeared on a phone screen.
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          child: detail == null
+              ? const SizedBox(height: 0, width: 0)
+              : Padding(
+                  key: ValueKey(detail),
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    detail,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: BrokaColors.textMid,
+                      fontSize: 12.5,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+        ),
+      ]),
+    );
   }
 
   // ── Controls ──────────────────────────────────────────────────────────────
 
-  Widget _buildControls() {
-    if (_callState == CallState.ended || _callState == CallState.failed) {
-      return _CallBtn(
-        icon:  Icons.call_end_rounded,
-        color: Colors.redAccent,
-        label: _callState == CallState.ended ? 'Call Ended' : 'Call Failed',
-        onTap: () => Navigator.pop(context),
-        large: true,
-      );
+  void _hangUp() {
+    if (_endingCall) return;
+    _endingCall = true;
+    _svc.hangup();
+  }
+
+  void _toggleMute() {
+    _svc.toggleMute();
+    setState(() => _muted = !_muted);
+  }
+
+  Future<void> _toggleSpeaker() async {
+    final on = await _svc.toggleSpeaker();
+    if (mounted) setState(() => _speaker = on);
+  }
+
+  Widget _muteButton() => _CallBtn(
+    icon:   _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+    color:  BrokaColors.warning,
+    label:  _muted ? 'Unmute' : 'Mute',
+    onTap:  _toggleMute,
+    active: _muted,
+  );
+
+  Widget _speakerButton() => _CallBtn(
+    icon:   _speaker ? Icons.volume_up_rounded : Icons.phone_in_talk_rounded,
+    color:  BrokaColors.neonBlue,
+    label:  _speaker ? 'Speaker' : 'Earpiece',
+    onTap:  _toggleSpeaker,
+    active: _speaker,
+  );
+
+  Widget _endButton() => _CallBtn(
+    icon:     Icons.call_end_rounded,
+    color:    BrokaColors.danger,
+    label:    'End',
+    onTap:    _hangUp,
+    filled:   true,
+    large:    true,
+  );
+
+  /// The controls, in a card like Home's over the constellation.
+  Widget _dock(Widget child) => Container(
+    margin: const EdgeInsets.symmetric(horizontal: 16),
+    padding: const EdgeInsets.fromLTRB(12, 16, 12, 14),
+    decoration: BoxDecoration(
+      color: BrokaColors.bgCard.withOpacity(0.82),
+      borderRadius: BorderRadius.circular(28),
+      border: Border.all(color: BrokaColors.border),
+      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35),
+          blurRadius: 24, offset: const Offset(0, 8))],
+    ),
+    child: child,
+  );
+
+  Widget _buildControls(bool narrow) {
+    if (_isOver) {
+      return _dock(Center(
+        child: _CallBtn(
+          icon:   Icons.close_rounded,
+          color:  BrokaColors.textHigh,
+          label:  'Close',
+          onTap:  () => Navigator.pop(context),
+        ),
+      ));
     }
 
-    // Incoming call: full-screen style accept / decline
-    if (!_isCaller && !_accepted &&
-        (_callState == CallState.ringing ||
-         _callState == CallState.connecting)) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 48),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Column(children: [
-              _CallBtn(
-                icon:  Icons.call_end_rounded,
-                color: Colors.redAccent,
-                label: 'Decline',
-                onTap: () {
-                  if (_endingCall) return;
-                  _endingCall = true;
-                  RingtoneService.instance.stop();
-                  _declinedByMe = true;
-                  _svc.hangup();
-                },
-                large: true,
-              ),
-            ]),
-            // Accept - green with animated ring
-            AnimatedBuilder(
-              animation: _ringCtrl,
-              builder: (_, child) => Stack(
-                alignment: Alignment.center,
-                children: [
-                  Opacity(
-                    opacity: (1.0 - _ringCtrl.value).clamp(0.0, 0.4),
+    // Incoming call: decline / accept
+    if (_isIncoming) {
+      return _dock(Row(
+        children: [
+          Expanded(child: _CallBtn(
+            icon:   Icons.call_end_rounded,
+            color:  BrokaColors.danger,
+            label:  'Decline',
+            filled: true,
+            large:  true,
+            onTap: () {
+              if (_endingCall) return;
+              _endingCall = true;
+              RingtoneService.instance.stop();
+              _declinedByMe = true;
+              _svc.hangup();
+            },
+          )),
+          // Accept - green, with a ring that keeps calling for attention.
+          Expanded(child: AnimatedBuilder(
+            animation: _ringCtrl,
+            builder: (_, child) => Stack(
+              alignment: Alignment.topCenter,
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  top: -_ringCtrl.value * 10,
+                  child: Opacity(
+                    opacity: (1.0 - _ringCtrl.value).clamp(0.0, 0.5),
                     child: Container(
-                      width: 90 + _ringCtrl.value * 20,
-                      height: 90 + _ringCtrl.value * 20,
+                      width: 72 + _ringCtrl.value * 20,
+                      height: 72 + _ringCtrl.value * 20,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
@@ -775,151 +1024,122 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                       ),
                     ),
                   ),
-                  child!,
-                ],
-              ),
-              child: _CallBtn(
-                icon:  _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-                color: BrokaColors.neonGreen,
-                label: 'Accept',
-                onTap: () {
-                  // WebRtcService.start() has no internal guard of its own
-                  // against being invoked twice, so this check is what
-                  // actually prevents a rapid double-tap from requesting
-                  // the camera/mic and opening the WebSocket/peer
-                  // connection twice for the same call.
-                  if (_accepted) return;
-                  RingtoneService.instance.stop();
-                  setState(() => _accepted = true);
-                  CallKitService.instance.reportOutgoingCall(
-                      roomId: _svc.roomId, peerName: _peerName, isVideo: _isVideo);
-                  _svc.start();
-                },
-                large: true,
-              ),
+                ),
+                child!,
+              ],
             ),
-          ],
-        ),
-      );
+            child: _CallBtn(
+              icon:   _isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+              color:  BrokaColors.neonGreen,
+              label:  'Accept',
+              filled: true,
+              large:  true,
+              onTap: () {
+                // WebRtcService.start() has no internal guard of its own
+                // against being invoked twice, so this check is what
+                // actually prevents a rapid double-tap from requesting
+                // the camera/mic and opening the WebSocket/peer
+                // connection twice for the same call.
+                if (_accepted) return;
+                RingtoneService.instance.stop();
+                setState(() => _accepted = true);
+                CallKitService.instance.reportOutgoingCall(
+                    roomId: _svc.roomId, peerName: _peerName, isVideo: _isVideo);
+                _svc.start();
+              },
+            ),
+          )),
+        ],
+      ));
     }
 
     // In-call controls for video: mute · video · flip · speaker, end below.
     if (_isVideo) {
-      return Column(
+      return _dock(Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _CallBtn(
-                icon:     _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
-                color:    _muted ? Colors.orange : BrokaColors.bgCard,
-                label:    _muted ? 'Unmute' : 'Mute',
-                onTap:    () { _svc.toggleMute(); setState(() => _muted = !_muted); },
-                outlined: true,
-                active:   _muted,
-              ),
-              const SizedBox(width: 16),
-              _CallBtn(
-                icon:     _videoOn ? Icons.videocam_rounded : Icons.videocam_off_rounded,
-                color:    _videoOn ? BrokaColors.bgCard : Colors.orange,
-                label:    _videoOn ? 'Video' : 'Video off',
-                onTap:    () { _svc.toggleVideo(); setState(() => _videoOn = !_videoOn); },
-                outlined: true,
-                active:   !_videoOn,
-              ),
-              const SizedBox(width: 16),
-              _CallBtn(
-                icon:     Icons.cameraswitch_rounded,
-                color:    BrokaColors.bgCard,
-                label:    'Flip',
-                onTap:    () => _svc.switchCamera(),
-                outlined: true,
-              ),
-              const SizedBox(width: 16),
-              _CallBtn(
-                icon:     _speaker ? Icons.volume_up_rounded : Icons.volume_down_rounded,
-                color:    _speaker ? BrokaColors.neonBlue : BrokaColors.bgCard,
-                label:    _speaker ? 'Speaker' : 'Earpiece',
-                onTap:    () async {
-            final on = await _svc.toggleSpeaker();
-            if (mounted) setState(() => _speaker = on);
-          },
-                outlined: true,
-                active:   _speaker,
-              ),
+              Expanded(child: _muteButton()),
+              Expanded(child: _CallBtn(
+                icon:   _videoOn ? Icons.videocam_rounded : Icons.videocam_off_rounded,
+                color:  BrokaColors.warning,
+                label:  _videoOn ? 'Camera' : 'Camera off',
+                onTap:  () { _svc.toggleVideo(); setState(() => _videoOn = !_videoOn); },
+                active: !_videoOn,
+              )),
+              Expanded(child: _CallBtn(
+                icon:  Icons.cameraswitch_rounded,
+                color: BrokaColors.neonBlue,
+                label: 'Flip',
+                onTap: () => _svc.switchCamera(),
+              )),
+              Expanded(child: _speakerButton()),
             ],
           ),
-          const SizedBox(height: 22),
-          _CallBtn(
-            icon:  Icons.call_end_rounded,
-            color: Colors.redAccent,
-            label: 'End',
-            onTap: () {
-              if (_endingCall) return;
-              _endingCall = true;
-              _svc.hangup();
-            },
-            large: true,
-          ),
+          const SizedBox(height: 14),
+          _endButton(),
         ],
-      );
+      ));
     }
 
     // In-call controls for audio: mute · end · speaker
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return _dock(Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        _CallBtn(
-          icon:     _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
-          color:    _muted ? Colors.orange : BrokaColors.bgCard,
-          label:    _muted ? 'Unmute' : 'Mute',
-          onTap:    () { _svc.toggleMute(); setState(() => _muted = !_muted); },
-          outlined: true,
-          active:   _muted,
-        ),
-        const SizedBox(width: 24),
-        _CallBtn(
-          icon:  Icons.call_end_rounded,
-          color: Colors.redAccent,
-          label: 'End',
-          onTap: () {
-            if (_endingCall) return;
-            _endingCall = true;
-            _svc.hangup();
-          },
-          large: true,
-        ),
-        const SizedBox(width: 24),
-        _CallBtn(
-          icon:     _speaker ? Icons.volume_up_rounded : Icons.volume_down_rounded,
-          color:    _speaker ? BrokaColors.neonBlue : BrokaColors.bgCard,
-          label:    _speaker ? 'Speaker' : 'Earpiece',
-          onTap:    () async {
-            final on = await _svc.toggleSpeaker();
-            if (mounted) setState(() => _speaker = on);
-          },
-          outlined: true,
-          active:   _speaker,
-        ),
+        Expanded(child: _muteButton()),
+        Expanded(child: _endButton()),
+        Expanded(child: _speakerButton()),
       ],
-    );
+    ));
   }
 }
 
-// ── Ripple ring painter ────────────────────────────────────────────────────────
+// ── Top-bar chip ───────────────────────────────────────────────────────────────
+
+class _TopChip extends StatelessWidget {
+  const _TopChip({required this.icon, required this.label, required this.color});
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: BrokaColors.bgCard.withOpacity(0.86),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: color.withOpacity(0.35)),
+    ),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 12, color: color),
+      const SizedBox(width: 6),
+      Flexible(
+        child: Text(label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700,
+                letterSpacing: 0.3)),
+      ),
+    ]),
+  );
+}
+
+// ── Ripple ring ────────────────────────────────────────────────────────────────
 
 class _RippleRing extends StatelessWidget {
   final double progress;
   final Color  color;
+  final double minRadius;
   final double maxRadius;
   const _RippleRing({required this.progress, required this.color,
-      required this.maxRadius});
+      required this.minRadius, required this.maxRadius});
 
   @override
   Widget build(BuildContext context) {
-    final r = maxRadius * progress;
-    final opacity = (1.0 - progress).clamp(0.0, 0.35);
+    final r = minRadius + (maxRadius - minRadius) * progress;
+    final opacity = (1.0 - progress).clamp(0.0, 0.45);
     return Container(
       width: r * 2, height: r * 2,
       decoration: BoxDecoration(
@@ -953,18 +1173,18 @@ class _QualityBadge extends StatelessWidget {
     final (label, color, bars) = switch (quality) {
       CallQuality.good => ('Good', BrokaColors.neonGreen, 3),
       CallQuality.fair => ('Fair', BrokaColors.warning, 2),
-      CallQuality.bad  => ('Weak', Colors.redAccent, 1),
+      CallQuality.bad  => ('Weak', BrokaColors.danger, 1),
       CallQuality.unknown => ('', BrokaColors.textLow, 0),
     };
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.35)),
+        color: BrokaColors.bgCard.withOpacity(0.86),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.45)),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
+      child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
         for (int i = 0; i < 3; i++) ...[
           if (i > 0) const SizedBox(width: 2),
           AnimatedContainer(
@@ -979,8 +1199,8 @@ class _QualityBadge extends StatelessWidget {
         ],
         const SizedBox(width: 6),
         Text(label, style: TextStyle(
-            color: color, fontSize: 9, fontWeight: FontWeight.w800,
-            letterSpacing: 0.8)),
+            color: color, fontSize: 11, fontWeight: FontWeight.w700,
+            letterSpacing: 0.3)),
       ]),
     );
   }
@@ -988,55 +1208,77 @@ class _QualityBadge extends StatelessWidget {
 
 // ── Call button ────────────────────────────────────────────────────────────────
 
+/// A round control with its label underneath.
+///
+/// [filled] is a call action - accept, decline, end - in its colour with a
+/// glow. Otherwise it is a toggle on the dock's card: quiet until [active],
+/// then lit in [color].
 class _CallBtn extends StatelessWidget {
   final IconData icon;
   final Color    color;
   final String   label;
   final VoidCallback onTap;
   final bool     large;
-  final bool     outlined;
+  final bool     filled;
   final bool     active;
 
   const _CallBtn({
     required this.icon, required this.color,
     required this.label, required this.onTap,
-    this.large = false, this.outlined = false, this.active = false,
+    this.large = false, this.filled = false, this.active = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final size = large ? 72.0 : 60.0;
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: size, height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: outlined
-                ? (active ? color.withOpacity(0.15) : Colors.transparent)
-                : color,
-            border: outlined
-                ? Border.all(
-                    color: active ? color : BrokaColors.border,
-                    width: active ? 2.0 : 1.5)
-                : null,
-            boxShadow: large
-                ? [BoxShadow(color: color.withOpacity(0.40),
-                    blurRadius: 24, spreadRadius: 4)]
-                : null,
-          ),
-          child: Icon(icon,
-              color: outlined
-                  ? (active ? color : BrokaColors.textMid)
-                  : Colors.white,
-              size: large ? 30 : 24),
-        ),
-        const SizedBox(height: 8),
-        Text(label,
-            style: const TextStyle(
-                color: BrokaColors.textLow, fontSize: 10)),
-      ]),
+    final size = large ? 68.0 : 56.0;
+    final Color iconColor = filled
+        ? Colors.white
+        : (active ? color : BrokaColors.textHigh);
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: size, height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: filled
+                    ? LinearGradient(
+                        begin: Alignment.topLeft, end: Alignment.bottomRight,
+                        colors: [color, Color.lerp(color, Colors.black, 0.25)!],
+                      )
+                    : null,
+                color: filled
+                    ? null
+                    : (active ? color.withOpacity(0.18) : BrokaColors.bgMid.withOpacity(0.75)),
+                border: filled
+                    ? null
+                    : Border.all(
+                        color: active ? color : BrokaColors.border,
+                        width: active ? 1.6 : 1.2),
+                boxShadow: filled
+                    ? [BoxShadow(color: color.withOpacity(0.40),
+                        blurRadius: 20, spreadRadius: 2)]
+                    : null,
+              ),
+              child: Icon(icon, color: iconColor, size: large ? 30 : 24),
+            ),
+            const SizedBox(height: 8),
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: active ? color : BrokaColors.textMid,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600)),
+        ]),
+      ),
     );
   }
 }

@@ -107,7 +107,9 @@ void main() {
 
     await tester.tap(find.text('Amina Wanjiru'));
     await _settle(tester);
-    expect(pushed.last.name, '/negotiate');
+    // Her two unread messages are in the direct chat, and Zeno has nothing
+    // new: the thread opens where they are (chat_screen_memory_test.dart).
+    expect(pushed.last.name, '/direct-chat');
     expect((pushed.last.arguments as Map)['buyer_id'], 'buyer-Amina Wanjiru');
   });
 

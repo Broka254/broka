@@ -17,6 +17,7 @@ import '../widgets/constellation_background.dart';
 import '../widgets/gradient_button.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
+import '../services/chat_screen_memory.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/local_chat_store.dart';
 
@@ -132,7 +133,11 @@ class _InboxScreenState extends State<InboxScreen> {
   int get _totalUnread =>
       _threads.fold(0, (s, t) => s + ((t['unread'] as int?) ?? 0));
 
-  void _openThread(Map<String, dynamic> t) {
+  /// Opens the thread on the screen the user was last on for it - Zeno's
+  /// room or the direct chat - unless only the other one has something new
+  /// (ChatScreenMemory.choose). It always opened Zeno's room, so someone
+  /// who had moved to the direct chat had to switch back every time.
+  Future<void> _openThread(Map<String, dynamic> t) async {
     final listing = Listing(
       id:           t['listing_id']       as String,
       name:         t['listing_name']     as String,
@@ -145,10 +150,17 @@ class _InboxScreenState extends State<InboxScreen> {
       sellerId:     t['seller_id']        as String?,
       sellerName:   t['seller_name']      as String?,
     );
-    Navigator.pushNamed(context, '/negotiate', arguments: {
+    final buyerId = t['buyer_id'] as String?;
+    final screen = ChatScreenMemory.choose(
+      remembered:   await ChatScreenMemory.recall(listing.id, buyerId),
+      directUnread: (t['unread'] as int?) ?? 0,
+      zenoUnread:   (t['zeno_unread'] as int?) ?? 0,
+    );
+    if (!mounted) return;
+    Navigator.pushNamed(context, screen.route, arguments: {
       'listing':  listing,
       'role':     t['my_role'] as String,
-      'buyer_id': t['buyer_id'] as String?,
+      'buyer_id': buyerId,
     }).then((_) => _loadInbox());
   }
 
@@ -179,7 +191,19 @@ class _InboxScreenState extends State<InboxScreen> {
                     onBack: () => Navigator.maybePop(context),
                     narrow: media.size.width < 360,
                     textScale: media.textScaler.scale(1.0).clamp(1.0, 1.35).toDouble(),
-                    trailing: unread > 0 ? _UnreadPill(unread) : null,
+                    // Calls sit with the conversations they belong to.
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (unread > 0) ...[
+                        _UnreadPill(unread),
+                        const SizedBox(width: 8),
+                      ],
+                      BrokaHeaderButton(
+                        key: const Key('inbox-calls'),
+                        icon: Icons.call_rounded,
+                        tooltip: 'Calls',
+                        onTap: () => Navigator.pushNamed(context, '/call-history'),
+                      ),
+                    ]),
                     trailingKey: unread,
                   ),
                 ),

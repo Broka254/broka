@@ -16,6 +16,7 @@ import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../services/api_service.dart';
+import '../services/chat_screen_memory.dart';
 import '../services/global_poller_service.dart';
 import '../services/photo_capture.dart';
 import '../models/models.dart';
@@ -157,6 +158,11 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     _initVoice();
     _loadHistory();
     _loadCounterparty();
+    // The Inbox opens this thread here next time (ChatScreenMemory).
+    final listingId = _listing?.id;
+    if (listingId != null) {
+      unawaited(ChatScreenMemory.remember(listingId, _buyerId, ChatScreen.zeno));
+    }
     // Register this thread as on-screen so the 7s poller does not notify
     // about a Zeno reply the user is reading right now. The direct-chat
     // screen has always done this; the negotiation room never did.
@@ -331,6 +337,16 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     } catch (_) {}
   }
 
+  /// Zeno's messages in this room are on screen. The Inbox stops counting
+  /// them as news (`zeno_unread`), so it doesn't pull the user back here
+  /// from the direct chat for something they've already read.
+  void _sawZeno() {
+    final listingId = _listing?.id;
+    if (listingId == null) return;
+    unawaited(ChatScreenMemory.markZenoSeen(listingId,
+        buyerId: _role == 'seller' ? _buyerId : null));
+  }
+
   // ── History ────────────────────────────────────────────────────────────────
   // ── Offline persistence ────────────────────────────────────────────────────
   String _threadScopeKey() =>
@@ -353,7 +369,11 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     if (_listing == null) { _addGreeting(); return; }
     await _loadCachedMessages();
     try {
-      final history = await ApiService.getNegotiationHistory(_listing!.id);
+      // A seller's thread is the buyer's they opened. Without buyer_id the
+      // server answers with the latest buyer's, so a seller who opened an
+      // earlier buyer from the Inbox read someone else's room.
+      final history = await ApiService.getNegotiationHistory(_listing!.id,
+          buyerId: _role == 'seller' ? _buyerId : null);
       // AI thread = Zeno's own replies + the human's own messages that were
       // actually sent to Zeno (via_ai=true). This used to only keep
       // role=='broker', which meant re-opening this screen silently dropped
@@ -373,6 +393,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           setState(() => _messages = aiThread);
           _scrollDown();
         }
+        _sawZeno();
       }
       unawaited(_cacheMessages());
     } catch (_) {
@@ -487,6 +508,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           if (reply.isBroker) _fresh.add(reply);
           if (reply.dealProbability != null) _dealProbability = reply.dealProbability!;
         });
+        if (reply.isBroker) _sawZeno();
         _scrollDown();
         if (_ttsEnabled) _speak(reply.content);
       }
@@ -586,6 +608,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           if (reply.isBroker) _fresh.add(reply);
           _typing = false;
         });
+        if (reply.isBroker) _sawZeno();
       }
       _scrollDown();
       if (_ttsEnabled && reply.isBroker && reply.content.isNotEmpty) _speak(reply.content);
@@ -791,6 +814,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           _messages.add(reply);
           if (reply.isBroker) _fresh.add(reply);
         });
+        if (reply.isBroker) _sawZeno();
       }
       _scrollDown();
     } catch (_) {
@@ -1466,6 +1490,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       'callToken': info['call_token'],
       'isCaller': true,
       'peerName': _counterName,
+      'peerId': _role == 'seller' ? _buyerId : _listing?.sellerId,
       // Same source the info strip and chat avatars already read
       // (_sellerInfo['profile_photo']). Null when the seller has no picture
       // set, or when this user IS the seller - _loadCounterparty skips the

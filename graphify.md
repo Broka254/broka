@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-187 endpoints served by `backend/main.py`. **Auth** is read from each
+189 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 18, optional 2, public 52, token 4, user 111.
+Counts: admin 18, optional 2, public 52, token 4, user 113.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -109,13 +109,14 @@ Counts: admin 18, optional 2, public 52, token 4, user 111.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:452) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:638) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1137) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:427) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:389) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:826) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:615) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:830) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:453) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:639) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1240) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:428) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:390) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:929) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:616) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -176,23 +177,24 @@ Counts: admin 18, optional 2, public 52, token 4, user 111.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:212) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:484) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:118) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4144) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4218) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1721) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4060) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4134) |
 | POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3314) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3762) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3828) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1797) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4108) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4182) |
 | POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3159) |
 | GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3414) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3660) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3704) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3728) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3703) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3747) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3794) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:3771) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -613,7 +615,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-87 files in `backend/tests/`.
+89 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -627,6 +629,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_body_limit.py` — The request body ceiling (api/core/body_limit.py).
 - `test_buy_agent.py` — BROKA - Buy-Agent Tests Run: pytest backend/tests/test_buy_agent.py -v
 - `test_buy_agent_conversation.py` — BROKA - Conversational Buying Agent tests Run: pytest backend/tests/test_buy_agent_conversation.py -v
+- `test_call_history.py` — Call history (2026-10-02): GET /calls/history, the app's list of calls.
 - `test_call_push_and_teardown.py` — BROKA - call push shaping + WS room teardown regressions (calling audit, 2026-09-18)
 - `test_call_reconnect.py` — Regression tests for the calling audit (2026-09-14).
 - `test_call_state.py` — BROKA - Call State & Call-Token Endpoint Tests Run: pytest backend/tests/test_call_state.py -v
@@ -653,6 +656,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_events_v4.py` — Tests for the upgraded durable event bus (v4.0).
 - `test_fraud.py` — BROKA - Fraud Engine Unit Tests (v3.0) Tests trust score computation and trust band classification.
 - `test_idempotency.py` — Tests for the idempotency key guard.
+- `test_inbox_zeno_unread.py` — The inbox opens the screen the user was using (2026-10-02).
 - `test_interest_nudges.py` — BROKA - Interest Availability Nudge Tests (v6.2) Run: pytest backend/tests/test_interest_nudges.py -v
 - `test_listing_fee_payment.py` — Paying the listing fee (PRICING.md; api/domains/pricing/payments.py).
 - `test_listing_overhaul.py` — The 2026-09-25 listing overhaul (LISTING_OVERHAUL.md): the category taxonomy, what a listing must and may now say about itself, the seller'…
@@ -714,6 +718,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/auth` | `AuthScreen` |
 | `/boost` | `BoostScreen` |
 | `/broker` | `BrokerScreen` |
+| `/call-history` | `CallHistoryScreen` |
 | `/create-store` | `StoreSetupScreen` |
 | `/deal-history` | `DealReceiptHistoryScreen` |
 | `/direct-chat` | `NegotiationScreen` |
@@ -773,6 +778,12 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/repositories/buy_agent_repository.dart` — lib/features/buy_agent/data/repositories/buy_agent_repository.dart
 - `domain/models/buy_agent_request.dart` — lib/features/buy_agent/domain/models/buy_agent_request.dart
 - `presentation/widgets/agent_motion.dart` — BROKA - the Buying Agent's motion.
+
+### `flutter_app/lib/features/calls/`
+
+- `data/call_history_repository.dart` — The user's call history: GET /calls/history (backend/api/routers/calls.py).
+- `domain/call_record.dart` — One call in the user's call history, as GET /calls/history returns it (backend/api/routers/calls.py get_call_history), seen from the user's…
+- `presentation/call_history_screen.dart` — Calls - every voice and video call with a buyer or seller, newest first (2026-10-02).
 
 ### `flutter_app/lib/features/categories/`
 
@@ -888,6 +899,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `broka_tts.dart` — BROKA TTS Service
 - `call_foreground_service.dart` — BROKA - Call Foreground Service (Dart bridge)
 - `callkit_service.dart` — BROKA - CallKit bridge (iOS)
+- `chat_screen_memory.dart` — Which of a thread's two screens the user was last on: Zeno's negotiation room (/negotiate) or the direct chat with the other person (/direc…
 - `deep_link_service.dart` — Store links opening in the app.
 - `deepgram_stt_service.dart` — lib/services/deepgram_stt_service.dart
 - `global_poller_service.dart` — BROKA - Global Poller Service
@@ -978,8 +990,10 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
 - `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
+- `call_history_screen_test.dart` — Calls (2026-10-02): every call with a buyer or seller, newest first, on Home's visual system.
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
+- `chat_screen_memory_test.dart` — The Inbox opens the screen the user was using (2026-10-02).
 - `direct_chat_delivery_test.dart` — The one-on-one chat, as reported from a phone (2026-10-02): the last two messages showed twice until the chat was reopened, a message the o…
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `home_buy_agent_watch_test.dart` — Home's "Zeno is watching for you" card can stop the watch (buying-agent review, 2026-09-26).
@@ -1014,6 +1028,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
 - `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
 - `voip_call_permissions_test.dart` — The app closed the moment a call was placed or answered.
+- `voip_call_screen_test.dart` — The call screen, upgraded (2026-10-02).
 - `zeno_about_listing_test.dart` — Zeno, opened from a listing's "Ask Zeno" card (2026-09-29): the listing pinned under the header, questions about it, its id on every turn s…
 - `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
@@ -1100,7 +1115,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Chat messages show once, ticks move, missed calls notify, Zeno sees photos (2026-10-02)
+- `CHANGES.md` — The call screen names who you're calling; a call history; the Inbox opens the chat you were using (2026-10-02)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

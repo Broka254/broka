@@ -34,6 +34,7 @@ import 'screens/mpesa_confirmation_screen.dart';
 import 'screens/econfirm_payment_screen.dart';
 import 'screens/deal_receipt_history_screen.dart';
 import 'screens/voip_call_screen.dart';
+import 'features/calls/presentation/call_history_screen.dart';
 import 'services/global_poller_service.dart';
 import 'theme/motion.dart';
 import 'screens/dispute_screen.dart';
@@ -584,6 +585,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/escrow-payment':   (_) => const EConfirmPaymentScreen(),
         '/deal-history':     (_) => const DealReceiptHistoryScreen(),
         '/voip-call':        (_) => const VoipCallScreen(),
+        '/call-history':     (_) => const CallHistoryScreen(),
         '/dispute':          (_) => const DisputeScreen(),
         '/verify':           (_) => const VerificationScreen(),
         '/boost':            (_) => const BoostScreen(),

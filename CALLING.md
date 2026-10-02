@@ -572,3 +572,41 @@ is ready, and the background handler passes `requestPermission: false`.
 Covered by `flutter_app/test/notification_init_test.dart`. Needs a configured
 Firebase project to matter on a device (FCM_SETUP_REMAINING.md).
 
+
+---
+
+# The call screen, names, and a call history (2026-10-02)
+
+**Names.** A seller calling a buyer from the direct chat saw "Buyer" on the
+call screen (and in the chat's header and call prompt): the chat passed the
+word, not the buyer's name, although the profile it already loads carries
+it. Every call site now passes the other person's name and their id as
+`peerId`; when all the screen gets is a placeholder ("Buyer", "Seller",
+"User", "Someone" - `VoipCallScreen.isPlaceholderName`), it looks the person
+up with `GET /auth/user/{peerId}`. The screen also says which side of the
+deal they are on, next to the listing, from `callerRole` and `isCaller`.
+
+**Look.** `voip_call_screen.dart` is on Home's visual system: the
+constellation behind everything, a glow in the state colour behind the
+person, the chat gradient on their ring, and the controls in a card like
+Home's. The pre-connection hint ("they may not pick up") and the button
+labels were in `textLow`, the dimmest colour, and close to invisible; they
+are `textMid`. Reconnecting is amber rather than the violet of "setting up".
+The call logic (state machine, CallKit, foreground service, result logging)
+is unchanged.
+
+**Call history.** `GET /calls/history` (`routers/calls.py`) lists the
+signed-in user's calls, newest first, from the call cards `log-result`
+already writes into each thread, so a call is in the history exactly when it
+is in the chat. Direction is the viewer's, from the caller's role stored on
+the card - not `sender_id`, which is whichever side logged first. A call the
+callee never picked up ("missed" or "cancelled") is `missed` for the callee.
+Names and photos come once per person in `people`. Pages with `before`.
+The app's Calls screen (`features/calls/`, route `/call-history`) opens from
+the Inbox's header and the Menu; a call opens its chat, and the button at
+its end calls back through the same path as every other call
+(`ZenoActionRunner.callOn`).
+
+Tests: `backend/tests/test_call_history.py`;
+`flutter_app/test/voip_call_screen_test.dart`,
+`flutter_app/test/call_history_screen_test.dart`.

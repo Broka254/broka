@@ -20,6 +20,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../services/chat_screen_memory.dart';
 import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
 import '../widgets/message_receipt.dart';
@@ -30,6 +31,7 @@ import '../widgets/units_stepper.dart';
 import '../widgets/zeno_avatar.dart';
 import '../utils/price_format.dart';
 import '../services/ringtone_service.dart';
+import 'voip_call_screen.dart';
 import '../models/models.dart';
 import '../models/listing.dart';
 import '../services/last_screen_tracker.dart';
@@ -306,6 +308,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   /// Everything that runs once the screen knows its listing and thread.
   void _startThread() {
+    // The Inbox opens this thread here next time, not in Zeno's room
+    // (ChatScreenMemory).
+    unawaited(ChatScreenMemory.remember(_listing!.id, _buyerId, ChatScreen.direct));
     _loadCachedMessages();
     _loadHistory();
     _connectWebSocket();
@@ -377,13 +382,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Widget _headerInitial() => Center(child: Text(
-      (_listing?.sellerName ?? 'S')[0].toUpperCase(),
+      _counterpartyName.isEmpty ? '?' : _counterpartyName[0].toUpperCase(),
       style: const TextStyle(color: Colors.white,
           fontWeight: FontWeight.w800, fontSize: 16)));
 
   Future<void> _loadCounterpartyInfo() async {
     if (_listing == null) return;
-    final counterpartyId = _role == 'buyer' ? _listing!.sellerId : _buyerId;
+    final counterpartyId = _counterpartyId;
     if (counterpartyId == null) return;
     try {
       final info = await ApiService.getUserProfile(counterpartyId);
@@ -392,6 +397,23 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   bool get _counterpartyOnline => (_counterpartyInfo?['is_online'] as bool?) ?? false;
+  /// The other person in the thread - the seller, or for a seller the
+  /// buyer they opened.
+  String? get _counterpartyId => _role == 'buyer' ? _listing?.sellerId : _buyerId;
+  /// Their name. A seller saw "Buyer" here, on the call screen and in the
+  /// call prompt - never the buyer's name, although the profile this chat
+  /// loads for their photo and presence carries it. A buyer sees the name
+  /// the listing gives its seller (a business's name, when it has one), as
+  /// before.
+  String get _counterpartyName {
+    final profile = (_counterpartyInfo?['name'] as String?)?.trim() ?? '';
+    if (_role == 'buyer') {
+      final listed = _listing?.sellerName?.trim() ?? '';
+      if (listed.isNotEmpty) return listed;
+      return profile.isNotEmpty ? profile : 'Seller';
+    }
+    return profile.isNotEmpty ? profile : 'Buyer';
+  }
   String? get _counterpartyLastSeen => _counterpartyInfo?['last_seen_label'] as String?;
   // Already on the payload _loadCounterpartyInfo fetches - the screen just
   // never read it. Used by the call screen's avatar and the header below,
@@ -570,8 +592,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   void _notifyIfAway(ChatMessage cm) {
     final listing = _listing;
     if (_appVisible || listing == null || cm.msgType == 'call') return;
-    final who = (_counterpartyInfo?['name'] as String?) ??
-        (_role == 'buyer' ? (listing.sellerName ?? 'Seller') : 'Buyer');
+    final who = _counterpartyName;
     final preview = switch (cm.msgType) {
       'image' => '\u{1F4F7} Photo',
       'voice' => '\u{1F3A4} Voice message',
@@ -854,7 +875,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // redundant and wrong.
       if (callInfo != null && !_incomingCallShown) {
         final roomId    = callInfo['room_id'] as String?;
-        final callerName = callInfo['caller_name'] as String? ?? 'Buyer';
+        // The caller's app sends its user's name, or "Buyer" when it has
+        // none; the caller is the person this chat is with, whose name the
+        // chat already has.
+        final sentName = callInfo['caller_name'] as String? ?? '';
+        final callerName = VoipCallScreen.isPlaceholderName(sentName)
+            ? _counterpartyName : sentName;
         final callerId   = callInfo['caller_id'] as String? ?? '';
         final callToken  = callInfo['call_token'] as String? ?? '';
         final callType   = callInfo['call_type'] as String? ?? 'audio';
@@ -938,6 +964,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                       'roomId': roomId, 'userId': ApiService.currentUserId ?? '',
                       'callToken': callToken,
                       'isCaller': false, 'peerName': callerName,
+                      'peerId': callerId,
                       'peerPhoto': _counterpartyPhoto,
                       'listingName': _listing?.name ?? '', 'listingId': _listing?.id ?? '',
                       'buyerId': buyerIdForThread, 'callerRole': callerRoleForThread,
@@ -1297,7 +1324,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
               color: BrokaColors.textHigh, fontWeight: FontWeight.w800)),
         ]),
         content: Text(
-            'Start a secure ${isVideo ? 'video ' : ''}call with ${_role == "buyer" ? (listing.sellerName ?? "the seller") : "the buyer"}?',
+            'Start a secure ${isVideo ? 'video ' : ''}call with $_counterpartyName?',
             style: const TextStyle(color: BrokaColors.textMid, height: 1.5)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false),
@@ -1339,7 +1366,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       Navigator.pushNamed(context, '/voip-call', arguments: {
         'roomId': initResult['room_id'], 'userId': ApiService.currentUserId ?? 'anon',
         'callToken': initResult['call_token'],
-        'peerName': _role == 'buyer' ? (listing.sellerName ?? 'Seller') : 'Buyer',
+        'peerName': _counterpartyName,
+        // Lets the call screen fetch the name itself when the profile
+        // hadn't loaded by the time the call was placed.
+        'peerId': _counterpartyId,
         'peerPhoto': _counterpartyPhoto,
         'peerOnline': _counterpartyOnline,
         'listingName': listing.name, 'isCaller': true,
@@ -1723,9 +1753,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         ]),
         const SizedBox(width: 9),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(_role == 'buyer'
-              ? (_listing?.sellerName ?? 'Seller')
-              : 'Buyer',
+          Text(_counterpartyName,
               maxLines: 1, overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: BrokaColors.textHigh,
                   fontWeight: FontWeight.w800, fontSize: 15.5)),

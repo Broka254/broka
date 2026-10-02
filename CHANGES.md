@@ -1,3 +1,54 @@
+# The call screen names who you're calling; a call history; the Inbox opens the chat you were using (2026-10-02)
+
+Reported from a phone, with a screenshot of a seller's call screen headed
+"Buyer": show the person's name, bring the call screen onto the rest of the
+app's design, add a call history, and stop the Inbox putting someone who had
+moved to the direct chat back in Zeno's room every time.
+
+**The call screen** (`lib/screens/voip_call_screen.dart`). On Home's visual
+system - the constellation, a glow in the call's state colour, the chat
+gradient on the person's ring, the controls in a card - with the hint and
+button labels in a readable colour (they were in `textLow`). It shows the
+person's name and which side of the deal they are on, next to the listing.
+The direct chat passed the word "Buyer" as a seller's peer name; it passes
+the buyer's name now (its header and call prompt said "Buyer" too), and
+every call site passes `peerId`, so a placeholder name is looked up. The
+call logic is unchanged. See CALLING.md.
+
+**Call history** (`GET /calls/history` in `api/routers/calls.py`;
+`lib/features/calls/`, route `/call-history`). Every call with a buyer or
+seller, newest first, by day, with a Missed filter; read from the call cards
+already in each thread. Opens from the Inbox's header and the Menu. A call
+opens its chat; its button calls back.
+
+**The Inbox opens the screen you were on** (`lib/services/chat_screen_memory.dart`,
+`lib/screens/inbox_screen.dart`). Each thread remembers, on the phone,
+whether the user was last in Zeno's room or the direct chat, and the Inbox
+opens that one - unless only the other has something new. The direct chat's
+news was already in the inbox (`unread`); Zeno's was not, so each inbox
+thread now carries `zeno_unread` (Zeno's messages to this viewer since they
+were last in Zeno's room) and the room reports what it has shown with
+`POST /negotiate/{listing_id}/zeno-read` - its own watermark row
+(`zeno_buyer` / `zeno_seller` in `thread_read_state`), which marks nothing of
+the other person's read and is never shown to them. A thread from before
+falls back to the direct chat's watermark. A thread never opened on the
+phone opens Zeno's room as before, unless only the direct chat has news. A
+notification about a Zeno message now opens Zeno's room (it opened the direct
+chat, where the message isn't shown).
+
+Also: a seller's Zeno room loaded the history without the buyer's id, so the
+server answered with the latest buyer's room - a seller who opened an earlier
+buyer from the Inbox read someone else's negotiation. It sends the id now.
+
+Tests: `tests/test_call_history.py`, `tests/test_inbox_zeno_unread.py`;
+`test/voip_call_screen_test.dart`, `test/call_history_screen_test.dart`,
+`test/chat_screen_memory_test.dart`. `test/inbox_screen_test.dart`'s thread
+with two unread direct messages now opens the direct chat.
+
+**Not device-verified**: the Android build was not run here; the screens
+were checked in widget tests and rendered to images.
+
+
 # Chat messages show once, ticks move, missed calls notify, Zeno sees photos (2026-10-02)
 
 Reported from a phone: the last messages in a chat showed twice until it was
