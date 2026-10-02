@@ -57,7 +57,13 @@ class Settings:
     # ── AI Providers ──────────────────────────────────────────────────────────
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
-    gemini_model: str = "gemini-2.0-flash"
+    # Google's alias for its newest Flash model, not a pinned version. The
+    # pin this replaces, gemini-2.0-flash, was shut down on 2026-06-01:
+    # every Gemini call since 404'd and fell through to the next provider,
+    # and with it the photo analysis Gemini was first in line for. An alias
+    # moves with Google's releases (two weeks' notice of a breaking change);
+    # set GEMINI_MODEL to pin a version instead.
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-flash-latest"))
     groq_model: str = "llama-3.3-70b-versatile"
     # OpenRouter — TESTING (2026-08): stands in for Groq, whose
     # llama-3.3-70b-versatile model Groq decommissioned on 2026-08-16.

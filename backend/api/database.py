@@ -480,6 +480,14 @@ class NegotiationMessage(Base):
     # than the buyer initiating contact themselves. negotiate_screen.dart
     # renders a disclosure label above such messages - Ch.22's guardrail.
     is_agent_initiated = Column(Boolean, nullable=True)
+    # The id the sender's app gave this message before sending it (direct
+    # chat only). The app shows a message the moment it is typed, before the
+    # server has it; this is how it recognises the server's copy as the same
+    # message instead of drawing a second bubble beside it, and how a resend
+    # after a timeout - when the first attempt did arrive - returns that row
+    # instead of storing the message twice. Unique per sender (index below);
+    # NULL on everything else, and NULLs never collide.
+    client_msg_id  = Column(String(64), nullable=True)
 
     # (listing_id, buyer_id) is the thread-identity pair filtered on
     # throughout negotiate.py (history, inbox, deal-status) and
@@ -492,6 +500,8 @@ class NegotiationMessage(Base):
     # gets its own index above.
     __table_args__ = (
         Index("ix_negotiation_messages_listing_buyer", "listing_id", "buyer_id"),
+        Index("uq_negotiation_messages_sender_client_msg",
+              "sender_id", "client_msg_id", unique=True),
     )
 
 
@@ -1368,6 +1378,9 @@ async def init_db():
             # Retry-safe listing creation (Listing.client_ref). Its unique
             # index is in index_patches below, after this has run.
             "ALTER TABLE listings ADD COLUMN client_ref VARCHAR(64)",
+            # Retry-safe direct-chat messages (NegotiationMessage.client_msg_id).
+            # Its unique index is in index_patches below, after this has run.
+            "ALTER TABLE negotiation_messages ADD COLUMN client_msg_id VARCHAR(64)",
             # Selling terms (Listing.price_unit ... sms_alerts). The two
             # booleans default to what BROKA did before it asked: offers
             # were welcome and the availability SMS was sent.
@@ -1524,6 +1537,10 @@ async def init_db():
             # either database, so listings made without a key are unaffected.
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_listings_seller_client_ref "
             "ON listings (seller_id, client_ref)",
+            # One direct-chat message per (sender, client id) - see
+            # NegotiationMessage.client_msg_id.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_negotiation_messages_sender_client_msg "
+            "ON negotiation_messages (sender_id, client_msg_id)",
             # One review per (deal, reviewer) - see Review.__table_args__.
             # Fails harmlessly, and leaves the service's own check as the
             # only guard, on a database already holding a duplicate.

@@ -18,12 +18,17 @@ class ZenoAssistantRepository {
   ///
   /// [listingId]: the listing the user opened Zeno from to ask about. Only
   /// the id - the server reads the listing itself.
+  ///
+  /// [imageBase64]: a photo for Zeno to look at with this message (raw
+  /// base64). The server checks it, strips its metadata and shrinks it
+  /// before any model sees it.
   Future<Result<ZenoTurnResult>> turn({
     required String message,
     required List<Map<String, String>> history,
     required String language,
     bool voice = false,
     String? listingId,
+    String? imageBase64,
   }) async {
     try {
       final res = await _client.post('/zeno/assistant/turn', {
@@ -32,6 +37,7 @@ class ZenoAssistantRepository {
         'language': language,
         'mode': voice ? 'voice' : 'text',
         if (listingId != null) 'listing_id': listingId,
+        if (imageBase64 != null) 'image_base64': imageBase64,
       });
       if (res is! Map) return const Failure('Zeno sent back nothing usable.');
       return Success(ZenoTurnResult.fromJson(res.cast<String, dynamic>()));
@@ -41,7 +47,8 @@ class ZenoAssistantRepository {
       if (e.statusCode == 404) {
         try {
           final reply = await ApiService.zenoChat(
-              message: message, history: history, language: language);
+              message: message, history: history, language: language,
+              imageBase64: imageBase64);
           return Success(ZenoTurnResult(reply: reply));
         } catch (_) {}
       }

@@ -159,11 +159,14 @@ async def assistant_turn(
     language: str,
     voice: bool = False,
     listing_id: Optional[str] = None,
+    image_base64: Optional[str] = None,
 ) -> dict:
     # 1. A plain command needs no model. A call or chat request only
     #    short-cuts when it names someone the user actually talks to -
     #    "call it a day" is not a request to ring someone called "it".
-    fast = intents.detect_fast(message)
+    #    Not with a photo attached: "help" or "sell" typed under a picture
+    #    is a question about the picture, and the fast path can't see it.
+    fast = None if image_base64 else intents.detect_fast(message)
     if fast:
         action = intents.clean_action(fast)
         if action["type"] != "NONE":
@@ -196,6 +199,7 @@ async def assistant_turn(
             guides=guides.GUIDES,
             topics=(knowledge.TOPIC_HELP if may_ask else None),
             listing=about,
+            image_base64=image_base64,
         )
 
     calls = 1

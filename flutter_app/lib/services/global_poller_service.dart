@@ -29,6 +29,7 @@
 // whichever user is now authenticated on this device.
 
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'api_service.dart';
@@ -67,6 +68,21 @@ class GlobalPollerService {
   // raised once that call stops ringing.
   final Map<String, String> _shownCallNotifications = {};
 
+  /// Whether the app is on screen (main.dart sets it from the lifecycle).
+  /// A thread "being viewed" is only being viewed while the app is in
+  /// front: a chat left open behind the phone's home screen used to
+  /// silence that thread's notifications - messages and missed calls -
+  /// for as long as it stayed open.
+  bool appInForeground = true;
+
+  /// Unread messages across all threads, as of the last sweep: the number
+  /// on Home's Inbox tab. Seeded from the cached inbox at start so the
+  /// badge is right before the first sweep answers.
+  final ValueNotifier<int> unreadTotal = ValueNotifier<int>(0);
+
+  static int unreadIn(Iterable<Map<String, dynamic>> threads) => threads.fold(
+      0, (sum, t) => sum + (((t['unread'] ?? t['unread_count']) as num?)?.toInt() ?? 0));
+
   /// Call from a conversation screen's initState / onResume.
   void markScreenActive(String listingId, {String? buyerId}) {
     _activelyViewedThreads.add(threadKeyFor(listingId, buyerId));
@@ -84,6 +100,7 @@ class GlobalPollerService {
 
   void start() {
     _timer?.cancel();
+    unawaited(_seedUnreadFromCache());
     _timer = Timer.periodic(const Duration(seconds: 7), (_) => _checkAll());
     // Run once immediately rather than waiting for the first tick.
     _checkAll();
@@ -128,7 +145,21 @@ class GlobalPollerService {
     _timer = null;
     _activelyViewedThreads.clear();
     _shownCallNotifications.clear();
+    unreadTotal.value = 0;
   }
+
+  Future<void> _seedUnreadFromCache() async {
+    final cached = await LocalChatStore.load(LocalChatStore.inboxListScope);
+    // Only if no sweep has answered yet - the cache is older than any sweep.
+    if (cached.isNotEmpty && unreadTotal.value == 0) {
+      unreadTotal.value = unreadIn(cached);
+    }
+  }
+
+  bool _isOnScreen(Map<String, dynamic> thread) =>
+      appInForeground &&
+      _activelyViewedThreads.contains(
+          threadKeyFor(thread['listing_id'] as String, thread['buyer_id'] as String?));
 
   Future<void> _checkAll() async {
     if (_checking) return; // avoid overlapping runs if one is slow
@@ -147,12 +178,15 @@ class GlobalPollerService {
       // actively chatting the whole time.
       unawaited(LocalChatStore.save(LocalChatStore.inboxListScope,
           threads.length > 300 ? threads.sublist(0, 300) : threads));
+      // The thread on screen is being read as it arrives; its count is
+      // about to be zero (the chat marks it read), so don't flash it.
+      unreadTotal.value = unreadIn(threads.where(
+          (t) => t['listing_id'] is String && !_isOnScreen(t)));
       final prefs = await SharedPreferences.getInstance();
       for (final thread in threads) {
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
-        if (_activelyViewedThreads.contains(
-            threadKeyFor(listingId, thread['buyer_id'] as String?))) {
+        if (_isOnScreen(thread)) {
           // Record the signature before skipping. A bare `continue` here
           // would leave the last message looking unseen, so closing the
           // screen would fire a notification for something already read -
@@ -212,6 +246,45 @@ class GlobalPollerService {
     return 'global_poll_seen_${listingId}_$buyerId';
   }
 
+  String _seenIdKeyFor(Map<String, dynamic> thread) {
+    final listingId = thread['listing_id'];
+    final buyerId   = thread['buyer_id'] ?? '';
+    return 'global_poll_seen_id_${listingId}_$buyerId';
+  }
+
+  static String _textSignature(Map<String, dynamic> thread) =>
+      '${thread['last_role'] ?? ''}|${thread['last_msg_type'] ?? 'text'}|'
+      '${thread['last_message'] ?? ''}';
+
+  /// Whether the thread's last message has already been dealt with
+  /// (notified, or read on screen).
+  ///
+  /// By the message's id. It used to be by its text alone - so a second
+  /// missed call from the same person ("buyer|call|cancelled" again), or a
+  /// second "ok", looked like the one already announced and was never
+  /// notified. The text is still the fallback: from a server that sends no
+  /// id, and on the first sweep after updating, when no id has been
+  /// recorded yet and every thread would otherwise announce its last
+  /// message again.
+  bool _alreadyHandled(Map<String, dynamic> thread, SharedPreferences prefs) {
+    final id = thread['last_message_id'] as String?;
+    if (id != null && id.isNotEmpty) {
+      final seenId = prefs.getString(_seenIdKeyFor(thread));
+      if (seenId != null) return seenId == id;
+    }
+    return prefs.getString(_seenKeyFor(thread)) == _textSignature(thread);
+  }
+
+  Future<void> _recordHandled(
+    Map<String, dynamic> thread, SharedPreferences prefs,
+  ) async {
+    await prefs.setString(_seenKeyFor(thread), _textSignature(thread));
+    final id = thread['last_message_id'] as String?;
+    if (id != null && id.isNotEmpty) {
+      await prefs.setString(_seenIdKeyFor(thread), id);
+    }
+  }
+
   /// Mark a thread as seen without notifying.
   ///
   /// Used for the thread on screen. Recording the signature is the whole
@@ -223,10 +296,7 @@ class GlobalPollerService {
   ) async {
     final lastMessage = thread['last_message'] as String? ?? '';
     if (lastMessage.isEmpty) return;
-    final lastRole = thread['last_role'] as String? ?? '';
-    final msgType  = thread['last_msg_type'] as String? ?? 'text';
-    await prefs.setString(
-        _seenKeyFor(thread), '$lastRole|$msgType|$lastMessage');
+    await _recordHandled(thread, prefs);
   }
 
   /// Key recording that this install has completed at least one sweep.
@@ -244,12 +314,8 @@ class GlobalPollerService {
     // Don't notify about our own most recent message.
     if (lastRole == myRole) return;
 
-    final key = _seenKeyFor(thread);
-    final signature = '$lastRole|$msgType|$lastMessage';
-    final lastSeenSignature = prefs.getString(key);
-    if (lastSeenSignature == signature) return; // already notified for this message
-
-    await prefs.setString(key, signature);
+    if (_alreadyHandled(thread, prefs)) return; // already notified for this message
+    await _recordHandled(thread, prefs);
 
     // Suppression is now per-INSTALL, not per-thread.
     //
@@ -296,17 +362,15 @@ class GlobalPollerService {
       // "completed" is a call that happened and both parties know about.
       // "declined" was the user's own deliberate act. Neither is news.
       if (outcome != 'missed' && outcome != 'cancelled') return;
-      final isVideo = (thread['last_call_type'] as String?) == 'video';
-      await NotificationService.instance.showNewMessage(
-        fromName: fromName,
-        preview: isVideo ? 'Missed video call' : 'Missed call',
-        threadKey: 'missed_${thread['listing_id']}_${thread['buyer_id'] ?? ''}',
-        payload: {
-          'type':      'new_message',
-          'listingId': thread['listing_id'],
-          'buyerId':   thread['buyer_id'],
-          'myRole':    myRole,
-        },
+      // Under the same tag as the server's missed-call push
+      // (NotificationService.missedCallTag), so the two are one.
+      await NotificationService.instance.showMissedCall(
+        listingId:   thread['listing_id'] as String,
+        buyerId:     thread['buyer_id'] as String?,
+        myRole:      myRole,
+        callerName:  fromName,
+        isVideo:     (thread['last_call_type'] as String?) == 'video',
+        listingName: thread['listing_name'] as String?,
       );
       return;
     }

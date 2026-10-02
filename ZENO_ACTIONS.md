@@ -95,6 +95,31 @@ the seller's description or not at all - so:
   remembering which listing), and not through Zeno's session: the session's
   turns carry no listing.
 
+## Showing Zeno a photo (2026-10-02)
+
+The Zeno tab's composer has a photo button (BROKA's camera or the gallery,
+as listing photos are taken); the photo waits in the composer and goes with
+the next message, or on its own. The negotiation room has the same button,
+and the damaged-goods report sends its photo the same way. On the server
+(`image_base64` on `/zeno/assistant/turn`, `/negotiate/message`,
+`/negotiate/chat`):
+
+- **Checked and stripped first** (`api/core/vision.py`): opened by Pillow,
+  refused with a 422 if it isn't an image, metadata (GPS included) removed,
+  shrunk to 960px JPEG - before any provider sees it.
+- **Only providers that can see get it**: Gemini (`GEMINI_MODEL`, Google's
+  `gemini-flash-latest` alias by default; the old `gemini-2.0-flash` pin
+  was shut down on 2026-06-01), then DeepSeek. When neither answers, a
+  text model is told there was a photo it cannot see, rather than answer
+  as if none was sent. The damage assessment, quoted to the seller, takes
+  only a model that saw it (`require_vision`).
+- **Private to the sender.** In the negotiation room only the sender's own
+  reply is written with the photo in view; the relay to the other party is
+  drafted without it.
+- **Not a fast-path command.** "sell" typed under a photo is a question
+  about the photo.
+- Kept on the phone as "📷 Photo" in the saved conversation, not the photo.
+
 ## Safety properties, all tested
 
 - **Only people the user already talks to.** `contacts.resolve` matches the

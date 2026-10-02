@@ -57,9 +57,12 @@
 // saved conversation. When it doesn't fit what the buyer wants, Zeno offers
 // a search - a card with a button, not a search that just happens.
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
+import '../services/photo_capture.dart';
 import '../services/realtime_stt.dart';
 import '../services/zeno_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
@@ -109,8 +112,21 @@ class _Turn {
 
   /// The assistant: what Zeno is doing, or offering to do, with this reply.
   final ZenoAction? action;
-  const _Turn(this.message, {this.matches = const [], this.retry, this.action});
+
+  /// A photo the user showed Zeno with this message. Kept for this visit
+  /// only: a conversation picked up later shows that a photo was sent, not
+  /// the photo (SharedPreferences holds every value in memory).
+  final Uint8List? photo;
+
+  /// With [retry]: the photo to send again.
+  final Uint8List? retryPhoto;
+  const _Turn(this.message,
+      {this.matches = const [], this.retry, this.action, this.photo, this.retryPhoto});
 }
+
+/// What a photo turn reads as in the saved conversation and in the
+/// context sent with later turns, where the photo itself is not.
+String _withPhotoNote(String text) => text.isEmpty ? '📷 Photo' : '📷 $text';
 
 // ── Language definitions ──────────────────────────────────────────────────────
 class _Lang {
@@ -156,6 +172,10 @@ class ZenoScreen extends StatefulWidget {
   /// null for the real one (RealtimeSttManager).
   final RealtimeSttProvider? voiceService;
 
+  /// Where the photo button gets a photo. Tests pass bytes; the app leaves
+  /// it null for BROKA's camera or the gallery (PhotoCapture).
+  final Future<Uint8List?> Function(BuildContext context)? photoPicker;
+
   const ZenoScreen({
     super.key,
     this.mode = ZenoMode.assistant,
@@ -164,6 +184,7 @@ class ZenoScreen extends StatefulWidget {
     this.animateBackground = true,
     this.startInVoice = false,
     @visibleForTesting this.voiceService,
+    @visibleForTesting this.photoPicker,
   });
 
   @override
@@ -180,6 +201,9 @@ class _ZenoScreenState extends State<ZenoScreen>
   final FocusNode _composerFocus = FocusNode();
   bool _hasDraft = false;
   bool _composerFocused = false;
+
+  /// A photo waiting in the composer to go with the next message.
+  Uint8List? _photo;
   final _scrollCtrl = ScrollController();
   bool _typing      = false;
   final List<_Turn> _turns = [];
@@ -456,7 +480,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           for (final t in _turns)
             ZenoStoredTurn(
               role: t.message.role,
-              content: t.message.content,
+              content: t.photo != null ? _withPhotoNote(t.message.content) : t.message.content,
               matches: [
                 for (final m in t.matches)
                   if (m is Map) m.cast<String, dynamic>(),
@@ -589,20 +613,26 @@ class _ZenoScreenState extends State<ZenoScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) => _arriving.remove(turn));
   }
 
-  Future<void> _send([String? override]) async {
+  /// [photoOverride]: a failed photo turn's photo, sent again.
+  Future<void> _send([String? override, Uint8List? photoOverride]) async {
     final text = (override ?? _msgCtrl.text).trim();
-    if (text.isEmpty || _typing) return;
+    // The composer's photo goes with a typed message, not with one sent on
+    // the user's behalf (a suggestion, Home's query, a retry of text).
+    final photo = override == null ? _photo : photoOverride;
+    if ((text.isEmpty && photo == null) || _typing) return;
     _msgCtrl.clear();
+    if (_photo != null && override == null) setState(() => _photo = null);
     // While Zeno's session is on, it is the one conversation: a typed turn
     // goes through it too, so its actions dock rather than end it, and its
     // replies aren't spoken twice. It comes back through sessionHeard.
+    // A photo can't go that way - the session carries words.
     final session = _session;
-    if (!_isBuying && session != null && session.isActive) {
+    if (!_isBuying && photo == null && session != null && session.isActive) {
       unawaited(session.send(text));
       return;
     }
     setState(() {
-      _addArriving(_Turn(Message(role: 'user', content: text)));
+      _addArriving(_Turn(Message(role: 'user', content: text), photo: photo));
       _typing = true;
     });
     _scrollDown();
@@ -611,7 +641,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     // sending it in both put every message into Zeno's context twice.
     final context20 = _recentHistory(20);
     final context40 = _recentHistory(40);
-    _history.add({'role': 'user', 'content': text});
+    _history.add({'role': 'user', 'content': photo != null ? _withPhotoNote(text) : text});
     _persist();
     final epoch = _epoch;
 
@@ -623,11 +653,14 @@ class _ZenoScreenState extends State<ZenoScreen>
     // The assistant: a reply, and maybe something to do. Typed or spoken,
     // it is the same turn; voice only asks for a reply that reads aloud.
     final result = await zenoAssistantRepository.turn(
-      message: text,
+      // A photo on its own still asks something - and a server from before
+      // photos refuses an empty message.
+      message: text.isEmpty && photo != null ? 'What can you tell me about this?' : text,
       history: context20,
       language: _langKey,
       voice: _voice.isOpen,
       listingId: _about?.id,
+      imageBase64: photo != null ? base64Encode(photo) : null,
     );
     if (!mounted || epoch != _epoch) return;
     switch (result) {
@@ -658,10 +691,41 @@ class _ZenoScreenState extends State<ZenoScreen>
         _history.removeLast();
         await _endVoice();
         if (mounted) await showPremiumUpsell(context, message: message);
+      case Failure(:final message, statusCode: 422) when photo != null:
+        // The server couldn't use the photo (not an image, damaged) - its
+        // message says so. Sending the same file again won't help.
+        setState(() {
+          _addArriving(_Turn(Message(role: 'broker', content: '⚠️ $message')));
+          _typing = false;
+        });
+        _history.removeLast();
       case Failure():
-        _turnFailed(text, '⚠️ Zeno is unavailable right now. Please try again shortly.');
+        _turnFailed(text, '⚠️ Zeno is unavailable right now. Please try again shortly.',
+            photo: photo);
     }
     _scrollDown();
+  }
+
+  /// The photo button: BROKA's camera or the gallery, the way listing and
+  /// chat photos are taken (PhotoCapture). The photo waits in the composer
+  /// until it is sent, with or without a question.
+  Future<void> _attachPhoto() async {
+    if (_typing) return;
+    final Uint8List? bytes;
+    final picker = widget.photoPicker;
+    if (picker != null) {
+      bytes = await picker(context);
+    } else {
+      final source = await PhotoCapture.askSource(context);
+      if (source == null || !mounted) return;
+      final file = await (source == PhotoSource.camera
+          ? PhotoCapture.takePhoto(context,
+              hint: 'Show Zeno the item clearly, in good light.')
+          : PhotoCapture.pickFromGallery(context));
+      bytes = file == null ? null : await file.readAsBytes();
+    }
+    if (bytes == null || !mounted) return;
+    setState(() => _photo = bytes);
   }
 
   // ── The assistant's actions ────────────────────────────────────────────────
@@ -769,9 +833,10 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// A turn whose reply never came. The error carries the message, so
   /// "Try again" needs nothing retyped. Not saved - as before, a failure
   /// is not part of the conversation to come back to.
-  void _turnFailed(String text, String error) {
+  void _turnFailed(String text, String error, {Uint8List? photo}) {
     setState(() {
-      _addArriving(_Turn(Message(role: 'broker', content: error), retry: text));
+      _addArriving(_Turn(Message(role: 'broker', content: error),
+          retry: text, retryPhoto: photo));
       _typing = false;
     });
   }
@@ -790,9 +855,10 @@ class _ZenoScreenState extends State<ZenoScreen>
         _turns.removeLast();
       }
     });
-    final h = _history.lastIndexWhere((e) => e['role'] == 'user' && e['content'] == text);
+    final sent = failed.retryPhoto != null ? _withPhotoNote(text) : text;
+    final h = _history.lastIndexWhere((e) => e['role'] == 'user' && e['content'] == sent);
     if (h != -1) _history.removeAt(h);
-    _send(text);
+    _send(text, failed.retryPhoto);
   }
 
   /// One turn of the buying conversation.
@@ -1477,6 +1543,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           fromUser: !turn.message.isBroker,
           child: _ZenoBubble(
             message: turn.message,
+            photo: turn.photo,
             stream: writing,
             onStreamed: () => _streamed(turn),
             onGrow: _followStream,
@@ -1763,15 +1830,26 @@ class _ZenoScreenState extends State<ZenoScreen>
                   ? [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 14)]
                   : null,
             ),
-            child: Row(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (_photo != null) _buildStagedPhoto(_photo!),
+              Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 4, 14),
-                  child: Icon(Icons.auto_awesome_rounded,
-                      size: 18,
-                      color: _composerFocused ? BrokaColors.neonBlue : BrokaColors.textMid),
-                ),
+                // The assistant can look at a photo; the Buying Agent's
+                // conversation is about words (what you want, your budget).
+                if (_isBuying)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 4, 14),
+                    child: Icon(Icons.auto_awesome_rounded,
+                        size: 18,
+                        color: _composerFocused ? BrokaColors.neonBlue : BrokaColors.textMid),
+                  )
+                else
+                  ChatComposerAction(
+                    icon: Icons.add_photo_alternate_outlined,
+                    tooltip: 'Show Zeno a photo',
+                    onTap: _attachPhoto,
+                  ),
                 Expanded(
                   child: TextField(
                     key: const Key('zeno-composer'),
@@ -1803,7 +1881,7 @@ class _ZenoScreenState extends State<ZenoScreen>
                 // Opens the Zeno voice card over this conversation. The
                 // composer stays exactly where it is underneath - voice is
                 // another way in, not a replacement for typing.
-                if (!_hasDraft)
+                if (!_hasDraft && _photo == null)
                   InkResponse(
                     onTap: _openVoice,
                     radius: 22,
@@ -1824,12 +1902,49 @@ class _ZenoScreenState extends State<ZenoScreen>
                   ),
               ],
             ),
+            ]),
           ),
         ),
-        ChatSendButton(visible: _hasDraft, busy: _typing, onTap: () => _send()),
+        ChatSendButton(visible: _hasDraft || _photo != null, busy: _typing, onTap: () => _send()),
       ],
     ),
   );
+
+  /// The photo waiting to go with the next message, with a way to take it
+  /// back out.
+  Widget _buildStagedPhoto(Uint8List photo) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Stack(clipBehavior: Clip.none, children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.memory(photo,
+                  key: const Key('zeno-staged-photo'),
+                  width: 72, height: 72, fit: BoxFit.cover, gaplessPlayback: true,
+                  errorBuilder: (_, __, ___) => Container(
+                      width: 72, height: 72, color: BrokaColors.bgMid,
+                      child: const Icon(Icons.broken_image_rounded, color: BrokaColors.textLow))),
+            ),
+            Positioned(
+              right: -8, top: -8,
+              child: Material(
+                color: BrokaColors.bgMid,
+                shape: const CircleBorder(side: BorderSide(color: BrokaColors.border)),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => setState(() => _photo = null),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.close_rounded, size: 14,
+                        color: BrokaColors.textHigh, semanticLabel: 'Remove the photo'),
+                  ),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      );
 }
 
 // ── Zeno Chat Bubble ─────────────────────────────────────────────────────────
@@ -1839,11 +1954,16 @@ class _ZenoScreenState extends State<ZenoScreen>
 class _ZenoBubble extends StatelessWidget {
   final Message message;
 
+  /// A photo the user showed Zeno with this message.
+  final Uint8List? photo;
+
   /// A reply that has just arrived: written out word by word.
   final bool stream;
   final VoidCallback? onStreamed;
   final VoidCallback? onGrow;
-  const _ZenoBubble({required this.message, this.stream = false, this.onStreamed, this.onGrow});
+  const _ZenoBubble({
+    required this.message, this.photo, this.stream = false, this.onStreamed, this.onGrow,
+  });
 
   static const _zenoCorners = BorderRadius.only(
       topLeft: Radius.circular(4),
@@ -1905,15 +2025,34 @@ class _ZenoBubble extends StatelessWidget {
                         onDone: onStreamed,
                         onGrow: onGrow,
                       )
-                    : Text(message.content,
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 14.5, height: 1.5)),
+                    : _userContent(context),
               ),
             ),
           ),
         ],
       ),
     );
+  }
+}
+
+extension on _ZenoBubble {
+  Widget _userContent(BuildContext context) {
+    final text = Text(message.content,
+        style: const TextStyle(color: Colors.white, fontSize: 14.5, height: 1.5));
+    final shown = photo;
+    if (shown == null) return text;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.memory(shown,
+            key: const Key('zeno-sent-photo'),
+            width: 200, height: 200, fit: BoxFit.cover, gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => const SizedBox(
+                width: 200, height: 60,
+                child: Icon(Icons.broken_image_rounded, color: Colors.white70))),
+      ),
+      if (message.content.isNotEmpty) ...[const SizedBox(height: 8), text],
+    ]);
   }
 }
 

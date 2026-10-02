@@ -72,6 +72,10 @@ class Message {
   // standing Buy-Agent request, not the buyer's own initiative - renders
   // a disclosure label above the bubble (Design Journal Volume 6, Ch.22).
   final bool isAgentInitiated;
+  // On the viewer's own direct-chat messages: the id their app gave the
+  // message before sending it, so the chat can match the copy it already
+  // shows (backend NegotiationMessage.client_msg_id).
+  final String? clientMsgId;
 
   const Message({
     required this.role,
@@ -88,6 +92,7 @@ class Message {
     this.suggestDirectChat = false,
     this.zenoAction,
     this.isAgentInitiated = false,
+    this.clientMsgId,
   });
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -104,6 +109,7 @@ class Message {
     suggestDirectChat: (j['suggest_direct_chat'] as bool?) ?? false,
     zenoAction: (j['zeno_action'] as Map?)?.cast<String, dynamic>(),
     isAgentInitiated: (j['is_agent_initiated'] as bool?) ?? false,
+    clientMsgId:     j['client_msg_id']    as String?,
     createdAt:       j['created_at'] != null
         ? DateTime.tryParse(j['created_at'] as String)
         : null,
@@ -127,6 +133,7 @@ class Message {
     'duration_secs': durationSecs,
     'call_type': callType,
     'created_at': createdAt?.toIso8601String(),
+    'client_msg_id': clientMsgId,
   };
 }
 

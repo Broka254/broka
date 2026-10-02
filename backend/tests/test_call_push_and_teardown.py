@@ -43,9 +43,16 @@ class _FakeApsAlert:
 
 
 class _FakeAndroidConfig:
-    def __init__(self, priority=None, ttl=None):
+    def __init__(self, priority=None, ttl=None, notification=None):
         self.priority = priority
         self.ttl = ttl
+        self.notification = notification
+
+
+class _FakeAndroidNotification:
+    def __init__(self, tag=None, channel_id=None):
+        self.tag = tag
+        self.channel_id = channel_id
 
 
 class _FakeAPNSConfig:
@@ -83,6 +90,7 @@ def captured(monkeypatch):
         Message=_FakeMessage,
         Notification=_FakeNotification,
         AndroidConfig=_FakeAndroidConfig,
+        AndroidNotification=_FakeAndroidNotification,
         APNSConfig=_FakeAPNSConfig,
         APNSPayload=_FakeAPNSPayload,
         Aps=_FakeAps,
@@ -150,6 +158,19 @@ class TestCallPushShaping:
         assert msg.apns.payload.aps.alert.title == "Your deal is ready"
         assert msg.apns.payload.aps.content_available is not True
         assert msg.notification is not None
+
+    @pytest.mark.asyncio
+    async def test_a_tagged_push_is_drawn_under_that_tag(self, captured):
+        """The missed-call push is tagged so the app's own notification for
+        the same missed call replaces it rather than doubling it."""
+        await calls_module._send_fcm(
+            "tok", "Missed call from Ann", "About: Phone", {"type": "missed_call"},
+            android_tag="missed_L1_B1", android_channel_id="broka_messages",
+        )
+        msg = captured[0]
+        assert msg.notification is not None
+        assert msg.android.notification.tag == "missed_L1_B1"
+        assert msg.android.notification.channel_id == "broka_messages"
 
     @pytest.mark.asyncio
     async def test_push_without_ttl_is_still_valid(self, captured):

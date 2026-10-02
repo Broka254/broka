@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 import httpx
 
+from api.core import gemini
 from api.core.config import settings
 from api.core.circuit_breaker import (
     gemini_breaker, deepseek_breaker, openrouter_breaker, groq_breaker, CircuitOpenError,
@@ -84,6 +85,13 @@ You:
   request is too vague to rank (e.g. no budget, no category)
 Response format: natural conversational text (no markdown). Keep replies
 under 200 words."""
+
+# Added to a turn whose photo no provider could look at.
+PHOTO_UNSEEN_NOTE = (
+    "(The user attached a photo to this message, but image analysis is unavailable right "
+    "now, so you cannot see it. Say so plainly in one short sentence and ask them to "
+    "describe it instead. Do not guess what it shows.)"
+)
 
 _CACHE_KEY_PREFIX = "broka:ai_cache:"
 _CACHE_TTL        = 3600
@@ -649,6 +657,7 @@ class AIBrokerService:
         guides: Optional[dict[str, str]] = None,
         topics: Optional[dict[str, str]] = None,
         listing: Optional[dict] = None,
+        image_base64: Optional[str] = None,
     ) -> dict:
         """One turn of Zeno as the user's assistant: talk, and - when asked -
         name ONE thing to do (open a screen, search, hand over to the Buying
@@ -675,6 +684,10 @@ class AIBrokerService:
         its words through as the reply - an assistant that goes silent
         because its answer wasn't wrapped in braces is worse than one that
         occasionally does nothing.
+
+        [image_base64], a prepared JPEG (core/vision.py), is a photo the
+        user attached to this message; only vision-capable providers are
+        given it (see _call_ai_with_image).
         """
         transcript = "\n".join(
             f"{'User' if h.get('role') == 'user' else 'Zeno'}: "
@@ -725,6 +738,17 @@ class AIBrokerService:
                 + "\n"
             )
 
+        photo = (
+            "THE USER ATTACHED A PHOTO to their newest message - it is the image with this "
+            "prompt. Look at it and answer about what you actually see: what the item is, its "
+            "visible condition, a rough Kenyan price range if they ask what it's worth, what to "
+            "check before buying, or how to photograph and list it if they want to sell it. Be "
+            "honest about what a photo cannot show: it cannot prove an item is genuine, working "
+            "or not stolen. If the photo is unclear, say what you can't make out. Never invent "
+            "text, serial numbers or prices you cannot read in it.\n\n"
+            if image_base64 else ""
+        )
+
         prompt = (
             "You are Zeno, the AI assistant inside BROKA, an East African marketplace where "
             "buyers and sellers deal through escrow. You talk with the user one on one - "
@@ -732,7 +756,8 @@ class AIBrokerService:
             "can also DO things in the app for them.\n\n"
             f"User's name: {user_name or '(unknown)'}\n"
             f"Conversation so far:\n{transcript}\n\n"
-            f"User's newest message: \"{_clip(message, 1000)}\"\n\n"
+            f"User's newest message: \"{_clip(message, 1000) or '(just the photo)'}\"\n\n"
+            + photo +
             "THINGS YOU CAN DO (at most one per turn, and only when the user asks for it or "
             "clearly wants it):\n"
             "- NAVIGATE: open a screen. destination must be one of these ids:\n"
@@ -772,7 +797,8 @@ class AIBrokerService:
             '"guide": "<guide id or null>", "topics": ["<topic>"] or null}}'
         )
 
-        raw = (await self._call_ai([{"role": "user", "content": prompt}], cache_key=None) or "").strip()
+        raw = (await self._call_ai([{"role": "user", "content": prompt}], cache_key=None,
+                                   image_base64=image_base64) or "").strip()
         try:
             parsed = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
             if not isinstance(parsed, dict):
@@ -956,7 +982,10 @@ class AIBrokerService:
         messages.append({"role": "user", "content": current})
         return messages
 
-    async def _call_ai(self, messages: list[dict], cache_key: Optional[str] = None) -> str:
+    async def _call_ai(self, messages: list[dict], cache_key: Optional[str] = None,
+                       image_base64: Optional[str] = None) -> str:
+        if image_base64:
+            return await self._call_ai_with_image(messages, image_base64)
         # 1. Try Gemini via circuit breaker
         if self.gemini_key:
             try:
@@ -1015,15 +1044,46 @@ class AIBrokerService:
         # 6. Hard failure
         raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again shortly.")
 
-    async def _call_gemini(self, messages: list[dict]) -> str:
+    async def _call_ai_with_image(self, messages: list[dict], image_base64: str) -> str:
+        """A turn the user attached a photo to.
+
+        Only Gemini and DeepSeek can see, so only they are given it. When
+        neither can (no key, both down), the turn still gets an answer from
+        a text model - told that there was a photo it cannot see. Answering
+        as though no photo had been sent is the failure this avoids: Zeno
+        confidently describing a picture it never received.
+
+        [image_base64] is a prepared JPEG (api/core/vision.prepare_for_model).
+        Never cached: the cache key is built from the text alone.
+        """
+        if self.gemini_key:
+            try:
+                return await gemini_breaker.call(self._call_gemini, messages, image_base64)
+            except CircuitOpenError:
+                logger.warning("[ai_broker] Gemini circuit OPEN - photo goes to DeepSeek")
+            except Exception as e:
+                logger.warning("[ai_broker] Gemini failed with a photo: %s - trying DeepSeek", e)
+        if self.deepseek_key:
+            try:
+                return await deepseek_breaker.call(self._call_deepseek, messages, image_base64)
+            except CircuitOpenError:
+                logger.warning("[ai_broker] DeepSeek circuit OPEN - no provider can see the photo")
+            except Exception as e:
+                logger.warning("[ai_broker] DeepSeek failed with a photo: %s", e)
+        logger.warning("[ai_broker] no vision provider answered - telling the model it can't see the photo")
+        return await self._call_ai(messages + [{"role": "user", "content": PHOTO_UNSEEN_NOTE}])
+
+    async def _call_gemini(self, messages: list[dict], image_base64: Optional[str] = None) -> str:
         url   = GEMINI_URL.format(model=settings.gemini_model, key=self.gemini_key)
         parts = [{"text": m["content"]} for m in messages if m.get("content")]
+        if image_base64:
+            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image_base64}})
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.post(url, json={"contents": [{"parts": parts}]})
         r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return gemini.reply_text(r.json())
 
-    async def _call_deepseek(self, messages: list[dict]) -> str:
+    async def _call_deepseek(self, messages: list[dict], image_base64: Optional[str] = None) -> str:
         """
         Direct DeepSeek V4 Flash API call - NOT via OpenRouter. Sits
         between Gemini and OpenRouter/Nemotron in the fallback chain (see
@@ -1045,6 +1105,14 @@ class AIBrokerService:
             # this, but this defends the method itself against being
             # invoked directly (e.g. from a test) without that gate.
             raise ValueError("DEEPSEEK_API_KEY not configured")
+
+        if image_base64 and messages and messages[-1].get("role") == "user":
+            # OpenAI's content-parts shape, as negotiate.py's caller sends it:
+            # the photo rides on the last user turn, beside its text.
+            messages = messages[:-1] + [{"role": "user", "content": [
+                {"type": "text", "text": messages[-1].get("content", "")},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+            ]}]
 
         url = f"{settings.deepseek_base_url}/chat/completions"
         payload = {

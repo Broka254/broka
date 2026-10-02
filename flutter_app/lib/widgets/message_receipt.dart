@@ -89,11 +89,10 @@ class MessageReceiptIcon extends StatelessWidget {
           icon: Icons.error_outline_rounded,
           color: BrokaColors.danger,
           size: 15,
-          // "Not sent", not "tap to retry": nothing in negotiation_screen
-          // retries a failed send. An optimistic bubble whose request failed
-          // just stays on screen (see the catch in _send). Promising a retry
-          // the app does not implement would be a worse lie than the silent
-          // grey tick this replaces.
+          // Short, so it fits beside the role label on a narrow phone. The
+          // bubble itself is what is tapped to try again or delete it
+          // (negotiation_screen's _onUnsentTap), and a snackbar says so
+          // when a send fails.
           label: 'Not sent',
           semantics: 'Not sent',
           bold: true,
@@ -235,12 +234,12 @@ MessageReceipt receiptFor({
     // A pending bubble that has sat there too long is not "sending", it is
     // not sent.
     //
-    // negotiation_screen never passes `failed:` - its send path catches the
-    // error and leaves the optimistic bubble exactly as it was (see the
-    // catch in _send). So `failed` was unreachable and a message that never
-    // left the device showed a clock icon indefinitely, which is the
-    // precise ambiguity this whole ladder exists to remove: "still going"
-    // and "gone forever" rendered identically.
+    // negotiation_screen passes `failed:` once a send has actually failed;
+    // this covers the rest - a request still hanging, or one that never
+    // reported back - so a message that never left the device can't show a
+    // clock icon indefinitely, the precise ambiguity this whole ladder
+    // exists to remove: "still going" and "gone forever" rendered
+    // identically.
     //
     // 20s is well past any normal round trip on a slow connection but short
     // enough that the user finds out while they still remember sending it.

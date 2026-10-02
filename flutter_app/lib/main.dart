@@ -71,6 +71,19 @@ Map<String, dynamic>? pendingColdStartCallData;
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  if (message.data['type'] == 'missed_call') {
+    // The phone draws this push itself (it is a notification push), so
+    // nothing to post - but the call's ringing notification, posted from
+    // the incoming-call push, may still be up and ringing: nothing else
+    // can tell a closed app that the caller gave up.
+    final roomId = message.data['roomId'] as String?;
+    if (roomId == null || roomId.isEmpty) return;
+    final svc = NotificationService.instance;
+    await svc.initialize(
+        navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+    await svc.cancelIncomingCall(roomId);
+    return;
+  }
   if (message.data['type'] == 'incoming_call') {
     // A fresh, throwaway navigator key - nothing in this isolate ever
     // attaches a real Navigator to it, and nothing needs to: showing the
@@ -477,6 +490,9 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // A chat open behind the home screen is not being read: the poller
+    // notifies about its thread again until the app is back in front.
+    GlobalPollerService.instance.appInForeground = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.paused) {
       _pausedAt = DateTime.now();
       // Stop pinging while backgrounded so "last seen" actually freezes at

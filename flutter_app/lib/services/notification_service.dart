@@ -317,6 +317,12 @@ class NotificationService {
   /// code path, so behavior is identical no matter which mechanism
   /// detected the call.
   Future<void> handleForegroundFcmMessage(Map<String, dynamic> data) async {
+    if (data['type'] == 'missed_call') {
+      // A notification push, which the phone draws by itself only while
+      // the app is NOT in front - in front, it arrives here instead.
+      await showMissedCallFromPush(data);
+      return;
+    }
     if (data['type'] != 'incoming_call') return;
     final roomId = data['roomId'] as String?;
     if (roomId == null) return;
@@ -432,7 +438,7 @@ class NotificationService {
       nav.pushNamed('/review', arguments: {'deal_id': dealId});
       return;
     }
-    if (type == 'new_message') {
+    if (type == 'new_message' || type == 'missed_call') {
       final role = data['myRole'] as String? ?? 'buyer';
       nav.pushNamed('/direct-chat', arguments: {
         'listingId': data['listingId'] as String?,
@@ -473,6 +479,80 @@ class NotificationService {
     } catch (e) {
       debugPrint('[Notifications] showNewMessage failed: $e');
     }
+  }
+
+  /// The tag a thread's missed-call notification is posted under. The
+  /// server's missed-call push (calls.py's _push_missed_call), which the
+  /// phone draws by itself when the app is closed, uses the same tag - and
+  /// Android replaces a notification with the same (tag, id) pair, FCM
+  /// drawing its tagged ones with id 0. So a missed call is one
+  /// notification whether the push, the foreground handler or the inbox
+  /// poller noticed it, or all three.
+  static String missedCallTag(String listingId, String? buyerId) =>
+      'missed_${listingId}_${buyerId ?? ''}';
+
+  /// "Missed call from Ann". Tapping it opens the chat, where the call
+  /// card has a Call back button.
+  Future<void> showMissedCall({
+    required String listingId,
+    required String? buyerId,
+    required String myRole,
+    required String callerName,
+    bool isVideo = false,
+    String? listingName,
+    String? roomId,
+  }) async {
+    // A call that is over: its ringing notification, if one is still up
+    // (an app that was closed has no other way to learn it stopped), goes.
+    if (roomId != null && roomId.isNotEmpty) await cancelIncomingCall(roomId);
+    if (!_ready) return;
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _messageChannel.id,
+        _messageChannel.name,
+        channelDescription: _messageChannel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.missedCall,
+        tag: missedCallTag(listingId, buyerId),
+        icon: '@mipmap/ic_launcher',
+      ),
+      iOS: const DarwinNotificationDetails(),
+    );
+    try {
+      await _plugin.show(
+        // 0 with the tag: the pair FCM draws the server's push under.
+        0,
+        'Missed ${isVideo ? 'video ' : ''}call from $callerName',
+        (listingName != null && listingName.isNotEmpty)
+            ? 'About: $listingName'
+            : 'Tap to call back',
+        details,
+        payload: jsonEncode({
+          'type': 'missed_call',
+          'listingId': listingId,
+          'buyerId': buyerId,
+          'myRole': myRole,
+        }),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showMissedCall failed: $e');
+    }
+  }
+
+  /// The server's missed-call push, when the app has to draw it itself.
+  Future<void> showMissedCallFromPush(Map<String, dynamic> data) async {
+    final listingId = data['listingId'] as String?;
+    if (listingId == null || listingId.isEmpty) return;
+    await showMissedCall(
+      listingId: listingId,
+      buyerId: data['buyerId'] as String?,
+      myRole: data['myRole'] as String? ?? 'buyer',
+      callerName: data['callerName'] as String? ?? 'Someone',
+      isVideo: data['callType'] == 'video',
+      listingName: data['listingName'] as String?,
+      roomId: data['roomId'] as String?,
+    );
   }
 
   /// Show an incoming-call notification (more intrusive channel).

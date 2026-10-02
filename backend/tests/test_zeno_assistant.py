@@ -81,13 +81,17 @@ def _auth(user: User) -> dict:
     return {"Authorization": f"Bearer {create_access_token({'sub': user.id})}"}
 
 
-def _model(monkeypatch, *, reply="", action=None, raw=None, fail=False, prompts=None):
-    """Stub the one LLM entry point. raw= returns that text as-is."""
+def _model(monkeypatch, *, reply="", action=None, raw=None, fail=False, prompts=None,
+           images=None):
+    """Stub the one LLM entry point. raw= returns that text as-is; images=
+    collects the photo each call was given."""
     from api.domains.ai_broker.service import AIBrokerService
 
-    async def fake_call(self, messages, cache_key=None):
+    async def fake_call(self, messages, cache_key=None, image_base64=None):
         if prompts is not None:
             prompts.append(messages[0]["content"])
+        if images is not None:
+            images.append(image_base64)
         if fail:
             raise HTTPException(status_code=503, detail="AI service temporarily unavailable.")
         if raw is not None:
@@ -355,7 +359,7 @@ def _model_seq(monkeypatch, replies, prompts):
     from api.domains.ai_broker.service import AIBrokerService
     queue = list(replies)
 
-    async def fake_call(self, messages, cache_key=None):
+    async def fake_call(self, messages, cache_key=None, image_base64=None):
         prompts.append(messages[0]["content"])
         return json.dumps(queue.pop(0))
 

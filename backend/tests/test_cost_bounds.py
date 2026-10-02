@@ -110,9 +110,20 @@ class TestZenoChatIsBounded:
         async def fake_ai(*a, **kw):
             return "verdict"
 
+        # A real photo of about the size the app attaches: the photo is now
+        # opened and re-encoded before any model sees it (core/vision.py),
+        # so 600,000 "A"s - which are not an image - are refused.
+        import base64, io, os
+        from PIL import Image
+        img = Image.frombytes("RGB", (700, 600), os.urandom(700 * 600 * 3))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=95)
+        photo = base64.b64encode(buf.getvalue()).decode()
+        assert len(photo) > 400_000
+
         with patch("api.routers.negotiate._call_ai", fake_ai):
             r = await client.post("/negotiate/chat", headers=headers, json={
-                "content": "p" * 4_000, "image_base64": "A" * 600_000,
+                "content": "p" * 4_000, "image_base64": photo,
                 "system_override": "zeno", "language": "english",
             })
         assert r.status_code == 200

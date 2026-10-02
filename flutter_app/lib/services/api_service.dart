@@ -304,6 +304,22 @@ class ApiService {
   // Keep old name as alias so unchanged call-sites still compile
   static Future<bool> _tryRelogin() => renewSession();
 
+  /// Sends once, and once more after renewing the session when the server
+  /// says the access token has expired. Access tokens last 15 minutes
+  /// (ACCESS_TOKEN_EXPIRE_MINUTES); the chat's requests had no retry, so
+  /// past that point a message, a receipt or a history fetch failed
+  /// silently until some other request happened to renew the token.
+  /// [send] must build its request when called, so the retry carries the
+  /// new token.
+  static Future<http.Response> _sendAuthed(
+      Future<http.Response> Function() send) async {
+    final response = await send();
+    if (response.statusCode == 401 && _token != null && await _tryRelogin()) {
+      return send();
+    }
+    return response;
+  }
+
   // ── Auth ───────────────────────────────────────────────────────────────────
 
   /// Step 1 of registration: sends a 6-digit SMS code to [phone].
@@ -993,8 +1009,8 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/negotiate/$listingId/history').replace(
       queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
     );
-    final response = await http.get(uri, headers: _headers)
-        .timeout(const Duration(seconds: 30));
+    final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+        .timeout(const Duration(seconds: 30)));
     // Explicit status check (rather than relying on non-2xx bodies
     // happening to fail the `as List` cast below) so a server error always
     // throws and never gets treated as "a real, empty conversation" -
@@ -1049,27 +1065,32 @@ class ApiService {
 
   static Future<void> markThreadDelivered(String listingId, {String? buyerId}) async {
     try {
-      await http.post(
+      await _sendAuthed(() => http.post(
         Uri.parse('$baseUrl/negotiate/$listingId/mark-delivered'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 10)));
     } catch (_) {}
   }
 
   static Future<void> markThreadRead(String listingId, {String? buyerId}) async {
     try {
-      await http.post(
+      await _sendAuthed(() => http.post(
         Uri.parse('$baseUrl/negotiate/$listingId/mark-read'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 10)));
     } catch (_) {}
   }
 
-  /// Returns {'buyer_last_read': iso8601|null, 'seller_last_read': iso8601|null}
-  /// for this thread - used to compute per-message seen ticks client-side.
-  static Future<Map<String, DateTime?>> getReadStatus(
+  /// When each side's device last received, and last read, this thread -
+  /// {'buyer_last_read', 'seller_last_read', 'buyer_last_delivered',
+  /// 'seller_last_delivered'} - used to compute per-message ticks.
+  ///
+  /// Null when the request failed. It used to return all-null watermarks
+  /// instead, which the chat applied: one failed poll turned every "seen"
+  /// tick back to a single grey one.
+  static Future<Map<String, DateTime?>?> getReadStatus(
     String listingId, {
     String? buyerId,
   }) async {
@@ -1077,8 +1098,8 @@ class ApiService {
       final uri = Uri.parse('$baseUrl/negotiate/$listingId/read-status').replace(
         queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
       );
-      final response = await http.get(uri, headers: _headers)
-          .timeout(const Duration(seconds: 10));
+      final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 10)));
       if (response.statusCode == 200) {
         final m = jsonDecode(response.body) as Map<String, dynamic>;
         DateTime? at(String key) {
@@ -1098,10 +1119,7 @@ class ApiService {
         };
       }
     } catch (_) {}
-    return {
-      'buyer_last_read': null, 'seller_last_read': null,
-      'buyer_last_delivered': null, 'seller_last_delivered': null,
-    };
+    return null;
   }
 
   // ── Auction ────────────────────────────────────────────────────────────────
@@ -1307,28 +1325,50 @@ class ApiService {
   }
 
   // ── Direct Chat (no AI mediation) ───────────────────────────────────────────
-  static Future<void> sendDirectMessage({
+
+  /// Sends a direct-chat message and returns the server's copy of it (id,
+  /// created_at, client_msg_id), or null from a server too old to send one.
+  /// Throws when the message did not get there.
+  ///
+  /// It used to swallow every failure and return nothing, so the chat could
+  /// neither say "not sent" nor tell the stored message from the one it was
+  /// showing - it guessed by refetching the whole thread, and the guess
+  /// raced the poll into a second bubble. [clientMsgId] is the chat's own
+  /// id for the message; sending the same one again returns the row the
+  /// first attempt stored rather than storing it twice.
+  static Future<Map<String, dynamic>?> sendDirectMessage({
     required String listingId,
     required String senderRole,
     required String senderId,
     required String content,
     String? buyerIdForThread,
     String? buyerId,
+    String? clientMsgId,
   }) async {
+    final body = jsonEncode({
+      'listing_id':  listingId,
+      'sender_role': senderRole,
+      'sender_id':   senderId,
+      'content':     content,
+      if (buyerIdForThread != null) 'buyer_id': buyerIdForThread,
+      if (buyerId          != null) 'buyer_id': buyerId,
+      if (clientMsgId      != null) 'client_msg_id': clientMsgId,
+    });
+    final response = await _sendAuthed(() => http.post(
+      Uri.parse('$baseUrl/negotiate/direct-message'),
+      headers: _headers,
+      body: body,
+    ).timeout(const Duration(seconds: 20)));
+    if (response.statusCode != 200) {
+      throw Exception(_extractError(response.body));
+    }
     try {
-      await http.post(
-        Uri.parse('$baseUrl/negotiate/direct-message'),
-        headers: _headers,
-        body: jsonEncode({
-          'listing_id':  listingId,
-          'sender_role': senderRole,
-          'sender_id':   senderId,
-          'content':     content,
-          if (buyerIdForThread != null) 'buyer_id': buyerIdForThread,
-          if (buyerId          != null) 'buyer_id': buyerId,
-        }),
-      ).timeout(const Duration(seconds: 30));
-    } catch (_) {}
+      final data = jsonDecode(response.body);
+      final message = data is Map ? data['message'] : null;
+      return message is Map ? Map<String, dynamic>.from(message) : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Media upload (voice notes + images) ────────────────────────────────────
@@ -1342,22 +1382,29 @@ class ApiService {
     required String mimeType,
     String?  buyerId,
     int?     durationSecs,
+    // The chat's own id for this voice note or photo - see sendDirectMessage.
+    String?  clientMsgId,
   }) async {
     final uri = Uri.parse('$baseUrl/media/upload');
-    final request = http.MultipartRequest('POST', uri)
-      ..headers['Authorization'] = 'Bearer ${_token ?? ""}'
-      ..fields['listing_id']   = listingId
-      ..fields['sender_role']  = senderRole
-      ..fields['sender_id']    = senderId
-      ..fields['content_type'] = contentType
-      ..files.add(http.MultipartFile.fromBytes('file', fileBytes,
-          filename: fileName,
-          contentType: MediaType.parse(mimeType)));
-    if (buyerId      != null) request.fields['buyer_id']      = buyerId;
-    if (durationSecs != null) request.fields['duration_secs'] = durationSecs.toString();
+    // A request can be sent once, so the retry after a renewal builds anew.
+    Future<http.Response> send() async {
+      final request = http.MultipartRequest('POST', uri)
+        ..headers['Authorization'] = 'Bearer ${_token ?? ""}'
+        ..fields['listing_id']   = listingId
+        ..fields['sender_role']  = senderRole
+        ..fields['sender_id']    = senderId
+        ..fields['content_type'] = contentType
+        ..files.add(http.MultipartFile.fromBytes('file', fileBytes,
+            filename: fileName,
+            contentType: MediaType.parse(mimeType)));
+      if (buyerId      != null) request.fields['buyer_id']      = buyerId;
+      if (durationSecs != null) request.fields['duration_secs'] = durationSecs.toString();
+      if (clientMsgId  != null) request.fields['client_msg_id'] = clientMsgId;
+      final streamed = await request.send().timeout(const Duration(seconds: 60));
+      return http.Response.fromStream(streamed);
+    }
 
-    final streamed = await request.send().timeout(const Duration(seconds: 60));
-    final res = await http.Response.fromStream(streamed);
+    final res = await _sendAuthed(send);
     if (res.statusCode != 200) throw Exception(_extractError(res.body));
     return jsonDecode(res.body) as Map<String, dynamic>;
   }

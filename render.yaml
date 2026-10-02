@@ -23,7 +23,9 @@ services:
       - key: MPESA_CALLBACK_SECRET
         generateValue: true  # protects /mpesa/callback - see api/routers/mpesa.py
       - key: GEMINI_API_KEY
-        sync: false          # Primary AI broker (Gemini 2.0 Flash)
+        sync: false          # Primary AI broker, and first in line for photos Zeno is shown
+      - key: GEMINI_MODEL
+        value: "gemini-flash-latest"   # Google's newest-Flash alias; gemini-2.0-flash was shut down 2026-06-01
       - key: DEEPSEEK_API_KEY
         sync: false          # DIRECT DeepSeek API (not OpenRouter) - TESTING for latency vs Nemotron below.
                               # Safe to leave unset in the dashboard - app skips to OpenRouter/Nemotron without it

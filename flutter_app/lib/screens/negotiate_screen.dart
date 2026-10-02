@@ -440,17 +440,24 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
 
   // ── Core message sender ────────────────────────────────────────────────────
-  Future<void> _send([String? quickText]) async {
+  /// [photo]: a picture for Zeno to look at with this message. Only the
+  /// sender's own reply is written with it in view; it is never passed to
+  /// the other party (backend negotiate.send_message).
+  Future<void> _send([String? quickText, List<int>? photo]) async {
     final text = (quickText ?? _msgCtrl.text).trim();
     if (text.isEmpty) return;
-    setState(() { _messages.add(Message(role: _role, content: text)); _typing = true; });
-    if (quickText == null) _msgCtrl.clear();
+    setState(() {
+      _messages.add(Message(role: _role, content: photo != null ? '📷 $text' : text));
+      _typing = true;
+    });
+    if (quickText == null || photo != null) _msgCtrl.clear();
     _scrollDown();
 
     try {
       Message reply;
       if (_listing != null) {
         reply = await ApiService.sendNegotiationMessage(
+          imageBase64: photo != null ? base64Encode(photo) : null,
           listingId:  _listing!.id,
           senderRole: _role,
           senderId:   ApiService.currentUserId ?? '',
@@ -525,6 +532,23 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       }
       unawaited(_cacheMessages());
     }
+  }
+
+  /// The photo button: show Zeno a picture - the item next to the listing's
+  /// photos, a part, a receipt - with whatever is typed, or a plain
+  /// question when nothing is.
+  Future<void> _showZenoPhoto() async {
+    if (_typing) return;
+    final source = await PhotoCapture.askSource(context);
+    if (source == null || !mounted) return;
+    final file = await (source == PhotoSource.camera
+        ? PhotoCapture.takePhoto(context, hint: 'Show Zeno clearly, in good light.')
+        : PhotoCapture.pickFromGallery(context));
+    if (file == null || !mounted) return;
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+    final typed = _msgCtrl.text.trim();
+    await _send(typed.isEmpty ? 'What can you tell me from this photo?' : typed, bytes);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1587,6 +1611,14 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
               tooltip: 'Make an offer',
               onTap: _showOfferDialog,
             ),
+            // Zeno can look at a picture here too; only in a deal's room -
+            // the listing-less free chat has nowhere to send one.
+            if (_listing != null)
+              ChatComposerAction(
+                icon: Icons.add_photo_alternate_outlined,
+                tooltip: 'Show Zeno a photo',
+                onTap: _showZenoPhoto,
+              ),
             Expanded(
               child: TextField(
                 key: const Key('negotiate-composer'),

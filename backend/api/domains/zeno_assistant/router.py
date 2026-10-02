@@ -7,11 +7,12 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.rate_limit import zeno_chat_limiter
+from api.core.vision import ImageRejected, prepare_for_model
 from api.database import get_db
 from api.security import get_current_user
 from . import service
@@ -21,11 +22,15 @@ router = APIRouter()
 # The app sends its whole transcript; the model reads the last 12 entries.
 _HISTORY_KEEP = 40
 _HISTORY_ENTRY_MAX_CHARS = 2000
+# Base64 of a 10 MB photo - the ceiling every image upload in BROKA has
+# (core/image_processing.MAX_UPLOAD_BYTES). The app sends a far smaller one.
+_IMAGE_MAX_B64_CHARS = (10 * 1024 * 1024 * 4) // 3 + 4
 
 
 class AssistantTurnIn(BaseModel):
-    # Bounded: it is pasted into a billed prompt.
-    message: str = Field(min_length=1, max_length=1000)
+    # Bounded: it is pasted into a billed prompt. May be empty when a photo
+    # is attached - "what is this?" is the photo itself.
+    message: str = Field(default="", max_length=1000)
     history: list[dict] = Field(default_factory=list)
     language: str = Field(default="english", max_length=20)
     # "voice" asks for replies that read well aloud.
@@ -33,6 +38,15 @@ class AssistantTurnIn(BaseModel):
     # Set when the user opened Zeno from a listing to ask about it. Only
     # the id: the server reads the listing itself (listing_context.py).
     listing_id: Optional[str] = Field(default=None, max_length=64)
+    # A photo for Zeno to look at with this message (raw base64). Checked
+    # and shrunk before any model sees it - see core/vision.py.
+    image_base64: Optional[str] = Field(default=None, max_length=_IMAGE_MAX_B64_CHARS)
+
+    @model_validator(mode="after")
+    def _something_to_answer(self):
+        if not self.message.strip() and not self.image_base64:
+            raise ValueError("Say something, or attach a photo.")
+        return self
 
     @field_validator("history", mode="before")
     @classmethod
@@ -74,6 +88,14 @@ async def assistant_turn(
     (/negotiate/chat): most turns are a model call.
     """
     await zeno_chat_limiter.check_and_record(current_user["id"])
+    image = None
+    if body.image_base64:
+        # Before the voice entitlement below: a photo that can't be used
+        # must not cost the user one of their voice turns.
+        try:
+            image = await prepare_for_model(body.image_base64)
+        except ImageRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     if body.mode == "voice":
         # Voice mode is premium (PRICING.md). The microphone streams from
         # the phone straight to the speech provider, where BROKA cannot
@@ -89,4 +111,5 @@ async def assistant_turn(
         language=body.language,
         voice=body.mode == "voice",
         listing_id=body.listing_id,
+        image_base64=image,
     )

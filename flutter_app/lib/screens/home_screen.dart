@@ -37,6 +37,7 @@ import '../utils/backend_time.dart';
 import '../main.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/api_service.dart';
+import '../services/global_poller_service.dart';
 import '../theme/motion.dart';
 import '../utils/auth_gate.dart';
 import '../utils/price_format.dart';
@@ -1004,6 +1005,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final routes = ['', '/inbox', '/sell', '/zeno', '/menu'];
     Navigator.pushNamed(context, routes[i]).then((_) {
       if (mounted) setState(() { _navIndex = 0; _feedRefreshNonce++; });
+      // Back from reading: bring the Inbox badge down now, not at the
+      // poller's next tick.
+      unawaited(GlobalPollerService.instance.catchUp());
     });
   }
 
@@ -1605,7 +1609,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     child: item['label'] == 'Zeno'
                         ? ZenoAvatar(size: 23, selected: selected, glow: selected)
-                        : Icon(item['icon'] as IconData, size: 23, color: tint),
+                        : item['label'] == 'Inbox'
+                            ? _InboxNavIcon(color: tint)
+                            : Icon(item['icon'] as IconData, size: 23, color: tint),
                   ),
                   const SizedBox(height: 3),
                   Text(item['label'] as String,
@@ -1624,6 +1630,53 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
     )),
   );
+}
+
+/// The Inbox tab's icon, with the number of unread messages across all
+/// conversations (GlobalPollerService.unreadTotal, refreshed every sweep).
+/// Nothing on Home said a message was waiting; the count lived only inside
+/// the Inbox, one tap away from where anyone would see it.
+class _InboxNavIcon extends StatelessWidget {
+  const _InboxNavIcon({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<int>(
+        valueListenable: GlobalPollerService.instance.unreadTotal,
+        builder: (_, unread, icon) {
+          final label = unread > 99 ? '99+' : '$unread';
+          return Semantics(
+            label: unread > 0 ? 'Inbox, $unread unread' : 'Inbox',
+            excludeSemantics: true,
+            child: Stack(clipBehavior: Clip.none, children: [
+              icon!,
+              if (unread > 0)
+                Positioned(
+                  right: -9, top: -6,
+                  child: Container(
+                    key: const Key('inbox-unread-badge'),
+                    constraints: const BoxConstraints(minWidth: 17),
+                    height: 17,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: BrokaColors.danger,
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: BrokaColors.bgMid, width: 1.5),
+                    ),
+                    child: Text(label,
+                        maxLines: 1,
+                        textScaler: TextScaler.noScaling,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 9.5,
+                            fontWeight: FontWeight.w800, height: 1.0)),
+                  ),
+                ),
+            ]),
+          );
+        },
+        child: Icon(Icons.inbox_outlined, size: 23, color: color),
+      );
 }
 
 /// A feed page that failed to load, thrown so ProductGridView shows its retry

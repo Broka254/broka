@@ -1,3 +1,72 @@
+# Chat messages show once, ticks move, missed calls notify, Zeno sees photos (2026-10-02)
+
+Reported from a phone: the last messages in a chat showed twice until it was
+reopened, a message the buyer had read still showed one grey tick, missed
+calls produced no notification, and Home gave no sign of unread messages.
+Asked whether Zeno can look at images: it could not.
+
+**One bubble per message** (`lib/screens/negotiation_screen.dart`,
+`api/routers/negotiate.py`, `api/routers/media.py`). The chat socket closed
+itself after a minute in which nobody typed (`wait_for(..., 60)` broke out of
+its loop), and the app never reconnected, so chats ran on the 4-second
+history poll - which delivered a just-sent message as "new" while the send
+was still answering, beside the copy already on screen that had no id to
+match it by. Each message now carries the phone's own id for it
+(`NegotiationMessage.client_msg_id`, unique per sender); the server stores
+it, returns the stored message from `POST /negotiate/direct-message` (it
+returned only `{"ok": true}`), echoes it on `/history` and the socket, and a
+resend under the same id returns the first copy instead of storing a second.
+The socket pings both ways and the app reconnects with backoff, renewing an
+expired token first. Sends go out in order from a queue; a failed one says
+"Not sent" and is tapped to try again or delete (it used to fail silently).
+A message typed while the history loaded is no longer lost.
+
+**Ticks** (`api/routers/negotiate.py`, `lib/services/api_service.dart`).
+A seller who reached the chat without a buyer id got no receipts at all
+(read-status answered "no thread"), no socket (refused 4003), and - worse -
+their messages were stored with `buyer_id` NULL, which every buyer on the
+listing is shown. Those endpoints now use the thread `/history` shows that
+seller (the latest buyer). Reading or receiving a thread now pushes a
+`receipt` event to the other side's open chat, so "seen" arrives at once; a
+failed read-status poll no longer resets every tick to grey (watermarks only
+move forward); and a chat left open in the background marks messages
+delivered, not read. The chat's requests renew an expired session (access
+tokens last 15 minutes) instead of failing until something else did.
+
+**Missed calls** (`api/routers/calls.py`, `lib/services/global_poller_service.dart`,
+`lib/services/notification_service.dart`, `lib/main.dart`). Nothing pushed a
+missed call: the only notice was the inbox poller, alive only while the app
+is. `log-result` with `missed` or `cancelled` now sends the callee a
+notification push the phone draws itself, which also takes down the call's
+still-ringing notification. The poller decided "already notified" by the
+last message's text, so a second missed call (or a second "ok") from the
+same person was never announced; it goes by the message id now
+(`last_message_id` on the inbox), without re-announcing old threads on
+update. A chat open behind the home screen no longer silences its thread.
+Push, poller and foreground share one Android tag
+(`NotificationService.missedCallTag`), so one missed call is one notification.
+
+**Home's Inbox tab shows the unread count** (`lib/screens/home_screen.dart`),
+from the poller's sweep, refreshed on return from the inbox.
+
+**Zeno looks at photos** (`api/core/vision.py`, `api/core/gemini.py`,
+`api/domains/zeno_assistant/`, `api/domains/ai_broker/service.py`,
+`lib/screens/zeno_screen.dart`, `lib/screens/negotiate_screen.dart`). See
+ZENO_ACTIONS.md. Gemini was pinned to `gemini-2.0-flash`, shut down on
+2026-06-01, in four modules; every Gemini call has been failing over to the
+next provider since. The model is now `GEMINI_MODEL` (default
+`gemini-flash-latest`). The damaged-goods report read its "photo" from the
+message text, so no report was ever analysed.
+
+Tests: `tests/test_chat_delivery.py`, `tests/test_zeno_vision.py`;
+`test/direct_chat_delivery_test.dart`, `test/missed_call_notification_test.dart`,
+`test/home_inbox_badge_test.dart`, `test/zeno_photo_test.dart`.
+
+**Not device-verified**: the Android build was not run here. The missed-call
+push needs Firebase configured on the server (FCM_SETUP_REMAINING.md); the
+poller covers an open app without it.
+
+
 # Calls to a closed app show up; voice notes say when they fail (2026-10-02)
 
 **Incoming-call notification from FCM** (`lib/services/notification_service.dart`).

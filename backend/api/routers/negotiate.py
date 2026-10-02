@@ -35,6 +35,7 @@ PRIVACY MODEL:
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import httpx
@@ -46,7 +47,7 @@ import time
 
 from api.database import get_db, NegotiationMessage, Listing, User, Deal, DealStatus, ThreadReadState
 from api.routers.auth import _approx_location
-from api.core import text_guard
+from api.core import gemini, text_guard
 from api.core.geo import haversine_km
 from api.core.audit import record_audit
 from api.core.circuit_breaker import deepseek_breaker, gemini_breaker, CircuitOpenError
@@ -59,8 +60,8 @@ router = APIRouter()
 # ── AI Provider config ────────────────────────────────────────────────────────
 
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL    = "gemini-2.0-flash"
-GEMINI_ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+# The model is a setting (GEMINI_MODEL), shared with every other Gemini caller
+# - see api/core/gemini.py for why it stopped being typed in here.
 
 GROQ_API_KEY  = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL    = "llama-3.3-70b-versatile"
@@ -243,6 +244,24 @@ When speaking to a seller about their performance, completion rate, or ranking:
 
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────
 
+# Size caps for POST /chat. Every field below ends up in a paid model call,
+# and this route used to accept any size from anyone - 50 unauthenticated
+# requests of 200,000 characters each all reached the model.
+#
+# CHAT_CONTENT_MAX_CHARS: the largest message the app builds is the
+# product-page verdict prompt (product_screen.dart), about 3,000 characters
+# including the listing's own name and category. 8,000 leaves room for
+# that to grow without letting a pasted document through.
+CHAT_CONTENT_MAX_CHARS = 8_000
+# Same per-entry cap the AI broker and buying agent apply to history
+# (ai_broker/service.py, buy_agent/router.py).
+CHAT_HISTORY_ENTRY_MAX_CHARS = 2_000
+# Base64 of a 10 MB image - the same ceiling media.py puts on image
+# uploads (MAX_IMAGE_MB). Listing photos are resized to 1080px on upload
+# (sell_photos_screen.dart), so real ones are a small fraction of this.
+CHAT_IMAGE_MAX_B64_CHARS = (10 * 1024 * 1024 * 4) // 3 + 4
+
+
 class MessageIn(BaseModel):
     listing_id:   str
     sender_role:  str
@@ -277,6 +296,16 @@ class MessageIn(BaseModel):
     #                           requester's own private Zeno screen - Zeno
     #                           never posts into the direct-chat thread.
     intent:       Optional[str] = None
+    # A photo for Zeno to look at (raw base64): the damaged-goods report's
+    # evidence, or any picture the sender asks Zeno about. Only the sender's
+    # own reply is written with it in view - the photo itself is never
+    # relayed to the other party. This field did not exist, so the app's
+    # damage photo was dropped by validation and the report "analysed" the
+    # sentence "The goods arrived damaged." instead.
+    image_base64: Optional[str] = Field(default=None, max_length=CHAT_IMAGE_MAX_B64_CHARS)
+    # Direct chat only: the id the sender's app gave the message before
+    # sending it (NegotiationMessage.client_msg_id).
+    client_msg_id: Optional[str] = Field(default=None, max_length=64)
 
 
 async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> bool:
@@ -312,24 +341,6 @@ async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> 
     return True
 
 
-# Size caps for POST /chat. Every field below ends up in a paid model call,
-# and this route used to accept any size from anyone - 50 unauthenticated
-# requests of 200,000 characters each all reached the model.
-#
-# CHAT_CONTENT_MAX_CHARS: the largest message the app builds is the
-# product-page verdict prompt (product_screen.dart), about 3,000 characters
-# including the listing's own name and category. 8,000 leaves room for
-# that to grow without letting a pasted document through.
-CHAT_CONTENT_MAX_CHARS = 8_000
-# Same per-entry cap the AI broker and buying agent apply to history
-# (ai_broker/service.py, buy_agent/router.py).
-CHAT_HISTORY_ENTRY_MAX_CHARS = 2_000
-# Base64 of a 10 MB image - the same ceiling media.py puts on image
-# uploads (MAX_IMAGE_MB). Listing photos are resized to 1080px on upload
-# (sell_photos_screen.dart), so real ones are a small fraction of this.
-CHAT_IMAGE_MAX_B64_CHARS = (10 * 1024 * 1024 * 4) // 3 + 4
-
-
 class ChatIn(BaseModel):
     content:         str = Field(max_length=CHAT_CONTENT_MAX_CHARS)
     # The route keeps the newest MAX_HISTORY entries, so accepting a longer
@@ -357,6 +368,10 @@ class MessageOut(BaseModel):
     duration_secs:    Optional[int] = None
     call_type:        Optional[str] = None
     created_at:       Optional[str] = None
+    # On the viewer's OWN direct-chat messages only: the id their app gave
+    # the message before sending it, so it can match the copy it is already
+    # showing (NegotiationMessage.client_msg_id).
+    client_msg_id:    Optional[str] = None
     # Set true only when the sender has just affirmatively agreed to switch
     # to direct chat after Zeno offered it (see _classify_wants_direct_chat)
     # - the frontend navigates to /direct-chat when this is true.
@@ -434,13 +449,13 @@ async def _call_gemini(system: str, messages: List[dict], image_base64: Optional
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            f"{GEMINI_ENDPOINT}?key={GEMINI_API_KEY}",
+            f"{gemini.endpoint()}?key={GEMINI_API_KEY}",
             headers={"Content-Type": "application/json"},
             json={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": contents,
                 "generationConfig": {
-                    "maxOutputTokens": max_tokens or 400,
+                    "maxOutputTokens": gemini.output_budget(max_tokens or 400),
                     "temperature":     0.75,
                 },
             },
@@ -451,8 +466,7 @@ async def _call_gemini(system: str, messages: List[dict], image_base64: Optional
     if response.status_code != 200:
         raise ValueError(f"Gemini error {response.status_code}: {response.text[:200]}")
 
-    data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    return gemini.reply_text(response.json())
 
 
 async def _call_deepseek(system: str, messages: List[dict],
@@ -814,9 +828,16 @@ async def _call_ai(
     *,
     prefer_cheap: bool = False,
     max_output_tokens: Optional[int] = None,
+    require_vision: bool = False,
 ) -> str:
     """
     Master AI caller.
+
+    require_vision: the answer is only worth having if the model saw the
+    photo (the damaged-goods assessment, which is quoted to the seller as
+    "my image analysis shows..."). Raises ValueError instead of falling
+    through to a text-only model, whose honest "I can't see it" would
+    otherwise be quoted as the analysis.
 
     NOTE ON ORDER: this chain is written Gemini-first, but each step is
     guarded by its own key. Deployments without GEMINI_API_KEY skip step 1
@@ -851,6 +872,8 @@ async def _call_ai(
     # The remaining gap is both keys absent. Telling the model it cannot see
     # costs one sentence and turns a confident non-answer into an honest one.
     if image_base64 and not (GEMINI_API_KEY or DEEPSEEK_API_KEY):
+        if require_vision:
+            raise ValueError("no vision-capable provider is configured")
         logger.warning(
             "[ai] image supplied but no vision-capable provider is configured "
             "(neither GEMINI_API_KEY nor DEEPSEEK_API_KEY set) - answering "
@@ -922,6 +945,24 @@ async def _call_ai(
         except Exception as e:
             logger.warning("DeepSeek unexpected error (%s) - falling back to OpenRouter", e)
 
+    # ── Past the providers that can see ──────────────────────────────────────
+    # Everything below is text-only. With a photo, reaching here means
+    # Gemini and DeepSeek were configured but both failed - the case the
+    # unconfigured check above doesn't cover. The model below must be told
+    # there is a photo it can't see, or it answers as though none was sent.
+    if image_base64:
+        if require_vision:
+            raise ValueError("no vision-capable provider answered")
+        if GEMINI_API_KEY or DEEPSEEK_API_KEY:
+            logger.warning("[ai] vision providers failed - answering without the photo")
+            system = (
+                f"{system}\n\nIMPORTANT: the user attached a photo and you CANNOT "
+                f"see it - image analysis is unavailable right now. Say so plainly "
+                f"in one short sentence and ask them to describe it instead. Do not "
+                f"guess at the contents, and do not answer as though no photo was "
+                f"sent."
+            )
+
     # ── Fallback 2: OpenRouter (Nemotron 3 Ultra) — TESTING ──────────────────
     if OPENROUTER_API_KEY:
         try:
@@ -957,6 +998,19 @@ async def _call_ai(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _prepared_image(image_base64: Optional[str]) -> Optional[str]:
+    """A photo the user sent, ready for a model (core/vision.py): checked,
+    metadata stripped, shrunk. None when there is none; 422 when it isn't
+    an image, rather than a billed model call about garbage."""
+    if not image_base64:
+        return None
+    from api.core.vision import ImageRejected, prepare_for_model
+    try:
+        return await prepare_for_model(image_base64)
+    except ImageRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
 
 def _compute_deal_probability(history: List[NegotiationMessage], latest_content: str) -> int:
     """
@@ -1711,7 +1765,8 @@ async def free_chat(
 
     system += f"\n\nLANGUAGE INSTRUCTION: {lang_instruction}"
 
-    reply = await _call_ai(system, messages, image_base64=data.image_base64)
+    image = await _prepared_image(data.image_base64)
+    reply = await _call_ai(system, messages, image_base64=image)
     return MessageOut(role="broker", content=reply)
 
 
@@ -2322,12 +2377,15 @@ async def send_message(
         await db.commit()
 
         b_first = b_name.split()[0]
-        image_b64 = data.content if data.intent == "buyer_reports_damaged" else None
-        # content field carries the base64 image when buyer uploads damage photo
+        # The photo arrives in image_base64. This used to read it from
+        # `content` - which the app fills with "The goods arrived damaged."
+        # - and image_base64 was not a field at all, so no report was ever
+        # analysed. A long `content` is still taken as the photo, for any
+        # build that did send it there.
+        image_b64 = data.image_base64 or (data.content if len(data.content or "") > 100 else None)
 
         damage_analysis = ""
-        if image_b64 and len(image_b64) > 100:
-            # Use Gemini vision to verify damage in the photo
+        if image_b64:
             analysis_system = (
                 "You are BROKA's impartial damage assessor. A buyer has sent a photo of an "
                 "item they received that they claim is damaged. Analyse the image and describe "
@@ -2335,12 +2393,18 @@ async def send_message(
                 "Do not take sides. If no damage is visible, say so plainly."
             )
             try:
-                damage_analysis = await _call_gemini(
+                from api.core.vision import prepare_for_model
+                # Any provider that can see (Gemini, then DeepSeek), and only
+                # one that can: the result is quoted to the seller as "my
+                # image analysis shows", so "I can't see it" must not be.
+                damage_analysis = await _call_ai(
                     analysis_system,
                     [{"role": "user", "content": "Please assess this item for damage."}],
-                    image_base64=image_b64,
+                    image_base64=await prepare_for_model(image_b64),
+                    require_vision=True,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("[negotiate] damage photo not analysed: %s", exc)
                 damage_analysis = ""
 
         # Notify seller: provide an explanation before buyer decides
@@ -2828,6 +2892,10 @@ async def send_message(
     result = await db.execute(history_query.order_by(NegotiationMessage.created_at))
     history = list(result.scalars().all())
 
+    # Before the message is stored: a photo that isn't one is refused
+    # outright, not half-sent.
+    image = await _prepared_image(data.image_base64)
+
     new_msg = NegotiationMessage(
         listing_id=data.listing_id,
         sender_id=data.sender_id,
@@ -2912,6 +2980,15 @@ async def send_message(
         # direction of travel - and the acknowledgement has to know which.
         sender_answered=classification.get("is_availability_confirmation", False),
     )
+    if image:
+        # Only the sender's own reply is written with the photo in view; the
+        # relay draft for the other party below is never given it.
+        sys_sender += (
+            "\n\nThe sender attached a photo to this message - it is included. Use what "
+            "you actually see in your reply to them, and say what a photo can't show "
+            "(whether it works, whether it's genuine). The photo is private to them: "
+            "never say it was shown or passed to the other party."
+        )
 
     if off_platform_detected:
         # Specificity over generality (Volume 2 §2.2): reference BROKA's real,
@@ -2970,7 +3047,7 @@ async def send_message(
         )
         msgs_other = _build_messages_for_party(history, data, other_role)
         reply_sender, reply_other = await asyncio.gather(
-            _call_ai(sys_sender, msgs_sender),
+            _call_ai(sys_sender, msgs_sender, image_base64=image),
             _call_ai(sys_other,  msgs_other),
         )
         broker_msg_other = NegotiationMessage(
@@ -2979,7 +3056,7 @@ async def send_message(
             content=reply_other, buyer_id=effective_buyer_id, msg_type="text",
         )
     else:
-        reply_sender = await _call_ai(sys_sender, msgs_sender)
+        reply_sender = await _call_ai(sys_sender, msgs_sender, image_base64=image)
 
     # Broker messages carry buyer_id so /history can scope them to the right thread.
     # NOTE: if Zeno wrote two short beats separated by a newline (the
@@ -3199,6 +3276,40 @@ async def zeno_draft_sms(
     return {"status": "sent", "recipient_name": their_first}
 
 
+async def seller_default_buyer(db: AsyncSession, listing_id: str) -> Optional[str]:
+    """The buyer thread a seller is looking at when their app named none:
+    the buyer who wrote most recently on the listing - the thread /history
+    shows them in that case. Every endpoint that writes to or reads the state
+    of "the" thread for a seller resolves it the same way, so what the
+    seller sees and where their message lands can't disagree."""
+    # visibility-ok: selects buyer_id only, no message content
+    result = await db.execute(
+        select(NegotiationMessage.buyer_id)
+        .where(
+            NegotiationMessage.listing_id == listing_id,
+            NegotiationMessage.role == "buyer",
+            NegotiationMessage.buyer_id.isnot(None),
+        )
+        .order_by(NegotiationMessage.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def _direct_message_out(m: NegotiationMessage) -> dict:
+    """The stored message as the sender's app shows it - the same fields the
+    chat socket and /history carry."""
+    return {
+        "id":            m.id,
+        "role":          m.role,
+        "content":       m.content or "",
+        "msg_type":      m.msg_type or "text",
+        "via_ai":        False,
+        "created_at":    (m.created_at.isoformat() + "Z") if m.created_at else None,
+        "client_msg_id": m.client_msg_id,
+    }
+
+
 @router.post("/direct-message")
 async def direct_message(
     data: MessageIn,
@@ -3208,6 +3319,13 @@ async def direct_message(
     """
     Persist a direct buyer↔seller chat message (no AI reply).
     Used when the user toggles AI assist OFF in negotiation_screen.
+
+    Returns the stored message. It used to return only {"ok": true}, so the
+    app could not tell its on-screen copy from the server's: it fetched the
+    whole history to guess which row was the one it had sent, and while it
+    did, the poll and the socket delivered that same row as "new" - the
+    message showed twice. `client_msg_id`, when sent, makes a resend of the
+    same message return the row the first attempt stored.
     """
     authenticated_uid = current_user["id"]
 
@@ -3224,11 +3342,27 @@ async def direct_message(
         raise HTTPException(status_code=403,
             detail="sender_id does not match authenticated user.")
 
+    from api.routers.media import sent_with_client_id
+    client_msg_id = (data.client_msg_id or "").strip() or None
+    if client_msg_id:
+        earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
+        if earlier is not None:
+            return {"ok": True, "message": _direct_message_out(earlier)}
+
     recipient = "seller" if actual_role == "buyer" else "buyer"
     # Direct-chat messages are scoped to the buyer's thread and marked as not via AI.
     effective_buyer_id: Optional[str] = (
         authenticated_uid if actual_role == "buyer" else data.buyer_id
     )
+    if not effective_buyer_id:
+        # A seller whose app sent no buyer_id. This used to store the
+        # message with buyer_id NULL - and a NULL row is shown in EVERY
+        # buyer's thread on the listing (the legacy rule in /history), so a
+        # reply meant for one buyer reached all of them. It now goes to the
+        # thread the seller's screen is showing.
+        effective_buyer_id = await seller_default_buyer(db, data.listing_id)
+        if not effective_buyer_id:
+            raise HTTPException(status_code=400, detail="buyer_id required")
     direct_msg = NegotiationMessage(
         listing_id=data.listing_id,
         sender_id=data.sender_id,
@@ -3238,30 +3372,40 @@ async def direct_message(
         buyer_id=effective_buyer_id,
         via_ai=False,
         msg_type="text",
+        client_msg_id=client_msg_id,
     )
     db.add(direct_msg)
     # Scanned here too, not only on the Zeno path: switching AI assist off
     # to talk directly is exactly where a number or a till gets passed. Same
     # transaction as the message (flush assigns its id), so a failed audit
     # write can't leave a stored message behind a 500 that invites a retry.
-    await db.flush()
-    await _audit_off_platform_solicitation(
-        db, sender_id=authenticated_uid, message_id=direct_msg.id,
-        listing_id=data.listing_id, role=actual_role, content=data.content,
-    )
-    await db.commit()
+    try:
+        await db.flush()
+        await _audit_off_platform_solicitation(
+            db, sender_id=authenticated_uid, message_id=direct_msg.id,
+            listing_id=data.listing_id, role=actual_role, content=data.content,
+        )
+        await db.commit()
+    except IntegrityError:
+        # The same message sent twice at once (a resend racing the first
+        # attempt): the unique (sender_id, client_msg_id) index let one in.
+        await db.rollback()
+        if client_msg_id:
+            earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
+            if earlier is not None:
+                return {"ok": True, "message": _direct_message_out(earlier)}
+        raise
     await db.refresh(direct_msg)
     # Broadcast via WebSocket
-    if effective_buyer_id:
-        try:
-            from api.routers.media import broadcast_text_message
-            await broadcast_text_message(
-                data.listing_id, effective_buyer_id,
-                direct_msg, authenticated_uid, actual_role == "seller"
-            )
-        except Exception:
-            pass
-    return {"ok": True}
+    try:
+        from api.routers.media import broadcast_text_message
+        await broadcast_text_message(
+            data.listing_id, effective_buyer_id,
+            direct_msg, authenticated_uid, actual_role == "seller"
+        )
+    except Exception:
+        pass
+    return {"ok": True, "message": _direct_message_out(direct_msg)}
 
 
 
@@ -3300,18 +3444,7 @@ async def get_history(
         effective_buyer_id = buyer_id
         # If the seller didn't specify a buyer, find the most recent buyer.
         if not effective_buyer_id:
-            # visibility-ok: selects buyer_id only, no message content
-            last_buyer_result = await db.execute(
-                select(NegotiationMessage.buyer_id)
-                .where(
-                    NegotiationMessage.listing_id == listing_id,
-                    NegotiationMessage.role == "buyer",
-                    NegotiationMessage.buyer_id.isnot(None),
-                )
-                .order_by(NegotiationMessage.created_at.desc())
-                .limit(1)
-            )
-            effective_buyer_id = last_buyer_result.scalar_one_or_none()
+            effective_buyer_id = await seller_default_buyer(db, listing_id)
 
     # visibility-ok: get_history; recipient_role and buyer_id are applied in the Python loop below
     result = await db.execute(
@@ -3363,7 +3496,8 @@ async def get_history(
                 filtered.append(
                     MessageOut(id=m.id, role=m.role, content=m.content or "", via_ai=msg_via_ai,
                                msg_type=msg_type, media_url=media_url, duration_secs=duration,
-                               call_type=call_type, created_at=created_at)
+                               call_type=call_type, created_at=created_at,
+                               client_msg_id=getattr(m, "client_msg_id", None))
                 )
 
         elif actual_role == "seller" and m.role == "buyer":
@@ -3422,8 +3556,13 @@ async def _resolve_role_and_buyer(
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found")
     role = "seller" if current["id"] == listing.seller_id else "buyer"
-    effective_buyer_id = current["id"] if role == "buyer" else (buyer_id_param or "")
-    return role, effective_buyer_id
+    if role == "buyer":
+        return role, current["id"]
+    # A seller with no buyer named is looking at the most recent buyer's
+    # thread (/history's rule). Answering "no thread" here instead is why a
+    # seller who reached the chat without a buyer_id never saw a single
+    # delivered or seen tick: read-status returned nothing at all.
+    return role, (buyer_id_param or await seller_default_buyer(db, listing_id) or "")
 
 
 async def _thread_unread_and_seen(
@@ -3540,7 +3679,25 @@ async def mark_thread_delivered(
         raise HTTPException(status_code=400, detail="buyer_id required")
     now = await _touch_watermark(
         db, listing_id, effective_buyer_id, role, delivered=True, read=False)
+    await _announce_receipt(listing_id, effective_buyer_id, role, current["id"],
+                            delivered_at=now, read_at=None)
     return {"status": "ok", "last_delivered_at": now.isoformat() + "Z"}
+
+
+async def _announce_receipt(listing_id: str, buyer_id: str, role: str, uid: str,
+                            *, delivered_at, read_at) -> None:
+    """Tell the other side's open chat that this side's ticks moved.
+
+    Without this the sender's screen found out by polling read-status every
+    30 seconds - "seen" arrived half a minute after the message was read, or
+    never, if they left the chat first. Best-effort: the poll still runs.
+    """
+    try:
+        from api.routers.media import broadcast_receipt
+        await broadcast_receipt(listing_id, buyer_id, role, exclude_uid=uid,
+                                delivered_at=delivered_at, read_at=read_at)
+    except Exception as exc:
+        logger.debug("[negotiate] receipt broadcast failed: %s", exc)
 
 
 @router.post("/{listing_id}/mark-read")
@@ -3562,6 +3719,8 @@ async def mark_thread_read(
 
     now = await _touch_watermark(
         db, listing_id, effective_buyer_id, role, delivered=True, read=True)
+    await _announce_receipt(listing_id, effective_buyer_id, role, current["id"],
+                            delivered_at=now, read_at=now)
     return {"status": "ok", "last_read_at": now.isoformat() + "Z"}
 
 
@@ -3724,6 +3883,12 @@ async def get_inbox(
             "last_seen":         last_seen_str,
             "last_message":      (last_msg.content or "[media]")[:80],
             "last_role":         last_msg.role,
+            # Which message last_message is. The app's notifier compared the
+            # TEXT of the last message with the one it had notified about,
+            # so a second "missed call" (or a second "ok") from the same
+            # person looked like the first one and was never announced.
+            "last_message_id":   last_msg.id,
+            "last_message_at":   (last_msg.created_at.isoformat() + "Z") if last_msg.created_at else None,
             "unread":            unread,
             # Message TYPE, not just its text. A call-history row stores the
             # outcome verb as its content ("missed", "declined", "completed"
@@ -3846,6 +4011,9 @@ async def get_inbox(
                 "last_seen":         last_seen_str,
                 "last_message":      (last_msg.content or "[media]")[:80],
                 "last_role":         last_msg.role,
+                # See the buyer view above.
+                "last_message_id":   last_msg.id,
+                "last_message_at":   (last_msg.created_at.isoformat() + "Z") if last_msg.created_at else None,
                 # Message TYPE, not just its text. A call-history row stores the
                 # outcome verb as its content ("missed", "declined", "completed"
                 # - see routers/calls.py), so a client rendering last_message

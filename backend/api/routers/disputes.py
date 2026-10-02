@@ -54,6 +54,7 @@ from api.database import (
     get_db, Deal, DealStatus, Dispute, DisputeStatus, User, Listing,
     NegotiationMessage, MpesaTransaction, MpesaStatus,
 )
+from api.core import gemini
 from api.security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,6 @@ _ZAC_SECRET     = os.getenv("ZAC_SECRET", "broka-zac-secret-change-in-production
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = "llama-3.3-70b-versatile"
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 GROQ_ENDPOINT   = "https://api.groq.com/openai/v1/chat/completions"
 
 # OpenRouter — TESTING (2026-08): standing in for Groq, whose
@@ -148,19 +148,19 @@ async def _call_gemini(system: str, messages: List[dict]) -> str:
         contents.insert(0, {"role": "user", "parts": [{"text": "Begin."}]})
     async with httpx.AsyncClient(timeout=35) as client:
         resp = await client.post(
-            f"{GEMINI_ENDPOINT}?key={GEMINI_API_KEY}",
+            f"{gemini.endpoint()}?key={GEMINI_API_KEY}",
             headers={"Content-Type": "application/json"},
             json={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": contents,
-                "generationConfig": {"maxOutputTokens": 600, "temperature": 0.4},
+                "generationConfig": {"maxOutputTokens": gemini.output_budget(600), "temperature": 0.4},
             },
         )
     if resp.status_code == 429:
         raise ValueError("Gemini quota exceeded - falling back to Groq")
     if resp.status_code != 200:
         raise ValueError(f"Gemini error {resp.status_code}: {resp.text[:200]}")
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    return gemini.reply_text(resp.json())
 
 
 async def _call_groq(system: str, messages: List[dict]) -> str:

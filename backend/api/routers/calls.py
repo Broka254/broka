@@ -181,6 +181,7 @@ CALL_PUSH_TTL_SECONDS = 60
 async def _send_fcm(
     token: str, title: str, body: str, data: dict, *,
     data_only: bool = False, ttl_seconds: Optional[int] = None,
+    android_tag: Optional[str] = None, android_channel_id: Optional[str] = None,
 ) -> FcmResult:
     """Send an FCM push notification. Returns an FcmResult (truthy on success).
 
@@ -205,6 +206,12 @@ async def _send_fcm(
     real incoming-call notification themselves. Every other caller of
     this function (reminders/nudges via workers.py) is unaffected by this
     parameter's default.
+
+    android_tag / android_channel_id shape the notification Android draws
+    for a visible push. The tag is what lets the app's own notification for
+    the same event replace this one instead of standing beside it: Android
+    keys a notification on (tag, id), and FCM draws a tagged one with id 0
+    (see NotificationService.missedCallTag in the app).
     """
     if not _get_fcm():
         logger.info("[calls] FCM not configured - skipping push")
@@ -237,14 +244,19 @@ async def _send_fcm(
             # APNs wants an absolute unix expiry; FCM wants a duration.
             apns_headers["apns-expiration"] = str(int(_time_now()) + ttl_seconds)
 
+        android_kwargs = {
+            "priority": "high",
+            "ttl": timedelta(seconds=ttl_seconds) if ttl_seconds is not None else None,
+        }
+        if not data_only and (android_tag or android_channel_id):
+            android_kwargs["notification"] = messaging.AndroidNotification(
+                tag=android_tag, channel_id=android_channel_id,
+            )
         msg = messaging.Message(
             notification=None if data_only else messaging.Notification(title=title, body=body),
             data={k: str(v) for k, v in data.items()},
             token=token,
-            android=messaging.AndroidConfig(
-                priority="high",
-                ttl=timedelta(seconds=ttl_seconds) if ttl_seconds is not None else None,
-            ),
+            android=messaging.AndroidConfig(**android_kwargs),
             apns=messaging.APNSConfig(
                 headers=apns_headers,
                 payload=messaging.APNSPayload(aps=aps),
@@ -746,7 +758,66 @@ async def log_call_result(
     except Exception:
         pass
 
+    if payload.outcome in ("missed", "cancelled"):
+        # Both are a call the callee never picked up - "cancelled" only says
+        # the caller gave up first. Never a reason to fail the request.
+        try:
+            await _push_missed_call(db, session, listing, buyer_id)
+        except Exception as exc:
+            logger.warning("[calls] missed-call push failed room=%s: %s", payload.room_id, exc)
+
     return {"status": "logged", "outcome": payload.outcome}
+
+
+# A missed call stays worth telling the callee about for a day; past that, a
+# phone that was off gets the call card in the chat instead of a stale alert.
+MISSED_CALL_PUSH_TTL_SECONDS = 24 * 3600
+
+
+async def _push_missed_call(db: AsyncSession, session, listing, buyer_id: str) -> None:
+    """Tell the callee, by push, that they missed a call.
+
+    There was no such push. The only missed-call notice was the app's own
+    inbox poller noticing the call card - which runs only while the app is
+    alive, so a call missed with BROKA closed (the usual way to miss one)
+    left nothing on the phone at all, and the ringing notification the
+    incoming-call push had posted simply timed out. This is a visible
+    notification, not data-only: Android shows it from a closed app without
+    the app running. Its roomId lets the app take down that call's ringing
+    notification when it is still up.
+    """
+    callee = (await db.execute(
+        select(User).where(User.id == session.callee_id)
+    )).scalar_one_or_none()
+    if callee is None or not callee.fcm_token:
+        return
+    is_video = session.call_type == "video"
+    callee_role = "seller" if session.callee_id == listing.seller_id else "buyer"
+    who = (session.caller_name or "").strip() or "Someone"
+    pushed = await _send_fcm(
+        token=callee.fcm_token,
+        title=f"Missed {'video ' if is_video else ''}call from {who}",
+        body=f"About: {listing.name}",
+        data={
+            "type":      "missed_call",
+            "roomId":    session.room_id,
+            "listingId": session.listing_id,
+            "buyerId":   buyer_id,
+            "myRole":    callee_role,
+            "callType":  session.call_type,
+            "callerName": who,
+            "listingName": listing.name,
+        },
+        ttl_seconds=MISSED_CALL_PUSH_TTL_SECONDS,
+        # One notification per thread's missed calls, shared with the app's
+        # own (NotificationService.missedCallTag), on its Messages channel.
+        android_tag=f"missed_{session.listing_id}_{buyer_id}",
+        android_channel_id="broka_messages",
+    )
+    if getattr(pushed, "unregistered", False):
+        callee.fcm_token = None
+        await db.commit()
+        logger.info("[calls] FCM_TOKEN_CLEARED user=%s reason=unregistered", callee.id)
 
 
 # ── WebSocket relay ────────────────────────────────────────────────────────────

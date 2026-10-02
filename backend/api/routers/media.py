@@ -31,6 +31,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from api.core.image_processing import ImageRejected, process_image
 from api.database import get_db, NegotiationMessage, Listing, User
@@ -54,6 +55,15 @@ _thread_connections: Dict[str, Dict[WebSocket, str]] = {}
 
 def _thread_key(listing_id: str, buyer_id: str) -> str:
     return f"{listing_id}:{buyer_id}"
+
+
+# Keepalive for the chat socket. The server pings every interval; a socket
+# that has sent nothing at all - not a ping, not a pong - for STALE seconds
+# is dead in a way TCP hasn't noticed (a mobile radio drop sends no FIN) and
+# is closed. The app pings on its own every 25s, so a live app never gets
+# near it.
+CHAT_WS_PING_SECONDS = 25
+CHAT_WS_STALE_SECONDS = CHAT_WS_PING_SECONDS * 4
 
 
 async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None) -> None:
@@ -127,6 +137,12 @@ async def negotiate_ws(
     is_seller = (uid == listing.seller_id)
     effective_buyer_id = buyer_id if is_seller else uid
     if not effective_buyer_id:
+        # A seller whose app named no buyer is looking at the most recent
+        # buyer's thread (/history's rule). Refusing the socket left exactly
+        # that seller with no live chat and no receipts at all.
+        from api.routers.negotiate import seller_default_buyer
+        effective_buyer_id = await seller_default_buyer(db, listing_id)
+    if not effective_buyer_id:
         logger.warning("[media-ws] missing buyer_id for seller=%s listing=%s", uid, listing_id)
         await websocket.close(code=4003, reason="buyer_id required for seller")
         return
@@ -150,10 +166,14 @@ async def negotiate_ws(
     # the other side's ticks advance without waiting for a poll.
     try:
         from api.routers.negotiate import _touch_watermark
-        await _touch_watermark(
+        delivered_at = await _touch_watermark(
             db, listing_id, effective_buyer_id,
             "seller" if is_seller else "buyer",
             delivered=True, read=False,
+        )
+        await broadcast_receipt(
+            listing_id, effective_buyer_id, "seller" if is_seller else "buyer",
+            exclude_uid=uid, delivered_at=delivered_at, read_at=None,
         )
     except Exception as exc:
         # Never fail a chat connection over a receipt.
@@ -184,24 +204,51 @@ async def negotiate_ws(
         except Exception:
             break
 
+    # BUG FIX: this loop was `wait_for(receive_text(), timeout=60)` inside a
+    # try whose `except TimeoutError` sent one ping and then fell out of the
+    # loop - so every chat socket closed itself after a minute in which
+    # nobody typed. The app had no reconnect, and spent the rest of the
+    # conversation on its 4-second history poll: messages late, no live
+    # receipts, and the poll racing the app's own send, which is what drew
+    # a sent message twice. Same shape as the call socket now (calls.py): a
+    # plain receive that is never cancelled, and one task that pings and
+    # closes a socket gone silent.
+    loop = asyncio.get_running_loop()
+    last_activity = loop.time()
+
+    async def _heartbeat() -> None:
+        while True:
+            await asyncio.sleep(CHAT_WS_PING_SECONDS)
+            if loop.time() - last_activity > CHAT_WS_STALE_SECONDS:
+                logger.info("[media-ws] heartbeat timeout user=%s thread=%s", uid, key)
+                try:
+                    await websocket.close(code=4000, reason="Heartbeat timeout")
+                except Exception:
+                    pass
+                return
+            try:
+                await websocket.send_json({"type": "ping"})
+            except Exception:
+                return
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
     try:
         while True:
-            raw = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+            raw = await websocket.receive_text()
+            last_activity = loop.time()
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            if msg.get("type") == "ping":
+            if isinstance(msg, dict) and msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
-    except asyncio.TimeoutError:
-        # Send keepalive ping
-        try:
-            await websocket.send_json({"type": "ping"})
-        except Exception:
-            pass
     except WebSocketDisconnect:
         logger.info("[media-ws] %s disconnected from thread=%s", uid, key)
+    except Exception as exc:
+        # receive after a heartbeat close, or a send on a socket already gone.
+        logger.info("[media-ws] %s left thread=%s (%s)", uid, key, type(exc).__name__)
     finally:
+        heartbeat_task.cancel()
         _thread_connections.get(key, {}).pop(websocket, None)
         if not _thread_connections.get(key):
             _thread_connections.pop(key, None)
@@ -220,6 +267,10 @@ def _msg_to_dict(m: NegotiationMessage, uid: str, is_seller: bool) -> dict:
         "call_type":    getattr(m, "call_type", None),
         "via_ai":       bool(m.via_ai),
         "created_at":   (m.created_at.isoformat() + "Z") if m.created_at else "",
+        # The sender's own id for the message (NegotiationMessage.client_msg_id):
+        # how their app, on another device or after a reconnect, recognises
+        # the copy it already shows.
+        "client_msg_id": getattr(m, "client_msg_id", None),
     }
 
 
@@ -237,6 +288,9 @@ async def upload_media(
     content_type:  str       = Form(...),   # "audio" | "image"
     buyer_id:      Optional[str] = Form(default=None),
     duration_secs: Optional[int] = Form(default=None),
+    # The id the sender's app gave this voice note or photo before sending
+    # it - see NegotiationMessage.client_msg_id.
+    client_msg_id: Optional[str] = Form(default=None, max_length=64),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -263,6 +317,14 @@ async def upload_media(
     # Validate content type
     if content_type not in ("audio", "image"):
         raise HTTPException(status_code=400, detail="content_type must be 'audio' or 'image'")
+
+    client_msg_id = (client_msg_id or "").strip() or None
+    if client_msg_id:
+        # A resend of something that already arrived (the first attempt's
+        # answer was lost to a timeout): hand back what was stored.
+        earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id)
+        if earlier is not None:
+            return _upload_response(earlier)
 
     max_bytes = (MAX_VOICE_MB if content_type == "audio" else MAX_IMAGE_MB) * 1024 * 1024
     file_bytes = await file.read()
@@ -292,6 +354,13 @@ async def upload_media(
     effective_buyer_id: Optional[str] = (
         authenticated_uid if actual_role == "buyer" else buyer_id
     )
+    if not effective_buyer_id:
+        # As in /negotiate/direct-message: a NULL thread is every buyer's
+        # thread, so a seller's photo without a buyer_id reached them all.
+        from api.routers.negotiate import seller_default_buyer
+        effective_buyer_id = await seller_default_buyer(db, listing_id)
+        if not effective_buyer_id:
+            raise HTTPException(status_code=400, detail="buyer_id required")
 
     msg_type = "voice" if content_type == "audio" else "image"
     nm = NegotiationMessage(
@@ -305,18 +374,45 @@ async def upload_media(
         msg_type=msg_type,
         media_url=data_uri,
         duration_secs=duration_secs if content_type == "audio" else None,
+        client_msg_id=client_msg_id,
     )
     db.add(nm)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # The same upload twice at once; the unique index let one in.
+        await db.rollback()
+        earlier = await sent_with_client_id(db, authenticated_uid, client_msg_id) if client_msg_id else None
+        if earlier is not None:
+            return _upload_response(earlier)
+        raise
     await db.refresh(nm)
 
     # Broadcast to WebSocket clients in the thread (not back to the sender -
     # they already see their own voice note/image immediately client-side)
-    if effective_buyer_id:
-        key = _thread_key(listing_id, effective_buyer_id)
-        payload = _msg_to_dict(nm, authenticated_uid, actual_role == "seller")
-        await _broadcast(key, payload, exclude_uid=authenticated_uid)
+    key = _thread_key(listing_id, effective_buyer_id)
+    payload = _msg_to_dict(nm, authenticated_uid, actual_role == "seller")
+    await _broadcast(key, payload, exclude_uid=authenticated_uid)
 
+    return _upload_response(nm)
+
+
+async def sent_with_client_id(
+    db: AsyncSession, sender_id: str, client_msg_id: str,
+) -> Optional[NegotiationMessage]:
+    """The message this sender already sent under this client id, if any
+    (NegotiationMessage.client_msg_id). Shared with /negotiate/direct-message."""
+    # visibility-ok: the sender's own message, looked up by their own id for it
+    result = await db.execute(
+        select(NegotiationMessage).where(
+            NegotiationMessage.sender_id == sender_id,
+            NegotiationMessage.client_msg_id == client_msg_id,
+        )
+    )
+    return result.scalars().first()
+
+
+def _upload_response(nm: NegotiationMessage) -> dict:
     return {
         "id":            nm.id,
         "role":          nm.role,
@@ -324,6 +420,7 @@ async def upload_media(
         "media_url":     nm.media_url,
         "duration_secs": nm.duration_secs,
         "created_at":    (nm.created_at.isoformat() + "Z") if nm.created_at else "",
+        "client_msg_id": nm.client_msg_id,
     }
 
 
@@ -341,3 +438,31 @@ async def broadcast_text_message(
     key = _thread_key(listing_id, buyer_id)
     if key in _thread_connections and _thread_connections[key]:
         await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
+
+
+async def broadcast_receipt(
+    listing_id: str,
+    buyer_id:   str,
+    role:       str,
+    *,
+    exclude_uid: str,
+    delivered_at: Optional[_dt],
+    read_at:      Optional[_dt],
+) -> None:
+    """Tell the thread's open sockets that [role]'s device received (and,
+    with read_at, read) the thread up to these moments. The sender's chat
+    turns the matching messages' ticks without waiting for its next
+    read-status poll. Not sent back to the side whose ticks these are."""
+    key = _thread_key(listing_id, buyer_id)
+    if not _thread_connections.get(key):
+        return
+
+    def _iso(dt: Optional[_dt]) -> Optional[str]:
+        return (dt.isoformat() + "Z") if dt else None
+
+    await _broadcast(key, {
+        "type":           "receipt",
+        "role":           role,
+        "last_delivered": _iso(delivered_at),
+        "last_read":      _iso(read_at),
+    }, exclude_uid=exclude_uid)

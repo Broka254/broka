@@ -42,6 +42,7 @@ from api.models.dispute import (
     Dispute, DisputeStatus, OptimisticLockError,
     DisputeType, DISPUTE_TYPE_META,
 )
+from api.core import gemini
 from api.core.audit import record_audit
 from api.core.ledger import ledger as _ledger
 
@@ -56,7 +57,6 @@ _ZAC_SECRET     = os.getenv("ZAC_SECRET", "broka-zac-secret-change-in-production
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = "llama-3.3-70b-versatile"
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 GROQ_ENDPOINT   = "https://api.groq.com/openai/v1/chat/completions"
 
 # OpenRouter — TESTING (2026-08): standing in for Groq, whose
@@ -106,17 +106,17 @@ async def _call_gemini(system: str, messages: list, image_base64: str = "") -> s
         contents.insert(0, {"role": "user", "parts": [{"text": "Begin."}]})
     async with httpx.AsyncClient(timeout=35) as client:
         resp = await client.post(
-            f"{GEMINI_ENDPOINT}?key={GEMINI_API_KEY}",
+            f"{gemini.endpoint()}?key={GEMINI_API_KEY}",
             headers={"Content-Type": "application/json"},
             json={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": contents,
-                "generationConfig": {"maxOutputTokens": 600, "temperature": 0.3},
+                "generationConfig": {"maxOutputTokens": gemini.output_budget(600), "temperature": 0.3},
             },
         )
     if resp.status_code != 200:
         raise ValueError(f"Gemini error {resp.status_code}: {resp.text[:200]}")
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    return gemini.reply_text(resp.json())
 
 
 async def _call_groq(system: str, messages: list) -> str:
