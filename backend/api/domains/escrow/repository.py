@@ -138,7 +138,7 @@ class ExternalEscrowRepository:
     # whatever another request had committed in between.
     #
     # That broke the double-release guard in
-    # EscrowService._confirm_delivery_econfirm. Its "authoritative
+    # EscrowService.release_econfirm_deal. Its "authoritative
     # re-check" re-reads the escrow after taking the deal lock, but the
     # request had loaded it once already (confirm_delivery reads it to
     # choose the flow), so the re-check saw the stale `funded` rather than
@@ -150,12 +150,43 @@ class ExternalEscrowRepository:
     # before the SELECT, so those edits are written first and read back.
 
     async def get_by_deal_id(self, deal_id: str) -> Optional[ExternalEscrow]:
+        """The deal's LATEST payment (highest payment_no), or None.
+
+        A deal can hold several payments (partial payments, ExternalEscrow.
+        payment_no); list_for_deal returns all of them.
+        """
         r = await self.db.execute(
             select(ExternalEscrow)
             .where(ExternalEscrow.deal_id == deal_id)
+            .order_by(ExternalEscrow.payment_no.desc())
+            .limit(1)
             .execution_options(populate_existing=True)
         )
-        return r.scalar_one_or_none()
+        return r.scalars().first()
+
+    async def list_for_deal(self, deal_id: str) -> list[ExternalEscrow]:
+        """Every payment on the deal, first to last."""
+        r = await self.db.execute(
+            select(ExternalEscrow)
+            .where(ExternalEscrow.deal_id == deal_id)
+            .order_by(ExternalEscrow.payment_no.asc())
+            .execution_options(populate_existing=True)
+        )
+        return list(r.scalars().all())
+
+    async def list_for_deals(self, deal_ids: list[str]) -> dict[str, list[ExternalEscrow]]:
+        """list_for_deal for many deals in one query (the deal list)."""
+        if not deal_ids:
+            return {}
+        r = await self.db.execute(
+            select(ExternalEscrow)
+            .where(ExternalEscrow.deal_id.in_(deal_ids))
+            .order_by(ExternalEscrow.deal_id, ExternalEscrow.payment_no.asc())
+        )
+        out: dict[str, list[ExternalEscrow]] = {}
+        for e in r.scalars().all():
+            out.setdefault(e.deal_id, []).append(e)
+        return out
 
     async def get_by_provider_transaction_id(self, provider_transaction_id: str) -> Optional[ExternalEscrow]:
         r = await self.db.execute(

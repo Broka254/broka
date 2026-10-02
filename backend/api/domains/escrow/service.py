@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
@@ -42,13 +43,14 @@ from api.core.audit import record_audit
 from api.core.reconciliation import report_reconciliation
 from api.core.fraud import flag_fraud, compute_trust_score
 from api.core.config import settings
-from api.core.money import add_money, money, pct_of
+from api.core.money import add_money, money, pct_of, to_decimal
 from api.core.econfirm_client import EConfirmError, EConfirmConnectionError, EConfirmAPIError
 from api.core.secrets_crypto import encrypt_secret, decrypt_secret, SecretCryptoError
 from api.models.external_escrow import ExternalEscrow, EConfirmEscrowStatus
 from .repository import DealRepository, MpesaRepository, ExternalEscrowRepository
 from api.domains.listings.stock import is_stocked, status_for, units_taken, units_total
 from .providers import get_escrow_provider
+from . import policy
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,132 @@ def _commission(price: float, listing_type=None) -> float:
     rate = (settings.auction_commission_rate if listing_type == ListingType.auction
             else settings.commission_rate)
     return max(money(settings.commission_minimum_kes), pct_of(price, rate))
+
+
+# ── Partial payments ───────────────────────────────────────────────────────
+#
+# A buyer does not have to pay the whole price at once: they pay what they
+# choose (never more than the balance), the seller sees what is secured, and
+# the buyer adds to it until the balance is cleared. Nobody waits for the
+# other party's confirmation before paying - a buyer turned away at the pay
+# button may not come back. Each payment is its own E-Confirm transaction
+# (ExternalEscrow row, payment_no 0, 1, 2...), so release and refund act on
+# every payment the deal holds.
+
+# The deal statuses a top-up may be added in. Only `paid`: in a dispute or
+# one of its sub-states the money is frozen while it is sorted out.
+_TOP_UP_STATUSES = (DealStatus.paid,)
+
+# Deal statuses in which money arriving for a top-up still has a live deal
+# to belong to. Released and refunded deals are over: money arriving for one
+# of those is reported, not quietly absorbed.
+_LIVE_FUNDED = _FUNDED_OR_LATER - {DealStatus.released, DealStatus.refunded}
+
+
+def amount_paid(payments) -> float:
+    """What the buyer has actually paid into escrow, across every payment."""
+    amounts = [p.amount for p in payments if p.status in EConfirmEscrowStatus.MONEY_IN]
+    return add_money(*amounts) if amounts else 0.0
+
+
+def balance_due(deal: Deal, payments) -> float:
+    """What is left to pay on the deal's price; never negative."""
+    left = money(to_decimal(deal.agreed_price) - to_decimal(amount_paid(payments)))
+    return max(left, 0.0)
+
+
+def validate_payment_amount(amount, balance: float, *, part_payments_allowed: bool) -> float:
+    """The goods amount for the next payment: `amount`, or the balance when
+    none is given.
+
+    Never more than the balance: the buyer can only overpay by mistake, and
+    a part of a payment cannot be refunded on its own through E-Confirm. If
+    the price really is higher than the deal says, the seller states it
+    (POST /deal/{id}/price, protection.set_price) and the balance grows.
+    """
+    if amount is None:
+        return balance
+    try:
+        a = float(amount)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Payment amount is not a valid number")
+    if a != a or a in (float("inf"), float("-inf")) or a <= 0:
+        raise HTTPException(status_code=422, detail="Payment amount must be greater than zero")
+    a = money(a)
+    if a > balance:
+        raise HTTPException(
+            status_code=422,
+            detail=f"That is more than the balance on this deal (KES {balance:,.2f})",
+        )
+    if a < balance:
+        if not part_payments_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"This deal is paid in full in one payment (KES {balance:,.2f})",
+            )
+        if a < policy.MIN_PART_PAYMENT_KES:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"A part payment must be at least KES {policy.MIN_PART_PAYMENT_KES:,.0f}, "
+                        f"or the whole balance (KES {balance:,.2f})"),
+            )
+    return a
+
+
+def payment_commission(deal: Deal, payments, amount: float, balance: float) -> float:
+    """BROKA's commission carried by a payment of `amount`.
+
+    Proportional to the payment, and the payment that clears the balance
+    carries whatever the earlier ones did not - so a deal paid in parts
+    costs the buyer the same commission as one paid at once (including the
+    minimum, which a proportional split alone would spread thin).
+    """
+    if amount >= balance:
+        carried = [p.merchant_commission_amount or 0.0 for p in payments
+                   if p.status in EConfirmEscrowStatus.MONEY_IN]
+        rest = money(to_decimal(deal.commission) - to_decimal(add_money(*carried) if carried else 0))
+        return max(rest, 0.0)
+    return money(to_decimal(deal.commission) * to_decimal(amount) / to_decimal(deal.agreed_price))
+
+
+def payment_rows(payments) -> list[dict]:
+    """The deal's payments as the app shows them."""
+    return [
+        {
+            "payment_no": p.payment_no,
+            "amount": p.amount,
+            "status": EscrowService._flutter_payment_status(p),
+            "funded_at": p.funded_at.isoformat() if p.funded_at else None,
+        }
+        for p in payments
+    ]
+
+
+def protection_fields(deal: Deal, payments, category: Optional[str] = None) -> dict:
+    """Partial-payment totals and the buyer-protection clocks, for any
+    response describing a deal."""
+    auto_at = policy.auto_release_at(deal)
+    respond_by = policy.refund_respond_by(deal)
+    paid = amount_paid(payments)
+    return {
+        "amount_paid": paid,
+        "balance": balance_due(deal, payments),
+        "payments": payment_rows(payments),
+        "seller_claimed_delivery_at": (
+            deal.seller_claimed_delivery_at.isoformat() if deal.seller_claimed_delivery_at else None),
+        "auto_release_at": auto_at.isoformat() if auto_at else None,
+        "requires_ownership_transfer": policy.requires_ownership_transfer(category),
+        "refund_request": (
+            {
+                "requested_at": deal.refund_requested_at.isoformat(),
+                "reason": deal.refund_reason,
+                "outcome": deal.refund_outcome,
+                "resolved_at": deal.refund_resolved_at.isoformat() if deal.refund_resolved_at else None,
+                "respond_by": respond_by.isoformat() if respond_by else None,
+            }
+            if deal.refund_requested_at else None
+        ),
+    }
 
 
 class EscrowService:
@@ -288,20 +416,33 @@ class EscrowService:
 
     # ── E-Confirm: fee quote (Phase 5 / Phase 14) ──────────────────────────
 
-    async def get_fee_quote(self, deal_id: str, user_id: str) -> dict:
+    async def get_fee_quote(self, deal_id: str, user_id: str, amount: Optional[float] = None) -> dict:
+        """The buyer's total for the next payment: `amount` of goods money
+        (the whole balance when not given) plus its share of the commission
+        and E-Confirm's fee."""
         deal = await self.deals.get_by_id(deal_id)
         if not deal:
             raise HTTPException(status_code=404, detail="Deal not found")
         if user_id not in (deal.buyer_id, deal.seller_id):
             raise HTTPException(status_code=403, detail="Not your deal")
-        if deal.status != DealStatus.agreed:
+        payments = await self.external_escrows.list_for_deal(deal_id)
+        if deal.status != DealStatus.agreed and not (deal.status in _TOP_UP_STATUSES and payments):
             raise HTTPException(
                 status_code=400,
                 detail=f"Fee quote is only available while a deal is 'agreed' (current: '{deal.status.value}')",
             )
+        balance = balance_due(deal, payments)
+        if balance <= 0:
+            raise HTTPException(status_code=400, detail="This deal is already paid in full")
+        listing_type = (await self.db.execute(
+            select(Listing.listing_type).where(Listing.id == deal.listing_id)
+        )).scalar_one_or_none()
+        goods = validate_payment_amount(
+            amount, balance, part_payments_allowed=listing_type != ListingType.auction)
+        commission = payment_commission(deal, payments, goods, balance)
 
         try:
-            quote = await get_escrow_provider().get_fee_quote(deal.agreed_price)
+            quote = await get_escrow_provider().get_fee_quote(goods)
         except EConfirmConnectionError as exc:
             logger.warning("[escrow] fee quote connection error deal=%s: %s", deal_id, exc)
             raise HTTPException(status_code=503, detail="Payment provider is temporarily unavailable — please try again shortly")
@@ -313,20 +454,26 @@ class EscrowService:
             raise HTTPException(status_code=502, detail="Could not get a payment quote right now")
 
         provider_fee = money(quote.fee_amount)
-        total = add_money(deal.agreed_price, deal.commission, provider_fee)
+        total = add_money(goods, commission, provider_fee)
         return {
             "deal_id": deal_id,
-            "goods_amount": deal.agreed_price,
-            "merchant_commission": deal.commission,
+            "goods_amount": goods,
+            "merchant_commission": commission,
             "provider_fee": provider_fee,
             "total_to_pay": total,
             "currency": quote.currency,
+            "agreed_price": deal.agreed_price,
+            "amount_paid": amount_paid(payments),
+            "balance": balance,
+            "min_part_payment": (policy.MIN_PART_PAYMENT_KES
+                                 if listing_type != ListingType.auction else balance),
         }
 
     # ── E-Confirm: create + fund (Phase 6 / Phase 7) ───────────────────────
 
     async def fund_deal_escrow(
         self, deal_id: str, buyer_id: str, payer_phone: str, request_ip: Optional[str] = None,
+        amount: Optional[float] = None,
     ) -> dict:
         """
         Buyer-facing action fusing Phase 6 (create escrow if one doesn't
@@ -349,6 +496,13 @@ class EscrowService:
         whenever escrow.status was PENDING, which is exactly the state a
         legitimately-already-sent STK push sits in while the buyer is
         still completing it on their phone.
+
+        Partial payments: `amount` is the goods money for this payment (the
+        whole balance when not given). A request while the deal's latest
+        payment is still open - being set up, or its prompt on the buyer's
+        phone - continues THAT payment, whatever amount it names; only once
+        it has settled does a request open the next one (a top-up), and
+        only on a deal that is `paid` and still has a balance.
         """
         deal = await self.deals.get_by_id(deal_id)
         if not deal:
@@ -356,15 +510,43 @@ class EscrowService:
         if deal.buyer_id != buyer_id:
             raise HTTPException(status_code=403, detail="Only the buyer can fund this deal")
 
-        escrow = await self.external_escrows.get_by_deal_id(deal_id)
+        payments = await self.external_escrows.list_for_deal(deal_id)
+        escrow = payments[-1] if payments else None
+        continuing = escrow is not None and escrow.status in EConfirmEscrowStatus.OPEN
+        # The first payment turns an agreed deal into a paid one; every later
+        # payment adds to a paid one.
+        first_payment = escrow is None or (continuing and escrow.payment_no == 0)
+        payable = (DealStatus.agreed,) if first_payment else _TOP_UP_STATUSES
 
-        if deal.status != DealStatus.agreed:
+        if deal.status not in payable:
             if escrow is not None:
-                return await self._payment_status_dict(deal, escrow)
+                return await self._payment_status_dict(deal)
             raise HTTPException(status_code=400, detail=f"Cannot fund — deal status is '{deal.status.value}'")
 
-        if escrow is None:
-            escrow = await self._create_external_escrow(deal, buyer_id)
+        if not continuing:
+            if policy.refund_request_open(deal):
+                raise HTTPException(
+                    status_code=409,
+                    detail="You have asked for a refund on this deal - withdraw the request before paying more",
+                )
+            balance = balance_due(deal, payments)
+            if balance <= 0:
+                # Paid in full - a retried Pay tap, not a new payment.
+                return await self._payment_status_dict(deal)
+            listing_type = (await self.db.execute(
+                select(Listing.listing_type).where(Listing.id == deal.listing_id)
+            )).scalar_one_or_none()
+            # An auction is paid in one payment: its payment-lapse rules
+            # (domains/auctions/lifecycle.py) read "paid" as the winning bid
+            # secured, and a token part payment would hold the item.
+            goods = validate_payment_amount(
+                amount, balance, part_payments_allowed=listing_type != ListingType.auction)
+            escrow = await self._create_external_escrow(
+                deal, buyer_id,
+                amount=goods,
+                commission=payment_commission(deal, payments, goods, balance),
+                payment_no=(escrow.payment_no + 1) if escrow is not None else 0,
+            )
             # Freshly created: funding_initiated_at is still None, so this
             # legitimately falls through to the first-ever fund attempt below.
 
@@ -425,7 +607,7 @@ class EscrowService:
         ):
             # Already past funding — never re-fund, just report where
             # things stand.
-            return await self._payment_status_dict(deal, escrow)
+            return await self._payment_status_dict(deal)
 
         if escrow.status in (EConfirmEscrowStatus.PENDING, EConfirmEscrowStatus.UNKNOWN) and escrow.funding_initiated_at is not None:
             # A fund attempt already happened at least once — successful
@@ -441,7 +623,7 @@ class EscrowService:
                 if refreshed is not None:
                     escrow = refreshed
             fresh_deal = await self.deals.get_by_id(deal.id)
-            return await self._payment_status_dict(fresh_deal or deal, escrow)
+            return await self._payment_status_dict(fresh_deal or deal)
 
         # Remaining case: PENDING with funding_initiated_at still None —
         # a legitimate first-ever attempt, whether this is a brand-new
@@ -465,11 +647,11 @@ class EscrowService:
         # with a compare-and-swap, all before the provider is called. Exactly
         # one caller can win it, and a lapse that runs after it sees the
         # attempt in flight.
-        claimed = await self._claim_funding_attempt(deal.id, escrow, payer_phone)
+        claimed = await self._claim_funding_attempt(deal.id, escrow, payer_phone, payable)
         if not claimed:
             fresh_deal = await self.deals.get_by_id(deal.id)
             await self.db.refresh(escrow)
-            return await self._payment_status_dict(fresh_deal or deal, escrow)
+            return await self._payment_status_dict(fresh_deal or deal)
 
         try:
             result = await get_escrow_provider().fund_escrow(escrow.provider_transaction_id, payer_phone)
@@ -526,10 +708,11 @@ class EscrowService:
             deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id, payer_phone=payer_phone,
         ))
 
-        return await self._payment_status_dict(deal, escrow)
+        return await self._payment_status_dict(deal)
 
     async def _claim_funding_attempt(
         self, deal_id: str, escrow: ExternalEscrow, payer_phone: str,
+        payable: tuple = (DealStatus.agreed,),
     ) -> bool:
         """Atomically mark a funding attempt as started. True if this caller won.
 
@@ -538,8 +721,12 @@ class EscrowService:
         itself is a compare-and-swap on funding_initiated_at IS NULL, so it
         also holds on SQLite, where FOR UPDATE is a no-op. Committed before
         returning, so no lock is held while the provider is called.
+
+        `payable` is the deal status the payment needs: `agreed` for the
+        first, `paid` for a top-up - which a refund or release that took the
+        deal past `paid` meanwhile must stop.
         """
-        locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.agreed,))
+        locked = await lock_deal_if_status(self.db, deal_id, payable)
         if locked is None:
             # Cancelled, lapsed or already paid since this request started.
             await self.db.commit()
@@ -562,12 +749,27 @@ class EscrowService:
 
     async def _create_external_escrow(
         self, deal: Deal, buyer_id: str, existing: Optional[ExternalEscrow] = None,
+        *, amount: Optional[float] = None, commission: Optional[float] = None,
+        payment_no: int = 0,
     ) -> ExternalEscrow:
         """Phase 6. Two-phase write on purpose (see api/models/
         external_escrow.py + fund_deal_escrow's 'stuck creating' branch
         above): a row is persisted BEFORE calling out to E-Confirm, so a
         crash/restart between the call and the response leaves local
-        evidence of the attempt rather than nothing at all."""
+        evidence of the attempt rather than nothing at all.
+
+        One call creates one PAYMENT: `amount` of goods money carrying
+        `commission` (the whole price and commission when not given), as
+        payment number `payment_no`. Retrying a rejected create (`existing`)
+        keeps that row's amount and commission."""
+        if existing is not None:
+            amount = existing.amount
+            commission = (existing.merchant_commission_amount
+                          if existing.merchant_commission_amount is not None else deal.commission)
+            payment_no = existing.payment_no
+        else:
+            amount = deal.agreed_price if amount is None else amount
+            commission = deal.commission if commission is None else commission
         r = await self.db.execute(select(User).where(User.id == deal.buyer_id))
         buyer = r.scalar_one_or_none()
         r = await self.db.execute(select(User).where(User.id == deal.seller_id))
@@ -587,31 +789,46 @@ class EscrowService:
 
         r = await self.db.execute(select(Listing).where(Listing.id == deal.listing_id))
         listing = r.scalar_one_or_none()
-        description = f"BROKA deal {deal.id[:8]} - {listing.name if listing else 'marketplace item'}"[:200]
+        description = f"BROKA deal {deal.id[:8]} - {listing.name if listing else 'marketplace item'}"
+        if payment_no:
+            description += f" (payment {payment_no + 1})"
+        description = description[:200]
 
         if existing is not None:
             escrow = existing
         else:
-            escrow = await self.external_escrows.create(
-                deal_id=deal.id,
-                provider="econfirm",
-                status=EConfirmEscrowStatus.CREATING,
-                amount=deal.agreed_price,
-                currency="KES",
-                buyer_email=buyer.email,
-                seller_email=seller.email,
-                receiver_phone=seller.phone,
-            )
-            await self.db.commit()  # persist the "we attempted this" marker before calling out (Phase 9)
+            try:
+                escrow = await self.external_escrows.create(
+                    deal_id=deal.id,
+                    payment_no=payment_no,
+                    provider="econfirm",
+                    status=EConfirmEscrowStatus.CREATING,
+                    amount=amount,
+                    merchant_commission_amount=commission,
+                    currency="KES",
+                    buyer_email=buyer.email,
+                    seller_email=seller.email,
+                    receiver_phone=seller.phone,
+                )
+                await self.db.commit()  # persist the "we attempted this" marker before calling out (Phase 9)
+            except IntegrityError:
+                # Another request opened this same payment a moment ago (a
+                # double tap): (deal_id, payment_no) is unique, so one of
+                # them is turned away rather than two transactions created.
+                await self.db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment setup for this deal is already in progress — please wait a moment and try again",
+                )
 
         try:
             result = await get_escrow_provider().create_escrow(
-                amount=deal.agreed_price,
+                amount=amount,
                 buyer_email=buyer.email,
                 seller_email=seller.email,
                 receiver_phone=seller.phone,
                 description=description,
-                commission_amount=deal.commission,
+                commission_amount=commission,
             )
         except EConfirmConnectionError as exc:
             escrow.last_error = f"create attempt: connection error ({type(exc).__name__})"
@@ -644,7 +861,7 @@ class EscrowService:
         escrow.provider_raw_status = result.raw_status
         escrow.status = result.status if result.status != EConfirmEscrowStatus.UNKNOWN else EConfirmEscrowStatus.PENDING
         escrow.provider_fee_amount = result.fee_amount
-        escrow.merchant_commission_amount = deal.commission
+        escrow.merchant_commission_amount = commission
         escrow.last_checked_at = datetime.utcnow()
         if result.confirmation_code:
             escrow.confirmation_code_encrypted = encrypt_secret(result.confirmation_code)
@@ -661,13 +878,14 @@ class EscrowService:
 
         await record_audit(
             self.db, buyer_id, "econfirm_escrow_created", "deal", deal.id,
-            f"provider_transaction_id={escrow.provider_transaction_id} amount={deal.agreed_price} commission={deal.commission}",
+            f"provider_transaction_id={escrow.provider_transaction_id} payment_no={payment_no} "
+            f"amount={amount} commission={commission}",
         )
         await self.db.commit()
 
         await publish(EConfirmEscrowCreated(
             deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
-            buyer_id=deal.buyer_id, seller_id=deal.seller_id, amount=deal.agreed_price,
+            buyer_id=deal.buyer_id, seller_id=deal.seller_id, amount=amount,
         ))
 
         return escrow
@@ -683,12 +901,19 @@ class EscrowService:
         "already at this state" is explicitly checked before doing
         anything (Phase 8: "If Deal is already paid: do not duplicate
         state transition").
-        """
-        escrow = await self.external_escrows.get_by_deal_id(deal_id)
-        if escrow is None or not escrow.provider_transaction_id:
-            return escrow  # nothing to check yet — still 'creating' with no id
 
-        if escrow.status in EConfirmEscrowStatus.TERMINAL:
+        Every payment on the deal is checked (partial payments: one
+        E-Confirm transaction each). Returns the deal's latest payment.
+        """
+        for escrow in await self.external_escrows.list_for_deal(deal_id):
+            if escrow.provider_transaction_id and escrow.status not in EConfirmEscrowStatus.TERMINAL:
+                await self.reconcile_payment(escrow)
+        return await self.external_escrows.get_by_deal_id(deal_id)
+
+    async def reconcile_payment(self, escrow: ExternalEscrow) -> ExternalEscrow:
+        """reconcile_econfirm_escrow for one payment."""
+        deal_id = escrow.deal_id
+        if not escrow.provider_transaction_id or escrow.status in EConfirmEscrowStatus.TERMINAL:
             return escrow
 
         try:
@@ -730,66 +955,7 @@ class EscrowService:
             return escrow
 
         if result.status == EConfirmEscrowStatus.FUNDED and previous_status != EConfirmEscrowStatus.FUNDED:
-            await self.external_escrows.save(escrow)
-            locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.agreed,))
-            if locked is not None:
-                locked.status = DealStatus.paid
-                escrow.funded_at = datetime.utcnow()
-                await self.external_escrows.save(escrow)
-                await record_audit(
-                    self.db, "system", "econfirm_escrow_funded", "deal", deal_id,
-                    f"provider_transaction_id={escrow.provider_transaction_id} amount={escrow.amount}",
-                )
-                await self.db.commit()
-                await publish(EConfirmEscrowFunded(
-                    deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
-                    buyer_id=deal.buyer_id, seller_id=deal.seller_id, amount=deal.agreed_price,
-                ))
-                # Publishing the ORIGINAL EscrowFunded event too (exactly
-                # once, same as this always did) is what makes
-                # deal_hub_subscribers.py write the ledger entry and
-                # broadcast over the deal's WebSocket room automatically —
-                # see that file's on_escrow_funded. Recording the ledger
-                # entry manually here as well would double it.
-                await publish(EscrowFunded(
-                    deal_id=deal_id, buyer_id=deal.buyer_id, seller_id=deal.seller_id,
-                    amount=deal.agreed_price, mpesa_receipt=escrow.provider_transaction_id,
-                ))
-            else:
-                # The deal was not `agreed` when locked. Usually that is the
-                # benign Phase 8 case - a concurrent poller already applied
-                # this same FUNDED transition - and the deal is paid or
-                # later. But money arriving for a deal that is CANCELLED (a
-                # lapsed auction win, say) is not benign: the buyer has paid
-                # into escrow for something they will not get, and nothing
-                # would ever notice. That needs a human with the provider's
-                # dashboard, so it is recorded as an audit row (the durable
-                # record, GET /admin/audit-logs), raised to Sentry through
-                # report_reconciliation, and published for any subscriber.
-                current = await self.deals.get_by_id(deal_id)
-                current_status = current.status if current is not None else None
-                if current_status in _FUNDED_OR_LATER:
-                    await self.db.commit()  # Phase 8: someone else already moved it — not an error
-                else:
-                    reason = (
-                        f"escrow funded but deal is "
-                        f"{current_status.value if current_status else 'missing'}"
-                    )
-                    await record_audit(
-                        self.db, "system", "econfirm_funded_on_inactive_deal", "deal", deal_id,
-                        f"provider_transaction_id={escrow.provider_transaction_id} {reason}",
-                    )
-                    await self.db.commit()
-                    report_reconciliation(
-                        "econfirm_funded_on_inactive_deal", deal_id=deal_id,
-                        provider_transaction_id=escrow.provider_transaction_id,
-                        reason=f"{reason} - the buyer's money is in escrow for a deal that "
-                               f"will not complete; refund through E-Confirm",
-                    )
-                    await publish(EConfirmReconciliationRequired(
-                        deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
-                        reason=reason,
-                    ))
+            await self._apply_funded(deal, escrow)
 
         elif result.status == EConfirmEscrowStatus.PAYOUT_FAILED and previous_status != EConfirmEscrowStatus.PAYOUT_FAILED:
             escrow.last_error = "provider reported payout_failed"
@@ -812,37 +978,164 @@ class EscrowService:
             # _confirm_delivery_econfirm) when a release returned
             # payout_initiated and completion is observed later by a
             # poll/sweep instead of the original release call's response.
+            # The deal is released once EVERY payment it holds is paid out.
+            escrow.released_at = escrow.released_at or datetime.utcnow()
             await self.external_escrows.save(escrow)
-            locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.paid,))
-            if locked is not None:
-                locked.status = DealStatus.released
-                locked.released_at = datetime.utcnow()
-                escrow.released_at = datetime.utcnow()
-                await self.external_escrows.save(escrow)
-                r = await self.db.execute(select(User).where(User.id == deal.seller_id))
-                seller = r.scalar_one_or_none()
-                if seller:
-                    seller.completed_deals = (seller.completed_deals or 0) + 1
-                    await compute_trust_score(seller.id, self.db)
-                await record_audit(
-                    self.db, "system", "econfirm_payout_completed", "deal", deal_id,
-                    f"provider_transaction_id={escrow.provider_transaction_id} amount={deal.agreed_price}",
-                )
-                await self.db.commit()
-                await publish(EConfirmPayoutCompleted(
-                    deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
-                    seller_id=deal.seller_id, amount=deal.agreed_price,
-                ))
-                await publish(EscrowReleased(
-                    deal_id=deal_id, seller_id=deal.seller_id, buyer_id=deal.buyer_id, amount=deal.agreed_price,
-                ))
-            else:
+            if not await self._finish_release_if_complete(deal_id):
                 await self.db.commit()
         else:
             await self.external_escrows.save(escrow)
             await self.db.commit()
 
         return escrow
+
+    async def _apply_funded(self, deal: Deal, escrow: ExternalEscrow) -> None:
+        """A payment reached escrow. The deal's first money turns it `paid`;
+        a top-up on a live deal is recorded against it; money for a deal
+        that is over is reported for a human to return."""
+        deal_id = deal.id
+        await self.external_escrows.save(escrow)
+        locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.agreed,))
+        if locked is not None:
+            locked.status = DealStatus.paid
+            escrow.funded_at = datetime.utcnow()
+            await self.external_escrows.save(escrow)
+            await record_audit(
+                self.db, "system", "econfirm_escrow_funded", "deal", deal_id,
+                f"provider_transaction_id={escrow.provider_transaction_id} amount={escrow.amount}",
+            )
+            await self.db.commit()
+            await self._publish_funded(deal, escrow)
+            return
+
+        # The deal was not `agreed` when locked. Usually that is the benign
+        # Phase 8 case - a concurrent poller already applied this same
+        # FUNDED transition - and the deal is paid or later. A later payment
+        # (a top-up) landing on a live deal is expected too, and is recorded
+        # once: whoever sets its funded_at first. But money arriving for a
+        # deal that is CANCELLED (a lapsed auction win, say), released or
+        # refunded is not benign: the buyer has paid into escrow for
+        # something they will not get, and nothing would ever notice. That
+        # needs a human with the provider's dashboard, so it is recorded as
+        # an audit row (the durable record, GET /admin/audit-logs), raised to
+        # Sentry through report_reconciliation, and published for any
+        # subscriber.
+        current = await self.deals.get_by_id(deal_id)
+        current_status = current.status if current is not None else None
+        if escrow.payment_no > 0 and current_status in _LIVE_FUNDED:
+            now = datetime.utcnow()
+            won = await self.db.execute(
+                update(ExternalEscrow)
+                .where(ExternalEscrow.id == escrow.id, ExternalEscrow.funded_at.is_(None))
+                .values(funded_at=now, updated_at=now)
+            )
+            if won.rowcount > 0:
+                await record_audit(
+                    self.db, "system", "econfirm_payment_funded", "deal", deal_id,
+                    f"provider_transaction_id={escrow.provider_transaction_id} "
+                    f"payment_no={escrow.payment_no} amount={escrow.amount}",
+                )
+            await self.db.commit()
+            await self.db.refresh(escrow)
+            if won.rowcount > 0:
+                await self._publish_funded(current, escrow)
+                if current.refund_outcome in ("seller_accepted", "seller_silent"):
+                    # A prompt opened before the refund was approved, paid
+                    # after: the team returning the refund by hand was told
+                    # an amount without it.
+                    report_reconciliation(
+                        "econfirm_funded_after_refund_approved", deal_id=deal_id,
+                        provider_transaction_id=escrow.provider_transaction_id,
+                        reason=f"payment {escrow.payment_no + 1} (KES {escrow.amount:,.2f}) arrived "
+                               f"after the deal's refund was approved - refund it too",
+                    )
+            return
+        if current_status in _FUNDED_OR_LATER and escrow.payment_no == 0:
+            await self.db.commit()  # Phase 8: someone else already moved it — not an error
+            return
+        reason = (
+            f"escrow funded but deal is "
+            f"{current_status.value if current_status else 'missing'}"
+        )
+        await record_audit(
+            self.db, "system", "econfirm_funded_on_inactive_deal", "deal", deal_id,
+            f"provider_transaction_id={escrow.provider_transaction_id} {reason}",
+        )
+        await self.db.commit()
+        report_reconciliation(
+            "econfirm_funded_on_inactive_deal", deal_id=deal_id,
+            provider_transaction_id=escrow.provider_transaction_id,
+            reason=f"{reason} - the buyer's money is in escrow for a deal that "
+                   f"will not complete; refund through E-Confirm",
+        )
+        await publish(EConfirmReconciliationRequired(
+            deal_id=deal_id, provider_transaction_id=escrow.provider_transaction_id,
+            reason=reason,
+        ))
+
+    async def _publish_funded(self, deal: Deal, escrow: ExternalEscrow) -> None:
+        await publish(EConfirmEscrowFunded(
+            deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
+            buyer_id=deal.buyer_id, seller_id=deal.seller_id, amount=escrow.amount,
+        ))
+        # Publishing the ORIGINAL EscrowFunded event too (exactly once per
+        # payment) is what makes deal_hub_subscribers.py write the ledger
+        # entry and broadcast over the deal's WebSocket room automatically —
+        # see that file's on_escrow_funded. Recording the ledger entry
+        # manually here as well would double it. The amount is THIS
+        # payment's: the ledger credits what actually arrived.
+        await publish(EscrowFunded(
+            deal_id=deal.id, buyer_id=deal.buyer_id, seller_id=deal.seller_id,
+            amount=escrow.amount, mpesa_receipt=escrow.provider_transaction_id,
+        ))
+        if escrow.payment_no > 0:
+            try:
+                from .protection import announce_top_up
+                await announce_top_up(self.db, deal.id, escrow.amount)
+            except Exception as exc:
+                logger.warning("[escrow] top-up announcement failed deal=%s: %s", deal.id, exc)
+
+    async def _finish_release_if_complete(
+        self, deal_id: str, *, delivery_confirmed: bool = False,
+    ) -> bool:
+        """Mark the deal released once every payment it holds is paid out.
+        True if this call did it. Commits when it does; the caller commits
+        otherwise."""
+        payments = await self.external_escrows.list_for_deal(deal_id)
+        paid_in = [p for p in payments if p.status in EConfirmEscrowStatus.MONEY_IN]
+        if not paid_in or any(p.status != EConfirmEscrowStatus.COMPLETED for p in paid_in):
+            return False
+        locked = await lock_deal_if_status(self.db, deal_id, (DealStatus.paid,))
+        if locked is None:
+            return False
+        now = datetime.utcnow()
+        locked.status = DealStatus.released
+        locked.released_at = now
+        if delivery_confirmed:
+            locked.delivery_confirmed_at = now
+        # Nothing left to wait for: a delivery claim's countdown is over.
+        if locked.timer_type and locked.timer_fired_at is None:
+            locked.timer_cancelled_at = locked.timer_cancelled_at or now
+        total = amount_paid(paid_in)
+        r = await self.db.execute(select(User).where(User.id == locked.seller_id))
+        seller = r.scalar_one_or_none()
+        if seller:
+            seller.completed_deals = (seller.completed_deals or 0) + 1
+            await compute_trust_score(seller.id, self.db)
+        last = paid_in[-1]
+        await record_audit(
+            self.db, "system", "econfirm_payout_completed", "deal", deal_id,
+            f"provider_transaction_id={last.provider_transaction_id} payments={len(paid_in)} amount={total}",
+        )
+        await self.db.commit()
+        await publish(EConfirmPayoutCompleted(
+            deal_id=deal_id, provider_transaction_id=last.provider_transaction_id,
+            seller_id=locked.seller_id, amount=total,
+        ))
+        await publish(EscrowReleased(
+            deal_id=deal_id, seller_id=locked.seller_id, buyer_id=locked.buyer_id, amount=total,
+        ))
+        return True
 
     async def get_payment_status(self, deal_id: str, user_id: str) -> dict:
         deal = await self.deals.get_by_id(deal_id)
@@ -851,33 +1144,53 @@ class EscrowService:
         if user_id not in (deal.buyer_id, deal.seller_id):
             raise HTTPException(status_code=403, detail="Not your deal")
 
-        escrow = await self.external_escrows.get_by_deal_id(deal_id)
-        if escrow and escrow.provider_transaction_id and escrow.status not in EConfirmEscrowStatus.TERMINAL:
+        payments = await self.external_escrows.list_for_deal(deal_id)
+        if any(p.provider_transaction_id and p.status not in EConfirmEscrowStatus.TERMINAL
+               for p in payments):
             # Phase 8: "Run reconciliation ... from a controlled backend
             # endpoint for immediate UI refresh" — this is that endpoint.
-            escrow = await self.reconcile_econfirm_escrow(deal_id)
+            await self.reconcile_econfirm_escrow(deal_id)
             deal = await self.deals.get_by_id(deal_id)  # re-fetch — reconcile may have changed it
 
-        return await self._payment_status_dict(deal, escrow)
+        return await self._payment_status_dict(deal)
 
-    async def _payment_status_dict(self, deal: Deal, escrow: Optional[ExternalEscrow]) -> dict:
+    async def _payment_status_dict(self, deal: Deal) -> dict:
+        """Where the deal's money stands. The payment fields describe the
+        LATEST payment - the one a payment screen is following - and
+        amount_paid/balance/payments the deal as a whole."""
+        payments = await self.external_escrows.list_for_deal(deal.id)
+        escrow = payments[-1] if payments else None
         provider_fee = escrow.provider_fee_amount if escrow else None
+        goods = escrow.amount if escrow else deal.agreed_price
+        commission = (escrow.merchant_commission_amount
+                      if escrow and escrow.merchant_commission_amount is not None else deal.commission)
+        balance = balance_due(deal, payments)
         return {
             "deal_id": deal.id,
             "deal_status": deal.status.value,
             "escrow_status": escrow.provider_raw_status if escrow else None,
             "payment_status": self._flutter_payment_status(escrow),
-            "goods_amount": deal.agreed_price,
-            "merchant_commission": deal.commission,
+            "goods_amount": goods,
+            "merchant_commission": commission,
             "provider_fee": provider_fee,
             "total_to_pay": (
-                add_money(deal.agreed_price, deal.commission, provider_fee)
+                add_money(goods, commission, provider_fee)
                 if provider_fee is not None else None
             ),
             "currency": escrow.currency if escrow else "KES",
             "funded_at": escrow.funded_at.isoformat() if escrow and escrow.funded_at else None,
             "released_at": escrow.released_at.isoformat() if escrow and escrow.released_at else None,
             "can_confirm_delivery": deal.status == DealStatus.paid,
+            "payment_no": escrow.payment_no if escrow else None,
+            "agreed_price": deal.agreed_price,
+            "amount_paid": amount_paid(payments),
+            "balance": balance,
+            "payments": payment_rows(payments),
+            "can_add_payment": (
+                deal.status in _TOP_UP_STATUSES and balance > 0
+                and not policy.refund_request_open(deal)
+                and not (escrow is not None and escrow.status in EConfirmEscrowStatus.OPEN)
+            ),
         }
 
     @staticmethod
@@ -912,29 +1225,51 @@ class EscrowService:
         deal_id: str,
         buyer_id: str,
         request_ip: Optional[str] = None,
+        item_received: Optional[bool] = None,
+        ownership_transferred: Optional[bool] = None,
     ) -> dict:
         """Buyer confirms delivery. See module docstring for the
-        E-Confirm-vs-legacy branch this makes."""
+        E-Confirm-vs-legacy branch this makes.
+
+        item_received / ownership_transferred are the buyer's answers to the
+        app's "has it been delivered?" (and, for land and vehicles, "have
+        the ownership documents been transferred?") check. A "no" does not
+        stop the release - the app recommends waiting, and the buyer
+        decides - but it is written to the audit row, where a later dispute
+        can see that the buyer released knowing the item had not arrived.
+        """
         deal = await self.deals.get_by_id(deal_id)
         if not deal:
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.buyer_id != buyer_id:
             raise HTTPException(status_code=403, detail="Only the buyer can confirm delivery")
 
+        def _answer(v: Optional[bool]) -> str:
+            return "unanswered" if v is None else ("yes" if v else "no")
+        checklist = (f"item_received={_answer(item_received)} "
+                     f"ownership_transferred={_answer(ownership_transferred)}")
+
         escrow = await self.external_escrows.get_by_deal_id(deal_id)
         if escrow is None:
-            return await self._confirm_delivery_legacy(deal, buyer_id, request_ip)
-        return await self._confirm_delivery_econfirm(deal, escrow, buyer_id, request_ip)
+            return await self._confirm_delivery_legacy(deal, buyer_id, request_ip, checklist)
+        return await self.release_econfirm_deal(
+            deal, buyer_id, request_ip,
+            notes="Buyer confirmed delivery via BROKA", audit_detail=checklist,
+        )
 
-    async def _confirm_delivery_legacy(self, deal: Deal, buyer_id: str, request_ip: Optional[str]) -> dict:
+    async def _confirm_delivery_legacy(
+        self, deal: Deal, buyer_id: str, request_ip: Optional[str], checklist: str = "",
+    ) -> dict:
         """Original, unchanged behavior for deals with no E-Confirm
         escrow — see module docstring."""
         if deal.status != DealStatus.paid:
             raise HTTPException(status_code=400, detail=f"Cannot release — deal status is '{deal.status.value}'")
 
+        now = datetime.utcnow()
         deal.status = DealStatus.released
-        deal.delivery_confirmed_at = datetime.utcnow()
-        deal.released_at = datetime.utcnow()
+        deal.delivery_confirmed_at = now
+        deal.released_at = now
+        _close_open_requests(deal, now)
 
         r = await self.db.execute(select(User).where(User.id == deal.seller_id))
         seller = r.scalar_one_or_none()
@@ -944,7 +1279,7 @@ class EscrowService:
 
         await record_audit(
             self.db, buyer_id, "delivery_confirmed", "deal", deal.id,
-            f"seller_id={deal.seller_id} amount={deal.agreed_price}",
+            f"seller_id={deal.seller_id} amount={deal.agreed_price} {checklist}".strip(),
             ip_address=request_ip,
         )
         await self.db.commit()
@@ -955,41 +1290,41 @@ class EscrowService:
 
         return {"ok": True, "deal_id": deal.id, "status": "released"}
 
-    async def _confirm_delivery_econfirm(
-        self, deal: Deal, escrow: ExternalEscrow, buyer_id: str, request_ip: Optional[str],
+    async def release_econfirm_deal(
+        self, deal: Deal, actor_id: str, request_ip: Optional[str] = None, *,
+        notes: str, audit_detail: str = "",
     ) -> dict:
-        """Phase 10's release flow. NEVER sets Deal.status=released on
-        request receipt alone — only once E-Confirm's response says the
+        """Phase 10's release flow, for every payment the deal holds. Run
+        by the buyer's confirmation and by the delivery claim's automatic
+        release (api/core/workers.py). NEVER sets Deal.status=released on
+        request receipt alone — only once E-Confirm says EVERY payment's
         payout is Completed (immediately here, or later via
-        reconcile_econfirm_escrow if the response was payout_initiated).
+        reconcile_econfirm_escrow if a response was payout_initiated).
 
         2026-09 restructure (finalization pass, Section 16): the external
-        release call now happens OUTSIDE any held row lock — "avoid making
+        release calls happen OUTSIDE any held row lock — "avoid making
         external provider calls while holding long database transactions".
         The lock is only held for the short "re-verify FRESH state, mark
         intent, commit" step; duplicate-release protection then comes from
-        escrow.status itself (RELEASE_PENDING/COMPLETED block a second
-        attempt), re-checked fresh from the DB after the lock rather than
-        trusting the `escrow` object passed into this method. That
-        distinction mattered: two concurrent requests correctly serialize
-        on the Postgres row lock, but the SECOND one used to re-check only
-        deal.status, not escrow.status — and deal.status deliberately
-        stays 'paid' when a release's immediate response is
-        payout_initiated rather than Completed, so the second request
-        could still slip through and call release_escrow() a second time
-        for the same transaction. Caught by re-reading this against
-        Section 10/20's explicit duplicate-release requirement, not
-        caught by the original design or its tests.
+        each payment's own status (RELEASE_PENDING/COMPLETED block a second
+        attempt), re-read fresh from the DB under the lock rather than
+        trusted from an earlier read. That distinction mattered: two
+        concurrent requests correctly serialize on the Postgres row lock,
+        but the SECOND one used to re-check only deal.status, not the
+        escrow's — and deal.status deliberately stays 'paid' when a
+        release's immediate response is payout_initiated rather than
+        Completed, so the second request could still slip through and call
+        release_escrow() a second time for the same transaction.
         """
         if deal.status != DealStatus.paid:
             raise HTTPException(status_code=400, detail=f"Cannot release — deal status is '{deal.status.value}'")
-        if escrow.status != EConfirmEscrowStatus.FUNDED or not escrow.provider_transaction_id:
-            # Fast, cheap rejection using the passed-in (possibly slightly
-            # stale) escrow — good enough for the overwhelmingly common
-            # case of "not funded yet" and avoids acquiring a lock for a
-            # request that's going to fail anyway. NOT the correctness
-            # guarantee against a genuine race — that's the fresh re-check
-            # below, after the lock.
+        payments = await self.external_escrows.list_for_deal(deal.id)
+        if not any(p.status == EConfirmEscrowStatus.FUNDED and p.provider_transaction_id for p in payments):
+            # Fast, cheap rejection - good enough for the overwhelmingly
+            # common case of "not funded yet" and avoids acquiring a lock
+            # for a request that's going to fail anyway. NOT the
+            # correctness guarantee against a genuine race — that's the
+            # fresh re-read below, after the lock.
             raise HTTPException(
                 status_code=409,
                 detail="This deal's escrow isn't in a confirmed-funded state yet — please refresh and try again shortly",
@@ -997,56 +1332,90 @@ class EscrowService:
 
         locked = await lock_deal_if_status(self.db, deal.id, (DealStatus.paid,))
         if locked is None:
-            fresh_escrow = await self.external_escrows.get_by_deal_id(deal.id)
-            fresh_deal = await self.deals.get_by_id(deal.id)
-            return await self._payment_status_dict(fresh_deal, fresh_escrow)
-
-        # Authoritative re-check: fresh from the DB, not the `escrow`
-        # parameter, and while still holding the lock — this is what
-        # actually prevents the double-release described above.
-        escrow = await self.external_escrows.get_by_deal_id(deal.id)
-        if escrow is None or escrow.status != EConfirmEscrowStatus.FUNDED or not escrow.provider_transaction_id:
             await self.db.commit()
             fresh_deal = await self.deals.get_by_id(deal.id)
-            return await self._payment_status_dict(fresh_deal, escrow)
-        if not escrow.confirmation_code_encrypted:
-            logger.error("[escrow] deal=%s is funded but has no confirmation_code stored", deal.id)
+            return await self._payment_status_dict(fresh_deal)
+
+        # Authoritative re-read: fresh from the DB while holding the lock —
+        # this is what actually prevents the double release described above.
+        payments = await self.external_escrows.list_for_deal(deal.id)
+        to_release = [p for p in payments
+                      if p.status == EConfirmEscrowStatus.FUNDED and p.provider_transaction_id]
+        if not to_release:
+            await self.db.commit()
+            fresh_deal = await self.deals.get_by_id(deal.id)
+            return await self._payment_status_dict(fresh_deal)
+        if any(not p.confirmation_code_encrypted for p in to_release):
+            logger.error("[escrow] deal=%s is funded but a payment has no confirmation_code stored", deal.id)
             await self.db.commit()
             raise HTTPException(
                 status_code=500,
                 detail="This deal is missing its release credential — please contact support rather than retrying",
             )
-
+        codes: dict[str, str] = {}
         try:
-            confirmation_code = decrypt_secret(escrow.confirmation_code_encrypted)
+            for p in to_release:
+                codes[p.id] = decrypt_secret(p.confirmation_code_encrypted)
         except SecretCryptoError as exc:
+            codes.clear()
             logger.error("[escrow] could not decrypt confirmation_code for deal=%s: %s", deal.id, exc)
             await self.db.commit()
             raise HTTPException(status_code=500, detail="Could not read this deal's release credential — please contact support")
 
         # Persist intent and commit — releases the row lock here, BEFORE
-        # the network call. A second request (whether it was queued on
+        # the network calls. A second request (whether it was queued on
         # the lock or arrives after) now sees RELEASE_PENDING, not FUNDED.
-        escrow.status = EConfirmEscrowStatus.RELEASE_PENDING
-        escrow.release_initiated_at = datetime.utcnow()
-        await self.external_escrows.save(escrow)
+        now = datetime.utcnow()
+        for p in to_release:
+            p.status = EConfirmEscrowStatus.RELEASE_PENDING
+            p.release_initiated_at = now
+            await self.external_escrows.save(p)
+        # The buyer releasing ends anything still waiting on them: a refund
+        # request of theirs (withdrawn by releasing) and the delivery claim's
+        # countdown.
+        _close_open_requests(locked, now)
         await record_audit(
-            self.db, buyer_id, "econfirm_release_requested", "deal", deal.id,
-            f"provider_transaction_id={escrow.provider_transaction_id}",
+            self.db, actor_id, "econfirm_release_requested", "deal", deal.id,
+            f"provider_transaction_id={','.join(p.provider_transaction_id for p in to_release)} "
+            f"{audit_detail}".strip(),
             ip_address=request_ip,
         )
         await self.db.commit()
-        await publish(EConfirmReleaseInitiated(
-            deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id, seller_id=deal.seller_id,
-        ))
+        for p in to_release:
+            await publish(EConfirmReleaseInitiated(
+                deal_id=deal.id, provider_transaction_id=p.provider_transaction_id, seller_id=deal.seller_id,
+            ))
 
-        try:
+        outcomes = []
+        for p in to_release:
+            code = codes.pop(p.id)
             try:
-                result = await get_escrow_provider().release_escrow(
-                    escrow.provider_transaction_id, confirmation_code, notes="Buyer confirmed delivery via BROKA",
-                )
+                outcomes.append(await self._release_payment(deal, p, code, notes))
             finally:
-                confirmation_code = None  # drop the only in-memory reference as soon as the call returns
+                code = None  # drop the in-memory reference as soon as the call returns
+        codes.clear()
+
+        finished = await self._finish_release_if_complete(deal.id, delivery_confirmed=True)
+        if not finished:
+            await self.db.commit()
+
+        errors = [o for o in outcomes if isinstance(o, HTTPException)]
+        if errors:
+            raise errors[0]
+        if all(o == "completed" for o in outcomes):
+            return {"ok": True, "deal_id": deal.id, "status": "released"}
+        detail = next(o[1] for o in outcomes if isinstance(o, tuple))
+        return {"ok": True, "deal_id": deal.id, "status": "release_pending", "detail": detail}
+
+    async def _release_payment(self, deal: Deal, escrow: ExternalEscrow, confirmation_code: str, notes: str):
+        """Ask E-Confirm to pay out one payment, already marked
+        RELEASE_PENDING. Returns "completed", ("pending", detail), or an
+        HTTPException for the caller to raise once every payment has been
+        tried - one payment failing must not leave the others unasked."""
+        try:
+            result = await get_escrow_provider().release_escrow(
+                escrow.provider_transaction_id, confirmation_code, notes=notes,
+            )
         except EConfirmAPIError as exc:
             if exc.status_code == 409:
                 # Phase 20: "Handle HTTP 409 release-in-progress as a
@@ -1063,15 +1432,13 @@ class EscrowService:
                     deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
                     reason="release returned 409 (already in progress)",
                 ))
-                return {
-                    "ok": True, "deal_id": deal.id, "status": "release_pending",
-                    "detail": "A release for this deal is already being processed — it will show as released once confirmed.",
-                }
+                return ("pending",
+                        "A release for this deal is already being processed — it will show as released once confirmed.")
             logger.warning("[escrow] release rejected deal=%s status=%d", deal.id, exc.status_code)
             escrow.last_error = f"release rejected: HTTP {exc.status_code}"
             await self.external_escrows.save(escrow)
             await self.db.commit()
-            raise HTTPException(status_code=422, detail="The payment provider rejected the release request — please contact support")
+            return HTTPException(status_code=422, detail="The payment provider rejected the release request — please contact support")
         except EConfirmConnectionError as exc:
             # Ambiguous per Phase 9/11 — do not assume the release failed
             # OR succeeded. escrow.status is already RELEASE_PENDING,
@@ -1091,7 +1458,7 @@ class EscrowService:
                 deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
                 reason="release call timed out/network error",
             ))
-            raise HTTPException(
+            return HTTPException(
                 status_code=503,
                 detail="We couldn't confirm the release went through — checking status now, please refresh in a few seconds",
             )
@@ -1100,45 +1467,16 @@ class EscrowService:
             escrow.last_error = f"release error: {type(exc).__name__}"
             await self.external_escrows.save(escrow)
             await self.db.commit()
-            raise HTTPException(status_code=502, detail="Could not process the release right now — please try again")
+            return HTTPException(status_code=502, detail="Could not process the release right now — please try again")
 
         escrow.provider_raw_status = result.raw_status
 
         if result.status == EConfirmEscrowStatus.COMPLETED:
-            # Second short critical section for the final state
-            # transition — again not held across any further network call.
-            locked2 = await lock_deal_if_status(self.db, deal.id, (DealStatus.paid,))
             escrow.status = EConfirmEscrowStatus.COMPLETED
             escrow.released_at = datetime.utcnow()
-            if locked2 is not None:
-                locked2.status = DealStatus.released
-                locked2.delivery_confirmed_at = datetime.utcnow()
-                locked2.released_at = datetime.utcnow()
-                r = await self.db.execute(select(User).where(User.id == deal.seller_id))
-                seller = r.scalar_one_or_none()
-                if seller:
-                    seller.completed_deals = (seller.completed_deals or 0) + 1
-                    await compute_trust_score(seller.id, self.db)
-                await self.external_escrows.save(escrow)
-                await record_audit(
-                    self.db, "system", "econfirm_payout_completed", "deal", deal.id,
-                    f"provider_transaction_id={escrow.provider_transaction_id}",
-                )
-                await self.db.commit()
-                await publish(EConfirmPayoutCompleted(
-                    deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
-                    seller_id=deal.seller_id, amount=deal.agreed_price,
-                ))
-                await publish(EscrowReleased(
-                    deal_id=deal.id, seller_id=deal.seller_id, buyer_id=buyer_id, amount=deal.agreed_price,
-                ))
-            else:
-                # deal.status already moved on by something else by the
-                # time we re-locked (shouldn't normally happen on this
-                # path) — still persist the now-Completed escrow state.
-                await self.external_escrows.save(escrow)
-                await self.db.commit()
-            return {"ok": True, "deal_id": deal.id, "status": "released"}
+            await self.external_escrows.save(escrow)
+            await self.db.commit()
+            return "completed"
 
         if result.status == EConfirmEscrowStatus.PAYOUT_FAILED:
             escrow.status = EConfirmEscrowStatus.PAYOUT_FAILED
@@ -1155,7 +1493,7 @@ class EscrowService:
             ))
             # Phase 10: "keep the Deal in paid unless provider explicitly
             # says the funds left escrow" — Deal.status is untouched here.
-            raise HTTPException(
+            return HTTPException(
                 status_code=502,
                 detail="The payout could not be completed right now. Your delivery confirmation was recorded and the deal remains protected — please try again shortly or contact support.",
             )
@@ -1178,10 +1516,7 @@ class EscrowService:
                 deal_id=deal.id, provider_transaction_id=escrow.provider_transaction_id,
                 reason=f"unexpected release response status: {result.raw_status}",
             ))
-        return {
-            "ok": True, "deal_id": deal.id, "status": "release_pending",
-            "detail": "Delivery confirmed — payout is being finalized, please check back shortly.",
-        }
+        return ("pending", "Delivery confirmed — payout is being finalized, please check back shortly.")
 
     # ── Read-only ───────────────────────────────────────────────────────
 
@@ -1191,7 +1526,11 @@ class EscrowService:
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.buyer_id != user_id and deal.seller_id != user_id:
             raise HTTPException(status_code=403, detail="Not your deal")
-        return self._deal_dict(deal)
+        payments = await self.external_escrows.list_for_deal(deal_id)
+        category = (await self.db.execute(
+            select(Listing.category).where(Listing.id == deal.listing_id)
+        )).scalar_one_or_none()
+        return self._deal_dict(deal, payments, category)
 
     async def get_my_deals(self, user_id: str) -> list[dict]:
         r = await self.db.execute(
@@ -1199,10 +1538,17 @@ class EscrowService:
                 (Deal.buyer_id == user_id) | (Deal.seller_id == user_id)
             ).order_by(Deal.created_at.desc())
         )
-        return [self._deal_dict(d) for d in r.scalars().all()]
+        deals = r.scalars().all()
+        payments = await self.external_escrows.list_for_deals([d.id for d in deals])
+        listing_ids = list({d.listing_id for d in deals if d.listing_id})
+        categories = dict((await self.db.execute(
+            select(Listing.id, Listing.category).where(Listing.id.in_(listing_ids))
+        )).all()) if listing_ids else {}
+        return [self._deal_dict(d, payments.get(d.id, []), categories.get(d.listing_id))
+                for d in deals]
 
     @staticmethod
-    def _deal_dict(deal: Deal) -> dict:
+    def _deal_dict(deal: Deal, payments=(), category: Optional[str] = None) -> dict:
         return {
             "id": deal.id,
             "listing_id": deal.listing_id,
@@ -1215,7 +1561,18 @@ class EscrowService:
             "released_at": deal.released_at.isoformat() if deal.released_at else None,
             "refunded_at": deal.refunded_at.isoformat() if deal.refunded_at else None,
             "created_at": deal.created_at.isoformat() if deal.created_at else None,
+            **protection_fields(deal, payments, category),
         }
+
+
+def _close_open_requests(deal: Deal, now: datetime) -> None:
+    """The buyer released the money: an open refund request of theirs is
+    withdrawn by it, and any running countdown has nothing left to do."""
+    if policy.refund_request_open(deal):
+        deal.refund_outcome = "withdrawn"
+        deal.refund_resolved_at = now
+    if deal.timer_type and deal.timer_fired_at is None and deal.timer_cancelled_at is None:
+        deal.timer_cancelled_at = now
 
 
 # ── Fund-safety: race-condition guard for release/refund actions ───────────

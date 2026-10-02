@@ -321,9 +321,10 @@ async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> 
     applies (DisputeEngineService.execute_fund_action).
     """
     from api.models.external_escrow import ExternalEscrow
+    # .first(): a deal paid in parts has one row per payment.
     held = (await db.execute(
-        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id)
-    )).scalar_one_or_none()
+        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id).limit(1)
+    )).scalars().first()
     if held is None:
         return False
     await record_audit(
@@ -2040,21 +2041,28 @@ async def send_message(
         if not active_deal:
             reply = "I couldn't find an active funded deal for this listing."
         else:
-            active_deal.seller_claimed_delivery_at = _dt.utcnow()
-            active_deal.checkin_count = 0
-            active_deal.last_checkin_at = None
-            active_deal.timer_type = "seller_claimed_delivery"
-            # First check-in fires almost immediately (handled by the sweep
-            # on its next pass) - no separate deadline needed here, the
-            # sweep paces the 4 check-ins itself over the 5-7 day window.
-            active_deal.timer_deadline = _dt.utcnow()
-            active_deal.timer_cancelled_at = None
-            active_deal.timer_fired_at = None
+            # Same rule as POST /deal/{id}/mark-delivered: the buyer's 72
+            # hours start now, unless the buyer has an open refund request,
+            # which this answers - a dispute, not a countdown
+            # (escrow/protection.py's start_delivery_claim).
+            from api.domains.escrow.protection import start_delivery_claim
+            from api.domains.escrow.service import lock_deal_if_status
+            locked = await lock_deal_if_status(db, active_deal.id, (DealStatus.paid,))
+            outcome = await start_delivery_claim(db, locked, _dt.utcnow()) if locked else "gone"
+            await record_audit(db, authenticated_uid, "delivery_claimed", "deal", active_deal.id,
+                               f"outcome={outcome} via=chat")
             await db.commit()
-            reply = ("Got it - I've recorded that you delivered the item. I'll "
-                      "check with the buyer to confirm, and follow up a few times "
-                      "over the next several days if needed before anything is "
-                      "finalized.")
+            reply = {
+                "started": ("Got it - I've recorded that you delivered the item. I'll ask the "
+                            "buyer to confirm and remind them every 12 hours. If they don't "
+                            "respond within 3 days, the money is released to you automatically."),
+                "running": ("You've already marked this delivered - the buyer has been asked to "
+                            "confirm, and the money will be released automatically if they don't "
+                            "respond."),
+                "disputed": ("The buyer had asked for a refund, so this is now a dispute. The "
+                             "money stays in escrow until it is resolved - please share proof of "
+                             "delivery here."),
+            }.get(outcome, "This deal has just changed - please refresh.")
         return MessageOut(role="broker", content=reply, via_ai=False)
 
     if data.intent == "buyer_confirms_received":
@@ -4161,9 +4169,28 @@ async def get_deal_status(
         )
     )
     deal = result.scalar_one_or_none()
-    if not deal:
+    # A party's deal only: buyer_id comes from the query string, and this
+    # now carries what was paid and the refund state.
+    if not deal or current["id"] not in (deal.buyer_id, deal.seller_id):
         return {"has_deal": False}
+    from api.domains.escrow.repository import ExternalEscrowRepository
+    from api.domains.escrow.service import protection_fields
+    from api.models.external_escrow import EConfirmEscrowStatus
+    from api.domains.escrow import policy as _policy
+    payments = await ExternalEscrowRepository(db).list_for_deal(deal.id)
+    category = (await db.execute(
+        select(Listing.category).where(Listing.id == deal.listing_id)
+    )).scalar_one_or_none()
+    protection = protection_fields(deal, payments, category)
     return {
+        **protection,
+        "agreed_price":           deal.agreed_price,
+        # Same rule as POST /deal/{id}/fund for a top-up.
+        "can_add_payment": (
+            deal.status == DealStatus.paid and protection["balance"] > 0
+            and not _policy.refund_request_open(deal)
+            and not any(p.status in EConfirmEscrowStatus.OPEN for p in payments)
+        ),
         "has_deal":               True,
         "deal_id":                deal.id,
         "status":                 deal.status.value if hasattr(deal.status, "value") else deal.status,

@@ -256,15 +256,18 @@ async def task_reconcile_econfirm_escrows(ctx: dict) -> None:
             return
         svc = EscrowService(session)
         checked, failed = 0, 0
-        for escrow in pending:
+        # A deal paid in parts has several unsettled payments; one pass per
+        # deal checks all of them.
+        deal_ids = list(dict.fromkeys(escrow.deal_id for escrow in pending))
+        for deal_id in deal_ids:
             try:
-                await svc.reconcile_econfirm_escrow(escrow.deal_id)
+                await svc.reconcile_econfirm_escrow(deal_id)
                 checked += 1
             except Exception as exc:
                 failed += 1
                 logger.error(
                     "[sweep] econfirm reconcile failed deal=%s: %s",
-                    escrow.deal_id, exc,
+                    deal_id, exc,
                 )
         logger.info("[sweep] econfirm reconciliation: checked=%d failed=%d", checked, failed)
 
@@ -499,14 +502,15 @@ async def task_check_deal_timers(ctx: dict) -> None:
       "buyer_silence_release"   - buyer received goods but never confirmed;
                                    auto-release funds to seller if still silent.
       "seller_claimed_delivery" - seller says delivered, buyer hasn't
-                                   confirmed. Runs 4 active check-ins (each
-                                   with a real push notification) over ~7
-                                   days before any release - see
-                                   _process_delivery_checkin below. This is
-                                   the highest-stakes branch, so it gets the
-                                   most caution and the most chances for the
-                                   buyer to respond or dispute before any
-                                   money moves.
+                                   confirmed. Zeno reminds the buyer every
+                                   12 hours and texts them on days 2 and 3;
+                                   72 hours after the claim the money is
+                                   released (escrow/protection.py's
+                                   process_delivery_claim).
+      "refund_request"          - buyer asked for a refund before any
+                                   delivery claim; the seller has 48 hours
+                                   to answer, then the buyer is refunded
+                                   (escrow/protection.py).
 
     This function is the ONLY thing that fires these actions. Zeno can
     announce a deadline or record a seller's delivery claim in conversation,
@@ -593,9 +597,19 @@ async def task_check_deal_timers(ctx: dict) -> None:
                     await _fire_auto_release(session, deal)
                     deal.timer_fired_at = now
                 elif deal.timer_type == "seller_claimed_delivery":
-                    # Multi-step - does NOT set timer_fired_at until the
-                    # final check-in actually results in a release.
-                    await _process_delivery_checkin(session, deal, now)
+                    # Multi-step: reminders every 12 hours, texts on days 2
+                    # and 3, and the release once the buyer has been silent
+                    # for 72 hours since the seller's claim
+                    # (api/domains/escrow/protection.py).
+                    from api.domains.escrow.protection import process_delivery_claim
+                    if await process_delivery_claim(session, deal, now):
+                        await _fire_claimed_delivery_release(session, deal)
+                elif deal.timer_type == "refund_request":
+                    # The buyer asked for a refund before any delivery claim:
+                    # the seller's reminders, then the refund if they stayed
+                    # silent (api/domains/escrow/protection.py).
+                    from api.domains.escrow.protection import process_refund_request
+                    await process_refund_request(session, deal, now)
                 elif deal.timer_type == "goods_not_arrived_contact_seller":
                     # Branch B: expected delivery date passed, buyer reported
                     # goods haven't arrived. Zeno contacts seller every 24h
@@ -619,96 +633,69 @@ async def task_check_deal_timers(ctx: dict) -> None:
         # Only now that the status changes are committed may the rest of the
         # system hear about them - see _queue_after_commit.
         await _publish_queued_events(session)
+        releases = session.info.pop("broka_post_commit_releases", [])
+    for deal_id in releases:
+        await _release_econfirm_after_claim(deal_id)
 
 
-# Days after the seller's delivery claim at which each check-in fires.
-# 4 check-ins spread across a 7-day window, per the explicit design
-# decision: enough real chances for the buyer to respond before any
-# auto-release, while keeping the total wait bounded and predictable.
-_CHECKIN_SCHEDULE_DAYS = [1, 3, 5, 7]
+async def _fire_claimed_delivery_release(session, deal) -> None:
+    """The buyer stayed silent through the delivery claim's grace period:
+    release the money to the seller.
 
-
-async def _process_delivery_checkin(session, deal, now) -> None:
-    """
-    One step of the seller_claimed_delivery sequence. Each call either:
-      - fires the next scheduled check-in (sends a real push notification
-        asking the buyer to confirm or dispute), or
-      - if all 4 check-ins are exhausted and the buyer still never
-        responded, performs the actual auto-release.
-
-    Buyer responding at any point (buyer_confirms_received /
-    buyer_disputes_delivery intents) sets timer_cancelled_at, which removes
-    the deal from the sweep's query entirely - this function never runs
-    again for that deal once the buyer has acted.
-    """
-    from datetime import timedelta
+    An E-Confirm deal at `paid` is released through E-Confirm with its
+    stored release codes - the same release the buyer's own tap makes - but
+    after the sweep has committed (see task_check_deal_timers): that is a
+    provider call, and must not run under the sweep's row locks. Anything
+    else takes the older path, which fails closed for an E-Confirm deal in
+    a dispute sub-state (_econfirm_deal_fails_closed)."""
+    from sqlalchemy import select
     from api.database import DealStatus
-
-    claimed_at = deal.seller_claimed_delivery_at
-    if claimed_at is None:
-        # Shouldn't happen, but fail safe - don't release without a claim.
-        deal.timer_cancelled_at = now
+    from api.models.external_escrow import ExternalEscrow
+    econfirm = (await session.execute(
+        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id).limit(1)
+    )).scalars().first() is not None
+    if econfirm and deal.status == DealStatus.paid:
+        session.info.setdefault("broka_post_commit_releases", []).append(deal.id)
+        logger.info("[sweep] deal %s: buyer silent through the delivery claim - releasing via E-Confirm",
+                    deal.id)
         return
+    await _fire_auto_release(session, deal)
+    logger.info("[sweep] deal %s auto-released after the delivery claim's grace period", deal.id)
 
-    days_since_claim = (now - claimed_at).total_seconds() / 86400
-    next_checkin_index = deal.checkin_count  # 0-based: how many have fired so far
 
-    if next_checkin_index >= len(_CHECKIN_SCHEDULE_DAYS):
-        # All check-ins exhausted, buyer never responded - release now.
-        await _fire_auto_release(session, deal)
-        deal.timer_fired_at = now
-        logger.info("[sweep] deal %s auto-released after %d unanswered check-ins",
-                     deal.id, len(_CHECKIN_SCHEDULE_DAYS))
-        return
-
-    scheduled_day = _CHECKIN_SCHEDULE_DAYS[next_checkin_index]
-    if days_since_claim < scheduled_day:
-        # Not due yet - re-check on the next sweep pass.
-        return
-
-    # Fire this check-in: send a real push notification to the buyer, AND
-    # post an in-thread message so the existing GlobalPollerService
-    # new-message detection surfaces a local notification even without FCM
-    # configured (FCM client-side setup isn't complete yet as of this
-    # writing - see FCM_SETUP_REMAINING.md - so this message-based path is
-    # the realistic notification mechanism for now).
-    deal.checkin_count = next_checkin_index + 1
-    deal.last_checkin_at = now
-    is_final = deal.checkin_count >= len(_CHECKIN_SCHEDULE_DAYS)
-
-    checkin_text = (
-        "This is your final reminder: the seller says your order was "
-        "delivered. If I don't hear from you, I'll release the funds to "
-        "the seller automatically. Please confirm or let me know if "
-        "there's an issue."
-        if is_final else
-        "Checking in: the seller says your order was delivered - has it "
-        "arrived? Let me know either way so we can wrap this up."
-    )
-    try:
-        from api.database import NegotiationMessage
-        checkin_msg = NegotiationMessage(
-            listing_id=deal.listing_id, sender_id="broker",
-            role="broker", recipient_role="buyer",
-            content=checkin_text, buyer_id=deal.buyer_id, msg_type="text",
-        )
-        session.add(checkin_msg)
-    except Exception as exc:
-        logger.error("[sweep] could not post check-in message for deal %s: %s", deal.id, exc)
-
-    try:
-        await _send_checkin_notification(deal, is_final=is_final)
-    except Exception as exc:
-        logger.error("[sweep] check-in notification failed for deal %s: %s", deal.id, exc)
-
-    logger.info("[sweep] deal %s check-in %d/%d sent (day %d)",
-                deal.id, deal.checkin_count, len(_CHECKIN_SCHEDULE_DAYS), scheduled_day)
-
-    # Schedule re-check on the next sweep pass for either the next check-in
-    # or the final release decision - timer_deadline stays <= now so the
-    # sweep's query keeps picking this deal up each pass without needing a
-    # second timer field.
-    deal.timer_deadline = now
+async def _release_econfirm_after_claim(deal_id: str) -> None:
+    """The E-Confirm half of _fire_claimed_delivery_release, in its own
+    session. A failure is a stuck payout, not a log line: it is audited and
+    raised as a reconciliation alert for someone to finish by hand."""
+    from fastapi import HTTPException
+    from api.database import AsyncSessionLocal
+    from api.core.audit import record_audit
+    from api.core.reconciliation import report_reconciliation
+    from api.domains.escrow.service import EscrowService
+    async with AsyncSessionLocal() as db:
+        svc = EscrowService(db)
+        try:
+            deal = await svc.deals.get_by_id(deal_id)
+            if deal is None:
+                return
+            result = await svc.release_econfirm_deal(
+                deal, "system",
+                notes="Released automatically: the buyer did not respond within 72 hours "
+                      "of the seller's delivery claim",
+                audit_detail="auto_release=delivery_claim_grace_elapsed",
+            )
+            logger.info("[sweep] deal %s auto-release: %s", deal_id, result.get("status"))
+        except Exception as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else repr(exc)
+            reason = f"automatic release after the delivery claim failed: {detail}"
+            logger.error("[sweep] deal %s: %s", deal_id, reason)
+            try:
+                await db.rollback()
+                await record_audit(db, "system", "econfirm_auto_release_failed", "deal", deal_id, reason)
+                await db.commit()
+            except Exception as audit_exc:
+                logger.error("[sweep] could not audit failed release for deal %s: %s", deal_id, audit_exc)
+            report_reconciliation("econfirm_auto_release_failed", deal_id=deal_id, reason=reason)
 
 
 async def _send_checkin_notification(deal, is_final: bool) -> None:
@@ -1722,9 +1709,10 @@ async def _econfirm_deal_fails_closed(session, deal, action: str) -> bool:
     from api.core.audit import record_audit
     from api.models.external_escrow import ExternalEscrow
 
+    # .first(): a deal paid in parts has one row per payment.
     escrow = (await session.execute(
-        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id)
-    )).scalar_one_or_none()
+        select(ExternalEscrow.id).where(ExternalEscrow.deal_id == deal.id).limit(1)
+    )).scalars().first()
     if escrow is None:
         return False
     reason = (

@@ -836,6 +836,25 @@ class Deal(Base):
     # refunded or cancelled - api/domains/listings/stock.py.
     quantity         = Column(Integer, nullable=True)
 
+    # ── Refund request (api/domains/escrow/protection.py) ────────────────────
+    # The buyer asks for their money back before the seller has said the item
+    # was delivered. Open while refund_requested_at is set and
+    # refund_resolved_at is not; refund_outcome says how it ended:
+    # "seller_accepted", "seller_contested", "seller_silent" (no answer within
+    # the response window, so the buyer is refunded), "withdrawn", or
+    # "delivery_disputed" (the seller had already claimed delivery, so it went
+    # to a dispute instead). Columns rather than a DealStatus: the status is a
+    # native enum on PostgreSQL that init_db's migrations cannot extend.
+    refund_requested_at = Column(DateTime, nullable=True)
+    refund_reason       = Column(String(500), nullable=True)
+    refund_outcome      = Column(String(24), nullable=True)
+    refund_resolved_at  = Column(DateTime, nullable=True)
+    # SMS reminders already sent in the running reminder sequence (the
+    # delivery claim's, or the refund request's). Counted separately from
+    # checkin_count because an SMS due in quiet hours waits for the morning
+    # while the in-app reminders do not.
+    reminder_sms_count  = Column(Integer, nullable=True, default=0)
+
 
 class SellerMetrics(Base):
     """
@@ -1397,6 +1416,15 @@ async def init_db():
             # Units per deal (Deal.quantity). NULL on every existing deal:
             # each was for one unit.
             "ALTER TABLE deals ADD COLUMN quantity INTEGER",
+            # Partial payments: one external_escrows row per payment.
+            # Existing rows are each their deal's first (and only) payment.
+            "ALTER TABLE external_escrows ADD COLUMN payment_no INTEGER NOT NULL DEFAULT 0",
+            # Refund requests and reminder SMS (Deal.refund_*).
+            "ALTER TABLE deals ADD COLUMN refund_requested_at TIMESTAMP",
+            "ALTER TABLE deals ADD COLUMN refund_reason VARCHAR(500)",
+            "ALTER TABLE deals ADD COLUMN refund_outcome VARCHAR(24)",
+            "ALTER TABLE deals ADD COLUMN refund_resolved_at TIMESTAMP",
+            "ALTER TABLE deals ADD COLUMN reminder_sms_count INTEGER DEFAULT 0",
             # Which rail took a payment to BROKA (api/domains/payments):
             # every existing row went through Daraja.
             "ALTER TABLE listing_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
@@ -1546,6 +1574,14 @@ async def init_db():
             # only guard, on a database already holding a duplicate.
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_deal_reviewer "
             "ON reviews (deal_id, reviewer_id)",
+            # Partial payments (ExternalEscrow.payment_no): a deal may now
+            # have several escrow rows, so the old one-per-deal unique index
+            # goes, and (deal_id, payment_no) takes over both its lookups and
+            # its duplicate guard. Created first so a deal is never without a
+            # guard; the drop matches nothing once done.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_external_escrows_deal_payment "
+            "ON external_escrows (deal_id, payment_no)",
+            "DROP INDEX IF EXISTS ix_external_escrows_deal_id",
         ]
         for stmt in index_patches:
             # Same SAVEPOINT scoping as the two blocks above - CREATE INDEX

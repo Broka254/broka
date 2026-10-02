@@ -684,7 +684,14 @@ class TestReleaseRace:
                 row.release_initiated_at = datetime.utcnow()
                 await db_a.commit()
 
-            await svc_b._confirm_delivery_econfirm(deal_b, escrow_b, buyer.id, None)
+            from fastapi import HTTPException
+            # The release re-reads every payment fresh, so the stale `funded`
+            # row above is never trusted: the second request is either told
+            # nothing is left to release (409) or handed the deal's status.
+            try:
+                await svc_b.release_econfirm_deal(deal_b, buyer.id, None, notes="test")
+            except HTTPException as exc:
+                assert exc.status_code == 409
 
         assert release_provider.release_calls == 0, (
             "the re-check under the deal lock read a stale `funded` escrow and "

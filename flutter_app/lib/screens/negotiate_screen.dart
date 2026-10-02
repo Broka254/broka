@@ -29,6 +29,7 @@ import '../widgets/protection_badge.dart';
 import '../widgets/units_stepper.dart';
 import '../features/reviews/presentation/review_prompt.dart';
 import '../utils/price_format.dart';
+import '../features/escrow/presentation/escrow_actions.dart';
 
 class NegotiateScreen extends StatefulWidget {
   const NegotiateScreen({super.key, this.animateBackground = true});
@@ -202,6 +203,25 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   // Seller-specific flags
   bool get _sellerHasClaimedDelivery =>
       _hasFundedDeal && _dealStatus?['seller_claimed_delivery_at'] != null;
+
+  // Buyer protection (backend: api/domains/escrow/protection.py)
+  String? get _dealId => _dealStatus?['deal_id'] as String?;
+  double get _amountPaid => (_dealStatus?['amount_paid'] as num?)?.toDouble() ?? 0;
+  double get _balance => (_dealStatus?['balance'] as num?)?.toDouble() ?? 0;
+  double get _agreedPrice => (_dealStatus?['agreed_price'] as num?)?.toDouble() ?? 0;
+  bool get _canAddPayment => (_dealStatus?['can_add_payment'] as bool?) ?? false;
+  Map<String, dynamic>? get _refundRequest =>
+      (_dealStatus?['refund_request'] as Map?)?.cast<String, dynamic>();
+  bool get _refundOpen =>
+      _refundRequest != null && _refundRequest!['resolved_at'] == null;
+
+  /// After a protection action: the deal's new state, and Zeno's message
+  /// about it in the thread.
+  Future<void> _afterDealAction(bool changed) async {
+    if (!changed || !mounted) return;
+    await _loadDealStatus();
+    await _loadHistory();
+  }
 
   // Buyer state machine getters — each maps to one DB status value
   // 'paid': escrow funded, goods not yet delivered/confirmed
@@ -655,16 +675,29 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
   // ── SELLER actions ─────────────────────────────────────────────────────────
 
+  /// Starts the buyer's 3 days to release or object; after that the money
+  /// is released automatically (POST /deal/{id}/mark-delivered).
   Future<void> _markAsDelivered() async {
-    if (_role != 'seller') return;
-    if (!await _confirm(
-      'Mark as delivered?',
-      'Only mark this once the buyer has actually received the item. '
-      'Zeno will then ask the buyer to confirm the goods are correct '
-      'before releasing any funds.',
-      yes: 'Yes, mark as delivered',
-    )) return;
-    await _sendIntent('seller_claims_delivered', content: 'Marking item as delivered.');
+    final dealId = _dealId;
+    if (_role != 'seller' || dealId == null) return;
+    await _afterDealAction(await markDealDelivered(context, dealId: dealId, balance: _balance));
+  }
+
+  Future<void> _respondToRefund() async {
+    final dealId = _dealId;
+    if (dealId == null) return;
+    await _afterDealAction(await showRefundResponseDialog(context,
+        dealId: dealId,
+        amount: _amountPaid > 0 ? _amountPaid : _agreedPrice,
+        reason: _refundRequest?['reason'] as String?,
+        respondBy: _refundRequest?['respond_by'] as String?));
+  }
+
+  Future<void> _setPrice() async {
+    final dealId = _dealId;
+    if (dealId == null) return;
+    await _afterDealAction(await showSetPriceDialog(context,
+        dealId: dealId, currentPrice: _agreedPrice, amountPaid: _amountPaid));
   }
 
   Future<void> _replacementShipped() async {
@@ -678,23 +711,47 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     await _sendIntent('seller_ships_replacement', content: 'Replacement has been shipped.');
   }
 
-  // ── BUYER: arrival confirmation ────────────────────────────────────────────
+  // ── BUYER: the money in escrow ─────────────────────────────────────────────
 
-  /// Goods arrived — starts the condition-check step, NOT an immediate release.
-  Future<void> _goodsArrived() async {
-    await _sendIntent('buyer_confirms_arrived', content: 'The goods have arrived.');
+  /// Release to the seller, after "has it been delivered?" (and, for land
+  /// or a vehicle, "have the documents been transferred?"). A "no" is a
+  /// recommendation to wait, not a block.
+  Future<void> _releasePayment() async {
+    final dealId = _dealId;
+    if (dealId == null) return;
+    final released = await showReleaseDialog(context,
+        dealId: dealId,
+        amount: _amountPaid > 0 ? _amountPaid : _agreedPrice,
+        requiresOwnershipTransfer: (_dealStatus?['requires_ownership_transfer'] as bool?) ?? false);
+    await _afterDealAction(released);
+    // Released: ask how it went while the goods are in hand. The backend
+    // decides whether it is due (released, not yet reviewed).
+    if (released && mounted) {
+      await promptReviewIfDue(context, dealId: dealId, sellerId: _listing?.sellerId);
+    }
   }
 
-  /// Goods have NOT arrived on the expected date.
-  Future<void> _reportGoodsNotArrived() async {
-    if (!await _confirm(
-      'Goods not arrived?',
-      "I'll contact the seller and start a 3-day resolution process. "
-      "If the seller doesn't respond, you will be automatically refunded.",
-      yes: "Yes, they haven't arrived",
-      yesColor: BrokaColors.danger,
-    )) return;
-    await _sendIntent('goods_not_arrived', content: 'The goods have not arrived.');
+  /// Pay the rest of a deal paid in part.
+  Future<void> _payBalance() async {
+    final dealId = _dealId;
+    if (dealId == null) return;
+    await showEscrowPayDialog(context, dealId: dealId, listingName: _listing?.name ?? '');
+    await _afterDealAction(true);
+  }
+
+  Future<void> _requestRefund() async {
+    final dealId = _dealId;
+    if (dealId == null) return;
+    await _afterDealAction(await showRefundRequestDialog(context,
+        dealId: dealId,
+        amount: _amountPaid > 0 ? _amountPaid : _agreedPrice,
+        sellerClaimedDelivery: _sellerHasClaimedDelivery));
+  }
+
+  Future<void> _withdrawRefund() async {
+    final dealId = _dealId;
+    if (dealId == null) return;
+    await _afterDealAction(await withdrawRefundRequest(context, dealId: dealId));
   }
 
   // ── BUYER: condition check (goods arrived but quality unknown) ─────────────
@@ -837,8 +894,17 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
     // ── SELLER ──────────────────────────────────────────────────────────────
     if (_role == 'seller') {
+      // The buyer asked for a refund: the seller's answer comes first.
+      if (_awaitingArrivalConfirm && _refundOpen) {
+        chips.add(_chip(
+          label: 'Respond to refund request',
+          icon: Icons.undo_rounded,
+          gradient: const [BrokaColors.danger, Color(0xFFB91C1C)],
+          onTap: _respondToRefund,
+        ));
+      }
       // Seller can mark as delivered only when funds are held and not yet claimed
-      if (_hasFundedDeal && !_sellerHasClaimedDelivery &&
+      if (_hasFundedDeal && !_sellerHasClaimedDelivery && !_refundOpen &&
           (_dealStatusStr == 'paid' || _dealStatusStr == null)) {
         chips.add(_chip(
           label: 'Mark as delivered',
@@ -846,6 +912,24 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           gradient: const [BrokaColors.gold, BrokaColors.goldDim],
           onTap: _markAsDelivered,
         ));
+      }
+      // A buyer may pay before the price is confirmed, or pay part of it:
+      // the seller states the price, and the buyer sees the balance.
+      if (_awaitingArrivalConfirm && !_refundOpen) {
+        chips.add(_chip(
+          label: 'Confirm agreed price',
+          icon: Icons.sell_outlined,
+          color: BrokaColors.bgCard,
+          border: BrokaColors.gold,
+          textColor: BrokaColors.gold,
+          onTap: _setPrice,
+        ));
+      }
+      if (_awaitingArrivalConfirm) {
+        final summary = escrowSummary(_dealStatus ?? const {}, isBuyer: false);
+        if (summary != null) {
+          chips.add(_infoChip(label: summary, icon: Icons.lock_clock_outlined));
+        }
       }
       // Seller confirms replacement shipped (A4 branch)
       if (_awaitingReplacement) {
@@ -880,21 +964,51 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     // ── BUYER ───────────────────────────────────────────────────────────────
     if (_role == 'buyer') {
       // ── paid: goods not yet confirmed arrived ──────────────────────────
-      if (_awaitingArrivalConfirm) {
-        chips.add(_chip(
-          label: 'Goods arrived',
-          icon: Icons.check_circle_outline_rounded,
-          gradient: const [BrokaColors.neonGreen, BrokaColors.success],
-          onTap: _goodsArrived,
+      // Release (with the delivery check), pay the balance of a part-paid
+      // deal, or ask for a refund - which, before the seller has marked it
+      // delivered, refunds automatically if the seller stays silent.
+      if (_awaitingArrivalConfirm && _refundOpen) {
+        chips.add(_infoChip(
+          label: "Refund requested - the seller has 48 hours to respond, or you're refunded automatically",
+          icon: Icons.hourglass_top_rounded,
         ));
         chips.add(_chip(
-          label: "Goods not arrived",
-          icon: Icons.remove_circle_outline_rounded,
+          label: 'Withdraw refund request',
+          icon: Icons.close_rounded,
+          color: BrokaColors.bgCard,
+          border: BrokaColors.textLow,
+          textColor: BrokaColors.textMid,
+          onTap: _withdrawRefund,
+        ));
+      } else if (_awaitingArrivalConfirm) {
+        chips.add(_chip(
+          label: 'Release payment',
+          icon: Icons.verified_outlined,
+          gradient: const [BrokaColors.neonGreen, BrokaColors.success],
+          onTap: _releasePayment,
+        ));
+        if (_canAddPayment) {
+          chips.add(_chip(
+            label: 'Pay balance (${formatKes(_balance)})',
+            icon: Icons.add_card_outlined,
+            gradient: const [BrokaColors.neonBlue, BrokaColors.neonGreen],
+            onTap: _payBalance,
+          ));
+        }
+        chips.add(_chip(
+          label: _sellerHasClaimedDelivery ? 'Report a problem' : 'Request refund',
+          icon: Icons.undo_rounded,
           color: BrokaColors.bgCard,
           border: BrokaColors.danger,
           textColor: BrokaColors.danger,
-          onTap: _reportGoodsNotArrived,
+          onTap: _requestRefund,
         ));
+      }
+      if (_awaitingArrivalConfirm) {
+        final summary = escrowSummary(_dealStatus ?? const {}, isBuyer: true);
+        if (summary != null) {
+          chips.add(_infoChip(label: summary, icon: Icons.lock_clock_outlined));
+        }
       }
 
       // ── awaiting_condition_check: goods arrived, confirm quality ───────

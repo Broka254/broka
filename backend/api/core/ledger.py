@@ -66,21 +66,26 @@ class EscrowLedger:
         db.add(e)
         return e
 
-    async def _already_recorded(self, db, deal_id: str, account, direction) -> bool:
-        """True if this deal already has an entry on this account/direction.
+    async def _already_recorded(self, db, deal_id: str, account, direction, ref_id=None) -> bool:
+        """True if this deal already has an entry on this account/direction
+        (and, when ref_id is given, with that ref_id).
 
         The event bus driving these writes (core/deal_hub_subscribers.py)
         is at-least-once: a redelivered EscrowFunded or EscrowReleased used
         to append a second full set of entries, doubling a deal's recorded
         money while keeping the global trial balance perfectly "balanced".
-        Each operation below happens at most once per deal, so the presence
-        of its signature entry is enough to recognise a replay.
+        Release and refund happen at most once per deal, so the presence
+        of their signature entry is enough to recognise a replay. Funding
+        can happen once per PAYMENT (a deal paid in parts), so it is keyed
+        on the payment's reference as well.
         """
         q = select(func.count(LedgerEntry.id)).where(
             LedgerEntry.deal_id == deal_id,
             LedgerEntry.account == account,
             LedgerEntry.direction == direction,
         )
+        if ref_id:
+            q = q.where(LedgerEntry.ref_id == ref_id)
         return ((await db.execute(q)).scalar() or 0) > 0
 
     async def record_escrow_funded(self, db, deal_id, buyer_id, amount, mpesa_receipt):
@@ -91,9 +96,12 @@ class EscrowLedger:
         if amt <= 0:
             logger.error("[ledger] refusing a non-positive funding amount (%s) deal=%s", amt, deal_id)
             raise LedgerError(f"escrow funding amount must be positive, got {amt}")
+        # Keyed on the payment's reference (the E-Confirm transaction or
+        # M-Pesa receipt): each part payment is credited once.
         if await self._already_recorded(db, deal_id, LedgerAccount.escrow_holding,
-                                        LedgerDirection.credit):
-            logger.info("[ledger] funding already recorded for deal=%s - ignoring replay", deal_id)
+                                        LedgerDirection.credit, ref_id=mpesa_receipt or None):
+            logger.info("[ledger] funding already recorded for deal=%s ref=%s - ignoring replay",
+                        deal_id, mpesa_receipt)
             return
         await self._entry(db, deal_id, LedgerAccount.buyer_wallet, LedgerDirection.debit,
                           amt, f"Buyer payment via M-Pesa {mpesa_receipt}", mpesa_receipt)

@@ -1010,12 +1010,16 @@ async def _payment_evidence(db: AsyncSession, deal_id: str, *, lock: bool):
     from api.database import MpesaTransaction
     from api.models.external_escrow import ExternalEscrow
 
-    q = select(ExternalEscrow).where(ExternalEscrow.deal_id == deal_id)
+    # An auction is paid in one payment (EscrowService refuses part
+    # payments on one), so this is its only row; ordered and limited anyway,
+    # since external_escrows holds one row per payment.
+    q = (select(ExternalEscrow).where(ExternalEscrow.deal_id == deal_id)
+         .order_by(ExternalEscrow.payment_no).limit(1))
     if lock:
         q = q.with_for_update()
     escrow = (await db.execute(
         q.execution_options(populate_existing=True)
-    )).scalar_one_or_none()
+    )).scalars().first()
     txns = (await db.execute(
         select(MpesaTransaction)
         .where(MpesaTransaction.deal_id == deal_id)

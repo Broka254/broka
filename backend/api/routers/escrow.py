@@ -54,13 +54,14 @@ async def confirm_delivery(
     # would mark the deal released while the actual seller payout was
     # never requested. Route those deals to the canonical flow instead,
     # which calls E-Confirm's own release endpoint - see
-    # domains/escrow/service.py's confirm_delivery / _confirm_delivery_econfirm.
+    # domains/escrow/service.py's confirm_delivery / release_econfirm_deal.
     # Found by auditing every code path that can set Deal.status =
     # released, not called out in the integration spec's own file list.
     from api.models.external_escrow import ExternalEscrow
+    # .first(): a deal paid in parts has one row per payment.
     external_escrow = (
-        await db.execute(select(ExternalEscrow).where(ExternalEscrow.deal_id == deal.id))
-    ).scalar_one_or_none()
+        await db.execute(select(ExternalEscrow).where(ExternalEscrow.deal_id == deal.id).limit(1))
+    ).scalars().first()
     if external_escrow is not None:
         raise HTTPException(
             status_code=409,

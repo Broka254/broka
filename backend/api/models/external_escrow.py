@@ -63,12 +63,28 @@ class EConfirmEscrowStatus:
 
     TERMINAL = (COMPLETED,)  # only state past which no further reconciliation is needed
 
+    # The buyer's money reached escrow in these (and may since have been
+    # paid out). What a deal's "amount paid" adds up.
+    MONEY_IN = (FUNDED, RELEASE_PENDING, COMPLETED, PAYOUT_FAILED)
+    # Not settled either way yet: being set up, prompt on the buyer's phone,
+    # or a status nobody has resolved. A deal has at most one of these at a
+    # time, so a second payment is never opened beside an unresolved one.
+    OPEN = (CREATING, PENDING, UNKNOWN)
+
 
 class ExternalEscrow(Base):
     __tablename__ = "external_escrows"
 
     id                          = sa.Column(sa.String, primary_key=True, default=_uuid)
-    deal_id                     = sa.Column(sa.String, sa.ForeignKey("deals.id"), nullable=False, unique=True, index=True)
+    # One row per PAYMENT, not per deal: a buyer can pay part of the price
+    # and add the rest later (ESCROW_AUDIT.md, "Partial payments"), and each
+    # payment is its own E-Confirm transaction with its own release code.
+    # deal_id was unique until then; lookups by deal use the
+    # (deal_id, payment_no) index below, whose uniqueness is also what stops
+    # two requests from opening the same payment twice.
+    deal_id                     = sa.Column(sa.String, sa.ForeignKey("deals.id"), nullable=False)
+    # 0 for the deal's first payment, then 1, 2... for each top-up.
+    payment_no                  = sa.Column(sa.Integer, nullable=False, default=0)
     provider                    = sa.Column(sa.String(32), nullable=False, default="econfirm")
 
     # Null until create_transaction() succeeds - see EscrowService's
@@ -81,7 +97,7 @@ class ExternalEscrow(Base):
     status                      = sa.Column(sa.String(32), nullable=False, default=EConfirmEscrowStatus.CREATING)
     provider_raw_status         = sa.Column(sa.String(64), nullable=True)  # exact provider string, unmapped
 
-    amount                      = sa.Column(sa.Float, nullable=False)      # goods price only, matches Deal.agreed_price
+    amount                      = sa.Column(sa.Float, nullable=False)      # goods money in THIS payment (all of Deal.agreed_price when paid at once)
     currency                    = sa.Column(sa.String(8), nullable=False, default="KES")
 
     buyer_email                 = sa.Column(sa.String, nullable=False)
@@ -103,5 +119,10 @@ class ExternalEscrow(Base):
     created_at                  = sa.Column(sa.DateTime, default=datetime.utcnow, nullable=False)
     updated_at                  = sa.Column(sa.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    __table_args__ = (
+        sa.Index("uq_external_escrows_deal_payment", "deal_id", "payment_no", unique=True),
+    )
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid only
-        return f"<ExternalEscrow deal_id={self.deal_id} status={self.status} provider_tx={self.provider_transaction_id}>"
+        return (f"<ExternalEscrow deal_id={self.deal_id} payment_no={self.payment_no} "
+                f"status={self.status} provider_tx={self.provider_transaction_id}>")

@@ -928,9 +928,10 @@ class DisputeEngineService:
         # not be invented) - this deliberately fails closed rather than
         # silently doing the wrong thing with real money.
         from api.models.external_escrow import ExternalEscrow
+        # .first(): a deal paid in parts has one row per payment.
         external_escrow = (
-            await self.db.execute(select(ExternalEscrow).where(ExternalEscrow.deal_id == deal.id))
-        ).scalar_one_or_none()
+            await self.db.execute(select(ExternalEscrow).where(ExternalEscrow.deal_id == deal.id).limit(1))
+        ).scalars().first()
         if external_escrow is not None:
             raise HTTPException(
                 status_code=409,

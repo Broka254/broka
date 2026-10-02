@@ -20,6 +20,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../features/escrow/presentation/escrow_actions.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
@@ -1469,146 +1470,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       }
       return;
     }
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: BrokaColors.neonGreen),
-      ),
-    );
-    Map<String, dynamic> quote;
-    try {
-      quote = await ApiService.getEConfirmFeeQuote(dealId);
-    } catch (e) {
-      if (mounted) Navigator.pop(context); // close the loading spinner
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().replaceAll('Exception: ', '')),
-        ));
-      }
-      return;
-    }
-    if (mounted) Navigator.pop(context); // close the loading spinner
-    if (!mounted) return;
-
-    final goodsAmount = (quote['goods_amount'] as num?)?.toDouble() ?? 0.0;
-    final commission  = (quote['merchant_commission'] as num?)?.toDouble() ?? 0.0;
-    final providerFee = (quote['provider_fee'] as num?)?.toDouble() ?? 0.0;
-    final total       = (quote['total_to_pay'] as num?)?.toDouble()
-        ?? (goodsAmount + commission + providerFee);
-
-    final phoneCtrl = TextEditingController();
-    bool paying = false;
-    String? errorMsg;
-
-    Widget quoteRow(String label, double amount, {bool emphasize = false}) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Row(children: [
-            Expanded(child: Text(label,
-                style: TextStyle(
-                    color: emphasize ? BrokaColors.textHigh : BrokaColors.textMid,
-                    fontSize: emphasize ? 13 : 12,
-                    fontWeight: emphasize ? FontWeight.w700 : FontWeight.normal))),
-            Text('KES ${amount.toStringAsFixed(0)}',
-                style: TextStyle(
-                    color: emphasize ? BrokaColors.neonGreen : BrokaColors.textMid,
-                    fontWeight: emphasize ? FontWeight.w800 : FontWeight.w600,
-                    fontSize: emphasize ? 13 : 12)),
-          ]),
-        );
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) {
-        return AlertDialog(
-          backgroundColor: BrokaColors.bgMid,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: const BorderSide(color: BrokaColors.neonGreen, width: 1)),
-          title: const Row(children: [
-            Text('🔒', style: TextStyle(fontSize: 18)),
-            SizedBox(width: 8),
-            Text('Pay & Secure in Escrow', style: TextStyle(color: BrokaColors.textHigh,
-                fontSize: 16, fontWeight: FontWeight.w800)),
-          ]),
-          content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: BrokaColors.bgCard,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: BrokaColors.border)),
-              child: Column(children: [
-                quoteRow('Item price', goodsAmount),
-                quoteRow('BROKA commission', commission),
-                quoteRow('Payment processing fee', providerFee),
-                const Divider(color: BrokaColors.border, height: 16),
-                quoteRow('Total to pay', total, emphasize: true),
-              ]),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: phoneCtrl,
-              keyboardType: TextInputType.phone,
-              style: const TextStyle(color: BrokaColors.textHigh),
-              decoration: const InputDecoration(
-                labelText: 'M-Pesa Phone', hintText: '07XXXXXXXX',
-                prefixIcon: Icon(Icons.phone_android_rounded,
-                    color: BrokaColors.neonGreen, size: 20)),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Funds are held safely in escrow until you confirm delivery.',
-              style: TextStyle(color: BrokaColors.textLow, fontSize: 11),
-            ),
-            if (errorMsg != null) ...[
-              const SizedBox(height: 10),
-              Text(errorMsg!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-            ],
-          ])),
-          actions: [
-            TextButton(onPressed: paying ? null : () => Navigator.pop(ctx),
-                child: const Text('Cancel', style: TextStyle(color: BrokaColors.textLow))),
-            ElevatedButton(
-              onPressed: paying ? null : () async {
-                final phone = phoneCtrl.text.trim();
-                if (phone.isEmpty) { setDlg(() => errorMsg = 'Enter your phone number'); return; }
-                setDlg(() { paying = true; errorMsg = null; });
-                try {
-                  final fundResult = await ApiService.fundDealEscrow(
-                    dealId: dealId, payerPhone: phone);
-                  final finalTotal = (fundResult['total_to_pay'] as num?)?.toDouble() ?? total;
-                  // Two contexts, two checks: the dialog's own (what is
-                  // popped) and the screen's (what navigates on). Checking
-                  // only the screen's let a dialog dismissed during the
-                  // await be popped twice.
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  if (mounted) {
-                    Navigator.pushNamed(context, '/escrow-payment', arguments: {
-                      'deal_id': dealId,
-                      'amount': finalTotal,
-                      'phone': phone,
-                      'listing_name': _listing?.name ?? '',
-                    });
-                  }
-                } catch (e) {
-                  setDlg(() { paying = false;
-                    errorMsg = e.toString().replaceAll('Exception: ', ''); });
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: BrokaColors.neonGreen, foregroundColor: Colors.black87,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-              child: paying
-                  ? const SizedBox(width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black87))
-                  : const Text('Pay', style: TextStyle(fontWeight: FontWeight.w800)),
-            ),
-          ],
-        );
-      }),
-    );
+    // Shared with Zeno's room (its "Pay balance"): all at once, or part
+    // now and the rest later - see escrow_actions.dart.
+    await showEscrowPayDialog(context, dealId: dealId, listingName: _listing?.name ?? '');
   }
 
   // ── Utility ────────────────────────────────────────────────────────────────
@@ -1838,7 +1702,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       child: Row(children: [
         const Icon(Icons.check_circle_rounded, color: BrokaColors.neonGreen, size: 20),
         const SizedBox(width: 10),
-        const Expanded(child: Text('Deal agreed! Pay commission to complete.',
+        const Expanded(child: Text('Deal agreed! Pay into escrow - all at once or in parts.',
             style: TextStyle(color: BrokaColors.neonGreen,
                 fontSize: 12, fontWeight: FontWeight.w600))),
         GestureDetector(

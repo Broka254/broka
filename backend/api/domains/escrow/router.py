@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from api.core.client_ip import client_ip_or_none
 from api.security import get_current_user
 from api.core.idempotency import idempotency_guard, IdempotencyResult
 from .service import EscrowService
+from . import protection
 
 router = APIRouter()
 
@@ -63,6 +64,19 @@ class FinalizeDealIn(BaseModel):
 
 class FundEscrowIn(BaseModel):
     payer_phone: str
+    # Goods money for this payment, KES; the whole balance when left out
+    # (older app builds). Less than the balance is a part payment, topped
+    # up later through this same endpoint. Range-checked against the deal's
+    # balance in the service; here only that it is a finite number.
+    amount: Optional[float] = Field(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False)
+
+
+class ConfirmDeliveryIn(BaseModel):
+    """The buyer's answers to the app's check before releasing. Optional:
+    older app builds send no body. Recorded, never enforced - see
+    EscrowService.confirm_delivery."""
+    item_received: Optional[bool] = None
+    ownership_transferred: Optional[bool] = None
 
 
 @router.post("/finalize", status_code=201)
@@ -86,13 +100,16 @@ async def finalize_deal(
 @router.get("/{deal_id}/fee-quote")
 async def get_fee_quote(
     deal_id: str,
+    amount: Optional[float] = Query(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Phase 5/14: real buyer-facing total (goods + BROKA commission +
-    E-Confirm's own fee) before the buyer commits to funding."""
+    E-Confirm's own fee) before the buyer commits to funding. `amount` is
+    the goods money of the payment being quoted (part payments); the whole
+    balance when left out."""
     svc = EscrowService(db)
-    return await svc.get_fee_quote(deal_id, current_user["id"])
+    return await svc.get_fee_quote(deal_id, current_user["id"], amount=amount)
 
 
 @router.post("/{deal_id}/fund")
@@ -124,6 +141,7 @@ async def fund_deal_escrow(
         buyer_id=current_user["id"],
         payer_phone=body.payer_phone,
         request_ip=client_ip_or_none(request),
+        amount=body.amount,
     )
     await idempotency_result.store(result)
     return result
@@ -149,15 +167,115 @@ async def get_payment_status(
 async def confirm_delivery(
     deal_id: str,
     request: Request,
+    body: Optional[ConfirmDeliveryIn] = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """The buyer releases the escrowed money to the seller."""
     svc = EscrowService(db)
     return await svc.confirm_delivery(
         deal_id=deal_id,
         buyer_id=current_user["id"],
         request_ip=client_ip_or_none(request),
+        item_received=body.item_received if body else None,
+        ownership_transferred=body.ownership_transferred if body else None,
     )
+
+
+# ── Buyer protection (api/domains/escrow/protection.py) ──────────────────
+
+class RefundRequestIn(BaseModel):
+    reason: str = Field("", max_length=500)
+
+
+class RefundResponseIn(BaseModel):
+    accept: bool
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class SetPriceIn(BaseModel):
+    agreed_price: float = Field(..., gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False)
+
+
+@router.post("/{deal_id}/mark-delivered")
+async def mark_delivered(
+    deal_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller says the item was delivered (or the ownership documents
+    handed over). Starts the buyer's 72 hours to release or object, after
+    which the money is released automatically."""
+    return await protection.mark_delivered(
+        db, deal_id, current_user["id"], request_ip=client_ip_or_none(request))
+
+
+@router.post("/{deal_id}/refund-request")
+async def request_refund(
+    deal_id: str,
+    body: RefundRequestIn,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    idempotency_result: IdempotencyResult = Depends(idempotency_guard),
+):
+    """The buyer asks for their money back. The seller is told at once and
+    has 48 hours to answer; silence refunds the buyer. After the seller has
+    marked the deal delivered, this opens a dispute instead."""
+    if idempotency_result.cached:
+        return idempotency_result.response
+    result = await protection.request_refund(
+        db, deal_id, current_user["id"], body.reason.strip(),
+        request_ip=client_ip_or_none(request))
+    await idempotency_result.store(result)
+    return result
+
+
+@router.delete("/{deal_id}/refund-request")
+async def withdraw_refund(
+    deal_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await protection.withdraw_refund(
+        db, deal_id, current_user["id"], request_ip=client_ip_or_none(request))
+
+
+@router.post("/{deal_id}/refund-response")
+async def respond_to_refund(
+    deal_id: str,
+    body: RefundResponseIn,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    idempotency_result: IdempotencyResult = Depends(idempotency_guard),
+):
+    """The seller accepts the buyer's refund request, or contests it (which
+    opens a dispute)."""
+    if idempotency_result.cached:
+        return idempotency_result.response
+    result = await protection.respond_to_refund(
+        db, deal_id, current_user["id"], body.accept, body.note,
+        request_ip=client_ip_or_none(request))
+    await idempotency_result.store(result)
+    return result
+
+
+@router.post("/{deal_id}/price")
+async def set_price(
+    deal_id: str,
+    body: SetPriceIn,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller states the price they agreed to, so a buyer who paid
+    less sees the balance (partial payments)."""
+    return await protection.set_price(
+        db, deal_id, current_user["id"], body.agreed_price,
+        request_ip=client_ip_or_none(request))
 
 
 @router.get("/{deal_id}")

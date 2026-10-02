@@ -124,11 +124,27 @@ async def on_escrow_released(envelope: EventEnvelope) -> None:
     try:
         from api.database import AsyncSessionLocal, Deal
         from sqlalchemy import select
+        # The reads happen inside the transaction. They used to run before
+        # it, which began one implicitly, so `db.begin()` raised "A
+        # transaction is already begun on this Session" and no release was
+        # ever written to the ledger - logged here and lost.
         async with AsyncSessionLocal() as db:
-            r = await db.execute(select(Deal).where(Deal.id == deal_id))
-            deal = r.scalar_one_or_none()
-            commission = deal.commission if deal else 0.0
             async with db.begin():
+                r = await db.execute(select(Deal).where(Deal.id == deal_id))
+                deal = r.scalar_one_or_none()
+                commission = deal.commission if deal else 0.0
+                # An E-Confirm deal's commission is what its payments
+                # carried: a deal released on part of its price (the seller
+                # accepted less) carried less than Deal.commission.
+                from api.models.external_escrow import ExternalEscrow, EConfirmEscrowStatus
+                carried = (await db.execute(
+                    select(ExternalEscrow.merchant_commission_amount).where(
+                        ExternalEscrow.deal_id == deal_id,
+                        ExternalEscrow.status.in_(EConfirmEscrowStatus.MONEY_IN),
+                    )
+                )).scalars().all()
+                if carried:
+                    commission = sum(c or 0.0 for c in carried)
                 await ledger.record_escrow_released(
                     db, deal_id, amount, commission
                 )

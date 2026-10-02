@@ -122,8 +122,86 @@ deal, and the winner got two (`test_concurrent_sweeps_close_each_auction_
 exactly_once`, intermittently on PostgreSQL). The second now waits and
 returns the first's deal.
 
+## Partial payments (2026-10-02)
+
+A buyer pays before anyone confirms the price, and need not pay it all at
+once: whatever they pay (never more than the balance, at least KES 100 unless
+it clears the balance) goes into escrow, and they add to it until the
+balance is cleared. Waiting for the seller to confirm a price before paying
+was ruled out: a buyer turned away at the pay button may not come back.
+
+- **One E-Confirm transaction per payment.** `external_escrows` holds one row
+  per payment (`payment_no` 0, 1, 2...); `deal_id` is no longer unique, and
+  `(deal_id, payment_no)` is, which also stops a double tap opening the same
+  payment twice. Existing rows are each their deal's payment 0.
+- **One open payment at a time.** While the latest payment is being set up
+  or its prompt is on the buyer's phone, a pay request continues it; the next
+  payment opens only once it has settled, and only on a `paid` deal with a
+  balance and no open refund request. Auctions are paid in one payment.
+- **Commission** is split across the payments in proportion, and the payment
+  that clears the balance carries the rest, so paying in parts costs the same
+  as paying at once (minimum included).
+- **The price.** The seller states the price they agreed
+  (`POST /deal/{id}/price`), never below what is paid or being paid; the
+  buyer sees the balance and pays it or asks for a refund. The seller can
+  accept what was paid by stating that as the price.
+- **Release** releases every funded payment; the deal is `released` only once
+  E-Confirm has paid out all of them.
+- **Ledger.** Funding is now idempotent per payment reference rather than per
+  deal (a deal paid twice is credited twice, a redelivered event once).
+
+## Release, reminders and refund requests (2026-10-02)
+
+The rules live in `api/domains/escrow/protection.py`; the numbers in
+`policy.py`, which the app is shown as deadlines.
+
+- **Buyer release** (`POST /deal/{id}/confirm-delivery`) takes the buyer's
+  answers to "has it been delivered?" and, for land, property and vehicles,
+  "have the ownership documents been transferred?". A "no" makes the app
+  recommend waiting; it never blocks, and it is written to the audit row.
+- **Delivery claim → 72 hours.** The seller marks the deal delivered
+  (`POST /deal/{id}/mark-delivered`, or the chat button). The clock starts at
+  the claim, never at payment: started at payment, a seller who never
+  delivered would be paid when it ran out. Zeno reminds the buyer every 12
+  hours, an SMS goes on days 2 and 3 (texts wait out quiet hours), and at 72
+  hours the money is released - for an E-Confirm deal through E-Confirm with
+  the stored release codes, after the sweep has committed (a provider call
+  must not run under its row locks). A failed automatic release is audited and
+  raised as a reconciliation alert. This replaces the 4 check-ins over 7 days.
+- **Refund request** (`POST /deal/{id}/refund-request`). Before a delivery
+  claim, the seller is told at once (chat, push, SMS) and has 48 hours to
+  accept or contest (`POST /deal/{id}/refund-response`), with a reminder and
+  a second SMS at 24 hours. Silence refunds the buyer: nothing has left the
+  seller's hands, so waiting costs them nothing, and a seller who disappears
+  cannot hold the money. Contesting opens a dispute. After a delivery claim the
+  buyer's word alone cannot undo the deal, so the request is a dispute. A
+  seller who claims delivery while a refund request is open is contesting it
+  (a dispute), never starting the countdown to their own payout. The buyer
+  can withdraw the request (`DELETE`), and releasing the money withdraws it.
+- **E-Confirm refunds are manual.** BROKA has no refund call on E-Confirm's
+  API. An approved refund on an E-Confirm deal freezes it (`disputed`), writes
+  an `econfirm_refund_required` audit row and reconciliation alert, and the
+  team returns the money through E-Confirm, then closes the deal with
+  `POST /admin/deals/{id}/econfirm-refunded` (refunded, and in the ledger).
+
+**Found while doing it:** the ledger's release subscriber
+(`deal_hub_subscribers.on_escrow_released`) read the deal before opening its
+transaction, so `db.begin()` raised "A transaction is already begun" and no
+release had ever been written to the ledger - every released deal's escrow
+account stayed full. Fixed, with a test.
+
 ## Still open
 
+- **Fees on a refund.** Who bears BROKA's commission and E-Confirm's fee when
+  a deal is refunded is not decided; the E-Confirm refund alert asks the team
+  to return what the buyer paid into escrow.
+- **A declined STK prompt** still leaves that payment open (pending) for good,
+  which blocks the next payment as it always blocked the first; it needs
+  E-Confirm to say whether an unpaid transaction can be cancelled or retried.
+- **Released deals missing their ledger release entry** (the subscriber bug
+  above). Their escrow accounts still show the money held; they need
+  compensating release entries. `/admin/ledger-integrity` does not list them,
+  since a positive balance is not an integrity failure.
 - **A seller can name any `buyer_id`**, creating a deal obligation against a
   user who never agreed. Pre-existing and acknowledged in the code's own
   comment, but it's spam surface.

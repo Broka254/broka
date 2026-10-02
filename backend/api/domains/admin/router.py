@@ -173,6 +173,26 @@ async def ledger_integrity(
     return report
 
 
+@router.post("/deals/{deal_id}/econfirm-refunded")
+async def econfirm_refunded(
+    deal_id: str,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Close an approved refund that was returned by hand through E-Confirm.
+
+    BROKA has no refund call on E-Confirm's API, so an approved refund on an
+    E-Confirm deal freezes it and raises an `econfirm_refund_required`
+    reconciliation alert (api/domains/escrow/protection.py). Once the money
+    is back with the buyer, this marks the deal refunded and records it in
+    the ledger.
+    """
+    from api.core.client_ip import client_ip_or_none
+    from api.domains.escrow.protection import mark_econfirm_refunded
+    return await mark_econfirm_refunded(db, deal_id, admin.id, request_ip=client_ip_or_none(request))
+
+
 @router.get("/audit-logs")
 async def get_audit_logs(
     resource_type: Optional[str] = None,
