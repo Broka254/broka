@@ -163,22 +163,22 @@ Counts: admin 20, optional 2, public 55, token 4, user 121.
 | GET | `/health` | public | `health` (backend/main.py:487) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:179) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:237) |
-| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:707) |
+| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:717) |
 | GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:656) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:876) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:886) |
 | GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:173) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:911) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:921) |
 | PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:327) |
-| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:919) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:954) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:965) |
+| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:929) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:964) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:975) |
 | GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:519) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:893) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:903) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:931) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:943) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:941) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:953) |
 | GET | `/live` | public | `live` (backend/main.py:543) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
@@ -364,6 +364,7 @@ Counts: admin 20, optional 2, public 55, token 4, user 121.
 - `engine.py` — The monthly listing fee: f = C x R.
 - `payments.py` — Paying for a listing: the M-Pesa prompt, its result, and what a paid month buys.
 - `plans.py` — Premium plans, store plans and commission - the prices, and the costs they cover.
+- `receipts.py` — What a user has paid BROKA: listing fees and premium plans, for the Payment Receipts screen.
 - `router.py` — Pricing router.
 - `service.py` — Gathering what a listing-fee quote needs from the database.
 
@@ -576,7 +577,7 @@ of a change.
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, gemini, ledger, workers; database, security
 - **escrow** — domains: listings; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
-- **listings** — domains: auctions, categories, escrow, media, premium, trust; core: audit, config, events, geo, rate_limit, text_search, timeutil; database, security
+- **listings** — domains: auctions, categories, escrow, media, premium, pricing, trust; core: audit, config, events, geo, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — domains: premium, pricing; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
@@ -630,7 +631,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-91 files in `backend/tests/`.
+92 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -703,6 +704,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_seller_advice.py` — Seller advice cards (domains/trust/seller_advice).
 - `test_seller_profile_figures.py` — BROKA - The figures a seller's profile shows, and who may review them Run: pytest backend/tests/test_seller_profile_figures.py -v
 - `test_seller_rating.py` — Overall Rating (Design Journal Vol.8 §3.2/§3.3, Part XVI).
+- `test_seller_receipts.py` — The Payment Receipts screen's data: GET /listings/seller/{id}/receipts.
 - `test_seller_signup.py` — Signup-time seller categorisation.
 - `test_session_lifetime.py` — Sign-in sessions: refresh tokens, and the schema they and the audit log need.
 - `test_settlement_sweeps.py` — The two automatic settlement sweeps must move money once, only where BROKA holds it, and tell the ledger.
@@ -833,12 +835,19 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/listing_fee_repository.dart` — BROKA - Listing fee: quotes, the M-Pesa payment and its progress (backend/api/domains/pricing/router.py).
 - `domain/listing_fee.dart` — The monthly listing fee, as the server quotes it (PRICING.md, GET /pricing/listing-fee/...).
 - `presentation/awaiting_payment_panel.dart` — The Seller Dashboard's "waiting for payment" list: listings buyers can't see until they are paid for, or soon won't.
-- `presentation/listing_fee_screen.dart` — BROKA - Listing fee: choose how long to list, and pay with M-Pesa.
+- `presentation/listing_fee_screen.dart` — BROKA - Listing fee: choose how long to list, then pay.
 
 ### `flutter_app/lib/features/listings/`
 
 - `data/repositories/listings_repository.dart` — BROKA v3.0 - Listings Repository
 - `domain/models/listing.dart` — BROKA v3.0 - Listing domain model
+
+### `flutter_app/lib/features/payments/`
+
+- `domain/checkout.dart` — BROKA - paying BROKA for something: the listing fee, a premium plan.
+- `presentation/checkout_widgets.dart` — BROKA - the look shared by every screen on the way to paying BROKA: the listing fee, premium plans, the payment methods and the M-Pesa scre…
+- `presentation/mpesa_checkout_screen.dart` — BROKA - paying with M-Pesa: the number the prompt goes to, what is being paid for, and Pay.
+- `presentation/payment_method_screen.dart` — BROKA - how do you want to pay? The first step of paying BROKA for anything (the listing fee, a premium plan).
 
 ### `flutter_app/lib/features/premium/`
 
@@ -963,6 +972,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/widgets/`
 
+- `axis_line_chart.dart` — BROKA — line chart with axes
 - `broka_image.dart` — One widget for every image the backend sends, whatever shape it is in.
 - `broka_search_field.dart` — The search box inside a screen: the Category Zones ("Electronics Zone"), Traders and Stores.
 - `chat_ambient_background.dart` — BROKA — Ambient constellation background for conversation screens
@@ -1039,6 +1049,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
+- `receipts_and_charts_test.dart` — The Seller Dashboard's graphs and its Payment Receipts screen.
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
