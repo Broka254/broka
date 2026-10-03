@@ -10,21 +10,24 @@
 // A plan cheaper than the one running can't be bought until it ends - the
 // server refuses it, so the screen says so instead of offering Pay.
 //
+// Paying is the shared checkout: "Continue to payment" opens the payment
+// methods, then the M-Pesa screen with the number to pay from at the top
+// (features/payments/).
+//
 // Pops `true` once a plan is paid.
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
-import '../../../services/api_service.dart';
 import '../../../utils/price_format.dart';
-import '../../listing_fee/data/listing_fee_repository.dart';
+import '../../payments/domain/checkout.dart';
+import '../../payments/presentation/checkout_widgets.dart';
+import '../../payments/presentation/payment_method_screen.dart';
 import '../data/premium_repository.dart';
 import '../domain/premium.dart';
 
-enum _Stage { loading, loadFailed, choosing, prompting, waiting, slow, paid }
+enum _Stage { loading, loadFailed, choosing }
 
 class PremiumScreen extends StatefulWidget {
   const PremiumScreen({
@@ -58,29 +61,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
   List<PremiumPlan> _plans = const [];
   String? _planId;
   int _months = 1;
-  final _phone = TextEditingController();
   String? _error;
-  PlanPayment? _payment;
-
-  // Kept across a timed-out attempt so Pay re-sends the same request and
-  // gets the prompt already on the phone, not a second one.
-  String? _attemptKey;
-  Timer? _poll;
-  DateTime? _waitingSince;
-  bool _checking = false;
 
   @override
   void initState() {
     super.initState();
-    _phone.text = ApiService.currentUserPhone ?? '';
     _load();
-  }
-
-  @override
-  void dispose() {
-    _poll?.cancel();
-    _phone.dispose();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -134,104 +120,71 @@ class _PremiumScreenState extends State<PremiumScreen> {
       if (plan != null) _planId = plan;
       if (months != null) _months = months;
       _error = null;
-      _attemptKey = null;
     });
   }
 
-  Future<void> _pay() async {
-    final plan = _chosen;
-    if (plan == null || _stage == _Stage.prompting || _isDowngrade) return;
-    final digits = _phone.text.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length < 9) {
-      setState(() => _error = 'Enter the Safaricom number to pay from, e.g. 0712 345 678.');
-      return;
-    }
-    _attemptKey ??= ListingFeeRepository.newAttemptKey();
-    setState(() {
-      _stage = _Stage.prompting;
-      _error = null;
-    });
-    final r = await _repo.subscribe(
-      planId: plan.id,
-      months: _months,
-      phone: _phone.text.trim(),
-      idempotencyKey: _attemptKey!,
+  /// The plan and months chosen, frozen: the checkout charges exactly
+  /// what was on screen when Continue was pressed.
+  MpesaCharge _charge(PremiumPlan plan) {
+    final months = _months;
+    return MpesaCharge(
+      start: (phone, key) async {
+        final r = await _repo.subscribe(planId: plan.id, months: months, phone: phone, idempotencyKey: key);
+        return switch (r) {
+          Success(:final data) => Success(ChargeStarted(paymentId: data.id, amount: data.amount)),
+          Failure(:final message, :final statusCode) => Failure(message, statusCode: statusCode),
+        };
+      },
+      check: (id) async {
+        final r = await _repo.paymentStatus(id);
+        return switch (r) {
+          Success(:final data) =>
+            Success(ChargeProgress(succeeded: data.succeeded, pending: data.pending, paidUntil: data.paidUntil)),
+          Failure(:final message, :final statusCode) => Failure(message, statusCode: statusCode),
+        };
+      },
     );
-    if (!mounted) return;
-    switch (r) {
-      case Success(:final data):
-        HapticFeedback.mediumImpact();
-        _attemptKey = null;
-        _startWaiting(data);
-      case Failure(:final message, :final statusCode):
-        setState(() {
-          _stage = _Stage.choosing;
-          _error = message;
-          // Only a request that may not have arrived is re-sent under the
-          // same key.
-          if (statusCode != null) _attemptKey = null;
-        });
-    }
   }
 
-  void _startWaiting(PlanPayment payment) {
-    _poll?.cancel();
-    setState(() {
-      _payment = payment;
-      _stage = _Stage.waiting;
-      _waitingSince = DateTime.now();
-    });
-    _poll = Timer.periodic(widget.pollEvery, (_) => _check());
-  }
-
-  Future<void> _check() async {
-    final payment = _payment;
-    if (payment == null || _checking) return;
-    _checking = true;
-    final Result<PlanPayment> r;
-    try {
-      r = await _repo.paymentStatus(payment.id);
-    } finally {
-      _checking = false;
-    }
-    if (!mounted || _stage != _Stage.waiting) return;
-    if (r case Success(:final data)) {
-      if (data.succeeded) {
-        _poll?.cancel();
-        HapticFeedback.heavyImpact();
-        setState(() {
-          _payment = data;
-          _stage = _Stage.paid;
-        });
-        return;
-      }
-      if (!data.pending) {
-        _poll?.cancel();
-        setState(() {
-          _stage = _Stage.choosing;
-          _error = "M-Pesa didn't complete the payment. Nothing was charged - try again.";
-        });
-        return;
-      }
-    }
-    if (DateTime.now().difference(_waitingSince!) >= widget.giveUpAfter) {
-      _poll?.cancel();
-      setState(() => _stage = _Stage.slow);
-    }
+  Future<void> _continue() async {
+    final plan = _chosen;
+    if (plan == null || _isDowngrade) return;
+    HapticFeedback.selectionClick();
+    final months = _months == 1 ? '1 month' : '$_months months';
+    final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PaymentMethodScreen(
+        order: CheckoutOrder(
+          title: 'BROKA ${plan.name}',
+          subject: 'Premium plan',
+          lines: [CheckoutLine('${plan.name} for $months', _total)],
+          total: _total,
+        ),
+        charge: _charge(plan),
+        success: CheckoutSuccess(
+          title: "You're on BROKA ${plan.name}",
+          body: (until) => until == null ? 'Your plan has started.' : 'Paid until ${_date(until)}.',
+        ),
+        pollEvery: widget.pollEvery,
+        giveUpAfter: widget.giveUpAfter,
+      ),
+    ));
+    if (paid == true && mounted) Navigator.of(context).pop(true);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: BrokaColors.bg,
-      appBar: AppBar(
-        backgroundColor: BrokaColors.bg,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: BrokaColors.textHigh),
-        title: const Text('BROKA Premium',
-            style: TextStyle(color: BrokaColors.textHigh, fontSize: 17, fontWeight: FontWeight.w800)),
-      ),
-      body: SafeArea(child: _body()),
+    final canPay = _stage == _Stage.choosing && (_status?.enabled ?? false) && _chosen != null && !_isDowngrade;
+    return CheckoutScaffold(
+      title: 'BROKA Premium',
+      icon: Icons.workspace_premium_rounded,
+      body: _body(),
+      bottom: canPay
+          ? CheckoutButton(
+              key: const Key('premium-continue'),
+              label: 'Continue to payment · KES ${formatKesAmount(_total)}',
+              onPressed: _continue,
+            )
+          : null,
     );
   }
 
@@ -240,44 +193,13 @@ class _PremiumScreenState extends State<PremiumScreen> {
       case _Stage.loading:
         return const Center(child: CircularProgressIndicator(color: BrokaColors.gold));
       case _Stage.loadFailed:
-        return _Message(
+        return CheckoutMessage(
           icon: Icons.wifi_off_rounded,
           title: "Couldn't load the plans",
           body: _error ?? 'Try again.',
           action: 'Try again',
           onAction: _load,
         );
-      case _Stage.waiting:
-        return _Message(
-          key: const Key('premium-waiting'),
-          icon: Icons.phone_android_rounded,
-          title: 'Check your phone',
-          body: 'Enter your M-Pesa PIN to pay KES ${formatKesAmount(_payment?.amount ?? _total)}. '
-              'This screen updates as soon as M-Pesa confirms.',
-          busy: true,
-        );
-      case _Stage.slow:
-        return _Message(
-          key: const Key('premium-slow'),
-          icon: Icons.hourglass_bottom_rounded,
-          title: 'Waiting for M-Pesa',
-          body: "M-Pesa hasn't confirmed yet. If you entered your PIN, your plan starts as soon "
-              'as it does - you can close this and come back.',
-          action: 'Check again',
-          onAction: () => _startWaiting(_payment!),
-        );
-      case _Stage.paid:
-        final plan = _plan(_payment?.planId) ?? _chosen;
-        final until = _payment?.paidUntil;
-        return _Message(
-          key: const Key('premium-paid'),
-          icon: Icons.workspace_premium_rounded,
-          title: "You're on BROKA ${plan?.name ?? 'Premium'}",
-          body: until == null ? 'Your plan has started.' : 'Paid until ${_date(until)}.',
-          action: 'Done',
-          onAction: () => Navigator.of(context).pop(true),
-        );
-      case _Stage.prompting:
       case _Stage.choosing:
         return _choosing();
     }
@@ -286,7 +208,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
   Widget _choosing() {
     final status = _status!;
     if (!status.enabled) {
-      return const _Message(
+      return const CheckoutMessage(
         key: Key('premium-off'),
         icon: Icons.celebration_rounded,
         title: "It's all free right now",
@@ -295,17 +217,14 @@ class _PremiumScreenState extends State<PremiumScreen> {
       );
     }
     final chosen = _chosen;
-    final busy = _stage == _Stage.prompting;
     return Column(children: [
       Expanded(
-        // Not a ListView: a lazily built list drops the phone field (and
-        // its focus) when it scrolls out of view.
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (status.hasPlan) _CurrentPlan(status: status) else _NoPlan(status: status),
             const SizedBox(height: 20),
-            _Heading(status.hasPlan ? 'Renew or change plan' : 'Choose a plan'),
+            CheckoutLabel(status.hasPlan ? 'Renew or change plan' : 'Choose a plan'),
             const SizedBox(height: 10),
             for (final p in _plans)
               _PlanCard(
@@ -313,7 +232,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 plan: p,
                 selected: p.id == _planId,
                 current: p.id == status.planId,
-                onTap: busy ? null : () => _choose(plan: p.id),
+                onTap: () => _choose(plan: p.id),
               ),
             if (chosen != null && _isDowngrade)
               _Note(
@@ -330,7 +249,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
               else if (_current != null && status.paidUntil != null)
                 _Note(text: 'Added after ${_date(status.paidUntil!)}, so renewing early loses nothing.'),
               const SizedBox(height: 18),
-              const _Heading('For how long?'),
+              const CheckoutLabel('For how long?'),
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
                 for (final period in chosen.periods)
@@ -338,13 +257,9 @@ class _PremiumScreenState extends State<PremiumScreen> {
                     key: Key('premium-months-${period.months}'),
                     period: period,
                     selected: period.months == _months,
-                    onTap: busy ? null : () => _choose(months: period.months),
+                    onTap: () => _choose(months: period.months),
                   ),
               ]),
-              const SizedBox(height: 20),
-              const _Heading('Pay with M-Pesa'),
-              const SizedBox(height: 8),
-              _PhoneField(controller: _phone, enabled: !busy, onChanged: () => setState(() => _error = null)),
             ],
             if (_error != null) ...[
               const SizedBox(height: 10),
@@ -355,29 +270,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
           ]),
         ),
       ),
-      if (chosen != null && !_isDowngrade)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-          child: SizedBox(
-            width: double.infinity,
-            height: 54,
-            child: ElevatedButton(
-              key: const Key('premium-pay'),
-              onPressed: busy ? null : _pay,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: BrokaColors.neonGreen,
-                disabledBackgroundColor: BrokaColors.neonGreen.withOpacity(0.5),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              child: busy
-                  ? const SizedBox(
-                      width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
-                  : Text('Pay KES ${formatKesAmount(_total)} with M-Pesa',
-                      style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900)),
-            ),
-          ),
-        ),
     ]);
   }
 }
@@ -632,15 +524,6 @@ class _PeriodChip extends StatelessWidget {
   }
 }
 
-class _Heading extends StatelessWidget {
-  const _Heading(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) =>
-      Text(text, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w800));
-}
-
 class _Note extends StatelessWidget {
   const _Note({super.key, required this.text});
   final String text;
@@ -659,90 +542,5 @@ class _Note extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(child: Text(text, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5))),
         ]),
-      );
-}
-
-class _PhoneField extends StatelessWidget {
-  const _PhoneField({required this.controller, required this.enabled, required this.onChanged});
-  final TextEditingController controller;
-  final bool enabled;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: BrokaColors.border),
-        ),
-        child: TextField(
-          key: const Key('premium-phone'),
-          controller: controller,
-          enabled: enabled,
-          keyboardType: TextInputType.phone,
-          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w700),
-          decoration: const InputDecoration(
-            hintText: '0712 345 678',
-            hintStyle: TextStyle(color: BrokaColors.textLow, fontSize: 14),
-            prefixIcon: Icon(Icons.phone_android_rounded, color: BrokaColors.neonGreen, size: 20),
-            border: InputBorder.none,
-            contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-          ),
-          onChanged: (_) => onChanged(),
-        ),
-      );
-}
-
-/// A full-screen state: waiting, paid, slow, failed to load, premium off.
-class _Message extends StatelessWidget {
-  const _Message({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.body,
-    this.action,
-    this.onAction,
-    this.busy = false,
-  });
-  final IconData icon;
-  final String title;
-  final String body;
-  final String? action;
-  final VoidCallback? onAction;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) => Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(28),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, color: BrokaColors.gold, size: 64),
-            const SizedBox(height: 16),
-            Text(title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 20, fontWeight: FontWeight.w900)),
-            const SizedBox(height: 8),
-            Text(body,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5, height: 1.4)),
-            if (busy) ...[
-              const SizedBox(height: 22),
-              const CircularProgressIndicator(color: BrokaColors.neonGreen),
-            ],
-            if (action != null) ...[
-              const SizedBox(height: 22),
-              ElevatedButton(
-                onPressed: onAction,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: BrokaColors.gold,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                child: Text(action!, style: const TextStyle(fontWeight: FontWeight.w800)),
-              ),
-            ],
-          ]),
-        ),
       );
 }

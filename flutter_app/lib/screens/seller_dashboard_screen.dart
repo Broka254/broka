@@ -26,6 +26,7 @@ import '../main.dart';
 import '../widgets/motion_widgets.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
+import '../widgets/axis_line_chart.dart';
 import '../widgets/factor_trend_chart.dart';
 import '../widgets/zeno_avatar.dart';
 import '../data/seller_insights.dart';
@@ -81,8 +82,6 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   String _calcResult     = '0';
 
   // ── Constants ────────────────────────────────────────────────────────────────
-  static const _days       = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  static const _weekLabels = ['W-5','W-4','W-3','W-2','W-1','Now'];
 
   // _staticTips removed - superseded by kSellerInsights in
   // data/seller_insights.dart. It was the fallback list behind the AI
@@ -361,7 +360,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _secLabel('PERFORMANCE OVER TIME'),
           const SizedBox(height: 10),
-          const ShimmerBox(height: 168,
+          const ShimmerBox(height: 220,
               radius: BorderRadius.all(Radius.circular(16))),
         ]),
       );
@@ -376,6 +375,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         // buyers these three figures in the same colours.
         goodThreshold: SellerStanding.ratingGood, poorThreshold: SellerStanding.ratingPoor,
         format: (v) => '${v.toStringAsFixed(1)}/10',
+        yTitle: 'Rating out of 10',
         lineColor: BrokaColors.gold,
       ),
       FactorTrendChart(
@@ -384,6 +384,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         currentValue: _live('dcr'),
         goodThreshold: SellerStanding.dcrGood, poorThreshold: SellerStanding.dcrPoor,
         format: (v) => '${v.toStringAsFixed(0)}%',
+        yTitle: 'Completed %',
         lineColor: BrokaColors.neonGreen,
       ),
       FactorTrendChart(
@@ -394,6 +395,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         higherIsBetter: false,
         goodThreshold: SellerStanding.responseGood, poorThreshold: SellerStanding.responsePoor,
         format: SellerStanding.formatMinutes,
+        yTitle: 'Reply time',
         lineColor: BrokaColors.neonBlue,
       ),
       FactorTrendChart(
@@ -404,6 +406,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         higherIsBetter: false,
         goodThreshold: 10.0, poorThreshold: 50.0,
         format: (v) => '#${v.round()}',
+        yTitle: 'Rank',
+        wholeNumbers: true,
         lineColor: BrokaColors.neonCyan,
       ),
       FactorTrendChart(
@@ -412,6 +416,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         currentValue: _live('completed_deals'),
         goodThreshold: 20.0, poorThreshold: 5.0,
         format: (v) => v.round().toString(),
+        yTitle: 'Deals',
+        wholeNumbers: true,
         lineColor: BrokaColors.neonGreen,
       ),
       FactorTrendChart(
@@ -422,6 +428,8 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         higherIsBetter: false,
         goodThreshold: 3.0, poorThreshold: 10.0,
         format: (v) => v.round().toString(),
+        yTitle: 'Deals',
+        wholeNumbers: true,
         lineColor: BrokaColors.gold,
       ),
     ];
@@ -431,7 +439,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _secLabel('PERFORMANCE OVER TIME'),
         const SizedBox(height: 4),
-        const Text('Since you joined BROKA · green is healthy, red needs work',
+        const Text('Each graph: the date along the bottom, the value up the side · green is healthy, red needs work',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 10)),
         const SizedBox(height: 12),
         for (int i = 0; i < charts.length; i++) ...[
@@ -1274,6 +1282,29 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   );
 
   // ── Revenue Overview Chart ────────────────────────────────────────────────────
+
+  /// The date each revenue bucket starts on, oldest first, matching the
+  /// server's buckets (ListingService.get_seller_revenue): the last 7 days
+  /// ending today, or the last 6 weeks ending today.
+  ///
+  /// The x-axis used to read Mon..Sun, but the buckets are the last seven
+  /// days, not a calendar week - so on a Wednesday the point labelled
+  /// "Mon" was last Thursday.
+  List<DateTime> _revenueBucketStarts() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final n = _revenueData.length;
+    return _revenueWeekMode
+        ? [for (var i = 0; i < n; i++) today.subtract(Duration(days: n - 1 - i))]
+        : [for (var i = 0; i < n; i++) today.subtract(Duration(days: (n - 1 - i) * 7 + 6))];
+  }
+
+  static String _kesAxis(double v) {
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(v % 1000000 == 0 ? 0 : 1)}M';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}K';
+    return v.toStringAsFixed(0);
+  }
+
   Widget _buildRevenueChart() {
     final data      = _revenueData;
     final maxV      = data.reduce(math.max);
@@ -1281,14 +1312,14 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     final avgV      = data.reduce((a, b) => a + b) / data.length;
     final maxIdx    = data.indexOf(maxV);
     final minIdx    = data.indexOf(minV);
-    final labels    = _revenueWeekMode ? _days : _weekLabels;
-    final dayWord   = _revenueWeekMode ? 'Day' : 'Week';
+    final starts    = _revenueBucketStarts();
+    final labels    = [for (final d in starts) shortDate(d)];
     final showEmpty = !_revenueLoading && !_revenueHasRealData;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
       child: Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(14, 20, 18, 20),
         decoration: BoxDecoration(
           gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
               begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -1298,6 +1329,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
               color: BrokaColors.neonCyan.withOpacity(0.04), blurRadius: 20)]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
+            const SizedBox(width: 6),
             const Expanded(child: Text('REVENUE OVERVIEW', style: TextStyle(
                 color: BrokaColors.textHigh, fontSize: 12,
                 fontWeight: FontWeight.w800, letterSpacing: 1.0))),
@@ -1315,13 +1347,21 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                 ]),
               ),
           ]),
-          const SizedBox(height: 20),
-          SizedBox(height: 130, child: Stack(alignment: Alignment.center, children: [
-            AnimatedBuilder(
-              animation: _glow,
-              builder: (_, __) => CustomPaint(
-                painter: _GlowLineChartPainter(values: data, glowT: _glow.value),
-                child: const SizedBox.expand()),
+          const SizedBox(height: 18),
+          SizedBox(height: 190, child: Stack(alignment: Alignment.center, children: [
+            AxisLineChart(
+              key: const Key('revenue-chart'),
+              values: data,
+              positions: [for (var i = 0; i < data.length; i++) i / (data.length - 1)],
+              xTicks: [for (var i = 0; i < labels.length; i++) AxisTick(i / (labels.length - 1), labels[i])],
+              yFormat: _kesAxis,
+              xTitle: _revenueWeekMode ? 'Day' : 'Week starting',
+              yTitle: 'Revenue (KES)',
+              lineColor: BrokaColors.neonCyan,
+              // Revenue starts at zero: a quiet week drawn at the bottom,
+              // not stretched to fill the chart.
+              yFloor: 0,
+              minStep: 1,
             ),
             if (showEmpty)
               Container(
@@ -1336,22 +1376,19 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                     style: TextStyle(color: BrokaColors.textMid, fontSize: 10)),
               ),
           ])),
-          const SizedBox(height: 8),
-          Row(children: List.generate(labels.length, (i) => Expanded(child: Center(
-            child: Text(labels[i], style: const TextStyle(
-                color: BrokaColors.textMid, fontSize: 8, letterSpacing: 0.3)))))),
           const SizedBox(height: 16),
           Container(height: 1, color: BrokaColors.border),
           const SizedBox(height: 14),
           Row(children: [
             _revStat(Icons.arrow_circle_up_rounded, 'HIGHEST',
-                'KES ${maxV.toStringAsFixed(0)}', BrokaColors.neonGreen, '$dayWord ${maxIdx + 1}'),
+                'KES ${maxV.toStringAsFixed(0)}', BrokaColors.neonGreen, labels[maxIdx]),
             _revDivider(),
             _revStat(Icons.arrow_circle_down_rounded, 'LOWEST',
-                'KES ${minV.toStringAsFixed(0)}', BrokaColors.danger, '$dayWord ${minIdx + 1}'),
+                'KES ${minV.toStringAsFixed(0)}', BrokaColors.danger, labels[minIdx]),
             _revDivider(),
             _revStat(Icons.bar_chart_rounded, 'AVERAGE',
-                'KES ${avgV.toStringAsFixed(0)}', BrokaColors.gold, 'Per $dayWord'),
+                'KES ${avgV.toStringAsFixed(0)}', BrokaColors.gold,
+                _revenueWeekMode ? 'Per day' : 'Per week'),
           ]),
         ]),
       ),
@@ -2003,7 +2040,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             Text('Payment Receipts', style: TextStyle(
                 color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 14)),
             SizedBox(height: 2),
-            Text('View all completed transactions',
+            Text('Sales, listing fees and premium plans',
                 style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
           ])),
           const Icon(Icons.chevron_right_rounded, color: BrokaColors.textLow, size: 20),
@@ -2764,112 +2801,6 @@ class _RadialGaugePainter extends CustomPainter {
   @override
   bool shouldRepaint(_RadialGaugePainter o) =>
       o.progress != progress || o.glowT != glowT;
-}
-
-// ── Glow Line Chart (Revenue Overview) ───────────────────────────────────────
-class _GlowLineChartPainter extends CustomPainter {
-  final List<double> values;
-  final double       glowT;
-  _GlowLineChartPainter({required this.values, required this.glowT});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (values.length < 2) return;
-    final n       = values.length;
-    final maxV    = values.reduce(math.max);
-    final minV    = values.reduce(math.min);
-    final range   = (maxV - minV).clamp(1.0, double.infinity);
-    final avgV    = values.reduce((a, b) => a + b) / n;
-    final bottom  = size.height - 2.0;
-    final usable  = size.height - 22.0;
-    final step    = size.width / (n - 1);
-
-    final pts = List.generate(n, (i) {
-      final norm = (values[i] - minV) / range;
-      return Offset(i * step, bottom - usable * norm.clamp(0.05, 1.0));
-    });
-
-    // Grid lines
-    for (int g = 1; g <= 3; g++) {
-      canvas.drawLine(
-        Offset(0, bottom - usable * g / 3),
-        Offset(size.width, bottom - usable * g / 3),
-        Paint()..color = BrokaColors.border.withOpacity(0.5)..strokeWidth = 0.6);
-    }
-
-    // Average dashed line
-    final avgY = bottom - usable * ((avgV - minV) / range).clamp(0.05, 1.0);
-    final dPaint = Paint()
-      ..color = BrokaColors.warning.withOpacity(0.55)
-      ..strokeWidth = 1.2;
-    for (double x = 0; x < size.width; x += 11) {
-      canvas.drawLine(
-        Offset(x, avgY), Offset(math.min(x + 6, size.width), avgY), dPaint);
-    }
-
-    // AVG label
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'AVG KES ${avgV.toStringAsFixed(0)}',
-        style: const TextStyle(
-            color: BrokaColors.warning, fontSize: 7.5, fontWeight: FontWeight.w700)),
-      textDirection: TextDirection.ltr)..layout();
-    tp.paint(canvas, Offset(size.width - tp.width - 2, avgY - 12));
-
-    // Bezier line path
-    final linePath = Path()..moveTo(pts[0].dx, pts[0].dy);
-    for (int i = 1; i < n; i++) {
-      final c1 = Offset(pts[i-1].dx + (pts[i].dx - pts[i-1].dx) / 3, pts[i-1].dy);
-      final c2 = Offset(pts[i].dx  - (pts[i].dx - pts[i-1].dx) / 3, pts[i].dy);
-      linePath.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, pts[i].dx, pts[i].dy);
-    }
-
-    // Gradient fill under line
-    final fillPath = Path()..moveTo(pts[0].dx, bottom);
-    for (final p in pts) {
-      fillPath.lineTo(p.dx, p.dy);
-    }
-    fillPath.lineTo(pts.last.dx, bottom);
-    fillPath.close();
-    canvas.drawPath(fillPath, Paint()
-      ..shader = LinearGradient(colors: [
-        BrokaColors.neonCyan.withOpacity(0.28 + 0.08 * glowT),
-        BrokaColors.neonBlue.withOpacity(0.12),
-        BrokaColors.bg.withOpacity(0.0),
-      ], begin: Alignment.topCenter, end: Alignment.bottomCenter)
-          .createShader(Rect.fromLTWH(0, 0, size.width, size.height)));
-
-    // Glow shadow behind line
-    canvas.drawPath(linePath, Paint()
-      ..color = BrokaColors.neonCyan.withOpacity(0.32 + 0.10 * glowT)
-      ..strokeWidth = 7
-      ..style = PaintingStyle.stroke
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
-
-    // Main glowing line — gold→blue→cyan
-    canvas.drawPath(linePath, Paint()
-      ..shader = const LinearGradient(
-        colors: [BrokaColors.gold, BrokaColors.neonBlue, BrokaColors.neonCyan],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round);
-
-    // Dot markers
-    for (final p in pts) {
-      canvas.drawCircle(p, 7,
-          Paint()
-            ..color = BrokaColors.neonCyan.withOpacity(0.18 + 0.10 * glowT)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
-      canvas.drawCircle(p, 3.5, Paint()..color = BrokaColors.bgCard);
-      canvas.drawCircle(p, 2.5, Paint()..color = BrokaColors.neonCyan);
-      canvas.drawCircle(p, 1.2, Paint()..color = Colors.white);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_GlowLineChartPainter o) =>
-      o.values != values || o.glowT != glowT;
 }
 
 // ── Futuristic Day-views Bar Chart (Mon–Sun) ──────────────────────────────────

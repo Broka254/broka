@@ -4,6 +4,8 @@
 // What must hold:
 //   * the seller sees the list price crossed out, their price and why, and
 //     the recommended months already chosen;
+//   * paying starts at the payment methods; picking M-Pesa opens a screen
+//     with the number to pay from at the top, editable;
 //   * Pay asks the server for exactly the months and extras chosen, under
 //     one key per attempt, and waits for M-Pesa rather than assuming;
 //   * a failed prompt says so and lets the seller try again;
@@ -17,7 +19,12 @@ import 'package:broka/core/network/api_client.dart';
 import 'package:broka/core/utils/result.dart';
 import 'package:broka/features/listing_fee/data/listing_fee_repository.dart';
 import 'package:broka/features/listing_fee/domain/listing_fee.dart';
+import 'package:broka/features/listing_fee/presentation/awaiting_payment_panel.dart';
 import 'package:broka/features/listing_fee/presentation/listing_fee_screen.dart';
+import 'package:broka/features/listings/data/repositories/listings_repository.dart';
+import 'package:broka/features/payments/domain/checkout.dart';
+import 'package:broka/features/payments/presentation/mpesa_checkout_screen.dart';
+import 'package:broka/features/payments/presentation/payment_method_screen.dart';
 import 'package:broka/screens/sell_zeno_alert_screen.dart';
 import 'package:broka/services/image_upload_service.dart';
 import 'package:broka/services/listing_publisher.dart';
@@ -142,6 +149,15 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 
 const _poll = Duration(milliseconds: 100);
 
+/// Continue -> pick M-Pesa -> the M-Pesa screen, with [phone] typed in.
+Future<void> _toMpesa(WidgetTester tester, String phone) async {
+  await _tap(tester, find.byKey(const Key('fee-continue')));
+  await tester.pumpAndSettle();
+  await _tap(tester, find.byKey(const Key('method-mpesa')));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(const Key('mpesa-phone')), phone);
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -204,7 +220,58 @@ void main() {
       final chosen = tester.widget<Semantics>(find.descendant(
           of: find.byKey(const Key('fee-months-5')), matching: find.byType(Semantics)).first);
       expect(chosen.properties.selected, isTrue);
-      expect(find.text('Pay KES 4,600 with M-Pesa'), findsOneWidget);
+      expect(find.text('Continue to payment · KES 4,600'), findsOneWidget);
+    });
+
+    testWidgets('paying starts at the payment methods, then the number to pay from, at the top',
+        (tester) async {
+      final backend = _FeeBackend();
+      await _open(tester, ListingFeeScreen(
+          listingId: 'l1', listingName: 'Plot in Kitengela', repository: backend.repository));
+      expect(find.byKey(const Key('mpesa-phone')), findsNothing,
+          reason: 'the number is asked for after the method is chosen, not under the months');
+      await _tap(tester, find.byKey(const Key('fee-continue')));
+      await tester.pumpAndSettle();
+      expect(find.byType(PaymentMethodScreen), findsOneWidget);
+      expect(find.text('Choose how to pay'.toUpperCase()), findsOneWidget);
+      expect(find.byKey(const Key('mpesa-phone')), findsNothing);
+      expect(backend.pays, isEmpty);
+
+      await _tap(tester, find.byKey(const Key('method-mpesa')));
+      await tester.pumpAndSettle();
+      expect(find.byType(MpesaCheckoutScreen), findsOneWidget);
+      final phoneTop = tester.getTopLeft(find.byKey(const Key('mpesa-phone'))).dy;
+      final summaryTop = tester.getTopLeft(find.byKey(const Key('checkout-summary'))).dy;
+      expect(phoneTop, lessThan(summaryTop), reason: 'the number comes first, above what is being paid for');
+      expect(find.text('KES 4,600'), findsWidgets);
+      expect(find.text('Pay KES 4,600'), findsOneWidget);
+
+      // Back goes to the methods, not out of paying.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(PaymentMethodScreen), findsOneWidget);
+    });
+
+    testWidgets('the number is the account\'s own to start with, and can be changed', (tester) async {
+      final backend = _FeeBackend();
+      await _open(tester, MpesaCheckoutScreen(
+        order: const CheckoutOrder(title: 'Listing fee', total: 300),
+        initialPhone: '0712345678',
+        charge: MpesaCharge(
+          start: (phone, key) async {
+            backend.pays.add({'phone_number': phone});
+            return const Success(ChargeStarted(paymentId: 'p1', amount: 300));
+          },
+          check: (_) async => const Success(ChargeProgress(succeeded: false, pending: true)),
+        ),
+        success: CheckoutSuccess(title: 'Paid', body: (_) => ''),
+      ));
+      expect(find.text('0712345678'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('mpesa-phone')), '0722 000 111');
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
+      await tester.pump();
+      expect(backend.pays.single['phone_number'], '0722 000 111');
+      expect(find.textContaining('prompt to 0722 000 111'), findsOneWidget);
     });
 
     testWidgets('pays for the months and extras chosen, then waits for M-Pesa', (tester) async {
@@ -214,19 +281,20 @@ void main() {
           pollEvery: _poll));
       await _tap(tester, find.byKey(const Key('fee-months-3')));
       await _tap(tester, find.byKey(const Key('fee-featured-week')));
-      expect(find.text('Pay KES 3,109 with M-Pesa'), findsOneWidget, reason: '3,010 + 99');
-      await tester.enterText(find.byKey(const Key('fee-phone')), '0712 345 678');
-      await _tap(tester, find.byKey(const Key('fee-pay')));
+      expect(find.text('Continue to payment · KES 3,109'), findsOneWidget, reason: '3,010 + 99');
+      await _toMpesa(tester, '0712 345 678');
+      expect(find.text('Featured for 7 days'), findsOneWidget);
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
-      expect(find.byKey(const Key('fee-waiting')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
       expect(backend.pays.single['months'], 3);
       expect(backend.pays.single['featured_plan'], 'week');
 
       await tester.pump(_poll); // pending
-      expect(find.byKey(const Key('fee-waiting')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
       await tester.pump(_poll); // success
       await tester.pump();
-      expect(find.byKey(const Key('fee-paid')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-paid')), findsOneWidget);
       expect(find.textContaining('is live until 26 Dec 2026'), findsOneWidget);
     });
 
@@ -234,14 +302,14 @@ void main() {
       final backend = _FeeBackend(statuses: ['failed']);
       await _open(tester, ListingFeeScreen(
           listingId: 'l1', listingName: 'Plot', repository: backend.repository, pollEvery: _poll));
-      await tester.enterText(find.byKey(const Key('fee-phone')), '0712345678');
-      await _tap(tester, find.byKey(const Key('fee-pay')));
+      await _toMpesa(tester, '0712345678');
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
       await tester.pump(_poll);
       await tester.pump();
-      expect(find.byKey(const Key('fee-error')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-error')), findsOneWidget);
       expect(find.textContaining("didn't complete the payment"), findsOneWidget);
-      expect(find.byKey(const Key('fee-pay')), findsOneWidget);
+      expect(find.byKey(const Key('mpesa-pay')), findsOneWidget);
     });
 
     testWidgets('no featured placement unless the server offers it', (tester) async {
@@ -254,9 +322,9 @@ void main() {
     testWidgets('a number too short to be one is caught before any prompt', (tester) async {
       final backend = _FeeBackend();
       await _open(tester, ListingFeeScreen(listingId: 'l1', listingName: 'Plot', repository: backend.repository));
-      await tester.enterText(find.byKey(const Key('fee-phone')), '0712');
-      await _tap(tester, find.byKey(const Key('fee-pay')));
-      expect(find.byKey(const Key('fee-error')), findsOneWidget);
+      await _toMpesa(tester, '0712');
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
+      expect(find.byKey(const Key('checkout-error')), findsOneWidget);
       expect(backend.pays, isEmpty);
     });
 
@@ -264,7 +332,65 @@ void main() {
       final backend = _FeeBackend(quote: _quote(monthsAvailable: 0));
       await _open(tester, ListingFeeScreen(listingId: 'l1', listingName: 'Plot', repository: backend.repository));
       expect(find.text('Paid 6 months ahead'), findsOneWidget);
-      expect(find.byKey(const Key('fee-pay')), findsNothing);
+      expect(find.byKey(const Key('fee-continue')), findsNothing);
+    });
+  });
+
+  group('Waiting for payment', () {
+    Map<String, dynamic> awaiting(String id, String status) => {
+          'id': id, 'name': 'Calculator $id', 'price': 1500,
+          'listing_fee': {'status': status, 'live': status == 'ending', 'paid_until': '2026-10-05T10:00:00',
+            'needs_payment': true},
+        };
+
+    testWidgets('an unpaid listing can be removed, after asking', (tester) async {
+      final deleted = <String>[];
+      final fees = ListingFeeRepository(client: ApiClient(client: MockClient((req) async => _json({
+            'listings': [awaiting('a', 'unpaid'), awaiting('b', 'expired'), awaiting('c', 'ending')],
+          }))));
+      final listings = ListingsRepository(client: ApiClient(client: MockClient((req) async {
+        if (req.method == 'DELETE') deleted.add(req.url.path);
+        return _json({'deleted': true});
+      })));
+      await _open(tester, Scaffold(body: SingleChildScrollView(
+          child: AwaitingPaymentPanel(repository: fees, listings: listings))));
+      expect(find.byKey(const Key('awaiting-remove-a')), findsOneWidget);
+      expect(find.byKey(const Key('awaiting-remove-b')), findsOneWidget, reason: 'ended and hidden: removable too');
+      expect(find.byKey(const Key('awaiting-remove-c')), findsNothing,
+          reason: 'still live: deleted from the catalogue like any live listing');
+
+      // Keep it: nothing is deleted.
+      await _tap(tester, find.byKey(const Key('awaiting-remove-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Keep it'));
+      await tester.pumpAndSettle();
+      expect(deleted, isEmpty);
+      expect(find.text('Calculator a'), findsOneWidget);
+
+      await _tap(tester, find.byKey(const Key('awaiting-remove-a')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('nothing is charged'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm-remove-unpaid')));
+      await tester.pumpAndSettle();
+      expect(deleted, ['/listings/a']);
+      expect(find.text('Calculator a'), findsNothing);
+      expect(find.text('Calculator b'), findsOneWidget);
+    });
+
+    testWidgets('a refusal is shown and the listing stays', (tester) async {
+      final fees = ListingFeeRepository(client: ApiClient(client: MockClient((req) async => _json({
+            'listings': [awaiting('a', 'unpaid')],
+          }))));
+      final listings = ListingsRepository(client: ApiClient(client: MockClient((req) async =>
+          _json({'detail': 'A buyer has a deal on this listing.'}, 409))));
+      await _open(tester, Scaffold(body: SingleChildScrollView(
+          child: AwaitingPaymentPanel(repository: fees, listings: listings))));
+      await _tap(tester, find.byKey(const Key('awaiting-remove-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-remove-unpaid')));
+      await tester.pumpAndSettle();
+      expect(find.text('A buyer has a deal on this listing.'), findsOneWidget);
+      expect(find.text('Calculator a'), findsOneWidget);
     });
   });
 
@@ -321,13 +447,15 @@ void main() {
 
       await _tap(tester, find.byKey(const Key('sell-go-live')));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byKey(const Key('fee-phone')), '0712345678');
-      await _tap(tester, find.byKey(const Key('fee-pay')));
+      await _toMpesa(tester, '0712345678');
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
       for (var i = 0; i < 4; i++) {
         await tester.pump(const Duration(seconds: 3));
       }
       await tester.pumpAndSettle();
       expect(find.byType(ListingFeeScreen), findsNothing);
+      expect(find.byType(PaymentMethodScreen), findsNothing);
+      expect(find.byType(MpesaCheckoutScreen), findsNothing);
       expect(find.text('Your listing is live!'), findsOneWidget);
     });
 

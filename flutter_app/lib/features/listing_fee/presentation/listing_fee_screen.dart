@@ -1,4 +1,4 @@
-// BROKA - Listing fee: choose how long to list, and pay with M-Pesa.
+// BROKA - Listing fee: choose how long to list, then pay.
 //
 // Opened three ways, one screen for all of them:
 //   * straight after Go live, when a new listing waits for its first
@@ -12,20 +12,24 @@
 // same payment. Every amount is the server's; Pay asks M-Pesa for exactly
 // the total shown, because the server works it out the same way.
 //
+// Paying is the shared checkout: "Continue to payment" opens the payment
+// methods, then the M-Pesa screen with the number to pay from at the top
+// (features/payments/).
+//
 // Pops `true` once paid, so Go live can celebrate.
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
-import '../../../services/api_service.dart';
 import '../../../utils/price_format.dart';
+import '../../payments/domain/checkout.dart';
+import '../../payments/presentation/checkout_widgets.dart';
+import '../../payments/presentation/payment_method_screen.dart';
 import '../data/listing_fee_repository.dart';
 import '../domain/listing_fee.dart';
 
-enum _Stage { loading, loadFailed, choosing, prompting, waiting, slow, paid }
+enum _Stage { loading, loadFailed, choosing }
 
 class ListingFeeScreen extends StatefulWidget {
   const ListingFeeScreen({
@@ -63,32 +67,12 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
   ListingFeeQuote? _quote;
   int _months = 1;
   String? _featured;
-  final _phone = TextEditingController();
   String? _error;
-  ListingFeePayment? _payment;
-
-  // Kept across a timed-out attempt, so pressing Pay again re-sends the
-  // same request - and the server answers with the prompt it already sent
-  // rather than prompting the phone twice. Anything else starts afresh.
-  String? _attemptKey;
-  Timer? _poll;
-  DateTime? _waitingSince;
-  // A status request still out: the timer's next tick waits for it rather
-  // than stacking a second one on a slow connection.
-  bool _checking = false;
 
   @override
   void initState() {
     super.initState();
-    _phone.text = ApiService.currentUserPhone ?? '';
     _load();
-  }
-
-  @override
-  void dispose() {
-    _poll?.cancel();
-    _phone.dispose();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -113,12 +97,14 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
     }
   }
 
-  int get _featuredPrice {
+  FeaturedPlan? get _featuredPlan {
     for (final p in _quote?.featuredPlans ?? const <FeaturedPlan>[]) {
-      if (p.id == _featured) return p.price;
+      if (p.id == _featured) return p;
     }
-    return 0;
+    return null;
   }
+
+  int get _featuredPrice => _featuredPlan?.price ?? 0;
 
   int get _total => (_quote?.option(_months)?.total ?? 0) + _featuredPrice;
 
@@ -127,109 +113,82 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
     setState(() {
       if (months != null) _months = months;
       if (featured != null || clearFeatured) _featured = featured;
-      _error = null;
-      _attemptKey = null;
     });
   }
 
-  Future<void> _pay() async {
-    if (_stage == _Stage.prompting) return;
-    final digits = _phone.text.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length < 9) {
-      setState(() => _error = 'Enter the Safaricom number to pay from, e.g. 0712 345 678.');
-      return;
-    }
-    _attemptKey ??= ListingFeeRepository.newAttemptKey();
-    setState(() {
-      _stage = _Stage.prompting;
-      _error = null;
-    });
-    final r = await _repo.pay(
-      listingId: widget.listingId,
-      months: _months,
-      phone: _phone.text.trim(),
-      featuredPlan: _featured,
-      idempotencyKey: _attemptKey!,
+  CheckoutOrder get _order {
+    final months = _months == 1 ? '1 month' : '$_months months';
+    final plan = _featuredPlan;
+    return CheckoutOrder(
+      title: _title,
+      subject: widget.listingName,
+      lines: [
+        CheckoutLine('Listed for $months', _quote?.option(_months)?.total ?? 0),
+        if (plan != null) CheckoutLine('Featured for ${plan.days} days', plan.price),
+      ],
+      total: _total,
     );
-    if (!mounted) return;
-    switch (r) {
-      case Success(:final data):
-        HapticFeedback.mediumImpact();
-        _attemptKey = null;
-        _startWaiting(data);
-      case Failure(:final message, :final statusCode):
-        setState(() {
-          _stage = _Stage.choosing;
-          _error = message;
-          // Only a request that may not have arrived is worth re-sending
-          // under the same key.
-          if (statusCode != null) _attemptKey = null;
-        });
-    }
   }
 
-  void _startWaiting(ListingFeePayment payment) {
-    _poll?.cancel();
-    setState(() {
-      _payment = payment;
-      _stage = _Stage.waiting;
-      _waitingSince = DateTime.now();
-    });
-    _poll = Timer.periodic(widget.pollEvery, (_) => _check());
+  /// The months and extras chosen, frozen: the checkout charges exactly
+  /// what was on screen when Continue was pressed.
+  MpesaCharge _charge() {
+    final months = _months;
+    final featured = _featured;
+    return MpesaCharge(
+      start: (phone, key) async {
+        final r = await _repo.pay(
+            listingId: widget.listingId, months: months, phone: phone, featuredPlan: featured, idempotencyKey: key);
+        return switch (r) {
+          Success(:final data) => Success(ChargeStarted(paymentId: data.id, amount: data.amount)),
+          Failure(:final message, :final statusCode) => Failure(message, statusCode: statusCode),
+        };
+      },
+      check: (id) async {
+        final r = await _repo.paymentStatus(id);
+        return switch (r) {
+          Success(:final data) =>
+            Success(ChargeProgress(succeeded: data.succeeded, pending: data.pending, paidUntil: data.paidUntil)),
+          Failure(:final message, :final statusCode) => Failure(message, statusCode: statusCode),
+        };
+      },
+    );
   }
 
-  Future<void> _check() async {
-    final payment = _payment;
-    if (payment == null || _checking) return;
-    _checking = true;
-    final Result<ListingFeePayment> r;
-    try {
-      r = await _repo.paymentStatus(payment.id);
-    } finally {
-      _checking = false;
-    }
-    if (!mounted || _stage != _Stage.waiting) return;
-    if (r case Success(:final data)) {
-      if (data.succeeded) {
-        _poll?.cancel();
-        HapticFeedback.heavyImpact();
-        if (widget.afterCreate) {
-          Navigator.of(context).pop(true);
-          return;
-        }
-        setState(() {
-          _payment = data;
-          _stage = _Stage.paid;
-        });
-        return;
-      }
-      if (!data.pending) {
-        _poll?.cancel();
-        setState(() {
-          _stage = _Stage.choosing;
-          _error = "M-Pesa didn't complete the payment. Nothing was charged - try again.";
-        });
-        return;
-      }
-    }
-    if (DateTime.now().difference(_waitingSince!) >= widget.giveUpAfter) {
-      _poll?.cancel();
-      setState(() => _stage = _Stage.slow);
-    }
+  Future<void> _continue() async {
+    HapticFeedback.selectionClick();
+    final name = widget.listingName;
+    final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PaymentMethodScreen(
+        order: _order,
+        charge: _charge(),
+        success: CheckoutSuccess(
+          title: 'Paid - buyers can see it',
+          body: (until) => until == null ? name : '$name is live until ${_date(until)}.',
+        ),
+        popOnPaid: widget.afterCreate,
+        pollEvery: widget.pollEvery,
+        giveUpAfter: widget.giveUpAfter,
+      ),
+    ));
+    if (paid == true && mounted) Navigator.of(context).pop(true);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: BrokaColors.bg,
-      appBar: AppBar(
-        backgroundColor: BrokaColors.bg,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: BrokaColors.textHigh),
-        title: Text(_title,
-            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17, fontWeight: FontWeight.w800)),
-      ),
-      body: SafeArea(child: _body()),
+    final q = _quote;
+    final canPay = _stage == _Stage.choosing && q != null && q.feesEnabled && q.options.isNotEmpty;
+    return CheckoutScaffold(
+      title: _title,
+      icon: Icons.sell_rounded,
+      body: _body(),
+      bottom: canPay
+          ? CheckoutButton(
+              key: const Key('fee-continue'),
+              label: 'Continue to payment · KES ${formatKesAmount(_total)}',
+              onPressed: _continue,
+            )
+          : null,
     );
   }
 
@@ -244,46 +203,12 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
       case _Stage.loading:
         return const Center(child: CircularProgressIndicator(color: BrokaColors.gold));
       case _Stage.loadFailed:
-        return _Message(
+        return CheckoutMessage(
           icon: Icons.wifi_off_rounded,
           title: "Couldn't load the price",
           body: _error ?? 'Try again.',
           action: 'Try again',
           onAction: _load,
-        );
-      case _Stage.waiting:
-      case _Stage.prompting:
-        if (_stage == _Stage.waiting) {
-          return _Message(
-            key: const Key('fee-waiting'),
-            icon: Icons.phone_android_rounded,
-            title: 'Check your phone',
-            body: 'Enter your M-Pesa PIN to pay KES ${formatKesAmount(_payment?.amount ?? _total)}. '
-                'This screen updates as soon as M-Pesa confirms.',
-            busy: true,
-          );
-        }
-        return _choosing();
-      case _Stage.slow:
-        return _Message(
-          key: const Key('fee-slow'),
-          icon: Icons.hourglass_bottom_rounded,
-          title: 'Waiting for M-Pesa',
-          body: "M-Pesa hasn't confirmed yet. If you entered your PIN, your listing goes live "
-              'as soon as it does - you can close this and check your Seller Dashboard.',
-          action: 'Check again',
-          onAction: () => _startWaiting(_payment!),
-        );
-      case _Stage.paid:
-        final until = _payment?.paidUntil;
-        return _Message(
-          key: const Key('fee-paid'),
-          icon: Icons.check_circle_rounded,
-          iconColor: BrokaColors.neonGreen,
-          title: 'Paid - buyers can see it',
-          body: until == null ? widget.listingName : '${widget.listingName} is live until ${_date(until)}.',
-          action: 'Done',
-          onAction: () => Navigator.of(context).pop(true),
         );
       case _Stage.choosing:
         return _choosing();
@@ -293,7 +218,7 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
   Widget _choosing() {
     final q = _quote!;
     if (!q.feesEnabled) {
-      return _Message(
+      return CheckoutMessage(
         icon: Icons.celebration_rounded,
         title: 'Listing is free right now',
         body: 'There is nothing to pay while BROKA launches.',
@@ -303,7 +228,7 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
     }
     if (q.options.isEmpty) {
       final until = q.state?.paidUntil;
-      return _Message(
+      return CheckoutMessage(
         icon: Icons.event_available_rounded,
         title: 'Paid 6 months ahead',
         body: 'A listing can be paid for up to six months at a time'
@@ -314,95 +239,56 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
       );
     }
     final recommendation = recommendationText(q);
-    final busy = _stage == _Stage.prompting;
-    return Column(children: [
-      Expanded(
-        // Not a ListView: the form is short, and a lazily built list drops
-        // the phone field (and its focus) whenever it scrolls out of view.
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(widget.listingName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-            const SizedBox(height: 14),
-            _PriceHero(quote: q),
-            const SizedBox(height: 12),
-            for (final line in feeReasons(q)) _Reason(line),
-            if (recommendation != null) ...[
-              const SizedBox(height: 14),
-              _Recommendation(text: recommendation, strong: q.strength == 'strong'),
-            ],
-            const SizedBox(height: 20),
-            const _Heading('How long should it stay up?'),
-            const SizedBox(height: 10),
-            for (final o in q.options)
-              _MonthOption(
-                key: Key('fee-months-${o.months}'),
-                option: o,
-                selected: o.months == _months,
-                onTap: busy ? null : () => _choose(months: o.months),
-              ),
-            if (q.featuredAvailable && q.featuredPlans.isNotEmpty) ...[
-              const SizedBox(height: 18),
-              const _Heading('Feature it at the top of Home?'),
-              const SizedBox(height: 4),
-              const Text('Optional. Pinned where every buyer looks first, with a FEATURED badge.',
-                  style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-              const SizedBox(height: 10),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                _Chip(
-                  key: const Key('fee-featured-none'),
-                  label: 'No thanks',
-                  selected: _featured == null,
-                  onTap: busy ? null : () => _choose(clearFeatured: true),
-                ),
-                for (final p in q.featuredPlans)
-                  _Chip(
-                    key: Key('fee-featured-${p.id}'),
-                    label: '${p.days} days  +KES ${formatKesAmount(p.price)}',
-                    selected: _featured == p.id,
-                    onTap: busy ? null : () => _choose(featured: p.id),
-                  ),
-              ]),
-            ],
-            const SizedBox(height: 20),
-            const _Heading('Pay with M-Pesa'),
-            const SizedBox(height: 8),
-            _PhoneField(controller: _phone, enabled: !busy, onChanged: () => setState(() => _error = null)),
-            if (_error != null) ...[
-              const SizedBox(height: 10),
-              Text(_error!,
-                  key: const Key('fee-error'),
-                  style: const TextStyle(color: BrokaColors.danger, fontSize: 12.5, fontWeight: FontWeight.w600)),
-            ],
-          ]),
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-        child: SizedBox(
-          width: double.infinity,
-          height: 54,
-          child: ElevatedButton(
-            key: const Key('fee-pay'),
-            onPressed: busy ? null : _pay,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: BrokaColors.neonGreen,
-              disabledBackgroundColor: BrokaColors.neonGreen.withOpacity(0.5),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            child: busy
-                ? const SizedBox(
-                    width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
-                : Text('Pay KES ${formatKesAmount(_total)} with M-Pesa',
-                    style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900)),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(widget.listingName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+        const SizedBox(height: 14),
+        _PriceHero(quote: q),
+        const SizedBox(height: 12),
+        for (final line in feeReasons(q)) _Reason(line),
+        if (recommendation != null) ...[
+          const SizedBox(height: 14),
+          _Recommendation(text: recommendation, strong: q.strength == 'strong'),
+        ],
+        const SizedBox(height: 22),
+        const CheckoutLabel('How long should it stay up?'),
+        const SizedBox(height: 10),
+        for (final o in q.options)
+          _MonthOption(
+            key: Key('fee-months-${o.months}'),
+            option: o,
+            selected: o.months == _months,
+            onTap: () => _choose(months: o.months),
           ),
-        ),
-      ),
-    ]);
+        if (q.featuredAvailable && q.featuredPlans.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const CheckoutLabel('Feature it at the top of Home?'),
+          const SizedBox(height: 4),
+          const Text('Optional. Pinned where every buyer looks first, with a FEATURED badge.',
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            _Chip(
+              key: const Key('fee-featured-none'),
+              label: 'No thanks',
+              selected: _featured == null,
+              onTap: () => _choose(clearFeatured: true),
+            ),
+            for (final p in q.featuredPlans)
+              _Chip(
+                key: Key('fee-featured-${p.id}'),
+                label: '${p.days} days  +KES ${formatKesAmount(p.price)}',
+                selected: _featured == p.id,
+                onTap: () => _choose(featured: p.id),
+              ),
+          ]),
+        ],
+      ]),
+    );
   }
 }
 
@@ -508,15 +394,6 @@ class _Recommendation extends StatelessWidget {
   }
 }
 
-class _Heading extends StatelessWidget {
-  const _Heading(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) =>
-      Text(text, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w800));
-}
-
 class _MonthOption extends StatelessWidget {
   const _MonthOption({super.key, required this.option, required this.selected, required this.onTap});
   final FeeOption option;
@@ -608,93 +485,6 @@ class _Chip extends StatelessWidget {
                   color: selected ? BrokaColors.neonPink : BrokaColors.textHigh,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700)),
-        ),
-      );
-}
-
-class _PhoneField extends StatelessWidget {
-  const _PhoneField({required this.controller, required this.enabled, required this.onChanged});
-  final TextEditingController controller;
-  final bool enabled;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: BrokaColors.border),
-        ),
-        child: TextField(
-          key: const Key('fee-phone'),
-          controller: controller,
-          enabled: enabled,
-          keyboardType: TextInputType.phone,
-          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w700),
-          decoration: const InputDecoration(
-            hintText: '0712 345 678',
-            hintStyle: TextStyle(color: BrokaColors.textLow, fontSize: 14),
-            prefixIcon: Icon(Icons.phone_android_rounded, color: BrokaColors.neonGreen, size: 20),
-            border: InputBorder.none,
-            contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-          ),
-          onChanged: (_) => onChanged(),
-        ),
-      );
-}
-
-/// A full-screen state: waiting, paid, slow, failed to load.
-class _Message extends StatelessWidget {
-  const _Message({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.body,
-    this.iconColor = BrokaColors.gold,
-    this.action,
-    this.onAction,
-    this.busy = false,
-  });
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String body;
-  final String? action;
-  final VoidCallback? onAction;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) => Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(28),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, color: iconColor, size: 64),
-            const SizedBox(height: 16),
-            Text(title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 20, fontWeight: FontWeight.w900)),
-            const SizedBox(height: 8),
-            Text(body,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5, height: 1.4)),
-            if (busy) ...[
-              const SizedBox(height: 22),
-              const CircularProgressIndicator(color: BrokaColors.neonGreen),
-            ],
-            if (action != null) ...[
-              const SizedBox(height: 22),
-              ElevatedButton(
-                onPressed: onAction,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: BrokaColors.gold,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                child: Text(action!, style: const TextStyle(fontWeight: FontWeight.w800)),
-              ),
-            ],
-          ]),
         ),
       );
 }

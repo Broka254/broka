@@ -5,8 +5,9 @@
 // What must hold:
 //   * the Premium screen shows the plan running and what is left of it, or
 //     the free AI cover tries of someone without one;
-//   * Pay asks for the plan and months chosen, under one key per attempt,
-//     and waits for M-Pesa rather than assuming;
+//   * Continue goes to the payment methods, then the M-Pesa screen, which
+//     asks for the plan and months chosen, under one key per attempt, and
+//     waits for M-Pesa rather than assuming;
 //   * a cheaper plan than the one running is not offered for payment - the
 //     server would refuse it - and the screen says when it can be;
 //   * with plans off, nothing is sold;
@@ -170,6 +171,15 @@ Future<void> _tap(WidgetTester tester, Finder finder) async {
 
 const _poll = Duration(milliseconds: 100);
 
+/// Continue -> pick M-Pesa -> the M-Pesa screen, with [phone] typed in.
+Future<void> _toMpesa(WidgetTester tester, String phone) async {
+  await _tap(tester, find.byKey(const Key('premium-continue')));
+  await tester.pumpAndSettle();
+  await _tap(tester, find.byKey(const Key('method-mpesa')));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(const Key('mpesa-phone')), phone);
+}
+
 SellWizardData _draft() {
   final data = SellWizardData(photoUploads: PhotoUploadTracker(service: _FakeUploader()))
     ..name = 'Dry maize'
@@ -247,7 +257,7 @@ void main() {
           of: find.byKey(const Key('premium-plan-pro')), matching: find.byType(Semantics)).first);
       expect(pro.properties.selected, isTrue);
       expect(find.text('20 AI cover tries - covers for about 7 listings'), findsOneWidget);
-      expect(find.text('Pay KES 499 with M-Pesa'), findsOneWidget);
+      expect(find.text('Continue to payment · KES 499'), findsOneWidget);
     });
 
     testWidgets('pays for the plan and months chosen, then waits for M-Pesa', (tester) async {
@@ -255,19 +265,20 @@ void main() {
       await _open(tester, PremiumScreen(repository: backend.repository, pollEvery: _poll));
       await _tap(tester, find.byKey(const Key('premium-plan-pro')));
       await _tap(tester, find.byKey(const Key('premium-months-3')));
-      expect(find.text('Pay KES 1,379 with M-Pesa'), findsOneWidget);
-      await tester.enterText(find.byKey(const Key('premium-phone')), '0712 345 678');
-      await _tap(tester, find.byKey(const Key('premium-pay')));
+      expect(find.text('Continue to payment · KES 1,379'), findsOneWidget);
+      await _toMpesa(tester, '0712 345 678');
+      expect(find.text('Pay KES 1,379'), findsOneWidget);
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
-      expect(find.byKey(const Key('premium-waiting')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
       expect(backend.subscribes.single, {'plan_id': 'pro', 'months': 3, 'phone_number': '0712 345 678'});
       expect(backend.keys.single, isNotNull);
 
       await tester.pump(_poll); // pending
-      expect(find.byKey(const Key('premium-waiting')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
       await tester.pump(_poll); // success
       await tester.pump();
-      expect(find.byKey(const Key('premium-paid')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-paid')), findsOneWidget);
       expect(find.text("You're on BROKA Pro"), findsOneWidget);
       expect(find.text('Paid until 26 Dec 2026.'), findsOneWidget);
     });
@@ -275,13 +286,13 @@ void main() {
     testWidgets('a cancelled prompt says so and Pay is there again', (tester) async {
       final backend = _PremiumBackend(statuses: ['failed']);
       await _open(tester, PremiumScreen(repository: backend.repository, pollEvery: _poll));
-      await tester.enterText(find.byKey(const Key('premium-phone')), '0712345678');
-      await _tap(tester, find.byKey(const Key('premium-pay')));
+      await _toMpesa(tester, '0712345678');
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
       await tester.pump(_poll);
       await tester.pump();
-      expect(find.byKey(const Key('premium-error')), findsOneWidget);
-      expect(find.byKey(const Key('premium-pay')), findsOneWidget);
+      expect(find.byKey(const Key('checkout-error')), findsOneWidget);
+      expect(find.byKey(const Key('mpesa-pay')), findsOneWidget);
     });
 
     testWidgets('on a plan: what is left, and a cheaper plan waits for it to end', (tester) async {
@@ -296,27 +307,27 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('premium-downgrade-note')), findsOneWidget);
       expect(find.textContaining('You can move to Plus when it ends'), findsOneWidget);
-      expect(find.byKey(const Key('premium-pay')), findsNothing);
+      expect(find.byKey(const Key('premium-continue')), findsNothing);
 
       await _tap(tester, find.byKey(const Key('premium-plan-elite')));
       await tester.pumpAndSettle();
       expect(find.textContaining('unused Pro days become Elite days'), findsOneWidget);
-      expect(find.byKey(const Key('premium-pay')), findsOneWidget);
+      expect(find.byKey(const Key('premium-continue')), findsOneWidget);
     });
 
     testWidgets('with plans off, nothing is sold', (tester) async {
       final backend = _PremiumBackend(me: _me(enabled: false));
       await _open(tester, PremiumScreen(repository: backend.repository));
       expect(find.byKey(const Key('premium-off')), findsOneWidget);
-      expect(find.byKey(const Key('premium-pay')), findsNothing);
+      expect(find.byKey(const Key('premium-continue')), findsNothing);
     });
 
     testWidgets('a number too short to be one is caught before any prompt', (tester) async {
       final backend = _PremiumBackend();
       await _open(tester, PremiumScreen(repository: backend.repository));
-      await tester.enterText(find.byKey(const Key('premium-phone')), '0712');
-      await _tap(tester, find.byKey(const Key('premium-pay')));
-      expect(find.byKey(const Key('premium-error')), findsOneWidget);
+      await _toMpesa(tester, '0712');
+      await _tap(tester, find.byKey(const Key('mpesa-pay')));
+      expect(find.byKey(const Key('checkout-error')), findsOneWidget);
       expect(backend.subscribes, isEmpty);
     });
   });

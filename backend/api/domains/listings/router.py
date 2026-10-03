@@ -659,7 +659,8 @@ async def seller_receipts(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Completed payments for this seller's deals.
+    """Completed payments for this seller's deals, and (under `charges`) the
+    listing fees and premium plans they paid BROKA.
 
     Provider-neutral in shape. The underlying table is named for M-Pesa
     because that is the rail that exists today, but the response exposes a
@@ -699,8 +700,17 @@ async def seller_receipts(
             "deal_status": deal.status.value if deal.status else None,
         })
 
+    # What the seller paid BROKA (listing fees, plans), alongside: the same
+    # screen keeps every M-Pesa receipt a seller may be asked for, but in
+    # its own list and total - it is money out, and counting it into
+    # "released to you" would overstate what they were paid.
+    from api.domains.pricing.receipts import charges_paid_by
+    charges = await charges_paid_by(db, seller_id, limit)
+
     return {"receipts": receipts, "total": round(total, 2),
-            "count": len(receipts)}
+            "count": len(receipts),
+            "charges": charges,
+            "charges_total": sum(c["amount"] for c in charges)}
 
 
 @router.get("/seller/{seller_id}/metrics")

@@ -143,12 +143,16 @@ class ShimmerBox extends StatefulWidget {
 
 class _ShimmerBoxState extends State<ShimmerBox>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
+  // Made on first use, which under reduce-motion is never. Disposing it
+  // through the lazy getter created it there instead - in dispose(), where
+  // making a ticker looks up a deactivated ancestor and throws.
+  AnimationController? _controller;
+  AnimationController get _c => _controller ??= AnimationController(
     vsync: this, duration: const Duration(milliseconds: 1250))..repeat();
 
   @override
   void dispose() {
-    _c.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 

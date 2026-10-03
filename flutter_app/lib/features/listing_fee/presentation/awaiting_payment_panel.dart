@@ -9,24 +9,33 @@
 //
 // Draws nothing when there is nothing to pay, or when the list can't be
 // loaded: it is a prompt, not a section the dashboard depends on.
+//
+// A listing that was never paid for, or whose time ran out, can also be
+// removed from here. Without that, a seller who changed their mind - or
+// posted the same item three times while a payment failed - had no way to
+// clear it: the dashboard's catalogue, where Delete lives, never shows an
+// unpaid listing.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
 import '../../../utils/price_format.dart';
 import '../../../widgets/broka_image.dart';
+import '../../listings/data/repositories/listings_repository.dart';
 import '../data/listing_fee_repository.dart';
 import '../domain/listing_fee.dart';
 import 'listing_fee_screen.dart';
 
 class AwaitingPaymentPanel extends StatefulWidget {
-  const AwaitingPaymentPanel({super.key, this.reloadSignal = 0, this.repository});
+  const AwaitingPaymentPanel({super.key, this.reloadSignal = 0, this.repository, this.listings});
 
   /// Changes whenever the dashboard refreshes; the panel reloads with it.
   final int reloadSignal;
 
   /// For tests.
   final ListingFeeRepository? repository;
+  final ListingsRepository? listings;
 
   @override
   State<AwaitingPaymentPanel> createState() => _AwaitingPaymentPanelState();
@@ -53,6 +62,58 @@ class _AwaitingPaymentPanelState extends State<AwaitingPaymentPanel> {
     final r = await _repo.awaitingPayment();
     if (!mounted) return;
     if (r case Success(:final data)) setState(() => _listings = data);
+  }
+
+  /// Asks first, then takes the listing off BROKA - the same soft delete as
+  /// the catalogue's Delete (DELETE /listings/{id}), so nothing that points
+  /// at it breaks. The server's refusal, if any, is shown as it comes.
+  Future<void> _remove(ListingAwaitingFee listing) async {
+    HapticFeedback.selectionClick();
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16), side: const BorderSide(color: BrokaColors.border)),
+        title: const Text('Remove this listing?',
+            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 17)),
+        content: Text(
+            listing.state.unpaid
+                ? '"${listing.name}" was never paid for, so buyers have not seen it. '
+                    'Removing it deletes it for good - nothing is charged.'
+                : '"${listing.name}" will be deleted for good. This can\'t be undone.',
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep it', style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            key: const Key('confirm-remove-unpaid'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove', style: TextStyle(color: BrokaColors.danger, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final r = await (widget.listings ?? listingsRepository).deleteListing(listing.id);
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    switch (r) {
+      case Success():
+        setState(() => _listings = [for (final l in _listings) if (l.id != listing.id) l]);
+        messenger.showSnackBar(SnackBar(
+          content: Text('"${listing.name}" removed'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      case Failure(:final message):
+        messenger.showSnackBar(SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BrokaColors.danger,
+        ));
+    }
   }
 
   Future<void> _open(ListingAwaitingFee listing) async {
@@ -89,19 +150,28 @@ class _AwaitingPaymentPanelState extends State<AwaitingPaymentPanel> {
           ),
         ]),
         const SizedBox(height: 4),
-        const Text('Pay to publish or renew - they go live as soon as M-Pesa confirms.',
+        const Text('Pay to publish or renew - they go live as soon as M-Pesa confirms. '
+            'Changed your mind? Remove the ones you no longer want.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
         const SizedBox(height: 10),
-        for (final l in _listings) _Row(listing: l, onTap: () => _open(l)),
+        for (final l in _listings)
+          _Row(
+            listing: l,
+            onTap: () => _open(l),
+            // A listing still running ("ending soon") is deleted from the
+            // catalogue like any live one; here only those buyers can't see.
+            onRemove: l.state.live ? null : () => _remove(l),
+          ),
       ]),
     );
   }
 }
 
 class _Row extends StatelessWidget {
-  const _Row({required this.listing, required this.onTap});
+  const _Row({required this.listing, required this.onTap, this.onRemove});
   final ListingAwaitingFee listing;
   final VoidCallback onTap;
+  final VoidCallback? onRemove;
 
   String get _status => switch (listing.state.status) {
         'unpaid' => 'Not published yet',
@@ -147,6 +217,19 @@ class _Row extends StatelessWidget {
           ),
           child: Text(action, style: const TextStyle(fontWeight: FontWeight.w800)),
         ),
+        if (onRemove != null) ...[
+          const SizedBox(width: 6),
+          IconButton(
+            key: Key('awaiting-remove-${listing.id}'),
+            tooltip: 'Remove listing',
+            onPressed: onRemove,
+            style: IconButton.styleFrom(
+              backgroundColor: BrokaColors.danger.withOpacity(0.12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.delete_outline_rounded, color: BrokaColors.danger, size: 20),
+          ),
+        ],
       ]),
     );
   }

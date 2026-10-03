@@ -1,6 +1,12 @@
 // BROKA — payment receipts
 //
-// Every completed payment on this seller's deals.
+// Every completed payment on this seller's deals - and, on the second tab,
+// what the seller paid BROKA: listing fees and premium plans, each with its
+// M-Pesa receipt. Those were the receipts sellers were asked for most and
+// could not find anywhere in the app.
+//
+// Two tabs rather than one list: a sale is money in and a fee is money
+// out, and one running total over both would be neither.
 //
 // The "Payment Receipts" button on the dashboard has pointed at
 // '/receipt-history' since before this work started, and nothing was ever
@@ -22,7 +28,10 @@ import '../widgets/chat_ambient_background.dart';
 import '../widgets/motion_widgets.dart';
 
 class ReceiptHistoryScreen extends StatefulWidget {
-  const ReceiptHistoryScreen({super.key});
+  const ReceiptHistoryScreen({super.key, this.loader});
+
+  /// For tests: what GET /listings/seller/{id}/receipts would answer.
+  final Future<Map<String, dynamic>> Function()? loader;
 
   @override
   State<ReceiptHistoryScreen> createState() => _ReceiptHistoryScreenState();
@@ -33,6 +42,9 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
   bool _loading = true;
   String? _error;
 
+  /// 0: sales released to the seller. 1: fees and plans paid to BROKA.
+  int _tab = 0;
+
   @override
   void initState() {
     super.initState();
@@ -41,13 +53,13 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
 
   Future<void> _load() async {
     final uid = ApiService.currentUserId;
-    if (uid == null) {
+    if (uid == null && widget.loader == null) {
       setState(() { _loading = false; _error = 'Not signed in.'; });
       return;
     }
     setState(() { _loading = true; _error = null; });
     try {
-      final d = await ApiService.getSellerReceipts(uid);
+      final d = await (widget.loader?.call() ?? ApiService.getSellerReceipts(uid!));
       if (mounted) setState(() { _data = d; _loading = false; });
     } catch (e) {
       // Distinguishes "could not load" from "nothing to show". An empty
@@ -143,8 +155,9 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
       );
 
   Widget _content() {
-    final receipts = (_data?['receipts'] as List?) ?? const [];
-    final total = (_data?['total'] as num?)?.toDouble() ?? 0;
+    final sales = _tab == 0;
+    final items = (_data?[sales ? 'receipts' : 'charges'] as List?) ?? const [];
+    final total = (_data?[sales ? 'total' : 'charges_total'] as num?)?.toDouble() ?? 0;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -153,15 +166,155 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
-        itemCount: receipts.length + 1,
+        itemCount: items.length + 2,
         itemBuilder: (_, i) {
-          if (i == 0) return _summary(total, receipts.length);
-          final r = receipts[i - 1] as Map;
-          return FadeSlideIn(index: i, child: _receiptCard(r));
+          if (i == 0) return _tabs();
+          if (i == 1) return sales ? _summary(total, items.length) : _chargesSummary(total, items.length);
+          final r = items[i - 2] as Map;
+          return FadeSlideIn(index: i, child: sales ? _receiptCard(r) : _chargeCard(r));
         },
       ),
     );
   }
+
+  /// Sales | Fees & plans, in the dashboard's pill-switcher language.
+  Widget _tabs() {
+    Widget pill(int index, String label) {
+      final selected = _tab == index;
+      return Expanded(
+        child: GestureDetector(
+          key: Key('receipts-tab-$index'),
+          onTap: () => setState(() => _tab = index),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              gradient: selected ? const LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue]) : null,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Text(label,
+                style: TextStyle(
+                    color: selected ? Colors.white : BrokaColors.textMid,
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600)),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        height: 42,
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.86),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: Row(children: [pill(0, 'Sales'), pill(1, 'Fees & plans')]),
+      ),
+    );
+  }
+
+  Widget _chargesSummary(double total, int count) => Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Container(
+          key: const Key('charges-summary'),
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [
+              Color.alphaBlend(BrokaColors.gold.withOpacity(0.14), BrokaColors.bg),
+              BrokaColors.bg,
+            ], begin: Alignment.topLeft, end: Alignment.bottomRight),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: BrokaColors.gold.withOpacity(0.3)),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('PAID TO BROKA',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 10,
+                    letterSpacing: 1.4, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Text(_money(total),
+                style: const TextStyle(color: BrokaColors.gold,
+                    fontSize: 28, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text(count == 0
+                    ? 'No listing fees or plans paid yet'
+                    : 'Listing fees and premium plans · $count ${count == 1 ? "payment" : "payments"}',
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+          ]),
+        ),
+      );
+
+  /// A listing fee or a plan: what it was for, the amount, and the receipt.
+  Widget _chargeCard(Map r) {
+    final ref = r['reference'] as String?;
+    final premium = r['kind'] == 'premium';
+    final colour = premium ? BrokaColors.gold : BrokaColors.neonBlue;
+    return Container(
+      key: Key('charge-${r['id']}'),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: colour.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(premium ? Icons.workspace_premium_rounded : Icons.sell_rounded, size: 12, color: colour),
+              const SizedBox(width: 4),
+              Text(r['title'] as String? ?? (premium ? 'Premium plan' : 'Listing fee'),
+                  style: TextStyle(color: colour, fontSize: 10.5, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+          const Spacer(),
+          Text(_money((r['amount'] as num?) ?? 0),
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w900)),
+        ]),
+        const SizedBox(height: 8),
+        Text(r['subject'] as String? ?? '',
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13.5, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        Row(children: [
+          Expanded(
+            child: Text(r['detail'] as String? ?? '',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+          ),
+          Text(_date(r['paid_at'] as String?),
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 10.5)),
+        ]),
+        if (ref != null && ref.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _reference(r['provider'] as String?, ref),
+        ],
+      ]),
+    );
+  }
+
+  Widget _reference(String? provider, String ref) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: BrokaColors.bg.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('${provider ?? 'Payment'} · ', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+          Text(ref,
+              style: const TextStyle(color: BrokaColors.textHigh,
+                  fontSize: 10.5, fontFamily: 'monospace', fontWeight: FontWeight.w700)),
+        ]),
+      );
 
   Widget _summary(double total, int count) => Padding(
         padding: const EdgeInsets.only(bottom: 16),
