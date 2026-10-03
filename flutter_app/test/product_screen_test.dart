@@ -33,6 +33,7 @@ Listing _listing({
   String? priceUnit,
   String? storeId,
   String listingType = 'direct',
+  String sellerName = 'Grace Akinyi',
 }) => Listing(
       id: 'listing-1',
       name: 'iPhone 13 128GB',
@@ -51,12 +52,26 @@ Listing _listing({
       priceUnit: priceUnit,
       views: 42,
       sellerId: sellerId,
-      sellerName: 'Grace Akinyi',
+      sellerName: sellerName,
       sellerCompletedDeals: 14,
       storeId: storeId,
       storeName: storeId == null ? null : 'Clanix Electronics',
       storeSlug: storeId == null ? null : 'clanix',
     );
+
+// A 1x1 JPEG selfie, as signup sends it: bare base64 starting "/9j/".
+const _selfie =
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdA'
+    'SFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2Nj'
+    'Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAABAAEDASIAAhEBAxEB/8QA'
+    'HwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIh'
+    'MUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVW'
+    'V1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG'
+    'x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQF'
+    'BgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAV'
+    'YnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE'
+    'hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq'
+    '8vP09fb3+Pn6/9oADAMBAAIRAxEAPwBtFFFfQGp//9k=';
 
 const _standing = {
   'overall_rating': 8.5,
@@ -229,6 +244,40 @@ void main() {
       await open(tester, _listing());
       expect(find.text('Active 12m ago'), findsOneWidget);
       expect(find.textContaining('3h ago'), findsNothing);
+    });
+  });
+
+  group('the seller card', () {
+    testWidgets("a business is named, and so is the person behind it", (tester) async {
+      setFakeRoute((uri) => uri.path == '/auth/user/seller-1'
+          ? {'id': 'seller-1', 'name': 'Xavier Bravin Odhaimbo', 'business_name': 'Clanix',
+              'account_type': 'buyer_seller', 'profile_photo': _selfie,
+              'last_seen_label': 'Active 4h ago'}
+          : null);
+      await open(tester, _listing(sellerName: 'Clanix'));
+      expect(tester.widget<Text>(find.byKey(const Key('seller-card-name'))).data, 'Clanix');
+      expect(tester.widget<Text>(find.byKey(const Key('seller-card-official-name'))).data,
+          'Xavier Bravin Odhaimbo');
+    });
+
+    testWidgets('someone selling as themselves has the one name', (tester) async {
+      await open(tester, _listing());
+      expect(tester.widget<Text>(find.byKey(const Key('seller-card-name'))).data, 'Grace Akinyi');
+      expect(find.byKey(const Key('seller-card-official-name')), findsNothing);
+    });
+
+    testWidgets("shows the seller's selfie, not their initial", (tester) async {
+      // A JPEG's base64 starts "/9j/", which was taken for a server path:
+      // the photo was fetched from the API, failed, and "C" showed instead.
+      setFakeRoute((uri) => uri.path == '/auth/user/seller-1'
+          ? {'id': 'seller-1', 'name': 'Xavier Bravin Odhaimbo', 'business_name': 'Clanix',
+              'profile_photo': _selfie}
+          : null);
+      await open(tester, _listing(sellerName: 'Clanix'));
+      final photos = tester.widgetList<Image>(find.byType(Image))
+          .where((i) => i.image is MemoryImage);
+      expect(photos, isNotEmpty);
+      expect(find.text('C'), findsNothing);
     });
   });
 

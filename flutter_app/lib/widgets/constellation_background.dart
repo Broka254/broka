@@ -149,8 +149,58 @@ class _ConstellationBackgroundState extends State<ConstellationBackground>
     super.dispose();
   }
 
+  // The sky's canvas: the box's size with the keyboard down. Stars sit at
+  // fractions of the canvas, so drawing to the box itself - which a
+  // Scaffold shortens by the keyboard's height - squashed the whole sky
+  // into what was left above the keyboard every time a field took focus.
+  // Now the keyboard only covers the bottom of an unchanged sky.
+  double? _skyWidth;
+  double _skyHeight = 0;
+
+  Size _skySize(BuildContext context, BoxConstraints box) {
+    final width = box.maxWidth;
+    final height = box.maxHeight;
+    final view = View.maybeOf(context);
+    final keyboard = view == null ? 0.0 : view.viewInsets.bottom / view.devicePixelRatio;
+    if (keyboard == 0 || width != _skyWidth) {
+      // With no keyboard the box is the resting size. Laid out afresh with
+      // the keyboard already up (a field that autofocuses, or the phone
+      // turned mid-typing), add back what an ancestor took out for it: the
+      // window's keyboard inset less what is still reported here.
+      final takenOut = max(0.0, keyboard - MediaQuery.viewInsetsOf(context).bottom);
+      _skyWidth = width;
+      _skyHeight = height + takenOut;
+    }
+    // Never shorter than the box, whatever happened: it must all be covered.
+    _skyHeight = max(_skyHeight, height);
+    return Size(width, _skyHeight);
+  }
+
   @override
   Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        LayoutBuilder(builder: (context, box) {
+          if (!box.hasBoundedWidth || !box.hasBoundedHeight) return _sky();
+          final sky = _skySize(context, box);
+          return ClipRect(
+            child: OverflowBox(
+              alignment: Alignment.topCenter,
+              minWidth: sky.width,
+              maxWidth: sky.width,
+              minHeight: sky.height,
+              maxHeight: sky.height,
+              child: _sky(),
+            ),
+          );
+        }),
+        widget.child,
+      ],
+    );
+  }
+
+  Widget _sky() {
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -210,8 +260,6 @@ class _ConstellationBackgroundState extends State<ConstellationBackground>
             ),
           ),
         ),
-
-        widget.child,
       ],
     );
   }

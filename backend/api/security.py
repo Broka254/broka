@@ -193,6 +193,45 @@ def decode_email_verify_token(token: str) -> str | None:
     return payload.get("email")
 
 
+# ── Password-reset token (short-lived, SMS code → new password handoff) ─────
+# Issued by /auth/password/forgot/verify once the SMS code is right, and
+# spent by /auth/password/reset. Its own type, so it proves nothing anywhere
+# else: a phone-verify token must not reset a password (it is minted for a
+# number that has no account yet), and this one must not register one.
+#
+# It carries a fingerprint of the password hash it was issued against. A
+# reset changes the hash, so the same token can't be replayed afterwards -
+# single use without a table to remember spent tokens in.
+
+def password_fingerprint(password_hash: str | None) -> str:
+    import hashlib
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:24]
+
+
+def create_password_reset_token(phone: str, password_hash: str | None) -> str:
+    from api.core.config import settings as _settings
+    payload = {
+        "phone": phone,
+        "pwf": password_fingerprint(password_hash),
+        "type": "password_reset",
+        "exp": datetime.now(timezone.utc) + timedelta(
+            minutes=_settings.phone_verify_token_expire_minutes
+        ),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_password_reset_token(token: str) -> dict | None:
+    """{"phone", "pwf"} if valid, unexpired and of the right type, else None."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("type") != "password_reset" or not payload.get("phone"):
+        return None
+    return payload
+
+
 # ── Call token (short-lived, WebSocket signaling auth) ───────────────────────
 # Issued by POST /calls/initiate (to the caller) and GET /calls/pending/{id}
 # (to the callee) once each is confirmed to be a legitimate participant on a

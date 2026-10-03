@@ -41,6 +41,21 @@ Map<String, dynamic> _uploaded(String id) => {
 const _pngBase64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
+// A 1x1 JPEG, as the selfie camera sends it: bare base64, which for any
+// JPEG begins "/9j/" - a leading slash, like a server path.
+const _jpegBase64 =
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdA'
+    'SFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2Nj'
+    'Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAABAAEDASIAAhEBAxEB/8QA'
+    'HwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIh'
+    'MUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVW'
+    'V1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG'
+    'x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQF'
+    'BgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAV'
+    'YnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE'
+    'hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq'
+    '8vP09fb3+Pn6/9oADAMBAAIRAxEAPwBtFFFfQGp//9k=';
+
 class _FakeUploader extends ImageUploadService {
   _FakeUploader(this.answer);
 
@@ -208,6 +223,15 @@ void main() {
       expect(BrokaImage.networkUrl('https://media.broka.co.ke/img/x/thumb.webp'),
           'https://media.broka.co.ke/img/x/thumb.webp');
       expect(BrokaImage.networkUrl(_pngBase64), isNull);
+    });
+
+    test('a bare base64 JPEG is an inline image, not a server path', () {
+      // Every selfie is one. Read as a path, it was fetched from the API,
+      // failed, and the Menu and a listing's seller card showed an initial
+      // where the person's photo should be.
+      expect(BrokaImage.networkUrl(_jpegBase64), isNull);
+      expect(BrokaImage.inlineBytes(_jpegBase64), isNotNull);
+      expect(BrokaImage.provider(_jpegBase64), isA<MemoryImage>());
     });
 
     test('decodes data URIs and bare base64, and rejects junk', () {

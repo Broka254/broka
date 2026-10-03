@@ -110,6 +110,27 @@ class LoginIn(BaseModel):
     password: str
 
 
+class PasswordForgotIn(BaseModel):
+    phone: str
+    # As on OtpRequestIn: lets Android read the code without a prompt.
+    app_signature: Optional[str] = None
+
+
+class PasswordForgotVerifyIn(BaseModel):
+    phone: str
+    code: str
+
+
+class PasswordResetIn(BaseModel):
+    reset_token: str
+    new_password: str
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class ProfilePatch(BaseModel):
     nickname: Optional[str] = None
     profile_photo: Optional[str] = None
@@ -224,6 +245,62 @@ async def login(
     await login_limiter.check_and_record(_phone_key(body.phone))
     svc = AuthService(db)
     return await svc.login(phone=body.phone, password=body.password)
+
+
+# ── Forgotten and changed passwords ──────────────────────────────────────────
+# forgot -> forgot/verify -> reset: an SMS code to the account's number, then
+# a new password. The code endpoints share the registration code limits and
+# buckets: they cost the same SMS and guard the same kind of six digits.
+
+@router.post("/password/forgot")
+async def forgot_password(
+    body: PasswordForgotIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    ip = client_ip(request)
+    await otp_request_limiter.check_and_record(_phone_key(body.phone))
+    await otp_request_limiter.check_and_record(f"ip:{ip}")
+    svc = AuthService(db)
+    return await svc.request_password_reset(body.phone, app_signature=body.app_signature)
+
+
+@router.post("/password/forgot/verify")
+async def verify_forgot_password(
+    body: PasswordForgotVerifyIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await otp_verify_limiter.check_and_record(_phone_key(body.phone))
+    await otp_verify_limiter.check_and_record(f"ip:{client_ip(request)}")
+    svc = AuthService(db)
+    return await svc.verify_password_reset(body.phone, body.code)
+
+
+@router.post("/password/reset")
+async def reset_password(
+    body: PasswordResetIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await login_limiter.check_and_record(client_ip(request))
+    svc = AuthService(db)
+    return await svc.reset_password(body.reset_token, body.new_password)
+
+
+@router.post("/password/change")
+async def change_password(
+    body: PasswordChangeIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Keyed on the account: checking the current password here is a login
+    # attempt by another name, and must not be a way around login's limit.
+    await login_limiter.check_and_record(f"user:{current_user['id']}")
+    svc = AuthService(db)
+    return await svc.change_password(
+        current_user["id"], body.current_password, body.new_password,
+    )
 
 
 @router.post("/upgrade-to-seller")

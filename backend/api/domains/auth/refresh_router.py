@@ -59,6 +59,20 @@ def issue_refresh_token_row(db: AsyncSession, user_id: str) -> str:
     return token
 
 
+async def revoke_all_refresh_tokens(db: AsyncSession, user_id: str) -> None:
+    """Revokes every live refresh token of `user_id` (the caller commits).
+    Access tokens already issued run out on their own within
+    ACCESS_TOKEN_EXPIRE_MINUTES."""
+    await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.utcnow())
+    )
+
+
 def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
     if value is None or value.tzinfo is None:
         return value
@@ -149,12 +163,5 @@ async def revoke_all_tokens(
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke ALL refresh tokens for the current user (logout all devices)."""
-    await db.execute(
-        update(RefreshToken)
-        .where(
-            RefreshToken.user_id == current_user["id"],
-            RefreshToken.revoked_at.is_(None),
-        )
-        .values(revoked_at=datetime.utcnow())
-    )
+    await revoke_all_refresh_tokens(db, current_user["id"])
     await db.commit()

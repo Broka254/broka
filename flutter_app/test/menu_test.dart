@@ -36,6 +36,20 @@ Map<String, dynamic> _me({
       'created_at': '2026-03-02T10:00:00',
     };
 
+// A 1x1 JPEG selfie, as signup sends it: bare base64 starting "/9j/".
+const _selfie =
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdA'
+    'SFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2Nj'
+    'Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAABAAEDASIAAhEBAxEB/8QA'
+    'HwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIh'
+    'MUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVW'
+    'V1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG'
+    'x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQF'
+    'BgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAV'
+    'YnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE'
+    'hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq'
+    '8vP09fb3+Pn6/9oADAMBAAIRAxEAPwBtFFFfQGp//9k=';
+
 const _store = {
   'id': 'store-1',
   'name': 'Clanix Electronics',
@@ -190,6 +204,19 @@ void main() {
       await _settle(tester);
       expect(find.text("Couldn't load your store"), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
+    });
+
+    testWidgets("the profile card shows the selfie, not the initial", (tester) async {
+      // A JPEG's base64 starts "/9j/": taken for a server path, it was
+      // fetched from the API, failed, and the card showed "G".
+      setFakeRoute(_account(me: _me(photo: _selfie)));
+      await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
+      await _settle(tester);
+      final card = find.byKey(const Key('menu-profile-card'));
+      expect(find.descendant(of: card, matching: find.byType(CachedNetworkImage)), findsNothing);
+      final photos = tester.widgetList<Image>(find.descendant(of: card, matching: find.byType(Image)));
+      expect(photos.where((i) => i.image is MemoryImage), isNotEmpty);
+      expect(find.descendant(of: card, matching: find.text('G')), findsNothing);
     });
 
     testWidgets('the profile card opens Profile', (tester) async {

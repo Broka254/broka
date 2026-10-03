@@ -32,11 +32,16 @@ class BrokaImage extends StatelessWidget {
   final Widget? placeholder;
 
   /// A URL a network image can load, or null if [source] isn't one.
+  ///
+  /// The only relative paths the backend sends are its own image routes,
+  /// "/media/...". Any leading slash used to count as one, but bare base64
+  /// of a JPEG starts "/9j/" - so every selfie was fetched from the API as
+  /// a path, failed, and showed an initial where the photo should be.
   static String? networkUrl(String? source) {
     final s = source?.trim();
     if (s == null || s.isEmpty) return null;
     if (s.startsWith('http://') || s.startsWith('https://')) return s;
-    if (s.startsWith('/')) return '${ApiService.baseUrl}$s';
+    if (s.startsWith('/media/')) return '${ApiService.baseUrl}$s';
     return null;
   }
 

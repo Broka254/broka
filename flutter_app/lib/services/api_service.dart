@@ -393,6 +393,76 @@ class ApiService {
     return data['phone_verify_token'] as String;
   }
 
+  // ── Forgotten / changed password ──────────────────────────────────────────
+  // An SMS code to the account's number proves who is resetting it - the
+  // number is the account. Through [apiClient]; each throws [ApiException]
+  // with the server's reason ("No BROKA account uses this number",
+  // "Incorrect code", ...), which the screens show as it is.
+
+  /// Sends a reset code to [phone]. [appSignature] as for [requestOtp].
+  static Future<Map<String, dynamic>> requestPasswordReset(
+    String phone, {
+    String? appSignature,
+  }) async =>
+      await apiClient.post('/auth/password/forgot', {
+        'phone': phone,
+        if (appSignature != null) 'app_signature': appSignature,
+      }, timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
+
+  /// Checks the code and returns the token that lets [resetPassword] set a
+  /// new password.
+  static Future<String> verifyPasswordReset(String phone, String code) async {
+    final data = await apiClient.post('/auth/password/forgot/verify',
+        {'phone': phone, 'code': code},
+        timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
+    return data['reset_token'] as String;
+  }
+
+  /// Sets the new password and signs this phone in with it, as [login]
+  /// does. Every other phone on the account is signed out by the server.
+  static Future<void> resetPassword({
+    required String resetToken,
+    required String newPassword,
+  }) async {
+    final data = await apiClient.post('/auth/password/reset',
+        {'reset_token': resetToken, 'new_password': newPassword},
+        timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
+    await _saveSession(
+      data['access_token'] as String, data['user_id'] as String,
+      name: data['name'] as String?,
+      nickname: data['nickname'] as String?,
+      phone: data['phone'] as String?,
+      accountType: data['account_type'] as String?,
+      lat: (data['lat'] as num?)?.toDouble(),
+      lng: (data['lng'] as num?)?.toDouble(),
+      photo: data['profile_photo'] as String?,
+      refreshToken: data['refresh_token'] as String?,
+    );
+  }
+
+  /// Changes the signed-in account's password. The server signs every other
+  /// phone out and hands this one a new session, kept here so it stays
+  /// signed in.
+  static Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final data = await apiClient.post('/auth/password/change',
+        {'current_password': currentPassword, 'new_password': newPassword},
+        timeout: const Duration(seconds: 30)) as Map<String, dynamic>;
+    final token = data['access_token'] as String?;
+    final refresh = data['refresh_token'] as String?;
+    if (token != null) {
+      _token = token;
+      await apiClient.saveToken(token);
+    }
+    if (refresh != null) {
+      _refreshToken = refresh;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('refresh_token', refresh);
+    }
+  }
+
   static Future<Map<String, dynamic>> register({
     // OTP is optional at signup — null here means the user chose to skip
     // phone verification for now (Step 1 or Step 2 of the wizard) and can

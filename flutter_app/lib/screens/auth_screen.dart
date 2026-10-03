@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
+import '../features/auth/presentation/password_reset_screen.dart';
 import '../main.dart';
 import '../widgets/gradient_button.dart';
 import '../services/api_service.dart';
@@ -812,6 +813,22 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     }
   }
 
+  /// "Forgot password?" used to be a label with nothing behind it. It opens
+  /// the SMS-code reset, starting from whatever number is typed here; a
+  /// reset that goes through has signed this phone in.
+  Future<void> _forgotPassword() async {
+    setState(() => _error = null);
+    final signedIn = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PasswordResetScreen(
+        phone: _phoneDigits.isEmpty ? null : _fullPhone,
+      ),
+    ));
+    if (signedIn == true && mounted) {
+      GlobalPollerService.instance.start();
+      _returnAuthenticated();
+    }
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -880,12 +897,15 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       ),
       const SizedBox(height: 14),
       _buildPasswordField(),
-      const SizedBox(height: 12),
-      const Align(alignment: Alignment.centerRight,
-        child: Text('Forgot password?',
-          style: TextStyle(color: BrokaColors.gold,
-              fontSize: 13, fontWeight: FontWeight.w700))),
-      const SizedBox(height: 22),
+      const SizedBox(height: 4),
+      Align(alignment: Alignment.centerRight,
+        child: TextButton(
+          key: const Key('login-forgot-password'),
+          onPressed: _loading ? null : _forgotPassword,
+          child: const Text('Forgot password?',
+            style: TextStyle(color: BrokaColors.gold,
+                fontSize: 13, fontWeight: FontWeight.w700)))),
+      const SizedBox(height: 10),
       if (_error != null) _buildError(),
       GradientButton(
         height: 58,

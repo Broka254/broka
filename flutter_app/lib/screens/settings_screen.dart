@@ -20,11 +20,17 @@
 //
 // New: the splash's startup sound, which could only be changed on the splash
 // itself, and "Sign out of all devices" (POST /auth/token/revoke-all).
+//
+// Since 2026-10-03: "Change password" (with an SMS-code reset for a
+// forgotten one). Only English and Kiswahili can be chosen as Zeno's
+// language for now; Dholuo, Kikuyu, Luganda and Sheng are shown as coming
+// soon and can't be selected.
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
+import '../features/auth/presentation/change_password_screen.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
@@ -51,6 +57,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   static const _languages = [
     ('english', 'English', '🇬🇧'),
     ('swahili', 'Kiswahili', '🇰🇪'),
+  ];
+
+  /// Shown, not offered: not ready for Zeno to deal in yet.
+  static const _comingSoon = [
     ('luo', 'Dholuo', '🟡'),
     ('kikuyu', 'Kikuyu', '🟤'),
     ('luganda', 'Luganda', '🇺🇬'),
@@ -112,6 +122,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setSound(bool on) async {
     setState(() => _sound = on);
     await SoundPreferenceService.setEnabled(on);
+  }
+
+  Future<void> _changePassword() async {
+    final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => ChangePasswordScreen(animateBackground: widget.animateBackground),
+    ));
+    if (changed == true && mounted) {
+      _snack('Password changed. Any other phone signed in to your account has been signed out.');
+    }
   }
 
   void _confirmSignOutEverywhere() {
@@ -230,6 +249,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const MenuSectionLabel('Security'),
         MenuGroup(children: [
           MenuTile(
+            key: const Key('settings-change-password'),
+            icon: Icons.password_rounded,
+            tint: BrokaColors.neonBlue,
+            title: 'Change password',
+            subtitle: 'Or reset a forgotten one with an SMS code to your number',
+            onTap: _changePassword,
+          ),
+          MenuTile(
             icon: Icons.devices_other_rounded,
             title: 'Sign out of all devices',
             subtitle: 'Ends every session on this account, including this phone',
@@ -286,6 +313,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   width: _language == key ? 1.5 : 1,
                 ),
                 shape: const StadiumBorder(),
+              ),
+            for (final (key, name, flag) in _comingSoon)
+              Opacity(
+                key: Key('settings-language-soon-$key'),
+                opacity: 0.55,
+                child: Chip(
+                  avatar: Text(flag, style: const TextStyle(fontSize: 14)),
+                  label: Text.rich(TextSpan(children: [
+                    TextSpan(text: name),
+                    const TextSpan(
+                      text: '  Coming soon',
+                      style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700,
+                          color: BrokaColors.gold),
+                    ),
+                  ])),
+                  labelStyle: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w500, color: BrokaColors.textMid),
+                  backgroundColor: BrokaColors.bgMid,
+                  side: const BorderSide(color: BrokaColors.border),
+                  shape: const StadiumBorder(),
+                ),
               ),
           ]),
         ]),

@@ -1,3 +1,48 @@
+# Forgotten passwords, selfies on the Menu and listings, a sky that stays put (2026-10-03)
+
+Reported from a phone, with screenshots: the starry background squashed
+whenever the keyboard opened; the Menu and a listing's seller card showed an
+initial instead of the person's selfie; a business seller's card gave only
+the business name; there was no way to change or recover a password; and
+four of Zeno's six languages should say "coming soon".
+
+**The background no longer squashes** (`lib/widgets/constellation_background.dart`).
+Stars sat at fractions of the box the background was given, and a Scaffold
+shortens its body by the keyboard's height - so on the chat, Zeno, search
+and every other screen on the constellation, the whole sky slid up and
+squeezed into what was left above the keyboard. The sky is now drawn on a
+canvas the size of the box with the keyboard down, and the keyboard only
+covers its bottom. Fixed in the widget, so every screen gets it.
+
+**Selfies instead of initials** (`lib/widgets/broka_image.dart`). BrokaImage
+treated any value starting with "/" as a server path. Bare base64 of a JPEG
+starts "/9j/" - and every selfie is one - so the photo was fetched from the
+API as a URL, failed, and the initial showed. Only "/media/..." (the
+backend's own image route) is a path now. The chat header decoded the photo
+itself, which is why it was right there and wrong on the Menu and the
+listing. The listing's seller card also falls back to the stored avatar.
+
+**A business and the person behind it** (`lib/models/seller_names.dart`,
+`lib/screens/product_screen.dart`). A long-term seller's card shows the
+business name and, under it, their official name, from the public profile
+(`business_name` and `name`). Someone selling as themselves has one name.
+
+**Forgotten and changed passwords** (`api/domains/auth/`, `api/security.py`;
+`lib/features/auth/presentation/`). "Forgot password?" on the login screen
+was a label with nothing behind it. It now opens an SMS-code reset:
+`POST /auth/password/forgot` texts a code (purpose `login_recovery`, so a
+signup code can't reset a password and a reset code can't verify a signup),
+`/forgot/verify` swaps it for a `password_reset` token, and `/reset` sets
+the new password, marks the number verified and signs the phone in. The
+token carries a fingerprint of the password hash it was issued against, so
+it works once. Settings has Change password (`POST /auth/password/change`,
+current password required, rate-limited like login), with the SMS reset for
+a forgotten current one. Both revoke every refresh token on the account and
+issue a fresh session to the phone that made the change.
+
+**Languages** (`lib/screens/settings_screen.dart`). English and Kiswahili
+can be chosen; Dholuo, Kikuyu, Luganda and Sheng are shown as coming soon.
+
 # The call screen names who you're calling; a call history; the Inbox opens the chat you were using (2026-10-02)
 
 Reported from a phone, with a screenshot of a seller's call screen headed

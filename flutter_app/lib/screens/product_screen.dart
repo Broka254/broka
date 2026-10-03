@@ -35,6 +35,7 @@ import '../features/stores/presentation/store_cart_screen.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../main.dart';
 import '../models/listing.dart';
+import '../models/seller_names.dart';
 import '../models/seller_standing.dart';
 import '../services/api_service.dart';
 import '../services/last_screen_tracker.dart';
@@ -637,11 +638,18 @@ class _ProductScreenState extends State<ProductScreen> {
   // ── Seller ────────────────────────────────────────────────────────────────
 
   Widget _buildSellerSection(Listing l) {
-    final sellerName = l.sellerName ?? _sellerInfo?['name'] as String? ?? 'Seller';
+    final names = SellerNames.of(listingName: l.sellerName, profile: _sellerInfo);
+    final sellerName = names.headline;
     final deals = l.sellerCompletedDeals
         ?? (_sellerInfo?['completed_deals'] as num?)?.toInt() ?? 0;
     final verified = _sellerInfo?['is_verified'] as bool? ?? l.sellerVerified;
-    final photo = _sellerInfo?['profile_photo'] as String? ?? l.sellerProfilePhoto;
+    // The selfie, else the stored avatar the listing carries. An empty
+    // string is no photo, so it must not stop the fallback.
+    final photo = [
+      _sellerInfo?['profile_photo'] as String?,
+      l.sellerProfilePhoto,
+      l.sellerAvatarUrl,
+    ].firstWhere((p) => p != null && p.trim().isNotEmpty, orElse: () => null);
     final location = _sellerInfo?['location_name'] as String? ?? l.locationName;
     final memberSince = _sellerInfo?['created_at'] as String?;
 
@@ -697,7 +705,12 @@ class _ProductScreenState extends State<ProductScreen> {
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
+                    if (names.officialName != null) ...[
+                      const Icon(Icons.storefront_rounded, color: BrokaColors.gold, size: 16),
+                      const SizedBox(width: 5),
+                    ],
                     Flexible(child: Text(sellerName, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        key: const Key('seller-card-name'),
                         style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16,
                             fontWeight: FontWeight.w700))),
                     if (verified) ...[
@@ -705,6 +718,22 @@ class _ProductScreenState extends State<ProductScreen> {
                       const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 18),
                     ],
                   ]),
+                  // A business is shown under its own name; the person
+                  // behind it is named too, so a buyer knows who they're
+                  // dealing with as well as which shop.
+                  if (names.officialName != null) ...[
+                    const SizedBox(height: 3),
+                    Row(children: [
+                      const Icon(Icons.person_outline_rounded,
+                          color: BrokaColors.textMid, size: 14),
+                      const SizedBox(width: 5),
+                      Flexible(child: Text(names.officialName!,
+                          key: const Key('seller-card-official-name'),
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: BrokaColors.textHigh,
+                              fontSize: 13, fontWeight: FontWeight.w500))),
+                    ]),
+                  ],
                   const SizedBox(height: 4),
                   Text(deals == 1 ? '1 deal completed' : '$deals deals completed',
                       style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),

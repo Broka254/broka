@@ -31,6 +31,7 @@ from api.security import (
     create_access_token,
     create_call_token,
     create_email_verify_token,
+    create_password_reset_token,
     create_phone_verify_token,
     create_refresh_token,
     decode_access_token,
@@ -73,6 +74,7 @@ def _non_access_tokens(user_id: str = "user-123") -> dict[str, str]:
         "refresh": refresh,
         "phone_verify": create_phone_verify_token("+254700000000"),
         "email_verify": create_email_verify_token("person@example.com"),
+        "password_reset": create_password_reset_token("+254700000000", None),
     }
 
 
@@ -84,14 +86,14 @@ class TestOnlyAccessTokensAuthenticate:
         assert get_current_user(tok) == {"id": "user-123"}
         assert decode_access_token(tok)["sub"] == "user-123"
 
-    @pytest.mark.parametrize("kind", ["call", "refresh", "phone_verify", "email_verify"])
+    @pytest.mark.parametrize("kind", ["call", "refresh", "phone_verify", "email_verify", "password_reset"])
     def test_other_token_types_are_refused_by_http_auth(self, kind):
         tok = _non_access_tokens()[kind]
         with pytest.raises(HTTPException) as exc:
             get_current_user(tok)
         assert exc.value.status_code == 401
 
-    @pytest.mark.parametrize("kind", ["call", "refresh", "phone_verify", "email_verify"])
+    @pytest.mark.parametrize("kind", ["call", "refresh", "phone_verify", "email_verify", "password_reset"])
     def test_other_token_types_are_refused_by_the_ws_decoder(self, kind):
         assert decode_access_token(_non_access_tokens()[kind]) is None
 
@@ -111,7 +113,7 @@ class TestWebSocketsRequireAccessTokens:
     """Real socket handshakes through Starlette's TestClient: each endpoint
     must close before accepting when handed anything but an access token."""
 
-    @pytest.mark.parametrize("kind", ["call", "refresh", "phone_verify", "email_verify"])
+    @pytest.mark.parametrize("kind", ["call", "refresh", "phone_verify", "email_verify", "password_reset"])
     def test_auction_ws_refuses_non_access_tokens(self, kind):
         tok = _non_access_tokens()[kind]
         with TestClient(app) as tc:

@@ -21,9 +21,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.security import (
-    hash_password_async, verify_login_password, create_access_token,
+    hash_password_async, verify_login_password, verify_password_async, create_access_token,
     create_phone_verify_token, decode_phone_verify_token, create_email_verify_token,
-    decode_email_verify_token,
+    decode_email_verify_token, create_password_reset_token, decode_password_reset_token,
+    password_fingerprint,
 )
 from api.core.events import publish, UserRegistered, UserLoggedIn
 from api.core.config import settings
@@ -75,6 +76,20 @@ def generate_business_display_name(name: str, category: Optional[str], location:
     """
     parts = [p.strip() for p in (name, category, location) if p and p.strip()]
     return " · ".join(parts)
+
+
+# The signup wizard's rule (flutter_app auth_screen.dart). Only checked on a
+# password being changed: registration has always taken whatever the app
+# sent, and existing passwords are what they are.
+MIN_PASSWORD_LENGTH = 6
+
+
+def _check_new_password(password: str) -> None:
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Use at least {MIN_PASSWORD_LENGTH} characters for your password",
+        )
 
 
 def _normalise_gender(value):
@@ -174,6 +189,13 @@ class AuthService:
 
     async def verify_otp(self, phone: str, code: str, purpose: OtpPurpose = OtpPurpose.registration) -> dict:
         phone = _normalize_phone(phone)
+        await self._consume_phone_otp(phone, code, purpose)
+        token = create_phone_verify_token(phone)
+        return {"ok": True, "phone_verify_token": token}
+
+    async def _consume_phone_otp(self, phone: str, code: str, purpose: OtpPurpose) -> None:
+        """Checks `code` against the latest pending code of `purpose` sent to
+        the (normalised) `phone`, and spends it. Raises on anything else."""
         otp = await self.repo.get_latest_otp(phone, purpose)
         if not otp:
             raise HTTPException(status_code=400, detail="No pending verification for this phone. Request a new code.")
@@ -184,10 +206,103 @@ class AuthService:
         if _hash_otp(code.strip()) != otp.code_hash:
             await self.repo.increment_otp_attempts(otp)
             raise HTTPException(status_code=400, detail="Incorrect code")
-
         await self.repo.consume_otp(otp)
-        token = create_phone_verify_token(phone)
-        return {"ok": True, "phone_verify_token": token}
+
+    # ── Forgotten password: SMS code → new password ─────────────────────────
+    # The phone number is the account, so a code sent to it is what proves
+    # the person resetting is its owner. Codes for this are their own
+    # purpose (login_recovery): a registration code can't reset a password,
+    # and a reset code can't register a second account.
+
+    async def request_password_reset(
+        self, phone: str, app_signature: Optional[str] = None,
+    ) -> dict:
+        phone = _normalize_phone(phone)
+        # Says plainly when there's no account. Registration's code request
+        # already answers "is this number on BROKA?" (409), so a vague reply
+        # here would protect nothing - and would leave someone who mistyped
+        # their number waiting for a code that is never sent.
+        if not await self.repo.get_by_phone(phone):
+            raise HTTPException(
+                status_code=404,
+                detail="No BROKA account uses this number. Check it, or create an account.",
+            )
+        return await self.request_otp(
+            phone, purpose=OtpPurpose.login_recovery, app_signature=app_signature,
+        )
+
+    async def verify_password_reset(self, phone: str, code: str) -> dict:
+        phone = _normalize_phone(phone)
+        await self._consume_phone_otp(phone, code, OtpPurpose.login_recovery)
+        user = await self.repo.get_by_phone(phone)
+        if not user:
+            raise HTTPException(status_code=404, detail="No BROKA account uses this number.")
+        return {"ok": True, "reset_token": create_password_reset_token(phone, user.password_hash)}
+
+    async def reset_password(self, reset_token: str, new_password: str) -> dict:
+        claims = decode_password_reset_token(reset_token)
+        if not claims:
+            raise HTTPException(
+                status_code=400,
+                detail="This reset has expired. Request a new code and try again.",
+            )
+        user = await self.repo.get_by_phone(claims["phone"])
+        # A different fingerprint means the password changed after the token
+        # was issued - most likely by this very token, replayed.
+        if not user or password_fingerprint(user.password_hash) != claims.get("pwf"):
+            raise HTTPException(
+                status_code=400,
+                detail="This reset was already used. Request a new code if you need to.",
+            )
+        _check_new_password(new_password)
+        user.password_hash = await hash_password_async(new_password)
+        # The SMS code just proved the number, for an account that may have
+        # skipped verifying it at signup.
+        user.phone_verified = True
+        user.last_seen = datetime.utcnow()
+        return await self._fresh_session_after_password_change(user)
+
+    async def change_password(
+        self, user_id: str, current_password: str, new_password: str,
+    ) -> dict:
+        user = await self.repo.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        # 400, not 401: the app renews its session on a 401 and sends the
+        # request again, which would spend a second guess for nothing.
+        if not await verify_password_async(current_password, user.password_hash):
+            raise HTTPException(status_code=400, detail="Your current password is wrong")
+        _check_new_password(new_password)
+        if await verify_password_async(new_password, user.password_hash):
+            raise HTTPException(
+                status_code=400, detail="Choose a password different from your current one",
+            )
+        user.password_hash = await hash_password_async(new_password)
+        return await self._fresh_session_after_password_change(user)
+
+    async def _fresh_session_after_password_change(self, user) -> dict:
+        """Signs every other phone out - a password is changed because
+        someone else might know the old one, and their refresh token would
+        otherwise outlive it by a month - then signs this one in again."""
+        from api.domains.auth.refresh_router import revoke_all_refresh_tokens
+        await revoke_all_refresh_tokens(self.db, user.id)
+        await self.db.commit()
+        token = create_access_token({"sub": user.id})
+        refresh_token = await self._issue_refresh_token(user.id)
+        return {
+            "ok": True,
+            "access_token": token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user_id": user.id,
+            "name": user.name,
+            "nickname": user.nickname,
+            "phone": user.phone,
+            "account_type": user.account_type.value if user.account_type else "buyer",
+            "profile_photo": user.profile_photo,
+            "lat": user.lat,
+            "lng": user.lng,
+        }
 
     # ── Registration (buyer-only; seller is a later upgrade) ────────────────
 

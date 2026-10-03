@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-198 endpoints served by `backend/main.py`. **Auth** is read from each
+202 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 52, token 4, user 120.
+Counts: admin 20, optional 2, public 55, token 4, user 121.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -85,26 +85,30 @@ Counts: admin 20, optional 2, public 52, token 4, user 120.
 | GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:23) |
 | GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:140) |
 | PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:56) |
-| PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:298) |
-| POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:160) |
-| POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:177) |
-| PATCH | `/auth/fcm-token` | user | `update_fcm_token` (backend/api/domains/auth/router.py:346) |
-| PATCH | `/auth/heartbeat` | user | `heartbeat` (backend/api/domains/auth/router.py:330) |
-| PATCH | `/auth/language` | user | `set_language` (backend/api/domains/auth/router.py:282) |
-| PATCH | `/auth/location` | user | `update_location` (backend/api/domains/auth/router.py:270) |
-| PATCH | `/auth/location-visibility` | user | `location_visibility` (backend/api/domains/auth/router.py:314) |
-| POST | `/auth/login` | public | `login` (backend/api/domains/auth/router.py:217) |
-| GET | `/auth/me` | user | `me` (backend/api/domains/auth/router.py:247) |
-| POST | `/auth/otp/request` | public | `request_otp` (backend/api/domains/auth/router.py:133) |
-| POST | `/auth/otp/verify` | public | `verify_otp` (backend/api/domains/auth/router.py:150) |
-| PATCH | `/auth/profile` | user | `update_profile` (backend/api/domains/auth/router.py:256) |
-| POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:187) |
-| GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:362) |
-| POST | `/auth/token/refresh` | public | `refresh_access_token` (backend/api/domains/auth/refresh_router.py:79) |
-| POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:129) |
-| POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:147) |
-| POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:230) |
-| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:376) |
+| PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:375) |
+| POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:181) |
+| POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:198) |
+| PATCH | `/auth/fcm-token` | user | `update_fcm_token` (backend/api/domains/auth/router.py:423) |
+| PATCH | `/auth/heartbeat` | user | `heartbeat` (backend/api/domains/auth/router.py:407) |
+| PATCH | `/auth/language` | user | `set_language` (backend/api/domains/auth/router.py:359) |
+| PATCH | `/auth/location` | user | `update_location` (backend/api/domains/auth/router.py:347) |
+| PATCH | `/auth/location-visibility` | user | `location_visibility` (backend/api/domains/auth/router.py:391) |
+| POST | `/auth/login` | public | `login` (backend/api/domains/auth/router.py:238) |
+| GET | `/auth/me` | user | `me` (backend/api/domains/auth/router.py:324) |
+| POST | `/auth/otp/request` | public | `request_otp` (backend/api/domains/auth/router.py:154) |
+| POST | `/auth/otp/verify` | public | `verify_otp` (backend/api/domains/auth/router.py:171) |
+| POST | `/auth/password/change` | user | `change_password` (backend/api/domains/auth/router.py:292) |
+| POST | `/auth/password/forgot` | public | `forgot_password` (backend/api/domains/auth/router.py:256) |
+| POST | `/auth/password/forgot/verify` | public | `verify_forgot_password` (backend/api/domains/auth/router.py:269) |
+| POST | `/auth/password/reset` | public | `reset_password` (backend/api/domains/auth/router.py:281) |
+| PATCH | `/auth/profile` | user | `update_profile` (backend/api/domains/auth/router.py:333) |
+| POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:208) |
+| GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:439) |
+| POST | `/auth/token/refresh` | public | `refresh_access_token` (backend/api/domains/auth/refresh_router.py:93) |
+| POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:143) |
+| POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:161) |
+| POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:307) |
+| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:453) |
 | POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:245) |
 | POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:212) |
 | POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:178) |
@@ -626,7 +630,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-90 files in `backend/tests/`.
+91 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -686,6 +690,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_nudge_templates.py` — Tests for the system-generated availability-nudge SMS (api/core/nudge_templates.py).
 - `test_otp_sms_retriever.py` — Covers the OTP SMS body built for Android's SMS Retriever API.
 - `test_password_hashing.py` — Password hashing: what bcrypt is given, and what it costs the event loop.
+- `test_password_reset.py` — Forgotten and changed passwords.
 - `test_payment_races.py` — Payments that race each other.
 - `test_premium.py` — Premium plans (PRICING.md section 4; api/domains/premium/).
 - `test_pricing.py` — Pricing (PRICING.md): the listing fee f = C x R, the plans, and commission.
@@ -784,6 +789,8 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `data/repositories/auth_repository.dart` — BROKA v3.0 - Auth Repository Single source of truth for auth operations.
 - `domain/models/user.dart` — BROKA v3.0 - User domain model
+- `presentation/change_password_screen.dart` — Settings > Change password: the current password, then a new one.
+- `presentation/password_reset_screen.dart` — Forgotten password: the account's phone number, the SMS code sent to it, then a new password.
 
 ### `flutter_app/lib/features/buy_agent/`
 
@@ -943,6 +950,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `listing.dart` — BROKA - Listing Model
 - `listing_photo.dart` — A listing or store image as the backend describes it: one stored image in three sizes.
 - `models.dart` — BROKA - Domain Models (MatchResult, Message, Bid) NOTE: Listing model lives in listing.dart
+- `seller_names.dart` — What a listing's seller is called, as a buyer sees it on the listing's screen.
 - `seller_standing.dart` — A seller's standing, as buyers see it on a listing's screen: GET /auth/user/{id} -> seller_standing (backend/api/domains/trust public_stand…
 
 ### `flutter_app/lib/utils/`
@@ -1007,6 +1015,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
 - `chat_screen_memory_test.dart` — The Inbox opens the screen the user was using (2026-10-02).
+- `constellation_background_test.dart` — The constellation behind the screens (widgets/constellation_background.dart) must not move when the keyboard opens.
 - `direct_chat_delivery_test.dart` — The one-on-one chat, as reported from a phone (2026-10-02): the last two messages showed twice until the chat was reopened, a message the o…
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `escrow_actions_test.dart` — Buyer protection dialogs (2026-10-02): paying in parts, releasing with the delivery check first, asking for a refund.
@@ -1025,6 +1034,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
 - `notification_init_test.dart` — The incoming-call notification for a closed app was never posted.
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
+- `password_reset_test.dart` — Forgotten and changed passwords, and Settings' language choice.
 - `photo_capture_test.dart` — Store images are taken the way listing photos are (services/photo_capture.dart): BROKA's own camera first, the phone's camera only as the f…
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
@@ -1032,6 +1042,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
+- `seller_names_test.dart` — The names a listing's seller is shown under (models/seller_names.dart).
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
 - `sms_otp_autofill_test.dart` — The signup wizard's automatic OTP capture (Android SMS Retriever), end to end on the Dart side: a code the native bridge delivers must land…
@@ -1129,7 +1140,7 @@ Modules:
 - `AUCTIONS.md` — Auctions — how the system works, and why (2026-09-18)
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The call screen names who you're calling; a call history; the Inbox opens the chat you were using (2026-10-02)
+- `CHANGES.md` — Forgotten passwords, selfies on the Menu and listings, a sky that stays put (2026-10-03)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
