@@ -13,7 +13,7 @@ Each fix here has a test that failed on the code before it:
     a subcategory of another category.
   * the availability SMS could not be declined.
   * an AI cover failure was a bare 500 whatever the cause; generation had
-    no rate limit; any bytes behind "data:image/" were sent to fal.ai and
+    no rate limit; any bytes behind "data:image/" were sent to fal.ai (the image provider then) and
     paid for; the price went into the prompt; a refused photo tripped the
     circuit breaker for every seller; a transient poll error threw away a
     finished generation.
@@ -33,7 +33,7 @@ from httpx import ASGITransport, AsyncClient
 from PIL import Image
 from sqlalchemy import select
 
-from api.core import fal_client
+from api.core import hf_image_client
 from api.core.nudge_templates import EAT
 from api.database import (
     AsyncSessionLocal, BuyAgentRequest, Category, CategoryFilter, Interest, Listing, User,
@@ -391,12 +391,19 @@ class TestSmsChoice:
 # ── AI cover image ─────────────────────────────────────────────────────────
 
 class TestShowcaseGeneration:
+    @pytest.fixture(autouse=True)
+    def _allowance(self):
+        # The premium allowance (off while PREMIUM_ENABLED is off, one free
+        # try) is test_showcase.py's; these tests are about the rest.
+        with patch.object(showcase, "_spend_a_cover", AsyncMock()):
+            yield
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("code,status", [("unavailable", 503), ("rejected", 422), ("failed", 502)])
     async def test_a_failure_is_a_readable_error_not_a_500(self, client, code, status):
         _, h = await _user()
-        with patch.object(fal_client, "generate_showcase_image_url",
-                          AsyncMock(side_effect=fal_client.FalGenerationError("boom", code=code))):
+        with patch.object(hf_image_client, "generate_showcase_image_url",
+                          AsyncMock(side_effect=hf_image_client.ImageGenerationError("boom", code=code))):
             r = await client.post("/showcase/preview", headers=h, json={
                 "photo_data_uri": _data_uri(_jpeg()), "name": "Sofa", "category": "Home & Furniture",
             })
@@ -405,10 +412,10 @@ class TestShowcaseGeneration:
         assert "boom" not in r.text        # the log's words, not the seller's
 
     @pytest.mark.asyncio
-    async def test_not_an_image_never_reaches_fal(self, client):
+    async def test_not_an_image_never_reaches_the_model(self, client):
         _, h = await _user()
         generate = AsyncMock(return_value="https://fal.media/x.jpg")
-        with patch.object(fal_client, "generate_showcase_image_url", generate):
+        with patch.object(hf_image_client, "generate_showcase_image_url", generate):
             r = await client.post("/showcase/preview", headers=h, json={
                 "photo_data_uri": "data:image/jpeg;base64," + base64.b64encode(b"not a photo").decode(),
                 "name": "Sofa", "category": "Home & Furniture",
@@ -422,9 +429,9 @@ class TestShowcaseGeneration:
         monkeypatch.setattr(rate_limit, "showcase_generate_limiter",
                             rate_limit.RateLimiter("showcase_test", 2, 3600))
         _, h = await _user()
-        with patch.object(fal_client, "generate_showcase_image_url",
+        with patch.object(hf_image_client, "generate_showcase_image_url",
                           AsyncMock(return_value="https://fal.media/x.jpg")), \
-             patch.object(fal_client, "download_generated_image",
+             patch.object(hf_image_client, "download_generated_image",
                           AsyncMock(return_value=(_jpeg(), "image/jpeg"))):
             codes = [
                 (await client.post("/showcase/preview", headers=h, json={
@@ -442,8 +449,8 @@ class TestShowcaseGeneration:
         assert up.status_code in (200, 201), up.text
         photo_id = up.json()["id"]
         generate = AsyncMock(return_value="https://fal.media/x.jpg")
-        with patch.object(fal_client, "generate_showcase_image_url", generate), \
-             patch.object(fal_client, "download_generated_image",
+        with patch.object(hf_image_client, "generate_showcase_image_url", generate), \
+             patch.object(hf_image_client, "download_generated_image",
                           AsyncMock(return_value=(_jpeg((400, 300), (250, 250, 250)), "image/jpeg"))):
             r = await client.post("/showcase/preview", headers=h, json={
                 "photo_id": photo_id, "name": "Sofa", "category": "Home & Furniture",
@@ -483,67 +490,139 @@ class TestShowcaseGeneration:
         assert r.status_code == 400
 
 
-class TestFalClient:
+class TestHfImageClient:
+    MODEL = "Qwen/Qwen-Image-Edit-2511"
+
     @pytest.fixture(autouse=True)
     def _configured(self, monkeypatch):
-        monkeypatch.setattr(fal_client, "settings", type("S", (), {
-            "fal_key": "k", "fal_showcase_model": "fal-ai/flux-pro/kontext"})())
-        monkeypatch.setattr(fal_client, "_POLL_INTERVAL_SECONDS", 0)
-        fal_client._breaker._state = fal_client._breaker._state.__class__("closed")
-        fal_client._breaker._failure_count = 0
+        monkeypatch.setattr(hf_image_client, "settings", type("S", (), {
+            "hf_token": "hf_test", "hf_showcase_model": self.MODEL})())
+        monkeypatch.setattr(hf_image_client, "_POLL_INTERVAL_SECONDS", 0)
+        monkeypatch.setattr(hf_image_client, "_provider_models", {})
+        hf_image_client._breaker._state = hf_image_client._breaker._state.__class__("closed")
+        hf_image_client._breaker._failure_count = 0
 
-    def _transport(self, monkeypatch, handler):
+    def _transport(self, monkeypatch, handler, mapping=None):
+        """handler answers the generation calls; the Hub's provider mapping
+        is answered here, so every test goes through the real lookup."""
         real = httpx.AsyncClient
+        if mapping is None:
+            mapping = {"fal-ai": {"providerId": "fal-ai/qwen-image-edit-2511",
+                                  "task": "image-to-image", "status": "live"}}
+
+        def route(req):
+            if req.url.host == "huggingface.co":
+                return httpx.Response(200, json={"id": self.MODEL,
+                                                 "inferenceProviderMapping": mapping})
+            return handler(req)
 
         def make(*args, **kwargs):
-            kwargs["transport"] = httpx.MockTransport(handler)
+            kwargs["transport"] = httpx.MockTransport(route)
             return real(*args, **kwargs)
-        monkeypatch.setattr(fal_client.httpx, "AsyncClient", make)
+        monkeypatch.setattr(hf_image_client.httpx, "AsyncClient", make)
+
+    @staticmethod
+    def _completes(seen=None):
+        def handler(req):
+            if seen is not None:
+                seen.append(req)
+            if req.method == "POST":
+                return httpx.Response(200, json={
+                    "request_id": "r1",
+                    "response_url": "https://queue.fal.run/fal-ai/qwen-image-edit-2511/requests/r1"})
+            if req.url.path.endswith("/status"):
+                return httpx.Response(200, json={"status": "COMPLETED"})
+            return httpx.Response(200, json={"images": [{"url": "https://fal.media/out.jpg"}]})
+        return handler
+
+    @pytest.mark.asyncio
+    async def test_calls_go_through_the_hugging_face_router_with_the_hf_token(self, monkeypatch):
+        seen = []
+        self._transport(monkeypatch, self._completes(seen))
+        url = await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+        assert url == "https://fal.media/out.jpg"
+        assert [(r.method, r.url.host, r.url.path) for r in seen] == [
+            ("POST", "router.huggingface.co", "/fal-ai/fal-ai/qwen-image-edit-2511"),
+            ("GET", "router.huggingface.co", "/fal-ai/fal-ai/qwen-image-edit-2511/requests/r1/status"),
+            ("GET", "router.huggingface.co", "/fal-ai/fal-ai/qwen-image-edit-2511/requests/r1"),
+        ]
+        assert all(r.url.params["_subdomain"] == "queue" for r in seen)
+        assert all(r.headers["authorization"] == "Bearer hf_test" for r in seen)
+
+    @pytest.mark.asyncio
+    async def test_the_hub_mapping_may_come_as_a_list(self, monkeypatch):
+        self._transport(monkeypatch, self._completes(), mapping=[
+            {"provider": "replicate", "providerId": "x/y", "task": "image-to-image"},
+            {"provider": "fal-ai", "providerId": "fal-ai/qwen-image-edit-2511", "task": "image-to-image"},
+        ])
+        assert await hf_image_client.generate_showcase_image_url(
+            "p", "data:image/jpeg;base64,AA") == "https://fal.media/out.jpg"
+
+    @pytest.mark.asyncio
+    async def test_a_model_hf_does_not_serve_is_unavailable_not_a_crash(self, monkeypatch):
+        self._transport(monkeypatch, self._completes(), mapping={
+            "replicate": {"providerId": "x/y", "task": "image-to-image"}})
+        with pytest.raises(hf_image_client.ImageGenerationError) as exc:
+            await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+        assert exc.value.code == "unavailable"
+
+    @pytest.mark.asyncio
+    async def test_no_token_is_unavailable_without_calling_anyone(self, monkeypatch):
+        monkeypatch.setattr(hf_image_client, "settings", type("S", (), {
+            "hf_token": "", "hf_showcase_model": self.MODEL})())
+        calls = []
+        self._transport(monkeypatch, lambda req: calls.append(req) or httpx.Response(500))
+        with pytest.raises(hf_image_client.ImageGenerationError) as exc:
+            await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+        assert exc.value.code == "unavailable" and calls == []
 
     @pytest.mark.asyncio
     async def test_a_refused_photo_does_not_switch_generation_off_for_everyone(self, monkeypatch):
         self._transport(monkeypatch, lambda req: httpx.Response(422, json={"detail": "nsfw"}))
         for _ in range(8):
-            with pytest.raises(fal_client.FalGenerationError) as exc:
-                await fal_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+            with pytest.raises(hf_image_client.ImageGenerationError) as exc:
+                await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
             assert exc.value.code == "rejected"
-        assert fal_client._breaker.state.value == "closed"
+        assert hf_image_client._breaker.state.value == "closed"
+
+    @pytest.mark.asyncio
+    async def test_running_out_of_hf_credit_is_ours_not_the_photo(self, monkeypatch):
+        """HF answers 402 when the account's credit is spent - no photo will
+        fix that, so it must not be blamed on the seller's photo."""
+        self._transport(monkeypatch, lambda req: httpx.Response(402, json={"error": "credits"}))
+        with pytest.raises(hf_image_client.ImageGenerationError) as exc:
+            await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+        assert exc.value.code != "rejected"
+        assert hf_image_client._breaker._failure_count == 1
 
     @pytest.mark.asyncio
     async def test_a_dropped_status_poll_does_not_lose_the_generation(self, monkeypatch):
         polls = {"n": 0}
+        done = self._completes()
 
         def handler(req):
-            if req.method == "POST":
-                return httpx.Response(200, json={"request_id": "r1"})
             if req.url.path.endswith("/status"):
                 polls["n"] += 1
                 if polls["n"] == 1:
                     return httpx.Response(503)
-                return httpx.Response(200, json={"status": "COMPLETED"})
-            return httpx.Response(200, json={"images": [{"url": "https://fal.media/out.jpg"}]})
+            return done(req)
         self._transport(monkeypatch, handler)
-        url = await fal_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+        url = await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
         assert url == "https://fal.media/out.jpg"
 
     @pytest.mark.asyncio
     async def test_the_request_asks_for_a_card_shaped_jpeg(self, monkeypatch):
-        seen = {}
-
-        def handler(req):
-            if req.method == "POST":
-                seen.update(json.loads(req.content))
-                return httpx.Response(200, json={"request_id": "r1"})
-            if req.url.path.endswith("/status"):
-                return httpx.Response(200, json={"status": "COMPLETED"})
-            return httpx.Response(200, json={"images": [{"url": "https://fal.media/out.jpg"}]})
-        self._transport(monkeypatch, handler)
-        await fal_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
-        assert seen["output_format"] == "jpeg" and seen["aspect_ratio"] == "4:3"
+        seen = []
+        self._transport(monkeypatch, self._completes(seen))
+        await hf_image_client.generate_showcase_image_url("p", "data:image/jpeg;base64,AA")
+        body = json.loads(seen[0].content)
+        assert body["output_format"] == "jpeg"
+        assert body["image_size"] == "landscape_4_3" and body["aspect_ratio"] == "4:3"
+        assert body["image_url"] == "data:image/jpeg;base64,AA"
 
     @pytest.mark.asyncio
     async def test_a_download_that_is_not_an_image_is_refused(self, monkeypatch):
         self._transport(monkeypatch, lambda req: httpx.Response(
             200, content=b"<html>", headers={"content-type": "text/html"}))
-        with pytest.raises(fal_client.FalGenerationError):
-            await fal_client.download_generated_image("https://fal.media/out.jpg")
+        with pytest.raises(hf_image_client.ImageGenerationError):
+            await hf_image_client.download_generated_image("https://fal.media/out.jpg")

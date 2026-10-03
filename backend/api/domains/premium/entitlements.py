@@ -7,7 +7,7 @@ counted: the features stay free, as they were before plans existed.
 
 Allowances are per plan month (models/subscription.py): month n of a plan
 runs from its start + n x 30 days. Someone without a plan has only
-FREE_TRIAL - two AI covers, once.
+FREE_TRIAL - one AI cover, once.
 
 A refusal is a 402 whose detail the app reads: {"code", "message",
 "feature", "plan", "upgrade_to"}. PREMIUM_REQUIRED means the user has no

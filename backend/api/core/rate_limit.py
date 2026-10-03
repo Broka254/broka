@@ -225,7 +225,7 @@ else:
     listing_create_limiter       = _make_limiter("listing_create",     limit=30,  window_seconds=3600)
     listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100, window_seconds=86400)
     # AI cover images (POST /showcase/preview, /listings/{id}/showcase/
-    # generate). Every generation is a paid fal.ai call, and nothing else
+    # generate). Every generation is a paid Hugging Face call, and nothing else
     # bounded them: one signed-in script could spend the month's budget in
     # an afternoon. A seller trying looks - six themes, a few regenerations -
     # stays well inside 12 an hour; 40 a day covers a busy shop.

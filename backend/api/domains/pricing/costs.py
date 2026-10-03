@@ -115,7 +115,10 @@ CALL_VIDEO_MINUTE = usd(0.05 * 9 / 1024)
 
 
 # ── Images ───────────────────────────────────────────────────────────────────
-# AI Showcase covers: fal.ai FLUX.1 Kontext [pro], $0.04 an image.
+# AI Showcase covers: Qwen-Image-Edit through Hugging Face, ~$0.03 a
+# megapixel - about $0.024 for a 1024x768 cover. Kept at the $0.04 FLUX.1
+# Kontext [pro] cost it replaced: a ceiling, so plan prices and margins
+# don't move with the switch, and room if HF_SHOWCASE_MODEL is changed.
 AI_SHOWCASE_IMAGE = usd(0.04)
 # Covers are made while a listing is posted, and a seller rarely keeps the
 # first one: a look, then another look or a retry. Assumption until the

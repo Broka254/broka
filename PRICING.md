@@ -52,7 +52,7 @@ marked *assumption* are estimates until the app logs the real numbers (see
 | **Text to speech** | Microsoft Edge TTS: free, but an unofficial endpoint. A paid neural voice is ~$16 / 1M characters | Zeno speaking. A reserve is kept in case the free voice goes away | 0.93 per minute (reserve) |
 | **Voice mode, all in** | STT + ~3 Zeno turns + TTS reserve | Counted per thing said to Zeno (a *voice request*): the server sees each spoken turn, not the microphone's minutes | **2.14 per minute**, 0.71 per request |
 | **Calls (TURN)** | Cloudflare Realtime $0.05/GB after 1,000 GB free a month | Relayed voice ~0.6 MB/min, video ~9 MB/min. The free 1,000 GB is ~110,000 video minutes | < 0.06 per video minute - not priced |
-| **AI Showcase image** | fal.ai FLUX.1 Kontext [pro], $0.04 an image | AI cover images, made while posting a listing. ~3 tries per listing (*assumption*: a seller tries a look or two before keeping one) | **5.18 per try**, ~15.5 per listing |
+| **AI Showcase image** | Qwen-Image-Edit through Hugging Face, ~$0.03 a megapixel (~$0.024 a 1024×768 cover); priced at the $0.04 of the FLUX.1 Kontext [pro] it replaced, as a ceiling | AI cover images, made while posting a listing. ~3 tries per listing (*assumption*: a seller tries a look or two before keeping one) | **5.18 per try**, ~15.5 per listing |
 | **Email** | Resend: free for 3,000 a month | Email OTPs | 0 |
 | **M-Pesa, collecting a fee** | Tariff of 7 Aug 2026: free to KES 100, KES 3 to 500, KES 5 to 1,000, capped at KES 54 | Charging listing fees and plans | 0-54 per payment |
 | **E-Confirm** | 1% of the deal | Holds the buyer's money in escrow and pays the seller | Passed through to the buyer |
@@ -417,9 +417,12 @@ what they pay (1.1×). **199 / 599 / 1,499 include VAT**, keep the floor
 after it, and sit at the value anchors above. Prepaying a year brings them
 to **159 / 479 / 1,199 a month**.
 
-**Free tries.** Someone without a plan gets **2 AI cover tries, once** -
-about KES 10, an acquisition cost, and the only way a seller learns what a
+**Free tries.** Someone without a plan gets **1 AI cover try, once** -
+about KES 5, an acquisition cost, and the only way a seller learns what a
 cover does to a listing before paying for more. Nothing else is on trial.
+While `PREMIUM_ENABLED` is off, AI covers are off too (the other premium
+features are free then): with no plans sold, every cover would be paid for
+by BROKA alone.
 
 Voice requests are the next most expensive (KES 0.71 each, a third of it the
 text-to-speech reserve). If the free voice keeps working, they can go up
@@ -708,7 +711,7 @@ before BROKA has a few thousand deals.
 - Buyer-protection fees: [eBay UK](https://www.ebay.co.uk/help/buying/paying-items/buyer-protection-fee?id=5594), [Depop](https://news.depop.com/company-news/evolving-our-fee-structure-with-zero-selling-fees-on-depop/), [Vinted](https://blog.vinta.app/blog/vinted-fees-explained-what-sellers-actually-pay), [Jumia Kenya commissions](https://vendorhub.jumia.co.ke/commissions-2026-sheet/)
 - Cloudflare R2: [pricing](https://developers.cloudflare.com/r2/pricing/); Cloudflare Realtime TURN/SFU: [pricing](https://developers.cloudflare.com/realtime/sfu/pricing)
 - Deepgram Nova-3: [pricing guide](https://brasstranscripts.com/blog/deepgram-pricing-per-minute-2025-real-time-vs-batch); AssemblyAI Universal-Streaming: [pricing](https://www.assemblyai.com/pricing)
-- fal.ai FLUX.1 Kontext [pro]: [fal.ai](https://fal.ai/models/fal-ai/flux-pro/kontext)
+- Qwen-Image-Edit: [model](https://huggingface.co/Qwen/Qwen-Image-Edit-2511), [Hugging Face Inference Providers pricing](https://huggingface.co/docs/inference-providers/pricing)
 - Kenyan bulk SMS: [Safaricom bulk SMS tariff](https://www.safaricom.co.ke/images/Downloads/Resources_Downloads/VAS/Bulk_SMS_Tariff_Guide_updated.pdf), [Mocky SMS guide](https://mocky.co.ke/blog/bulk-sms-marketing-in-kenya-costs-compliance-and-roi-guide-for-smes-in-2026)
 - M-Pesa tariffs from 7 August 2026: [The Kenya Times](https://thekenyatimes.com/business/safaricom-reduces-m-pesa-business-charges-list-of-new-charges/), [tech-ish](https://tech-ish.com/2026/08/01/mpesa-pochi-buy-goods-tariff-cuts-2026/)
 - Vercel: [pricing](https://vercel.com/pricing); Resend: [pricing](https://resend.com/pricing); Sentry: [pricing](https://docs.sentry.io/pricing/)

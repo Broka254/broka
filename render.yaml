@@ -42,6 +42,12 @@ services:
         sync: false          # Legacy fallback - currently a no-op (see OPENROUTER_API_KEY above);
                               # GROQ_MODEL is hardcoded in source, not env-driven, so reactivating
                               # this tier with a still-served Groq model needs a code change too
+      - key: HF_TOKEN
+        sync: false          # Hugging Face token ("Make calls to Inference Providers") for AI
+                             # cover images - see api/core/hf_image_client.py. Unset is safe:
+                             # AI covers return a clear error, gallery covers still work.
+      - key: HF_SHOWCASE_MODEL
+        value: "Qwen/Qwen-Image-Edit-2511"   # any Hub model HF serves for image-to-image via fal-ai
       - key: DEEPGRAM_API_KEY
         sync: false          # Deepgram streaming speech-to-text, for the Zeno voice card.
                              # Unset is safe: /stt/deepgram-token returns 503 and the app
@@ -98,6 +104,7 @@ services:
         value: "false"       # true: voice mode, Zeno's SMS, the Buying Agent, AI covers and hosting
                              # auctions need a plan, and plans are sold (PRICING.md). Only once
                              # the app build with the Premium screen is required.
+                             # false: those stay free, but AI covers are off.
       - key: MPESA_PREMIUM_CALLBACK_URL
         sync: false          # Optional. Unset = /premium/callback/<MPESA_CALLBACK_SECRET>
       - key: ECONFIRM_FALLBACK_EMAIL_DOMAIN

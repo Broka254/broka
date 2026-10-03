@@ -95,20 +95,18 @@ class Settings:
         os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "15")
     ))
 
-    # ── fal.ai (AI Showcase/Cover Image) ────────────────────────────────────
+    # ── Hugging Face (AI Showcase/Cover Image) ──────────────────────────────
     # Separate from the AI Providers above on purpose - those are for the
-    # negotiation broker (text), this is image generation, and the spec
-    # this was built against is explicit that it must be fal.ai specifically
-    # (not Gemini/OpenAI/Stability direct) and never reach the Flutter
-    # client. See api/domains/showcase/service.py.
-    fal_key: str = field(default_factory=lambda: os.getenv("FAL_KEY", ""))
-    # fal-ai/flux-pro/kontext: "change X while keeping everything else the
-    # same" is its whole design goal, which lines up with the
-    # product-preservation requirement better than a generic strength-based
-    # img2img model. Overridable without a redeploy in case a better-suited
-    # model shows up later.
-    fal_showcase_model: str = field(default_factory=lambda: os.getenv(
-        "FAL_SHOWCASE_MODEL", "fal-ai/flux-pro/kontext"
+    # negotiation broker (text), this is image generation, and the token
+    # never reaches the Flutter client. It replaced fal.ai, whose account
+    # needed a tax id. See api/core/hf_image_client.py.
+    hf_token: str = field(default_factory=lambda: os.getenv("HF_TOKEN", ""))
+    # Qwen/Qwen-Image-Edit-2511: an instruction editor ("change the
+    # background, keep the product") whose Apache-2.0 licence allows covers
+    # BROKA charges for. Any Hub model that HF serves for image-to-image
+    # through fal-ai works; overridable without a redeploy.
+    hf_showcase_model: str = field(default_factory=lambda: os.getenv(
+        "HF_SHOWCASE_MODEL", "Qwen/Qwen-Image-Edit-2511"
     ))
     # Whether AI covers are premium is PREMIUM_ENABLED's business now (the
     # premium domain), not a flag of the showcase's own - it replaced
@@ -393,7 +391,8 @@ class Settings:
     # ── Premium plans (PRICING.md) ────────────────────────────────────────────
     # Off: voice mode, Zeno's SMS, the Buying Agent, AI covers and hosting
     # auctions stay free for everyone, as they are today, and plans cannot be
-    # bought. On: they need a plan (AI covers: two free tries first) and plans
+    # bought - except AI covers, which are off: each is a paid generation, and
+    # with no plans to sell there is no one they are for. On: they need a plan (AI covers: one free try first) and plans
     # are sold. Same rule as listing fees - only once the app build with the
     # Premium screen is the one users must have, or an older build hits a
     # wall it has no way past.
@@ -644,15 +643,15 @@ def validate_startup() -> None:
             "verification is unavailable until one of these is set."
         )
 
-    # ── Warn if FAL_KEY not configured ─────────────────────────────────────────
+    # ── Warn if HF_TOKEN not configured ────────────────────────────────────────
     # Lower severity than the SMS/SECRET_KEY checks above - AI showcase
     # generation is an optional, skippable step in listing creation
     # (sellers can upload a gallery cover or skip it entirely), so a
     # missing key degrades one feature rather than blocking registration.
-    if not s.fal_key:
+    if not s.hf_token:
         logger.warning(
-            "[startup] ⚠  FAL_KEY not set — AI showcase image generation "
-            "will return a clear error instead of calling fal.ai. Gallery "
+            "[startup] ⚠  HF_TOKEN not set — AI showcase image generation "
+            "will return a clear error instead of calling Hugging Face. Gallery "
             "covers and skipping the showcase step are unaffected."
         )
 

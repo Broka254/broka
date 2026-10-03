@@ -3,7 +3,7 @@ BROKA - Cloudflare Realtime TURN Client
 ─────────────────────────────────────────────────────────────────────────────
 Raw REST wrapper around Cloudflare Realtime's TURN credential-generation
 API - no Cloudflare SDK dependency, matching how api/core/sms.py and
-api/core/fal_client.py talk to their own external providers directly over
+api/core/hf_image_client.py talk to their own external providers directly over
 httpx rather than pulling in a vendor package.
 
 Cloudflare's documented contract:
@@ -152,8 +152,8 @@ async def generate_ice_servers(ttl: int = _DEFAULT_TTL_SECONDS) -> dict:
         raise CloudflareTurnError("Cloudflare TURN is temporarily unavailable")
     # CloudflareTurnError from _generate_once (malformed/invalid Cloudflare
     # response) isn't an httpx.HTTPError, so it already passes through the
-    # except clauses below untouched - same pattern as fal_client.py's
-    # FalGenerationError.
+    # except clauses below untouched - same pattern as hf_image_client.py's
+    # ImageGenerationError.
     except httpx.TimeoutException as e:
         logger.warning("[cloudflare:turn] request timed out err=%s", e)
         raise CloudflareTurnError("Cloudflare TURN credential request timed out")

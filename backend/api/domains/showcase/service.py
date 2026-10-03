@@ -1,8 +1,8 @@
 """
 BROKA - AI Showcase/Cover Image Service
 ─────────────────────────────────────────────────────────────────────────────
-Orchestrates the showcase image feature end to end. The actual fal.ai HTTP
-mechanics live in api/core/fal_client.py (reusable technical client,
+Orchestrates the showcase image feature end to end. The actual Hugging Face
+HTTP mechanics live in api/core/hf_image_client.py (reusable technical client,
 mirrors api/core/sms.py); this file is the business logic: ownership,
 the premium allowance, prompt construction, and the
 generate -> download -> persist pipeline.
@@ -21,7 +21,7 @@ state in SellWizardData, same as every other wizard step already works):
     Edit Listing). Looks facts up from the real row; ownership-checked.
   - generate_showcase_preview_standalone() - no listing yet (the wizard's
     Showcase step). Facts come straight from the request body instead.
-Both funnel into the same _run_generation() core so the fal.ai call,
+Both funnel into the same _run_generation() core so the model call,
 prompt shape, and preservation instructions can't drift between the two.
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Listing
-from api.core import fal_client
+from api.core import hf_image_client
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +126,8 @@ async def _first_actual_photo_data_uri(db: AsyncSession, listing: Listing) -> st
 
 
 def _legacy_first_photo_data_uri(listing: Listing) -> str:
-    """The seller's primary actual product photo, as a data: URI fal.ai
-    can use directly as image_url. verified_photos stores raw base64
+    """The seller's primary actual product photo, as a data: URI the
+    model can use directly as image_url. verified_photos stores raw base64
     chunks with no data: prefix and no per-photo mime tag (see
     product_card.dart's base64Decode(parts.first)), so this defaults the
     mime type the same way media.py's own upload endpoint does when a
@@ -190,16 +190,22 @@ async def _get_owned_listing(db: AsyncSession, listing_id: str, user_id: str) ->
 
 async def _spend_a_cover(db: AsyncSession, user_id: str) -> None:
     """An AI cover is premium (PRICING.md): each try spends one of the
-    plan's monthly AI covers, or one of the two free ones. Checked fresh
-    from the database every time, never from anything cached in the token -
-    a plan can start or end after the token was issued. A no-op while
-    PREMIUM_ENABLED is off.
+    plan's monthly AI covers, or the one free one. Checked fresh from the
+    database every time, never from anything cached in the token - a plan
+    can start or end after the token was issued.
 
-    Called once the request is one that will reach fal.ai: a missing photo
-    or a bad theme must not use up a try. _run_generation gives it back if
-    fal.ai then fails.
+    While PREMIUM_ENABLED is off, every other premium feature is free, but
+    AI covers are off: entitlements counts nothing then, so each cover would
+    be a paid generation for anyone, with no plan that could pay for it.
+
+    Called once the request is one that will reach the model: a missing
+    photo or a bad theme must not use up a try. _run_generation gives it
+    back if the model then fails.
     """
     from api.domains.premium import entitlements
+    if not entitlements.enabled():
+        raise _failure(hf_image_client.ImageGenerationError(
+            "PREMIUM_ENABLED is off - AI covers are premium only", code="unavailable"))
     await entitlements.consume(db, user_id, entitlements.Feature.AI_COVER)
 
 
@@ -233,8 +239,8 @@ async def _check_generation_rate(user_id: str) -> None:
             )
 
 
-# What a seller is told when generation fails, by FalGenerationError.code.
-# The exception's own text is for the log ("FAL_KEY unset", "status=ERROR").
+# What a seller is told when generation fails, by ImageGenerationError.code.
+# The exception's own text is for the log ("HF_TOKEN unset", "status=ERROR").
 _FAILURE_REPLIES = {
     "unavailable": (503, "AI covers aren't available right now. Upload a cover from your "
                          "gallery, or skip this step - your photos are enough."),
@@ -244,8 +250,8 @@ _FAILURE_REPLIES = {
 }
 
 
-def _failure(exc: "fal_client.FalGenerationError") -> HTTPException:
-    """FalGenerationError used to escape every endpoint here as a bare 500,
+def _failure(exc: "hf_image_client.ImageGenerationError") -> HTTPException:
+    """The generation error used to escape every endpoint here as a bare 500,
     so the seller saw "generation failed" whatever the cause - including
     "not configured", which no retry can fix."""
     logger.warning("[showcase] generation failed code=%s: %s", exc.code, exc)
@@ -279,7 +285,7 @@ async def _photo_from_asset(db: AsyncSession, user_id: str, photo_id: str) -> st
 
 async def _photo_from_data_uri(photo_data_uri: Optional[str]) -> str:
     """A photo sent inline, decoded and re-encoded before it goes anywhere.
-    It used to be forwarded to fal.ai as sent - any bytes at all behind a
+    It used to be forwarded to the model as sent - any bytes at all behind a
     "data:image/" prefix, of any size, paid for whether or not they were a
     photo - and at full camera size."""
     from api.core.image_processing import ImageRejected, process_image, to_jpeg
@@ -306,7 +312,7 @@ async def _photo_from_data_uri(photo_data_uri: Optional[str]) -> str:
 async def _run_generation(
     db: AsyncSession, user_id: str, prompt: str, photo_data_uri: str, as_asset: bool,
 ) -> dict:
-    """The fal.ai call + download, shared by both entry points below.
+    """The model call + download, shared by both entry points below.
 
     as_asset=True (current app builds): the result is stored as the
     seller's own image asset (purpose listing_showcase, not yet attached -
@@ -320,9 +326,9 @@ async def _run_generation(
     as_asset=False: the old data-URI response, for app builds before it.
     """
     try:
-        fal_url = await fal_client.generate_showcase_image_url(prompt, photo_data_uri)
-        image_bytes, mime = await fal_client.download_generated_image(fal_url)
-    except fal_client.FalGenerationError as exc:
+        image_url = await hf_image_client.generate_showcase_image_url(prompt, photo_data_uri)
+        image_bytes, mime = await hf_image_client.download_generated_image(image_url)
+    except hf_image_client.ImageGenerationError as exc:
         await _give_the_cover_back(db, user_id)
         raise _failure(exc)
 
@@ -340,7 +346,7 @@ async def _run_generation(
     except ImageRejected as exc:
         await db.rollback()
         await _give_the_cover_back(db, user_id)
-        raise _failure(fal_client.FalGenerationError(f"unreadable result: {exc}"))
+        raise _failure(hf_image_client.ImageGenerationError(f"unreadable result: {exc}"))
     return {"asset": asset_urls(asset), "prompt_used": prompt}
 
 
@@ -392,7 +398,7 @@ async def generate_showcase_preview_standalone(
         photo = await _photo_from_asset(db, user_id, photo_id)
     else:
         photo = await _photo_from_data_uri(photo_data_uri)
-    # Counted only once the request is one that will reach fal.ai: a
+    # Counted only once the request is one that will reach the model: a
     # missing photo shouldn't use up a seller's allowance.
     await _check_generation_rate(user_id)
     await _spend_a_cover(db, user_id)

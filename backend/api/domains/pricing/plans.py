@@ -148,10 +148,10 @@ PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
 )
 PREMIUM_BY_ID: dict[str, PremiumPlan] = {p.id: p for p in PREMIUM_PLANS}
 
-# What someone without a plan may try before being asked to subscribe: two
-# AI covers, once. About KES 10 each - an acquisition cost, and the only way
-# a seller learns what a cover does to a listing before paying for more.
-FREE_TRIAL: dict[str, int] = {"ai_covers": 2}
+# What someone without a plan may try before being asked to subscribe: one
+# AI cover, once. About KES 5 - an acquisition cost, and the only way a
+# seller learns what a cover does to a listing before paying for more.
+FREE_TRIAL: dict[str, int] = {"ai_covers": 1}
 
 
 # ── Stores ───────────────────────────────────────────────────────────────────

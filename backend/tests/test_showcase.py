@@ -1,12 +1,11 @@
 """
 BROKA - AI Showcase/Cover Image Tests
 Covers: location_name derivation from county/subcounty, ownership checks,
-AI covers as a premium allowance (free while PREMIUM_ENABLED is off; two
-free tries, then a plan's, when it is on), and the set/remove/generate flows.
-fal.ai itself is mocked at the api.core.fal_client boundary - the fal.ai
-HTTP/polling contract is covered separately and directly against the real
-module in verify_fal.py, since httpx isn't installable in the sandbox this
-was written in.
+AI covers as a premium allowance (off while PREMIUM_ENABLED is off; one
+free try, then a plan's, when it is on), and the set/remove/generate flows.
+The model is mocked at the api.core.hf_image_client boundary - its
+HTTP/polling contract is covered in test_listing_overhaul.py's
+TestHfImageClient.
 
 Run: pytest backend/tests/test_showcase.py -v
 """
@@ -19,7 +18,7 @@ import pytest_asyncio
 from api.database import init_db, reset_engine, AsyncSessionLocal, User, Listing
 from api.domains.listings.service import _derive_location_name, ListingService
 from api.domains.showcase import service as showcase_service
-from api.core import fal_client
+from api.core import hf_image_client
 from fastapi import HTTPException
 
 
@@ -132,10 +131,10 @@ def _premium_on():
                  dataclasses.replace(settings, premium_enabled=True))
 
 
-def _fal_ok():
-    return (patch("api.domains.showcase.service.fal_client.generate_showcase_image_url",
-                  return_value="https://cdn.fal.ai/fake.png"),
-            patch("api.domains.showcase.service.fal_client.download_generated_image",
+def _model_ok():
+    return (patch("api.domains.showcase.service.hf_image_client.generate_showcase_image_url",
+                  return_value="https://fal.media/fake.png"),
+            patch("api.domains.showcase.service.hf_image_client.download_generated_image",
                   return_value=(b"RAWBYTES", "image/jpeg")))
 
 
@@ -146,24 +145,29 @@ async def _generate(db, seller_id):
 
 
 @pytest.mark.asyncio
-async def test_ai_covers_are_free_for_everyone_while_premium_is_off():
+async def test_ai_covers_are_off_while_premium_is_off():
+    """With PREMIUM_ENABLED off nothing is counted, so every cover used to
+    be a paid generation for anyone, with no plan to pay for it."""
     async with AsyncSessionLocal() as db:
         seller = await _make_user(db, "Free Seller")
         await db.commit()
-        gen, dl = _fal_ok()
-        with gen, dl:
-            for _ in range(4):
-                await _generate(db, seller.id)  # must not raise
+        gen, dl = _model_ok()
+        with gen as generate, dl:
+            with pytest.raises(HTTPException) as exc:
+                await _generate(db, seller.id)
+        assert exc.value.status_code == 503
+        assert exc.value.detail["code"] == "SHOWCASE_UNAVAILABLE"
+        assert "gallery" in exc.value.detail["message"]
+        generate.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_two_free_tries_then_a_plan_is_needed():
+async def test_one_free_try_then_a_plan_is_needed():
     async with AsyncSessionLocal() as db:
         seller = await _make_user(db, "Trial Seller")
         await db.commit()
-        gen, dl = _fal_ok()
+        gen, dl = _model_ok()
         with _premium_on(), gen, dl:
-            await _generate(db, seller.id)
             await _generate(db, seller.id)
             with pytest.raises(HTTPException) as exc:
                 await _generate(db, seller.id)
@@ -184,7 +188,7 @@ async def test_a_plan_gives_its_months_tries():
         db.add(Subscription(user_id=seller.id, plan_id="plus", started_at=now,
                             paid_until=now + timedelta(days=30)))
         await db.commit()
-        gen, dl = _fal_ok()
+        gen, dl = _model_ok()
         with _premium_on(), gen, dl:
             for _ in range(PREMIUM_BY_ID["plus"].ai_covers):
                 await _generate(db, seller.id)
@@ -199,18 +203,17 @@ async def test_a_cover_the_model_failed_to_make_does_not_use_a_try():
     async with AsyncSessionLocal() as db:
         seller = await _make_user(db, "Unlucky Seller")
         await db.commit()
-        failing = patch("api.domains.showcase.service.fal_client.generate_showcase_image_url",
-                        side_effect=fal_client.FalGenerationError("model down", code="failed"))
+        failing = patch("api.domains.showcase.service.hf_image_client.generate_showcase_image_url",
+                        side_effect=hf_image_client.ImageGenerationError("model down", code="failed"))
         with _premium_on():
             with failing:
                 for _ in range(3):
                     with pytest.raises(HTTPException) as exc:
                         await _generate(db, seller.id)
                     assert exc.value.status_code == 502
-            gen, dl = _fal_ok()
+            gen, dl = _model_ok()
             with gen, dl:
-                await _generate(db, seller.id)
-                await _generate(db, seller.id)  # both free tries still there
+                await _generate(db, seller.id)  # the free try is still there
 
 
 # ── set / remove ──────────────────────────────────────────────────────────────
@@ -284,7 +287,7 @@ async def test_remove_showcase_image_clears_both_fields_but_not_verified_photos(
         assert refreshed.verified_photos == "realphoto=="  # untouched
 
 
-# ── generate (fal.ai mocked) ─────────────────────────────────────────────────
+# ── generate (model mocked) ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_generate_requires_actual_photos_first():
@@ -306,9 +309,10 @@ async def test_generate_does_not_persist_to_the_listing():
         listing = await _make_listing(db, seller.id, verified_photos="cGhvdG8=")
         await db.commit()
 
-        with patch("api.domains.showcase.service.fal_client.generate_showcase_image_url",
-                    return_value="https://cdn.fal.ai/fake.png"), \
-             patch("api.domains.showcase.service.fal_client.download_generated_image",
+        with _premium_on(), \
+             patch("api.domains.showcase.service.hf_image_client.generate_showcase_image_url",
+                    return_value="https://fal.media/fake.png"), \
+             patch("api.domains.showcase.service.hf_image_client.download_generated_image",
                     return_value=(b"FAKEPNGDATA", "image/png")):
             result = await showcase_service.generate_showcase_preview(db, listing.id, seller.id, "cinematic lighting")
 
@@ -329,11 +333,12 @@ async def test_standalone_generate_works_without_any_listing():
         seller = await _make_user(db, "Wizard Seller")
         await db.commit()
 
-        with patch("api.domains.showcase.service.fal_client.generate_showcase_image_url",
-                    return_value="https://cdn.fal.ai/fake2.png"), \
-             patch("api.domains.showcase.service.fal_client.download_generated_image",
+        with _premium_on(), \
+             patch("api.domains.showcase.service.hf_image_client.generate_showcase_image_url",
+                    return_value="https://fal.media/fake2.png"), \
+             patch("api.domains.showcase.service.hf_image_client.download_generated_image",
                     return_value=(b"RAWBYTES", "image/jpeg")):
-            # A real photo: anything else is refused before reaching fal.ai
+            # A real photo: anything else is refused before reaching the model
             # (test_listing_overhaul.py covers that).
             result = await showcase_service.generate_showcase_preview_standalone(
                 db, seller.id, _jpeg_data_uri(),
