@@ -417,16 +417,17 @@ class Settings:
     free_listings_per_seller: int = field(default_factory=lambda: max(0, int(os.getenv(
         "FREE_LISTINGS_PER_SELLER", "0"
     ))))
-    # The founding-seller offer (PRICING.md §2): sellers are numbered by when
-    # they posted their first listing, and "count:percent" pairs give each
-    # band its discount - the first 50 sellers 100% off, the next 50 80%...
-    # It lasts FOUNDING_DISCOUNT_DAYS from that first listing, so the
-    # earliest sellers start paying too. Empty switches it off.
+    # The founding-seller offer (PRICING.md §2, costed in
+    # LAUNCH_DISCOUNT_MODEL.md): sellers are numbered by when they posted
+    # their first listing, and "count:percent" pairs give each band its
+    # discount on that FIRST listing only - the first 50 sellers 100% off,
+    # the next 150 50%. It lasts FOUNDING_DISCOUNT_DAYS from that listing.
+    # Empty switches it off.
     founding_seller_tiers: tuple = field(default_factory=lambda: _parse_tiers(os.getenv(
-        "FOUNDING_SELLER_TIERS", "50:100,50:80,100:60,200:40,400:20"
+        "FOUNDING_SELLER_TIERS", "50:100,150:50"
     )))
     founding_discount_days: int = field(default_factory=lambda: max(0, int(os.getenv(
-        "FOUNDING_DISCOUNT_DAYS", "90"
+        "FOUNDING_DISCOUNT_DAYS", "30"
     ))))
     # Where Safaricom posts the result of a listing-fee STK push. Unset, it is
     # derived from MPESA_CALLBACK_SECRET (pricing/payments.py), the same way

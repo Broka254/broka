@@ -1,8 +1,9 @@
 """The founding-seller offer (PRICING.md §2; pricing/service.founding_discount).
 
 Sellers are numbered by their first listing and each band gets its discount
-for FOUNDING_DISCOUNT_DAYS. What must hold:
+on that first listing for FOUNDING_DISCOUNT_DAYS. What must hold:
   * the order is by first listing - a buyer who signed up early takes no place;
+  * only the first listing is discounted - not a dealer's whole stock;
   * 100% off posts the listing live, paid up to the end of the offer;
   * a partial discount never prices a listing under what it costs to serve;
   * the offer ends, and discounted time can't be bought past its end.
@@ -53,7 +54,7 @@ def founding_on(monkeypatch):
     patched = dataclasses.replace(
         settings, listing_fees_enabled=True, in_app_payments_enabled=False,
         free_listings_per_seller=0, founding_seller_tiers=((1, 100), (1, 80)),
-        founding_discount_days=90,
+        founding_discount_days=30,
     )
     for module in ("api.domains.listings.service", "api.domains.pricing.payments",
                    "api.domains.pricing.service", "api.domains.pricing.router"):
@@ -105,7 +106,7 @@ async def test_sellers_are_numbered_by_first_listing_and_banded(client):
     assert listing["listing_fee"]["status"] in ("live", "ending")
     async with AsyncSessionLocal() as db:
         paid_until = (await db.get(Listing, listing["id"])).paid_until
-    assert abs(paid_until - (datetime.utcnow() + timedelta(days=90))) < timedelta(minutes=1)
+    assert abs(paid_until - (datetime.utcnow() + timedelta(days=30))) < timedelta(minutes=1)
 
     _, second = await _user()
     q = await _quote(client, second)
@@ -120,8 +121,11 @@ async def test_sellers_are_numbered_by_first_listing_and_banded(client):
     q = await _quote(client, third)
     assert q["founding"]["percent"] == 0 and q["monthly_fee"] == q["list_price"]
 
-    # The first seller keeps their place for later listings.
-    assert (await _quote(client, first))["founding"]["rank"] == 1
+    # The first seller keeps their place, but only their first listing was discounted.
+    later = await _quote(client, first)
+    assert later["founding"]["rank"] == 1 and later["founding"]["percent"] == 0
+    assert later["monthly_fee"] == later["list_price"]
+    assert (await _listing(client, first))["listing_fee"]["status"] == "unpaid"
 
 
 @pytest.mark.asyncio
@@ -140,8 +144,8 @@ async def test_the_offer_ends_and_cannot_be_bought_past_its_end(client, monkeypa
         row = await db.get(Listing, listing["id"])
         row.created_at = row.paid_until = datetime.utcnow() - timedelta(days=80)
         await db.commit()
-    assert (await _founding(seller_id)).percent == 80
-    q = await _quote(client, h)
+    assert (await _founding(seller_id, listing["id"])).percent == 80
+    q = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
     assert [o["months"] for o in q["options"]] == [1]
     r = await client.post("/pricing/listing-fee/pay", headers={**h, "X-Idempotency-Key": uuid.uuid4().hex},
                           json={"listing_id": listing["id"], "months": 3, "phone_number": "0712345678"})
@@ -151,9 +155,9 @@ async def test_the_offer_ends_and_cannot_be_bought_past_its_end(client, monkeypa
         row = await db.get(Listing, listing["id"])
         row.created_at = datetime.utcnow() - timedelta(days=91)
         await db.commit()
-    assert (await _founding(seller_id)).percent == 0
+    assert (await _founding(seller_id, listing["id"])).percent == 0
 
 
-async def _founding(seller_id):
+async def _founding(seller_id, listing_id):
     async with AsyncSessionLocal() as db:
-        return await service.founding_discount(db, seller_id)
+        return await service.founding_discount(db, seller_id, listing_id=listing_id)

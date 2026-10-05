@@ -107,6 +107,7 @@ async def listing_quote(db: AsyncSession, user_id: str, listing_id: str) -> dict
     quote = await service.listing_fee_quote(
         db, user_id, listing.category, float(listing.price), listing.quantity or 1,
         starts_at=max(datetime.utcnow(), listing.paid_until or datetime.utcnow()),
+        listing_id=listing.id,
     )
     available = months_available(listing)
     quote["options"] = [o for o in quote["options"] if o["months"] <= available]
@@ -151,6 +152,7 @@ async def start_payment(
     quote = await service.listing_fee_quote(
         db, user_id, listing.category, float(listing.price), listing.quantity or 1,
         starts_at=max(datetime.utcnow(), listing.paid_until or datetime.utcnow()),
+        listing_id=listing.id,
     )
     option = next((o for o in quote["options"] if o["months"] == months), None)
     if option is None:

@@ -160,39 +160,48 @@ def tier_percent(rank: int, tiers=None) -> int:
 
 async def founding_discount(
     db: AsyncSession, seller_id: str, at: Optional[datetime] = None,
+    listing_id: Optional[str] = None,
 ) -> FoundingDiscount:
-    """The founding-seller offer for this seller, for listing time starting `at`.
+    """The founding-seller offer on this seller's FIRST listing, for listing
+    time starting `at`. `listing_id` is the listing being priced; None for
+    one about to be posted.
 
-    Sellers are numbered by their first listing, not by signing up: buyers
-    never pay a listing fee, and an early buyer must not use up a place a
-    seller would have paid less in. Auctions don't count - they pay no fee.
-    The offer runs FOUNDING_DISCOUNT_DAYS from that first listing (from now,
-    for a seller about to post their first), so the earliest sellers start
-    paying too; time bought from its end on is full price.
+    Only the first listing: the offer gets a seller started, it does not
+    carry a dealer's whole stock (PRICING.md, "The founding-seller offer").
+    Sellers are numbered by that first listing, not by signing up: buyers
+    never pay a listing fee, and an early buyer must not use up a place.
+    Auctions don't count - they pay no fee. The offer runs
+    FOUNDING_DISCOUNT_DAYS from the first listing (from now, for a seller
+    about to post it); time bought from its end on is full price.
     """
     now = datetime.utcnow()
     not_auction = Listing.listing_type != ListingType.auction
-    first = (await db.execute(
-        select(func.min(Listing.created_at)).where(Listing.seller_id == seller_id, not_auction)
-    )).scalar()
+    first_row = (await db.execute(
+        select(Listing.id, Listing.created_at)
+        .where(Listing.seller_id == seller_id, not_auction)
+        .order_by(Listing.created_at, Listing.id).limit(1)
+    )).first()
     firsts = (select(Listing.seller_id, func.min(Listing.created_at).label("first"))
               .where(not_auction).group_by(Listing.seller_id).subquery())
-    if first is None:
+    if first_row is None:
         ahead = (await db.execute(select(func.count()).select_from(firsts))).scalar() or 0
-        first = now
+        first, is_first_listing = now, listing_id is None
     else:
+        first = first_row.created_at
         ahead = (await db.execute(
             select(func.count()).select_from(firsts).where(firsts.c.first < first)
         )).scalar() or 0
+        is_first_listing = listing_id is not None and listing_id == first_row.id
     rank = int(ahead) + 1
     ends_at = first + timedelta(days=settings.founding_discount_days)
-    percent = tier_percent(rank) if (at or now) < ends_at else 0
-    return FoundingDiscount(rank=rank, percent=percent, ends_at=ends_at)
+    applies = is_first_listing and (at or now) < ends_at
+    return FoundingDiscount(rank=rank, percent=tier_percent(rank) if applies else 0, ends_at=ends_at)
 
 
 async def listing_fee_quote(
     db: AsyncSession, user_id: str, category_name: str, unit_price: float, quantity: int,
     new_listing: bool = False, starts_at: Optional[datetime] = None,
+    listing_id: Optional[str] = None,
 ) -> dict:
     """`starts_at`: when the time being priced begins (the end of time
     already paid, for a renewal); now when left out."""
@@ -201,7 +210,8 @@ async def listing_fee_quote(
     in_category = await category_completed_deals(db, category)
     tier = (await db.execute(select(User.seller_tier).where(User.id == user_id))).scalar()
     start = starts_at or datetime.utcnow()
-    founding = await founding_discount(db, user_id, start)
+    # A quote for a draft (no listing_id) is for a listing about to be posted.
+    founding = await founding_discount(db, user_id, start, listing_id)
     # 100% is not priced (the fee floor would charge the cost of serving
     # the listing): the listing is posted live until the offer ends.
     founding_free = founding.percent >= 100

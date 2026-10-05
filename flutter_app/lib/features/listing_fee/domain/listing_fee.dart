@@ -273,7 +273,7 @@ List<String> feeReasons(ListingFeeQuote q) {
     lines.add('The rate falls as the value rises, so bigger listings pay a smaller share.');
     // The founding-seller offer travels in the launch discount's place.
     if (q.launchPercent > 0) {
-      lines.add('Founding seller: ${q.launchPercent}% off for your first months on BROKA.');
+      lines.add('Founding seller: ${q.launchPercent}% off your first listing.');
     }
     return lines;
   }
