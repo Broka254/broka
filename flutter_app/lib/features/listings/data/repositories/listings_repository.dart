@@ -13,6 +13,20 @@ class ListingsPage {
   ListingsPage({required this.items, required this.total});
 }
 
+/// What PATCH /listings/{id} said about a price change.
+class PriceChange {
+  /// Price changes left this week, once the change is made.
+  final int? changesRemaining;
+
+  /// Set when nothing has changed yet because the server asks first: the
+  /// raise shortens the listing's paid time. Its own words, shown as they are.
+  final String? confirmMessage;
+
+  const PriceChange({this.changesRemaining, this.confirmMessage});
+
+  bool get needsConfirmation => confirmMessage != null;
+}
+
 class ListingsRepository {
   final ApiClient _client;
   ListingsRepository({ApiClient? client}) : _client = client ?? apiClient;
@@ -215,15 +229,28 @@ class ListingsRepository {
     }
   }
 
-  /// Changes the price of the caller's own listing. Returns how many more
-  /// price changes the seller has this week. The server allows two a week,
-  /// 12 hours apart, and none while a buyer's deal stands; its refusals are
-  /// sentences written for the seller, passed on as they are.
-  Future<Result<int?>> changePrice(String listingId, double price) async {
+  /// Changes the price of the caller's own listing. The server allows two
+  /// changes a week, 12 hours apart, none while a buyer's deal stands, and
+  /// a raise of at most 25% once buyers have seen the price; its refusals
+  /// are sentences written for the seller, passed on as they are.
+  ///
+  /// A raise on a listing with paid time left shortens that time (the fee
+  /// follows the price), so the server asks first: the result then carries
+  /// its question in [PriceChange.confirmMessage], and nothing has changed
+  /// until the same price is sent again with [acceptShorterPaidTime].
+  Future<Result<PriceChange>> changePrice(String listingId, double price,
+      {bool acceptShorterPaidTime = false}) async {
     try {
-      final data = await _client.patch('/listings/$listingId', {'price': price});
-      return Success((data as Map?)?['price_changes_remaining'] as int?);
+      final data = await _client.patch('/listings/$listingId', {
+        'price': price,
+        if (acceptShorterPaidTime) 'accept_shorter_paid_time': true,
+      });
+      return Success(PriceChange(
+          changesRemaining: (data as Map?)?['price_changes_remaining'] as int?));
     } on ApiException catch (e) {
+      if (e.code == 'PRICE_RAISE_SHORTENS_PAID_TIME') {
+        return Success(PriceChange(confirmMessage: e.message));
+      }
       return Failure(e.message, statusCode: e.statusCode);
     } catch (e) {
       return Failure(e.toString());

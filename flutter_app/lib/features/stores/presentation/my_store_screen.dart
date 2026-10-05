@@ -24,7 +24,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart' show BrokaColors;
@@ -38,6 +37,7 @@ import '../../../widgets/wizard_scaffold.dart';
 import '../../categories/domain/category_visual.dart';
 import '../../listing_fee/presentation/listing_fee_screen.dart';
 import '../../listings/data/repositories/listings_repository.dart';
+import '../../listings/presentation/change_price.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/stores_repository.dart';
 import '../data/store_share.dart';
@@ -1380,26 +1380,12 @@ class _ProductsTabState extends State<_ProductsTab> {
   }
 
   Future<void> _changePrice(StoreProduct product) async {
-    final price = await showDialog<double>(
-        context: context, builder: (_) => _PriceDialog(product: product));
-    if (price == null || !mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    final result = await widget.listings.changePrice(product.id, price);
-    if (!mounted) return;
-    switch (result) {
-      case Success(:final data):
-        messenger.showSnackBar(SnackBar(content: Text(switch (data) {
-          null => 'Price updated',
-          0 => "Price updated. That was this week's last price change.",
-          1 => 'Price updated. You can change it once more this week.',
-          final n => 'Price updated. You can change it $n more times this week.',
-        })));
-        await _reload();
-      case Failure(:final message):
-        // The server's own words: they say which limit applies and when
-        // it lifts.
-        messenger.showSnackBar(SnackBar(content: Text(message)));
-    }
+    final changed = await changeListingPrice(context,
+        repo: widget.listings,
+        listingId: product.id,
+        name: product.listing.name,
+        currentPrice: product.listing.price);
+    if (changed && mounted) await _reload();
   }
 
   Future<void> _shareProduct(StoreProduct product) async {
@@ -1868,77 +1854,6 @@ class _ProductActionsSheet extends StatelessWidget {
           const SizedBox(height: 8),
         ]),
       ),
-    );
-  }
-}
-
-/// A new price for one product. Pops the price, or null to leave it.
-class _PriceDialog extends StatefulWidget {
-  const _PriceDialog({required this.product});
-  final StoreProduct product;
-
-  @override
-  State<_PriceDialog> createState() => _PriceDialogState();
-}
-
-class _PriceDialogState extends State<_PriceDialog> {
-  late final _ctrl =
-      TextEditingController(text: widget.product.listing.price.round().toString());
-  String? _error;
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final value = double.tryParse(_ctrl.text.trim());
-    if (value == null || value <= 0) {
-      setState(() => _error = 'Enter a price in shillings');
-      return;
-    }
-    // The same price isn't a change, and would spend one of the week's two.
-    Navigator.pop(context, value == widget.product.listing.price ? null : value);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: BrokaColors.bgMid,
-      title: const Text('Change the price', style: TextStyle(color: BrokaColors.textHigh)),
-      content: Column(mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(widget.product.listing.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: BrokaColors.textMid)),
-        const SizedBox(height: 14),
-        TextField(
-          key: const Key('price-field'),
-          controller: _ctrl,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          onSubmitted: (_) => _save(),
-          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 18,
-              fontWeight: FontWeight.w700),
-          decoration: InputDecoration(
-            prefixText: 'KES ',
-            prefixStyle: const TextStyle(color: BrokaColors.textMid, fontSize: 18),
-            errorText: _error,
-          ),
-        ),
-        const SizedBox(height: 10),
-        const Text('A price can change twice a week, at least 12 hours apart.',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-      ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        TextButton(
-          key: const Key('save-price'),
-          onPressed: _save,
-          child: const Text('Save', style: TextStyle(fontWeight: FontWeight.w800)),
-        ),
-      ],
     );
   }
 }

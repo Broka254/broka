@@ -12,6 +12,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/sell_wizard_data.dart';
+import '../utils/handover.dart';
 import '../utils/land_size.dart';
 import '../utils/price_format.dart';
 import 'sell_category_screen.dart';
@@ -128,7 +129,7 @@ class SellFlow {
       case stock:
         final count = int.tryParse(data.quantity);
         return (data.isAuction || (count != null && count >= 1)) &&
-            data.deliveryAvailable != null;
+            (data.deliveryAvailable != null || !isDeliverableCategory(data.category));
       case location:
         return data.county.trim().isNotEmpty && data.subcounty.trim().isNotEmpty;
     }

@@ -46,6 +46,7 @@ import json
 import time
 
 from api.database import get_db, NegotiationMessage, Listing, User, Deal, DealStatus, ThreadReadState
+from api.domains.listings.handover import IN_PLACE_NOTE, is_deliverable
 from api.routers.auth import _approx_location
 from api.core import gemini, text_guard
 from api.core.geo import haversine_km
@@ -1076,7 +1077,11 @@ def _selling_terms(listing) -> str:
     else:
         lines.append("- Price:             open to offers")
     delivery = getattr(listing, "delivery_available", None)
-    if delivery is True:
+    if not is_deliverable(getattr(listing, "category", None)):
+        # Land and buildings: "can you deliver?" has no seller's answer, and
+        # older rows may still carry one the app asked for (handover.py).
+        lines.append(f"- Delivery:          {IN_PLACE_NOTE}")
+    elif delivery is True:
         note = getattr(listing, "delivery_note", None)
         lines.append(f"- Delivery:          seller can arrange delivery{(' (' + note + ')') if note else ''}")
     elif delivery is False:

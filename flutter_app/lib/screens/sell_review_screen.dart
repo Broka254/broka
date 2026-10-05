@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../core/utils/result.dart';
 import '../services/sell_wizard_data.dart';
+import '../utils/handover.dart';
 import '../utils/land_size.dart';
 import '../utils/price_format.dart';
 import '../utils/price_unit.dart';
@@ -145,9 +146,11 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
           if (data.isAuction && data.reserve.isNotEmpty)
             _row('Reserve price', _kes(data.reserve)),
           if (!data.isAuction) _row('Available', PriceUnits.quantity(quantity, data.priceUnit)),
-          _row('Delivery', data.deliveryAvailable == true
-              ? (data.deliveryNote.isEmpty ? 'Can arrange' : 'Can arrange - ${data.deliveryNote}')
-              : 'Buyer picks up'),
+          _row('Delivery', !isDeliverableCategory(data.category)
+              ? inPlaceTitle
+              : data.deliveryAvailable == true
+                  ? (data.deliveryNote.isEmpty ? 'Can arrange' : 'Can arrange - ${data.deliveryNote}')
+                  : 'Buyer picks up'),
           _row('Location', data.location),
           _row('Description', data.description),
         ])),

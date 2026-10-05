@@ -241,6 +241,15 @@ so far that nobody pays near list, lower the category maximums instead.
 **Rates are locked for the period paid.** A seller who pays for three months
 pays that price for three months, whatever their record does meanwhile.
 
+**The price, though, is not.** The fee is priced on the listing's price, so a
+seller who lists a car at KES 10,000, pays for that, and then raises it to
+KES 800,000 would never pay for the real price. A raise on a listing with
+paid time left shortens that time in proportion: the days left are worth
+what was paid for them at the new monthly fee (`listings/price_rules.py`).
+The app shows the seller the numbers and asks first; no money moves, they
+renew sooner. A cut leaves the paid time alone. One change may also raise
+the price by at most 25% once buyers have seen it.
+
 ### Months: 1 to 6, longer is cheaper
 
 Six months at most, so a sold item cannot sit on BROKA for more than half a
