@@ -7,6 +7,7 @@
   GET  /pricing/listing-fee/mine                     your listings waiting for payment
   POST /pricing/listing-fee/callback/{secret}        Safaricom's result
   GET  /pricing/plans, /pricing/categories           the public price lists
+  GET  /pricing/store-plan?trade=&listings=           a store of any size
   GET  /pricing/safe-payment                         paying a seller safely, outside BROKA
 
 PRICING.md explains the prices; pricing/payments.py the payment.
@@ -141,6 +142,23 @@ async def listing_fee_callback_secured(secret: str, request: Request, db: AsyncS
 async def pricing_plans():
     """Premium plans, store plans and the commission."""
     return plans.catalog()
+
+
+@router.get("/store-plan")
+async def store_plan(
+    trade: Literal["goods", "vehicles", "property"] = Query("goods"),
+    listings: int = Query(..., ge=1, le=10_000, description="Listings the store should hold"),
+):
+    """The price of a store holding `listings`, any number up to the card's
+    most: a seller with 40 listings pays for 40, not for the next plan up.
+    Public, like the plans, so a seller can price a store before opening one."""
+    card = plans.STORE_RATE_CARDS_BY_ID[trade]
+    if listings > card.max_listings:
+        raise HTTPException(status_code=422, detail=(
+            f"{card.name} plans in the app go up to {card.max_listings} listings. "
+            "For more, contact BROKA and we'll price it with you."))
+    plan = card.plan(listings)
+    return {"currency": "KES", "rate_card": card.to_dict(), "plan": plan.to_dict()}
 
 
 @router.get("/categories")

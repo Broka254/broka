@@ -102,12 +102,12 @@ class TestListPrice:
         assert engine.list_price(ELECTRONICS, 20_000, 10) == engine.list_price(ELECTRONICS, 200_000, 1)
 
     @pytest.mark.parametrize("price, quantity, fee", [
-        (20_000, 1, 70),            # a phone
-        (180_000, 1, 310),          # an iPhone
-        (180_000, 3, 610),          # three of them (612 before rounding)
-        (180_000, 200, 8_580),      # two hundred
-        (800_000, 1, 820),          # a car
-        (1_500_000, 1, 1_380),      # a plot
+        (20_000, 1, 100),           # a phone (70 before the 2026-10-06 nudge)
+        (180_000, 1, 420),          # an iPhone (310)
+        (180_000, 3, 835),          # three of them (610)
+        (180_000, 200, 12_640),     # two hundred (8,580)
+        (800_000, 1, 1_120),        # a car (820)
+        (1_500_000, 1, 1_890),      # a plot (1,380)
     ])
     def test_the_worked_examples_in_pricing_md(self, price, quantity, fee):
         assert engine.round_kes(engine.list_price(ELECTRONICS, price, quantity)) == fee
@@ -239,14 +239,56 @@ class TestPlans:
                           "priority_support_minutes"):
                 assert getattr(upper, field) >= getattr(lower, field), field
 
-    def test_bigger_stores_pay_less_per_listing(self):
-        per_listing = [s.monthly_price / s.listings for s in plans.STORE_PLANS]
-        assert all(a > b for a, b in zip(per_listing, per_listing[1:]))
+    @pytest.mark.parametrize("card", plans.STORE_RATE_CARDS, ids=lambda c: c.id)
+    def test_a_store_of_any_size_never_loses_money(self, card):
+        """Sellers pick any size, so the margin rule is checked at every one,
+        prepaid periods included - not only at the example plans."""
+        for n in range(1, card.max_listings + 1):
+            plan = card.plan(n)
+            worst = plan.max_monthly_cost()
+            assert costs.net_of_vat(plan.monthly_price) >= plans.MIN_MARGIN_MULTIPLE * worst, n
+            for period in plans.period_prices(plan.monthly_price):
+                assert costs.net_of_vat(period["total"] / period["months"]) >= worst, (n, period)
 
-    def test_a_store_listing_costs_less_than_listing_it_alone(self):
+    @pytest.mark.parametrize("card", plans.STORE_RATE_CARDS, ids=lambda c: c.id)
+    def test_one_more_listing_never_jumps_the_price(self, card):
+        """No cliffs: each listing adds at most its band's rate, and a bigger
+        store never pays more per listing."""
+        prices = [card.price(n) for n in range(card.included, card.max_listings + 1)]
+        steps = [b - a for a, b in zip(prices, prices[1:])]
+        assert all(0 < s <= max(rate for _, rate in card.bands) for s in steps)
+        per_listing = [p / n for n, p in enumerate(prices, start=card.included)]
+        assert all(a >= b for a, b in zip(per_listing, per_listing[1:]))
+
+    def test_a_goods_store_is_599_for_30_and_any_size_after(self):
+        """The founder's call (2026-10-06): 599 covers 30 listings, and a
+        seller with 40 pays for 40 rather than for the next plan up."""
+        goods = plans.STORE_RATE_CARDS_BY_ID["goods"]
+        assert goods.price(1) == goods.price(30) == 599
+        assert goods.plan(10).listings == 30
+        assert goods.price(40) == 599 + 10 * 16 == 759
+        # At or under every fixed plan it replaces (50: 999, 100: 1,799,
+        # 250: 3,999, 500: 6,999).
+        for n, old in ((50, 999), (100, 1_799), (250, 3_999), (500, 6_999)):
+            assert goods.price(n) <= old, n
+
+    @pytest.mark.parametrize("card, category, price", [
+        ("goods", ELECTRONICS, 20_000),
+        ("vehicles", CATEGORIES["Automobiles"], 800_000),
+        ("property", CATEGORIES["Land"], 1_500_000),
+    ])
+    def test_a_store_listing_costs_less_than_listing_it_alone(self, card, category, price):
         """The store is the considerate price for long-term sellers."""
-        alone = _fee(NEW, ELECTRONICS, 20_000)["list_price"]
-        assert max(s.monthly_price / s.listings for s in plans.STORE_PLANS) < alone / 2
+        alone = _fee(NEW, category, price)["list_price"]
+        rate_card = plans.STORE_RATE_CARDS_BY_ID[card]
+        assert max(rate_card.price(n) / n
+                   for n in range(rate_card.included, rate_card.max_listings + 1)) < alone / 2
+
+    def test_vehicle_and_property_stores_are_for_dealers_and_agents(self):
+        """A one-house 'store' would undercut that house's listing fee."""
+        for card in ("vehicles", "property"):
+            rate_card = plans.STORE_RATE_CARDS_BY_ID[card]
+            assert rate_card.min_listings >= 5 and rate_card.categories
 
     def test_ai_covers_come_in_listings_worth_of_tries(self):
         """Covers are made while posting, a few tries per listing: an
@@ -386,6 +428,22 @@ class TestPublicEndpoints:
         assert [p["id"] for p in body["premium"]] == ["plus", "pro", "elite"]
         assert body["commission"]["negotiated"]["total_percent"] == 4.49
         assert body["stores"]["plans"][0]["periods"][-1]["setup_fee"] == 0
+        assert [c["id"] for c in body["stores"]["rate_cards"]] == ["goods", "vehicles", "property"]
+
+    @pytest.mark.asyncio
+    async def test_a_store_of_the_size_the_seller_picks(self, client):
+        r = await client.get("/pricing/store-plan", params={"listings": 40})
+        assert r.status_code == 200
+        plan = r.json()["plan"]
+        assert plan["trade"] == "goods" and plan["listings"] == 40 and plan["monthly_price"] == 759
+        yard = (await client.get("/pricing/store-plan",
+                                 params={"trade": "vehicles", "listings": 25})).json()["plan"]
+        assert yard["monthly_price"] == 5_999
+        # Past the card's most, the app doesn't sell it - BROKA prices it by hand.
+        too_big = await client.get("/pricing/store-plan", params={"listings": 1_001})
+        assert too_big.status_code == 422 and "contact BROKA" in too_big.json()["detail"]
+        assert (await client.get("/pricing/store-plan",
+                                 params={"trade": "boats", "listings": 5})).status_code == 422
 
     @pytest.mark.asyncio
     async def test_categories(self, client):

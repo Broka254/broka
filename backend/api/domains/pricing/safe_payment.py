@@ -23,11 +23,19 @@ PAYMENTS_OFF_MESSAGE = (
     "the item before paying, or use an escrow service for deals at a distance."
 )
 
+# Land and cars get their own lines. An M-Pesa payment tops out at
+# KES 250,000 (500,000 a day), so M-Pesa escrow can't carry those deals,
+# and an escrow service doesn't prove the seller owns what they sell: the
+# official search does. Land brokers are the most-reported perpetrators of
+# land fraud (NCRC baseline survey, 41%).
 ADVICE = [
     "Meet in a busy public place and check the item works before you pay.",
     "Pay only after you have the item. Never send a deposit to 'hold' it.",
     "For a phone or laptop, check the IMEI or serial number and that it isn't locked to an account.",
-    "For land, a car or anything you can't collect, use an escrow service: it holds your money until you confirm you got what you paid for.",
+    "For anything you can't collect, use an escrow service: it holds your money until you confirm you got what you paid for.",
+    "Land: do an official search on Ardhisasa or eCitizen before you pay anything, check the seller's ID matches the title, and pay through an advocate or a bank. Never pay a broker in cash.",
+    "Car: do an NTSA search on the logbook, match the chassis number on the car, and pay by bank at the transfer.",
+    "M-Pesa can't move more than KES 250,000 in one payment, so a big deal goes through a bank or an advocate.",
     "Pay to the name on the seller's BROKA profile. A different name at the M-Pesa prompt is a warning sign.",
     "Keep the conversation and the M-Pesa message: you'll need them if you report the seller.",
 ]

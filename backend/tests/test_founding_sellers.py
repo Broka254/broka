@@ -111,10 +111,10 @@ async def test_sellers_are_numbered_by_first_listing_and_banded(client):
     _, second = await _user()
     q = await _quote(client, second)
     assert q["founding"]["rank"] == 2 and q["founding"]["percent"] == 80
-    # 80% off KES 70 is 14 - and never under what the listing costs to serve.
+    # 80% off KES 100 is 20 - and never under what the listing costs to serve.
     cost = costs.listing_month_cost(CATEGORIES["Electronics"].chats_per_month)
     assert costs.net_of_vat(q["monthly_fee"]) >= cost
-    assert q["monthly_fee"] < q["list_price"] == 70
+    assert q["monthly_fee"] < q["list_price"] == 100
     assert (await _listing(client, second))["listing_fee"]["status"] == "unpaid"
 
     _, third = await _user()

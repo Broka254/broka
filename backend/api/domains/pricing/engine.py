@@ -42,16 +42,23 @@ from api.domains.pricing.categories import CategoryPricing
 # rises because a listing fee is paid whether or not anything sells - a flat
 # percentage of KES 36M of stock would be an up-front commission with no sale
 # behind it. PRICING.md §2 has the worked examples.
+#
+# Raised by about a third on every listing on 2026-10-06 (0.35/0.15/0.08/
+# 0.02% before), the same share for every band so no category is singled
+# out: the old bands were set as a small extra on top of a 3.49% commission
+# that payments being paused took away, and recovered a tenth of one phone
+# sale's commission and a hundredth of a house's (BUSINESS_MODEL_REVIEW.md).
+# A KES 20,000 phone pays KES 100 - the most M-Pesa collects for nothing.
 VALUE_BANDS: tuple[tuple[float, float], ...] = (
-    (20_000, 0.0035),          # 0.35% of the first KES 20,000
-    (200_000, 0.0015),         # 0.15% of KES 20,000 - 200,000
-    (2_000_000, 0.0008),       # 0.08% of KES 200,000 - 2M
-    (math.inf, 0.0002),        # 0.02% above KES 2M
+    (20_000, 0.0050),          # 0.50% of the first KES 20,000
+    (200_000, 0.0020),         # 0.20% of KES 20,000 - 200,000
+    (2_000_000, 0.0011),       # 0.11% of KES 200,000 - 2M
+    (math.inf, 0.0003),        # 0.03% above KES 2M
 )
 
 # The most one listing pays for a month, however much it offers. Reached at
-# about KES 43M; a seller listing that much stock wants a store.
-MAX_MONTHLY_FEE = 10_000
+# about KES 44M; a seller listing that much stock wants a store.
+MAX_MONTHLY_FEE = 15_000
 
 # Only the duration advice caps quantity: stock past this clears at the same
 # pace. The fee itself counts every unit.

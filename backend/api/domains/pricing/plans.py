@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from api.core.config import settings
 from api.domains.pricing import costs
+from api.domains.pricing.categories import for_category
 
 MIN_MARGIN_MULTIPLE = 1.25
 
@@ -181,6 +182,9 @@ STORE_SETUP_WAIVED_FROM_MONTHS = 6
 # average category's demand (one negotiation a month).
 STORE_SLOT_MONTH = costs.listing_month_cost(1.0)
 
+# Texts for new buyers and orders: one a month per listing, up to this many.
+STORE_SMS_CAP = 300
+
 
 @dataclass(frozen=True)
 class StorePlan:
@@ -189,11 +193,13 @@ class StorePlan:
     monthly_price: int
     listings: int          # listings the plan covers - no listing fee on these
     sms_alerts: int        # texts for new orders and new buyers
+    slot_cost: float = STORE_SLOT_MONTH   # one listing's cost at full use, by trade
+    trade: str = "goods"
 
     def max_monthly_cost(self) -> float:
         return (
             (costs.STORE_MONTH + self.sms_alerts * costs.SMS) * costs.OVERHEAD
-            + self.listings * STORE_SLOT_MONTH
+            + self.listings * self.slot_cost
             + costs.mpesa_collection_cost(self.monthly_price)
         )
 
@@ -204,6 +210,7 @@ class StorePlan:
         return {
             "id": self.id,
             "name": self.name,
+            "trade": self.trade,
             "monthly_price": self.monthly_price,
             "listings": self.listings,
             "price_per_listing": round(self.monthly_price / self.listings, 2),
@@ -212,17 +219,102 @@ class StorePlan:
         }
 
 
-# VAT included. A store is a shop window on the web, BROKA's buyers, escrow
-# and Zeno selling for the owner around the clock; a website alone costs
-# KES 499 a month (Lacesse Duka). Still the considerate price for a
-# long-term seller: KES 14-25 a listing, against ~KES 85 for one phone
-# listed on its own.
-STORE_PLANS: tuple[StorePlan, ...] = (
-    StorePlan(id="starter",   name="Starter",   monthly_price=499,  listings=20,  sms_alerts=20),
-    StorePlan(id="standard",  name="Standard",  monthly_price=999,  listings=50,  sms_alerts=50),
-    StorePlan(id="growth",    name="Growth",    monthly_price=1799, listings=100, sms_alerts=100),
-    StorePlan(id="business",  name="Business",  monthly_price=3999, listings=250, sms_alerts=200),
-    StorePlan(id="wholesale", name="Wholesale", monthly_price=6999, listings=500, sms_alerts=300),
+@dataclass(frozen=True)
+class StoreRateCard:
+    """What a store costs for however many listings its owner picks.
+
+    The base price covers the first `included` listings; each listing past
+    that adds the rate of its band, and the rates fall as the store grows.
+    Bands like the listing fee's, so one more listing never jumps the price:
+    the fixed plans this replaces did (listing 21 moved a store from 499 to
+    999), and a seller with 40 listings had to buy 50.
+
+    Priced by count, not by the stock's value. Count is something BROKA can
+    see; value is whatever the seller types, and tiers on it had cliffs
+    that put a shop's 16th phone up KES 1,000 a month
+    (BUSINESS_MODEL_REVIEW.md section 6). Value comes in through the trade
+    instead: a car yard's card prices a slot well above a phone shop's.
+    """
+    id: str
+    name: str
+    included: int                          # listings the base price covers
+    base_price: int
+    bands: tuple[tuple[int, int], ...]     # (up to this many listings, KES a listing in the band)
+    max_listings: int                      # the most the app sells; above it, priced by hand
+    categories: tuple[str, ...] = ()       # what it may hold; () = everything no other card takes
+    # A vehicle or property store with a single KES 20M house would undercut
+    # that house's own listing fee (KES 7,840 a month against 2,999), so a
+    # store of those trades is a dealer's or an agent's: store billing must
+    # hold it to this many live listings.
+    min_listings: int = 1
+    slot_cost: float = STORE_SLOT_MONTH
+
+    def price(self, listings: int) -> int:
+        n = min(max(int(listings), 1), self.max_listings)
+        total, lower = self.base_price, self.included
+        for upper, rate in self.bands:
+            if n <= lower:
+                break
+            total += (min(n, upper) - lower) * rate
+            lower = upper
+        return total
+
+    def plan(self, listings: int) -> StorePlan:
+        """The plan for `listings`, never smaller than what the base price covers."""
+        n = min(max(int(listings), self.included), self.max_listings)
+        return StorePlan(
+            id=f"{self.id}-{n}", name=f"{self.name}, {n} listings",
+            monthly_price=self.price(n), listings=n,
+            sms_alerts=min(n, STORE_SMS_CAP), slot_cost=self.slot_cost, trade=self.id,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "included_listings": self.included,
+            "base_price": self.base_price,
+            "per_listing_bands": [{"up_to": up, "price": rate} for up, rate in self.bands],
+            "min_listings": self.min_listings,
+            "max_listings": self.max_listings,
+            "categories": list(self.categories),
+        }
+
+
+def _slot_cost(category: str) -> float:
+    return costs.listing_month_cost(for_category(category).chats_per_month)
+
+
+# VAT included. A goods store is KES 599 for up to 30 listings (the founder's
+# call, 2026-10-06: 20 a month for each, a fifth of what a KES 20,000 phone
+# pays listed alone), then 16 a listing to 100, 14 to 250 and 12 to 1,000:
+# 40 listings 759, 100 listings 1,719, 500 listings 6,819 - each size at or
+# under the fixed plans it replaces. Car yards and agents start at 2,999 for
+# 10: KES 167-300 a car, against ~866 a month for a KABA member's Sunday spot
+# at Jamhuri and 1,120 for one KES 800,000 car listed alone; Househunt
+# charges agents 10,000 for 20 listings. tests/test_pricing.py checks the
+# margin rule at every size of every card.
+STORE_RATE_CARDS: tuple[StoreRateCard, ...] = (
+    StoreRateCard(id="goods", name="Store", included=30, base_price=599,
+                  bands=((100, 16), (250, 14), (1_000, 12)), max_listings=1_000),
+    StoreRateCard(id="vehicles", name="Car yard", included=10, base_price=2_999,
+                  bands=((25, 200), (60, 114), (200, 100)), max_listings=200,
+                  categories=("Automobiles",), min_listings=5,
+                  slot_cost=_slot_cost("Automobiles")),
+    StoreRateCard(id="property", name="Agent", included=10, base_price=2_999,
+                  bands=((30, 150), (100, 57), (300, 50)), max_listings=300,
+                  categories=("Property", "Land"), min_listings=5,
+                  slot_cost=_slot_cost("Property")),
+)
+STORE_RATE_CARDS_BY_ID: dict[str, StoreRateCard] = {c.id: c for c in STORE_RATE_CARDS}
+
+# Sizes shown as examples next to the cards; any size in between is sold too.
+STORE_PLANS: tuple[StorePlan, ...] = tuple(
+    STORE_RATE_CARDS_BY_ID[card].plan(n)
+    for card, sizes in (("goods", (30, 50, 100, 250, 500, 1_000)),
+                        ("vehicles", (10, 25, 60, 200)),
+                        ("property", (10, 30, 100, 300)))
+    for n in sizes
 )
 
 
@@ -261,6 +353,9 @@ def catalog() -> dict:
         "stores": {
             "setup_fee": STORE_SETUP_FEE,
             "setup_fee_waived_from_months": STORE_SETUP_WAIVED_FROM_MONTHS,
+            # Any size is sold: GET /pricing/store-plan prices the one a
+            # seller picks. `plans` are examples along each card.
+            "rate_cards": [c.to_dict() for c in STORE_RATE_CARDS],
             "plans": [s.to_dict() for s in STORE_PLANS],
         },
         "commission": commission(),

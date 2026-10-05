@@ -21,13 +21,13 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 |---|---|
 | **Buyer-to-seller payments** | **Paused** (`IN_APP_PAYMENTS_ENABLED=false`): buyers pay sellers directly, so BROKA charges **no commission** for now. The app advises meeting to inspect first, and lists independent escrow services for deals at a distance (`GET /pricing/safe-payment`). See "While BROKA handles no payments" below |
 | **Commission**, when payments return | Negotiated deal: buyer pays **4.49%** (BROKA 3.49%, never under KES 20, + E-Confirm 1%). Auction: **5%** (BROKA 4% + E-Confirm 1%) |
-| **Listing fee** | Monthly, per listing, on its **value - price × quantity** - in falling bands (0.35% of the first KES 20,000 ... 0.02% above KES 2M), never under what the listing costs to serve, at most KES 10,000. A KES 20,000 phone pays KES 70 a month; 200 KES 180,000 iPhones pay KES 8,580. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). 1 to 6 months at a time; longer is cheaper per month |
+| **Listing fee** | Monthly, per listing, on its **value - price × quantity** - in falling bands (0.50% of the first KES 20,000 ... 0.03% above KES 2M; raised about a third on 2026-10-06), never under what the listing costs to serve, at most KES 15,000. A KES 20,000 phone pays KES 100 a month, a KES 800,000 car 1,120; 200 KES 180,000 iPhones pay KES 12,640. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). 1 to 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
 | **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
 | **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
 | **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus 2 AI cover tries |
-| **Store** | KES 299 to open (waived on 6+ months), then KES 499 (20 listings) to KES 6,999 (500 listings) a month; store listings pay no listing fee |
+| **Store** | Any size the owner picks (`GET /pricing/store-plan`). Shops: KES 599 for up to 30 listings, then 16 a listing to 100, 14 to 250, 12 to 1,000 (40 listings 759, 100 listings 1,719, 500 listings 6,819). Car yards and agents: KES 2,999 for 10, then by the listing. KES 299 to open (waived on 6+ months); store listings pay no listing fee. Billing is not built yet |
 
 ---
 
@@ -214,20 +214,28 @@ number of free active listings for good. It never ends, so it is off.
 ### C - the list price
 
 ```
-C = max(cost, min(KES 10,000, banded share of price × quantity))
+C = max(cost, min(KES 15,000, banded share of price × quantity))
 ```
 
 | Part of the listing's value | Rate a month |
 |---|---|
-| First KES 20,000 | 0.35% |
-| KES 20,000 - 200,000 | 0.15% |
-| KES 200,000 - 2M | 0.08% |
-| Above KES 2M | 0.02% |
+| First KES 20,000 | 0.50% |
+| KES 20,000 - 200,000 | 0.20% |
+| KES 200,000 - 2M | 0.11% |
+| Above KES 2M | 0.03% |
+
+**Raised by about a third on 2026-10-06** (from 0.35 / 0.15 / 0.08 / 0.02%,
+cap 10,000): the same share for every band, so no category is singled out.
+The old bands were set as a small extra on top of the 3.49% commission, which
+pausing payments took away; they recovered a tenth of one phone sale's
+commission and a hundredth of a house's. A KES 20,000 phone now pays KES 100,
+which M-Pesa still collects for nothing. Why, and what was weighed, is in
+[BUSINESS_MODEL_REVIEW.md](BUSINESS_MODEL_REVIEW.md).
 
 - **The value is price × quantity.** 200 phones are 200 phones' worth of
   stock. The first version charged √price for one unit, capped per category,
   and grew with quantity only by a log - so 200 KES 180,000 iPhones
-  (KES 36M) paid 3.7 times one iPhone. Now they pay 28 times one, and ten
+  (KES 36M) paid 3.7 times one iPhone. Now they pay 30 times one, and ten
   KES 20,000 phones pay exactly what one KES 200,000 item does.
 - **Bands, like income tax.** Each rate applies only to the part of the
   value inside its band, so the fee rises smoothly: one more shilling of
@@ -236,11 +244,8 @@ C = max(cost, min(KES 10,000, banded share of price × quantity))
   stock would be an up-front commission with no sale behind it.
 - **cost** is the listing's cost for a month (§1), with VAT: the floor. A
   KES 300 shirt's 0.35% is a shilling; Zeno answering its buyers is not.
-- **KES 10,000** is the most one listing pays a month, reached at about
-  KES 43M. A seller with that much stock wants a store (§5). Note that a
-  store listing pays no listing fee and stores are priced by listing count,
-  so a bulk seller is far better off in a store - the next thing to fix in
-  store pricing.
+- **KES 15,000** is the most one listing pays a month, reached at about
+  KES 44M. A seller with that much stock wants a store (§5).
 
 ### R - the risk coefficient
 
@@ -362,16 +367,16 @@ discount, no launch offer), for a seller past their free listings.
 |---|---|---|---|---|---|
 | Shirt, KES 300 | 300 | 10 | 28 | 56 | 1 month |
 | Dress, KES 1,500 | 1,500 | 10 | 28 | 56 | 1 month |
-| Phone, KES 20,000 | 20,000 | 70 | 175 | 310 | 1 month |
-| iPhone, KES 180,000 | 180,000 | 310 | 770 | 1,370 | 2 months |
-| 3 iPhones, KES 180,000 each | 540,000 | 610 | 1,520 | 2,700 | 2 months |
-| 200 iPhones, KES 180,000 each | 36,000,000 | 8,580 | 21,350 | 37,960 | 6 months |
-| Sofa, KES 25,000 | 25,000 | 78 | 195 | 345 | 2 months |
-| Car, KES 800,000 | 800,000 | 820 | 2,040 | 3,630 | 3 months |
-| Plot, KES 1.5M | 1,500,000 | 1,380 | 3,430 | 6,110 | 5 months |
-| House, KES 10M | 10,000,000 | 3,380 | 8,410 | 14,950 | 5 months |
-| House, KES 20M | 20,000,000 | 5,380 | 13,390 | 23,800 | 6 months |
-| House to let, KES 30,000/month | 30,000 | 85 | 210 | 375 | 1 month |
+| Phone, KES 20,000 | 20,000 | 100 | 250 | 440 | 1 month |
+| iPhone, KES 180,000 | 180,000 | 420 | 1,050 | 1,860 | 2 months |
+| 3 iPhones, KES 180,000 each | 540,000 | 835 | 2,080 | 3,690 | 2 months |
+| 200 iPhones, KES 180,000 each | 36,000,000 | 12,640 | 31,460 | 55,930 | 6 months |
+| Sofa, KES 25,000 | 25,000 | 110 | 275 | 485 | 2 months |
+| Car, KES 800,000 | 800,000 | 1,120 | 2,790 | 4,960 | 3 months |
+| Plot, KES 1.5M | 1,500,000 | 1,890 | 4,700 | 8,360 | 5 months |
+| House, KES 10M | 10,000,000 | 4,840 | 12,050 | 21,410 | 5 months |
+| House, KES 20M | 20,000,000 | 7,840 | 19,510 | 34,690 | 6 months |
+| House to let, KES 30,000/month | 30,000 | 120 | 300 | 530 | 1 month |
 
 When payments run through BROKA again, R and the launch offer discount
 these: a proven seller pays as little as 40% of them.
@@ -385,27 +390,28 @@ typical price" is the monthly fee with payments paused (no discounts).
 
 | Category | Completion rate (guess) | New seller's R | Cost / month | Typical price | Fee at typical price | Why |
 |---|---|---|---|---|---|---|
-| Electronics | 80% | 0.56 | 9.40 | 20,000 | 70 | Phones are Nairobi's most-scammed item online; escrow answers a real fear |
-| Gaming | 80% | 0.56 | 8.82 | 15,000 | 53 | Same buyers, same fear |
-| Baby & Kids | 72% | 0.67 | 8.03 | 3,000 | 11 | Small, shippable, bought from strangers |
-| Sports & Fitness | 72% | 0.67 | 8.03 | 5,000 | 18 |  |
+| Electronics | 80% | 0.56 | 9.40 | 20,000 | 100 | Phones are Nairobi's most-scammed item online; escrow answers a real fear |
+| Gaming | 80% | 0.56 | 8.82 | 15,000 | 75 | Same buyers, same fear |
+| Baby & Kids | 72% | 0.67 | 8.03 | 3,000 | 15 | Small, shippable, bought from strangers |
+| Sports & Fitness | 72% | 0.67 | 8.03 | 5,000 | 25 |  |
 | Books & Education | 72% | 0.67 | 7.45 | 1,000 | 9 |  |
-| Music & Instruments | 72% | 0.67 | 8.03 | 15,000 | 53 |  |
-| Arts & Crafts | 72% | 0.67 | 7.64 | 3,000 | 11 |  |
+| Music & Instruments | 72% | 0.67 | 8.03 | 15,000 | 75 |  |
+| Arts & Crafts | 72% | 0.67 | 7.64 | 3,000 | 15 |  |
 | Fashion | 70% | 0.70 | 8.03 | 1,500 | 10 | Low value; cash on delivery is common |
 | Beauty & Personal Care | 70% | 0.70 | 7.64 | 1,500 | 9 |  |
-| Health & Medical | 68% | 0.73 | 7.64 | 3,000 | 11 |  |
-| Other | 65% | 0.77 | 8.03 | 3,000 | 11 | Middle of the range |
-| Home & Furniture | 62% | 0.81 | 8.43 | 15,000 | 53 | Bulky; buyers inspect and pay on delivery |
+| Health & Medical | 68% | 0.73 | 7.64 | 3,000 | 15 |  |
+| Other | 65% | 0.77 | 8.03 | 3,000 | 15 | Middle of the range |
+| Home & Furniture | 62% | 0.81 | 8.43 | 15,000 | 75 | Bulky; buyers inspect and pay on delivery |
 | Food & Beverages | 55% | 0.89 | 8.03 | 1,000 | 10 | Perishable, local, cash |
-| Construction | 55% | 0.89 | 8.43 | 20,000 | 70 | Site deliveries, paid on arrival |
-| Business & Industrial | 55% | 0.89 | 8.43 | 100,000 | 190 | Invoices and bank transfers |
-| Pets & Animals | 55% | 0.89 | 8.43 | 10,000 | 35 | Seen and paid in person |
-| Agriculture | 50% | 0.93 | 8.82 | 10,000 | 35 | Farm-gate and market-day cash |
-| Automobiles | 45% | 0.95 | 11.36 | 800,000 | 820 | Inspection, logbook transfer, bank payment |
-| Services | 45% | 0.95 | 8.43 | 3,000 | 11 | Paid after the job |
-| Property | 40% | 0.97 | 11.36 | 3,000,000 | 1,980 | Agents; rent paid straight to landlords |
-| Land | 35% | 0.98 | 10.38 | 1,500,000 | 1,380 | Closes through advocates after a title search |
+| Construction | 55% | 0.89 | 8.43 | 20,000 | 100 | Site deliveries, paid on arrival |
+| Business & Industrial | 55% | 0.89 | 8.43 | 100,000 | 260 | Invoices and bank transfers |
+| Pets & Animals | 55% | 0.89 | 8.43 | 10,000 | 50 | Seen and paid in person |
+| Agriculture | 50% | 0.93 | 8.82 | 10,000 | 50 | Farm-gate and market-day cash |
+| Automobiles | 45% | 0.95 | 11.36 | 800,000 | 1,120 | Inspection, logbook transfer, bank payment |
+| Services | 45% | 0.95 | 8.43 | 3,000 | 15 | Paid after the job |
+| Property | 40% | 0.97 | 11.36 | 3,000,000 | 2,740 | Agents; rent paid straight to landlords |
+| Land | 35% | 0.98 | 10.38 | 1,500,000 | 1,890 | Closes through advocates after a title search |
+
 
 `GET /pricing/categories` serves this table. **Replace a guess with the
 measured rate once a category has about 200 completed deals** - one line in
@@ -588,24 +594,54 @@ store holds - and **listings in the store pay no listing fee**.
   so names are not squatted. **Waived** when the first payment covers 6
   months or more.
 
-| Plan | Listings | SMS alerts | Price / month (VAT included) | Per listing | Cost at full use |
-|---|---|---|---|---|---|
-| Starter | 20 | 20 | **KES 499** | 24.95 | 203 |
-| Standard | 50 | 50 | **KES 999** | 19.98 | 470 |
-| Growth | 100 | 100 | **KES 1,799** | 17.99 | 916 |
-| Business | 250 | 200 | **KES 3,999** | 16.00 | 2,232 |
-| Wholesale | 500 | 300 | **KES 6,999** | 14.00 | 4,395 |
+**Any size, priced by the listing (2026-10-06).** The owner picks how many
+listings the store holds, 30 or 40 or 500, and pays for that. The fixed plans
+this replaces made a seller with 40 listings buy 50, and jumped at each
+plan's edge. `GET /pricing/store-plan?trade=goods&listings=40` prices a size,
+`GET /pricing/plans` lists the cards (`plans.STORE_RATE_CARDS`). Each trade
+has its own card, because a car slot is worth far more than a phone slot.
+Count is what BROKA can see: the value of the stock is whatever the seller
+types, and tiers on it had cliffs (BUSINESS_MODEL_REVIEW.md section 6).
 
-Prepaying uses the premium discounts (8% / 15% / 20%). A store listing costs
-**KES 14-25 a month**, against KES 85 for a new seller listing one phone on
-its own - still the considerate price that makes a long-term seller choose a
-store. It was KES 249-4,999 (KES 10-12.50 a listing, barely above cost):
-too little for what a store is - a shop on the web at
-`broka.co.ke/store/<name>`, BROKA's buyers, escrow, and Zeno selling for the
-owner around the clock - when a website alone costs KES 499 a month
-(Lacesse Duka) and Shopify Basic ~KES 3,770. "Cost at full use" assumes every slot filled and drawing a negotiation
-a month; most stores will sit well under it. Beyond 500 listings, price it
-by hand.
+| Card | Base price covers | Then, per listing | Most in the app |
+|---|---|---|---|
+| **Shops** (everything but vehicles, property and land) | **KES 599** for up to 30 | 16 to 100, 14 to 250, 12 to 1,000 | 1,000 |
+| **Car yards** (Automobiles; at least 5 live) | **KES 2,999** for up to 10 | 200 to 25, 114 to 60, 100 to 200 | 200 |
+| **Agents** (Property and Land; at least 5 live) | **KES 2,999** for up to 10 | 150 to 30, 57 to 100, 50 to 300 | 300 |
+
+| Shop size | 30 | 40 | 50 | 100 | 250 | 500 | 1,000 |
+|---|---|---|---|---|---|---|---|
+| Price / month | 599 | 759 | 919 | 1,719 | 3,819 | 6,819 | 12,819 |
+| Per listing | 20.0 | 19.0 | 18.4 | 17.2 | 15.3 | 13.6 | 12.8 |
+| The fixed plan it replaces | 499 (20) | 999 (50) | 999 | 1,799 | 3,999 | 6,999 | by hand |
+
+| Car yard / agent size | 10 | 25 | 30 | 60 | 100 | 200 | 300 |
+|---|---|---|---|---|---|---|---|
+| Car yard | 2,999 | 5,999 | 6,569 | 9,989 | 13,989 | 23,989 | - |
+| Agent | 2,999 | 5,249 | 5,999 | 7,709 | 9,989 | 14,989 | 19,989 |
+
+- **Why these prices:**
+  - **A shop pays KES 20 a listing or less.** A KES 20,000 phone listed on
+    its own pays 100. Small store builders charge KES 460-1,999 a month, and
+    the WhatsApp catalogue is free.
+  - **A car yard pays KES 120-300 a car**, against ~866 a month for a KABA
+    member's Sunday spot at Jamhuri, and 1,120 for one KES 800,000 car
+    listed alone.
+  - **Agents pay less than Househunt** (10,000 for 20 listings, 15,000
+    unlimited) and BuyRentKenya (5,000-110,000), because BROKA doesn't have
+    their buyers yet.
+- **Rules for store billing to enforce:**
+  - A car yard or agent store needs 5 live listings. A one-house "store"
+    would undercut that house's own listing fee: 2,999 against 7,840 a month
+    for a KES 20M house.
+  - A shop can't hold vehicles, property or land.
+- **SMS alerts:** one a month per listing, up to 300.
+- **Prepaying** uses the premium discounts (8% / 15% / 20%).
+- **The margin rule is checked at every size of every card**, prepaid periods
+  included (`tests/test_pricing.py`). The tightest is a 1,000-listing shop at
+  1.28× its full-use cost, where every slot is filled and draws a
+  negotiation a month; most stores sit well under that.
+- **Bigger than a card's most:** priced by hand.
 
 ---
 
@@ -651,6 +687,7 @@ them the fee is most of what BROKA earns from the listing.
 | `GET /pricing/listing-fee/mine` | signed in | The caller's listings buyers can't see until paid, or won't within a week |
 | `POST /pricing/listing-fee/callback/{MPESA_CALLBACK_SECRET}` | Safaricom | The prompt's result |
 | `GET /pricing/plans` | public | Plus / Pro / Elite with allowances and prepaid prices, the free trial, store plans, commission |
+| `GET /pricing/store-plan?trade=&listings=` | public | A store of the size the seller picks: `trade` is `goods` (default), `vehicles` or `property`; the plan with its prepaid periods and setup fee, and the rate card. Above the card's most, 422 |
 | `GET /premium/me` | signed in | `enabled`; the plan, paid until, when this month's allowances renew; per feature `{allowance, used, left}`; free tries left |
 | `POST /premium/subscribe` | signed in | `{plan_id, months, phone_number}`: sends the M-Pesa prompt for the catalogue price. Takes `X-Idempotency-Key` |
 | `GET /premium/payments/{id}` | owner | pending / success / failed, and `paid_until`; asks Safaricom itself when the callback is late |

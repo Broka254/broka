@@ -13,8 +13,8 @@ What it is built on:
 The proposal was then attacked by five independent reviews: a Luthuli Avenue
 phone shop, a car yard and property agent, a one-off private seller, a numbers
 and loophole auditor, and a marketplace strategist. Their findings changed it;
-section 6 lists what was dropped and why. Nothing here is built yet. It is a
-proposal for the founder to accept, change or reject.
+section 6 lists what was dropped and why. The founder's decisions, and what
+is already in the code, are in section 5.
 
 Hard rules it keeps:
 
@@ -286,72 +286,69 @@ The cheapest honest premium sells what works with no BROKA buyers today: AI
 covers, voice and descriptions. Zeno credits are what turn BROKA's AI into
 money that grows with demand (2.5).
 
-### 2.3 Stores: priced by item count, per trade
+### 2.3 Stores: any size the owner picks, priced per trade
+
+Decided 2026-10-06 and in the code (`plans.STORE_RATE_CARDS`,
+`GET /pricing/store-plan`). The founder's change is that KES 599 covers
+30 listings, not 20, and the owner picks any size: 40, 500, anything in
+between. Each listing past the base adds a little, less as the store grows.
+One more listing never jumps the price, the way the old fixed plans did:
+listing 21 moved a store from 499 to 999.
 
 Stock value was tried and dropped (section 6). The value of the stock is
-whatever the seller types. Tiers on it have cliffs, where one more phone moved
-a shop from 499 to 1,499, and they can be gamed. Kenyan portals already price
-by count, and the big value differences between trades are carried by
-separate rate cards.
+whatever the seller types, and tiers on it had cliffs: one more phone moved a
+shop from 499 to 1,499. Count is something BROKA can see. Kenyan portals
+already price by count, and the big value differences between trades are
+carried by separate rate cards.
 
-**Goods stores** (phones, electronics, fashion, home and the rest). A slot is
-one item model holding up to 10 units. A slot for items priced over
-KES 100,000 counts as 2.
+**Shops** (phones, electronics, fashion, home and everything but vehicles,
+property and land):
 
-| Plan | Slots | Price/month | Today's equivalent |
-|---|---|---|---|
-| Duka | 20 | **599** | Starter 499 |
-| Shop | 50 | **1,199** | Standard 999 |
-| Business | 100 | **1,999** | Growth 1,799 |
-| Wholesale | 250 | **3,999** | Business 3,999 |
-| Wholesale+ | 500 | **6,999** | Wholesale 6,999 |
+| Listings | 30 | 40 | 50 | 100 | 250 | 500 | 1,000 |
+|---|---|---|---|---|---|---|---|
+| Price/month | **599** | 759 | 919 | 1,719 | 3,819 | 6,819 | 12,819 |
+| The fixed plan it replaces | 499 (20) | 999 (50) | 999 | 1,799 | 3,999 | 6,999 | by hand |
 
-A phone shop with 15 phones pays 599. The same phones as separate listings
-cost ~1,890 a month.
+That is 599 for up to 30, then KES 16 a listing to 100, 14 to 250, 12 to
+1,000. Above 1,000, priced by hand. A phone shop with 15 phones pays 599; the
+same phones listed one by one cost ~1,890 a month.
 
-**Car yards** (vehicles only, at least 5 live):
+**Car yards** (vehicles only, at least 5 live): KES 2,999 for up to 10, then
+200 a car to 25 (5,999), 114 to 60 (9,989), 100 to 200.
 
-| Plan | Cars | Price/month |
-|---|---|---|
-| Yard 10 | 10 | **2,999** |
-| Yard 25 | 25 | **5,999** |
-| Yard 60 | 60 | **9,999** |
+- That is KES 120-300 a car a month.
+- A KABA member pays ~866 a car a month to show it at Jamhuri on Sundays; a
+  private seller pays 4,330.
+- A private KES 800,000 car pays 1,120 as a listing.
 
-That is KES 167-300 a car a month. A KABA member pays ~866 a car a month to
-show it at Jamhuri on Sundays; a private seller pays 4,330. A private
-KES 800,000 car pays 1,120 as a listing.
+**Agents** (property and land only, at least 5 live): KES 2,999 for up to
+10, then 150 a listing to 30 (5,999), 57 to 100 (9,989), 50 to 300.
 
-**Agents** (property and land only, at least 5 live; identical units in one
-building count once):
+- This is below Househunt (10,000 for 20, 15,000 unlimited) and BuyRentKenya
+  (5,000-110,000), because BROKA doesn't have their buyers yet.
+- Move toward their prices once enquiries per listing are measured.
 
-| Plan | Listings | Price/month |
-|---|---|---|
-| Agent 10 | 10 | **2,999** |
-| Agent 30 | 30 | **5,999** |
-| Agent 100 | 100 | **9,999** |
+**Every store, once store billing is built:**
 
-This is below Househunt (10,000 for 20, 15,000 unlimited) and BuyRentKenya
-(5,000-110,000), because BROKA doesn't have their buyers yet. Move toward
-their prices once enquiries per listing are measured.
-
-**Every store:**
-
-- includes the listing fees for its slots, the storefront at
-  `broka.co.ke/store/<name>`, the free buyer texts, cover tries (6 up to 60),
-  and a free ID and business check (2.4)
+- includes the listing fees for its listings, the storefront at
+  `broka.co.ke/store/<name>`, the free buyer texts, and a free ID and business
+  check (2.4)
 - keeps the setup fee (299, waived on 6 months prepaid)
-- goods stores can't hold vehicles, land or property, so nobody opens a
-  "store" to dodge a car's listing fee
+- shops can't hold vehicles, land or property, so nobody opens a "store" to
+  dodge a car's listing fee
+- a listing holding more than 10 units counts as one listing per 10 units, so
+  200 iPhones aren't priced like 3 in a store either
 - "No buyer, no charge" for stores: fewer than 5 different buyers enquiring
   (10 for yards and agents) in a paid month makes the next month free
-- **The first 20 businesses** get 50% off, locked for 12 months. They are
+- **the first 20 businesses** get 50% off, locked for 12 months. They are
   billed by hand through an M-Pesa till until store billing is built at
   store 21.
-- Yards and agents get eTIMS invoices, so they can claim the cost.
+- yards and agents get eTIMS invoices, so they can claim the cost
 
-Every tier clears the code's margin rule (kept after VAT ≥ 1.25× full-use
-cost, with ZetuPay's 1.5% collection fee): goods 1.28-1.98×, yards and agents
-5.7-8.7×.
+Every size of every card clears the code's margin rule, prepaid periods
+included: what BROKA keeps after VAT is at least 1.25× its cost at full use.
+Shops come out at 1.28× (1,000 listings) to 1.76× (30); yards and agents at
+4.8× or more.
 
 **Before any store is charged:**
 
@@ -477,20 +474,19 @@ after fees go on, or fewer than 10% of fee-eligible listings pay within
 
 ---
 
-## 5. Decisions for the founder
+## 5. Decisions (founder, 2026-10-06)
 
-1. **The nudge:** the bands in 2.1 (+35-47% on everything), or lighter
-   (0.40% / 0.16% / 0.09% / 0.02%: a phone 80, a car 910).
-2. **Lettings:** a flat fee per vacancy (85 → 499 for a KES 30,000 let).
-   It is a much bigger step than the nudge, though still under 2% of the
-   agent's fee.
-3. **"Until sold"** for private car, land and house sellers.
-4. **Store rate cards per trade** (2.3), and founding businesses at half
-   price.
-5. **Premium:** hold Pro until Zeno sells; sell the KES 99 cover pack now.
-6. **Optional, if supply stalls:** one free goods listing under KES 300,000
-   per ID-checked seller (`FREE_LISTINGS_PER_SELLER=1`). This is the norm on
-   Jiji, OLX and Avito.
+| # | Question | Decision | In the code? |
+|---|---|---|---|
+| 1 | The nudge | **The bands in 2.1** (+35-47% on everything), not the lighter option | **Yes**: `engine.VALUE_BANDS`, cap 15,000 |
+| 2 | Lettings: a flat fee per vacancy (85 → 499 for a KES 30,000 let) | Agreed | Not yet: needs a "For sale / To let" field |
+| 3 | "Until sold" for private car, land and house sellers | Agreed | Not yet: needs the still-for-sale tap and plate / LR binding |
+| 4 | Store rate cards per trade, founding businesses at half price | **Agreed, with a change:** KES 599 covers 30 listings, and the owner picks any size | **Yes** (prices): `plans.STORE_RATE_CARDS`, `GET /pricing/store-plan`. Store billing is still to build |
+| 5 | Premium: hold Pro until Zeno sells; KES 99 cover pack now | Agreed | Not yet |
+| - | Fix the storefront's escrow claims | **Done** | Web storefront, app and the paying-safely advice |
+| 6 | Optional, if supply stalls: one free goods listing under KES 300,000 per ID-checked seller (`FREE_LISTINGS_PER_SELLER=1`); the norm on Jiji, OLX and Avito | Held in reserve | Setting exists, off |
+
+The rest of section 2 is agreed and is built in the order of 2.6.
 
 ---
 

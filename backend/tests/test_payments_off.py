@@ -91,7 +91,7 @@ class TestListingFee:
         proven = engine.SellerRecord(completed_weight=100, completed_deals=100)
         off = engine.quote(e, 20_000, 1, proven, 0, discounts_apply=False)
         on = engine.quote(e, 20_000, 1, proven, 0, discounts_apply=True)
-        assert off["monthly_fee"] == off["list_price"] == 70
+        assert off["monthly_fee"] == off["list_price"] == 100
         assert off["discount_percent"] == 0 and off["discounts"]["apply"] is False
         assert on["monthly_fee"] < off["monthly_fee"]
 
@@ -100,7 +100,7 @@ class TestListingFee:
         q = (await client.get("/pricing/listing-fee/quote", headers=await _headers(),
                               params={"category": "Electronics", "price": 180000, "quantity": 3})).json()
         assert q["listing_value"] == 540_000
-        assert q["monthly_fee"] == q["list_price"] == 610
+        assert q["monthly_fee"] == q["list_price"] == 835
 
 
 class TestSafePayment:
@@ -113,6 +113,15 @@ class TestSafePayment:
         assert body["advice"] and body["providers"]
         assert all(p["url"].startswith("https://") for p in body["providers"])
         assert "independent" in body["disclaimer"]
+
+    def test_land_and_car_buyers_are_not_sent_to_m_pesa_escrow(self):
+        """Regression: the advice sent land and car buyers to an escrow
+        service, and listed one as M-Pesa escrow - which can't carry more than
+        KES 250,000 in a payment, and proves nothing about who owns the land."""
+        advice = " ".join(safe_payment.ADVICE)
+        assert "Ardhisasa" in advice and "NTSA" in advice
+        assert "250,000" in advice
+        assert not any(line.startswith("For land, a car") for line in safe_payment.ADVICE)
 
     @pytest.mark.asyncio
     async def test_plans_say_no_commission_is_charged(self, client, payments_off):
