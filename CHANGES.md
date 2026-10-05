@@ -1,3 +1,40 @@
+# Changing a listing's price, a fee that follows it, land that isn't delivered (2026-10-05)
+
+Raised by the owner: a seller couldn't change a listing's price, though it
+was meant to be allowed within limits; the platform assumed everything can
+be delivered, land and property included; and the fee should follow the
+listing's price and quantity.
+
+**Changing the price** (`lib/screens/seller_dashboard_screen.dart`,
+`lib/features/listings/presentation/change_price.dart`). The rules existed
+on the server (two changes a week, 12 hours apart, none while a deal stands)
+but only a store product had a way to use them. Every listing on the seller
+dashboard now has a Price button; store products share the same dialog.
+
+**How far a change may go** (`api/domains/listings/price_rules.py`). Once
+buyers have seen a price, one change raises it by at most 25%
+(`PRICE_RAISE_TOO_LARGE`): a bigger jump on a listing buyers saved is a bait
+and switch. A new listing, or one buyers can't see yet, can be corrected
+freely. Cuts are not limited.
+
+**The fee follows the price.** The listing fee was already priced on the
+listing's price, category and quantity (`pricing/engine.py`, PRICING.md §2),
+but only when paid: a listing paid for at KES 10,000 could be raised to any
+price for the months paid. Now a raise on a listing with paid time left
+shortens that time in proportion to the new monthly fee. The server answers
+`PRICE_RAISE_SHORTENS_PAID_TIME` with the numbers, the app asks, and the
+change goes through with `accept_shorter_paid_time`. Quantity can't be edited
+after posting, so it can't be gamed the same way.
+
+**Land and property aren't delivered** (`api/domains/listings/handover.py`,
+`lib/utils/handover.dart`). The sell wizard no longer asks their seller
+about delivery; the server drops any answer an older app sends; the listing
+screen says "Viewed on site" instead of "Delivery not stated"; and Zeno is
+told it stays where it is and passes by a title transfer, even for older
+rows that carry a delivery answer. Listings carry `handover`
+(`"delivery"` or `"in_place"`). The escrow release already asks a land or
+property buyer about the title documents (`escrow/policy.py`).
+
 # Forgotten passwords, selfies on the Menu and listings, a sky that stays put (2026-10-03)
 
 Reported from a phone, with screenshots: the starry background squashed

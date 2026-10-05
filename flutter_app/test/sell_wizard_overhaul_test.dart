@@ -480,6 +480,22 @@ void main() {
       expect(data.deliveryAvailable, isTrue);
       expect(data.quantity, '100');
     });
+
+    testWidgets('land is not asked about delivery', (tester) async {
+      // A delivery answer from a category picked earlier in the draft.
+      final data = SellWizardData()
+        ..category = 'Land'
+        ..deliveryAvailable = true;
+      await _open(tester, SellStockScreen(data: data));
+      expect(find.byKey(const Key('sell-delivery-yes')), findsNothing);
+      expect(find.byKey(const Key('sell-delivery-in-place')), findsOneWidget);
+
+      await _tap(tester, find.text('NEXT'));
+      await tester.pump();
+      expect(find.text('Say whether you can arrange delivery.'), findsNothing);
+      expect(data.deliveryAvailable, isNull);
+      expect(SellFlow.isComplete(SellFlow.stock, data), isTrue);
+    });
   });
 
   group('Cover step', () {

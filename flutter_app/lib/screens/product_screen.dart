@@ -39,6 +39,7 @@ import '../models/seller_names.dart';
 import '../models/seller_standing.dart';
 import '../services/api_service.dart';
 import '../services/last_screen_tracker.dart';
+import '../utils/handover.dart';
 import '../utils/land_size.dart';
 import '../utils/price_unit.dart';
 import '../utils/auth_gate.dart';
@@ -547,8 +548,11 @@ class _ProductScreenState extends State<ProductScreen> {
             : ('Fixed price', 'The seller takes the asking price, no offers',
                 Icons.lock_outline_rounded, BrokaColors.neonPink);
     final note = (l.deliveryNote ?? '').trim();
-    final (deliveryTitle, deliveryBody, deliveryIcon, deliveryColor) = switch (l.deliveryAvailable) {
-      true => ('Seller delivers', note.isEmpty ? 'The seller can arrange delivery' : note,
+    final (deliveryTitle, deliveryBody, deliveryIcon, deliveryColor) =
+        !isDeliverableCategory(l.category)
+            ? (inPlaceTitle, inPlaceBody, Icons.place_outlined, BrokaColors.neonBlue)
+            : switch (l.deliveryAvailable) {
+      true =>('Seller delivers', note.isEmpty ? 'The seller can arrange delivery' : note,
           Icons.local_shipping_outlined, BrokaColors.neonBlue),
       false => ('Pickup only', 'You collect it from the seller',
           Icons.storefront_outlined, BrokaColors.warning),

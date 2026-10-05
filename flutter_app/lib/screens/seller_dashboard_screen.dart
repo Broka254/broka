@@ -38,6 +38,7 @@ import '../models/seller_standing.dart';
 import '../core/utils/result.dart';
 import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
+import '../features/listings/presentation/change_price.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 
@@ -2268,6 +2269,33 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                   ),
                 ),
               ),
+              // An auction's starting price is one of its terms, changed
+              // with the rest of them before bidding (PATCH /auctions/{id}/terms).
+              if (l.listingType != 'auction') ...[
+                const SizedBox(width: 8),
+                Semantics(
+                  button: true,
+                  label: 'Change the price of ${l.name}',
+                  child: PressableScale(
+                    key: Key('change-price-${l.id}'),
+                    onTap: () => _changePrice(l),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: BrokaColors.gold.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: BrokaColors.gold.withOpacity(0.35)),
+                      ),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.sell_outlined, size: 14, color: BrokaColors.gold),
+                        SizedBox(width: 5),
+                        Text('Price', style: TextStyle(color: BrokaColors.gold,
+                            fontSize: 12, fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(width: 8),
               // Smaller and red, beside the thing a seller taps most: it
               // should be findable, not the obvious tap.
@@ -2300,6 +2328,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         ]),
       ),
     );
+  }
+
+  /// The server's rules decide (change_price.dart); a change reloads the
+  /// catalogue, since the paid time can move with the price.
+  Future<void> _changePrice(Listing l) async {
+    HapticFeedback.selectionClick();
+    final changed = await changeListingPrice(context,
+        repo: listingsRepository, listingId: l.id, name: l.name, currentPrice: l.price);
+    if (changed && mounted) await _load();
   }
 
   /// Asks first, then takes the listing off BROKA. The backend refuses while

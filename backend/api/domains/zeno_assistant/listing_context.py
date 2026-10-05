@@ -33,6 +33,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import Listing, User
+from api.domains.listings.handover import IN_PLACE_NOTE, is_deliverable
 from api.domains.listings.paid import is_live
 from api.domains.listings.validation import CONDITIONS, MAX_PRICE_UNIT_LEN, _PRICE_UNIT
 from api.domains.trust.public_standing import public_seller_standing
@@ -122,7 +123,9 @@ async def load(db: AsyncSession, viewer_id: str, listing_id: str) -> Optional[di
     ]
     if listing.quantity and listing.quantity > 1:
         facts.append(f"Quantity available: {listing.quantity}")
-    if listing.delivery_available is True:
+    if not is_deliverable(listing.category):
+        facts.append(f"Delivery: {IN_PLACE_NOTE}")
+    elif listing.delivery_available is True:
         facts.append("Delivery: the seller CAN arrange delivery (their note on it, if any, is below)")
     elif listing.delivery_available is False:
         facts.append("Delivery: NO - the buyer collects it from the seller")
@@ -145,7 +148,7 @@ async def load(db: AsyncSession, viewer_id: str, listing_id: str) -> Optional[di
     ]
     if listing.location_name:
         text.append(f"Location: {_one_line(listing.location_name, PLACE_MAX)}")
-    if listing.delivery_note:
+    if listing.delivery_note and is_deliverable(listing.category):
         text.append(f"Delivery note: {_one_line(listing.delivery_note, NOTE_MAX)}")
     details = _details(listing.attributes)
     if details:

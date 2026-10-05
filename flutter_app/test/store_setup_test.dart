@@ -922,6 +922,42 @@ void main() {
       expect(find.byKey(const Key('product-action-remove')), findsOneWidget);
     });
 
+    testWidgets('a raise that shortens the paid time is sent only once the owner agrees',
+        (tester) async {
+      final backend = await openMyStore(tester, more: {
+        'PATCH /listings/l1': (req) {
+          final body = jsonDecode(req.body) as Map<String, dynamic>;
+          if (body['accept_shorter_paid_time'] == true) {
+            return _json({'price_changes_remaining': 1});
+          }
+          return _json({'detail': {
+            'code': 'PRICE_RAISE_SHORTENS_PAID_TIME',
+            'message': 'At KES 21,000 the 20 days you have paid for become 18. '
+                'Change the price anyway?',
+          }}, 409);
+        },
+      });
+      await openProducts(tester);
+
+      await tester.tap(find.byKey(const Key('store-product-l1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('product-action-price')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('price-field')), '21000');
+      await tester.tap(find.byKey(const Key('save-price')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('become 18'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm-shorter-paid-time')));
+      await tester.pumpAndSettle();
+
+      expect(backend.bodiesFor('PATCH', '/listings/l1').toList(), [
+        {'price': 21000.0},
+        {'price': 21000.0, 'accept_shorter_paid_time': true},
+      ]);
+      expect(find.text('Price updated. You can change it once more this week.'), findsOneWidget);
+    });
+
     testWidgets('taking a product out keeps the owner on the Products tab', (tester) async {
       final products = _mixedProducts();
       final backend = await openMyStore(tester, products: products, more: {

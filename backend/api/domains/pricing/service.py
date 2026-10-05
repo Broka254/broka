@@ -133,6 +133,21 @@ async def listing_fee_quote(
     return result
 
 
+async def monthly_fees_at_prices(
+    db: AsyncSession, seller_id: str, category_name: str, quantity: int, *prices: float,
+) -> list[int]:
+    """This seller's monthly fee for the listing at each of `prices`, as of now.
+
+    One record and one category count for all of them, so the fees differ
+    only by price - what a price change does to the fee, and nothing else
+    (the seller's record may have moved since they paid).
+    """
+    category = for_category(category_name)
+    record = await seller_record(db, seller_id)
+    in_category = await category_completed_deals(db, category)
+    return [engine.quote(category, p, quantity, record, in_category)["monthly_fee"] for p in prices]
+
+
 # The category table shows the lasting price, without the launch offer:
 # this many completed deals puts launch_discount() at zero.
 _PAST_LAUNCH = 10_000

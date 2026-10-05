@@ -18,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.database import get_db, DealStatus, Listing
 from api.domains.auctions.lifecycle import AuctionError
 from api.security import get_current_user
+from api.core.config import settings
+from api.database import ListingStatus, ListingType
+from api.domains.pricing import service as pricing_service
+from . import price_rules
 from . import validation as rules
+from .paid import fee_applies, fee_state, is_live
 from .service import ListingService
 
 router = APIRouter()
@@ -316,6 +321,10 @@ class ListingEdit(BaseModel):
     # Replaces the showcase with this image asset; "" removes it.
     showcase_id: Optional[str] = None
     showcase_image_url: Optional[str] = None
+    # A raise that shortens the listing's paid time (price_rules.py) is
+    # refused with PRICE_RAISE_SHORTENS_PAID_TIME and the numbers, so the
+    # app can ask; the seller's yes is this, sent with the same price.
+    accept_shorter_paid_time: bool = False
 
     @field_validator("price")
     @classmethod
@@ -434,7 +443,7 @@ async def update_listing(
         # begun those are fixed; the seller changes them before it does
         # through PATCH /auctions/{id}/terms, which validates the whole
         # window rather than one number.
-        from api.database import AuctionMeta, ListingType
+        from api.database import AuctionMeta
         from api.domains.auctions import lifecycle as _auction_lifecycle
 
         if listing.listing_type == ListingType.auction:
@@ -491,6 +500,62 @@ async def update_listing(
                            f"{wait:.0f} more hours - a price that moves twice in "
                            f"a day reads as uncertainty, not a deal.")
 
+        new_price = float(body.price)
+        old_price = float(listing.price or 0)
+
+        # How far one change may go (price_rules.py). Auctions are left to
+        # their terms lock above.
+        if (listing.listing_type != ListingType.auction
+                and new_price > price_rules.raise_limit(old_price)
+                and price_rules.raise_is_limited(
+                    listing.created_at,
+                    is_live(listing, now) and listing.status == ListingStatus.active, now)):
+            limit = int(price_rules.raise_limit(old_price))
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "PRICE_RAISE_TOO_LARGE",
+                    "message": (
+                        f"A price can go up by at most "
+                        f"{round(price_rules.MAX_RAISE_SHARE * 100)}% at a time - "
+                        f"KES {limit:,} for this listing. Buyers who saved it at "
+                        f"KES {old_price:,.0f} would read a bigger jump as a bait "
+                        f"and switch."),
+                    "max_price": limit,
+                },
+            )
+
+        # What the raise does to the fee already paid (price_rules.py).
+        paid_until_after = listing.paid_until
+        if (settings.listing_fees_enabled and fee_applies(listing)
+                and new_price > old_price
+                and listing.paid_until is not None and listing.paid_until > now):
+            fee_before, fee_after = await pricing_service.monthly_fees_at_prices(
+                db, listing.seller_id, listing.category, listing.quantity or 1,
+                old_price, new_price)
+            paid_until_after = price_rules.shortened_paid_until(
+                listing.paid_until, now, fee_before, fee_after)
+            if paid_until_after != listing.paid_until and not body.accept_shorter_paid_time:
+                days_left = (listing.paid_until - now).days
+                days_after = (paid_until_after - now).days
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "PRICE_RAISE_SHORTENS_PAID_TIME",
+                        "message": (
+                            f"At KES {new_price:,.0f} this listing's fee is "
+                            f"KES {fee_after:,} a month instead of KES {fee_before:,}, "
+                            f"so the {days_left} days you have paid for become "
+                            f"{days_after}. Change the price anyway?"),
+                        "monthly_fee_before": fee_before,
+                        "monthly_fee_after": fee_after,
+                        "paid_until": listing.paid_until.isoformat(),
+                        "paid_until_after": paid_until_after.isoformat(),
+                        "days_left": days_left,
+                        "days_left_after": days_after,
+                    },
+                )
+
         db.add(ListingPriceChange(
             id=str(_uuid.uuid4()),
             listing_id=listing_id,
@@ -499,8 +564,12 @@ async def update_listing(
             new_price=float(body.price),
             changed_at=now,
         ))
-        changed["price"] = {"from": listing.price, "to": float(body.price)}
-        listing.price = float(body.price)
+        changed["price"] = {"from": listing.price, "to": new_price}
+        listing.price = new_price
+        if paid_until_after != listing.paid_until:
+            changed["paid_until"] = {"from": listing.paid_until.isoformat(),
+                                     "to": paid_until_after.isoformat()}
+            listing.paid_until = paid_until_after
         recent = [None] + list(recent)   # count this one toward the allowance
 
     await db.commit()
@@ -512,6 +581,7 @@ async def update_listing(
         "price_changes_remaining":
             max(0, MAX_PRICE_CHANGES_PER_WEEK - len(recent)),
         "window_days": PRICE_CHANGE_WINDOW_DAYS,
+        "listing_fee": fee_state(listing, now),
     }
 
 

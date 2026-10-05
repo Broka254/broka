@@ -18,6 +18,7 @@ from api.core.geo import distances_km, haversine_km
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
+from .handover import handover, is_deliverable
 from .paid import fee_applies, fee_state, is_live, live_clause
 from .stock import is_stocked, units_taken, units_total
 from .validation import load_attributes
@@ -328,6 +329,7 @@ class ListingService:
         subcounty = tidy_place(data.get("location_subcounty"))
         lat, lng = listing_point(county, data["lat"], data["lng"])
 
+        deliverable = is_deliverable(category_name)
         listing = Listing(
             seller_id=seller_id,
             store_id=store.id if store else None,
@@ -341,8 +343,12 @@ class ListingService:
             price_unit=data.get("price_unit"),
             quantity=data.get("quantity"),
             price_negotiable=data.get("price_negotiable", True) is not False,
-            delivery_available=data.get("delivery_available"),
-            delivery_note=(data.get("delivery_note") or None) if data.get("delivery_available") else None,
+            # Land and buildings don't move: whatever an app sent about
+            # delivering one is dropped, so neither buyers nor Zeno are told
+            # the seller delivers a plot (handover.py).
+            delivery_available=data.get("delivery_available") if deliverable else None,
+            delivery_note=((data.get("delivery_note") or None)
+                           if deliverable and data.get("delivery_available") else None),
             sms_alerts=data.get("sms_alerts", True) is not False,
             lat=lat,
             lng=lng,
@@ -1236,6 +1242,9 @@ class ListingService:
             "price_negotiable": getattr(listing, "price_negotiable", True) is not False,
             "delivery_available": listing.delivery_available,
             "delivery_note": listing.delivery_note,
+            # "delivery" or "in_place" (land, property): what the delivery
+            # question means for this listing - see handover.py.
+            "handover": handover(listing.category),
             "lat": listing.lat,
             "lng": listing.lng,
             "location_name": listing.location_name,

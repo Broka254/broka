@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../services/sell_wizard_data.dart';
+import '../utils/handover.dart';
 import '../utils/price_unit.dart';
 import '../widgets/sell_step_scaffold.dart';
 import 'sell_flow.dart';
@@ -30,6 +31,8 @@ class _SellStockScreenState extends State<SellStockScreen> {
 
   SellWizardData get _data => widget.data;
   int get _qty => int.tryParse(_qtyCtrl.text) ?? 0;
+  // Land and buildings stay where they are: no delivery question.
+  bool get _deliverable => isDeliverableCategory(_data.category);
 
   @override
   void initState() {
@@ -73,11 +76,17 @@ class _SellStockScreenState extends State<SellStockScreen> {
       setState(() => _error = 'Enter how many you have - at least 1.');
       return;
     }
-    if (_data.deliveryAvailable == null) {
+    if (_deliverable && _data.deliveryAvailable == null) {
       setState(() => _error = 'Say whether you can arrange delivery.');
       return;
     }
     _data.quantity = _data.isAuction ? '1' : '$_qty';
+    if (!_deliverable) {
+      // Not asked, so nothing is sent: an answer left over from another
+      // category picked earlier in this draft would be dropped by the server
+      // anyway (handover.dart).
+      _data.deliveryAvailable = null;
+    }
     _data.deliveryNote = _data.deliveryAvailable == true ? _noteCtrl.text.trim() : '';
     setState(() => _error = null);
     SellFlow.next(context, _data, from: SellFlow.stock);
@@ -147,6 +156,23 @@ class _SellStockScreenState extends State<SellStockScreen> {
           const SizedBox(height: 24),
         ],
 
+        if (!_deliverable) ...[
+          sellStepLabel('HOW THE BUYER GETS IT'),
+          const SizedBox(height: 10),
+          const SellCard(
+            key: Key('sell-delivery-in-place'),
+            child: Row(children: [
+              Text('📍', style: TextStyle(fontSize: 24)),
+              SizedBox(width: 12),
+              Expanded(child: Text(
+                'Land and property aren\'t delivered. Buyers view it where it is, and '
+                'ownership passes by a title transfer - BROKA asks the buyer about the '
+                'documents before your money is released.',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45),
+              )),
+            ]),
+          ),
+        ] else ...[
         sellStepLabel('CAN YOU ARRANGE DELIVERY IF A BUYER NEEDS IT?'),
         const SizedBox(height: 10),
         SellChoiceCard(
@@ -194,6 +220,7 @@ class _SellStockScreenState extends State<SellStockScreen> {
                 )
               : const SizedBox(width: double.infinity),
         ),
+        ],
       ]),
     );
   }
