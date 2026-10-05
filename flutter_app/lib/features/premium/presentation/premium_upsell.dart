@@ -23,8 +23,12 @@ Future<bool> showPremiumUpsell(BuildContext context, {required String message, S
     context: context,
     backgroundColor: BrokaColors.bgCard,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+    // Scrollable: the server writes the message, and the ones that say
+    // what a feature does for a sale run to several lines - on a short
+    // phone an unscrollable column overflowed and cut off the buttons.
+    isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(22, 18, 22, 16),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(

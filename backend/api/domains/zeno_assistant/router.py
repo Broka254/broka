@@ -2,6 +2,9 @@
 
 The one endpoint behind the Zeno tab, typed or spoken. See service.py for
 the turn and intents.py for what Zeno may do.
+
+And Zeno helping a seller write a listing (selling.py):
+POST /zeno/listing-draft/describe and POST /zeno/listing-draft/price/turn.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from api.core.rate_limit import zeno_chat_limiter
 from api.core.vision import ImageRejected, prepare_for_model
 from api.database import get_db
 from api.security import get_current_user
-from . import service
+from . import selling, service
 
 router = APIRouter()
 
@@ -25,6 +28,27 @@ _HISTORY_ENTRY_MAX_CHARS = 2000
 # Base64 of a 10 MB photo - the ceiling every image upload in BROKA has
 # (core/image_processing.MAX_UPLOAD_BYTES). The app sends a far smaller one.
 _IMAGE_MAX_B64_CHARS = (10 * 1024 * 1024 * 4) // 3 + 4
+
+
+def _recent_history(v) -> list[dict]:
+    """Keep the newest entries, each reduced to role and clipped
+    content, rather than rejecting a long conversation with a 422 - the
+    same rule as the Buying Agent's /converse."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("history must be a list")
+    cleaned = []
+    for h in v[-_HISTORY_KEEP:]:
+        if not isinstance(h, dict):
+            continue
+        content = h.get("content")
+        content = content if isinstance(content, str) else ("" if content is None else str(content))
+        cleaned.append({
+            "role": "user" if h.get("role") == "user" else "assistant",
+            "content": content[:_HISTORY_ENTRY_MAX_CHARS],
+        })
+    return cleaned
 
 
 class AssistantTurnIn(BaseModel):
@@ -51,24 +75,7 @@ class AssistantTurnIn(BaseModel):
     @field_validator("history", mode="before")
     @classmethod
     def _recent_history_only(cls, v):
-        """Keep the newest entries, each reduced to role and clipped
-        content, rather than rejecting a long conversation with a 422 - the
-        same rule as the Buying Agent's /converse."""
-        if v is None:
-            return []
-        if not isinstance(v, list):
-            raise ValueError("history must be a list")
-        cleaned = []
-        for h in v[-_HISTORY_KEEP:]:
-            if not isinstance(h, dict):
-                continue
-            content = h.get("content")
-            content = content if isinstance(content, str) else ("" if content is None else str(content))
-            cleaned.append({
-                "role": "user" if h.get("role") == "user" else "assistant",
-                "content": content[:_HISTORY_ENTRY_MAX_CHARS],
-            })
-        return cleaned
+        return _recent_history(v)
 
 
 @router.post("/assistant/turn")
@@ -112,4 +119,109 @@ async def assistant_turn(
         voice=body.mode == "voice",
         listing_id=body.listing_id,
         image_base64=image,
+    )
+
+
+# ── Zeno helping a seller write a listing (selling.py) ───────────────────────
+
+_ATTR_MAX = 20
+_ATTR_KEY_MAX = 40
+_ATTR_VALUE_MAX = 80
+
+
+class ListingDraftIn(BaseModel):
+    """The listing the seller is writing - there is no listing row yet.
+    Every field is the seller's own entry in the sell wizard, bounded
+    because it goes into a billed prompt."""
+    name: str = Field(default="", max_length=120)
+    category: str = Field(default="", max_length=60)
+    subcategory: Optional[str] = Field(default=None, max_length=60)
+    condition: Optional[str] = Field(default=None, max_length=20)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    description: str = Field(default="", max_length=2000)
+    asking_price: Optional[float] = Field(default=None, ge=0, le=selling.MAX_SUGGESTED_PRICE)
+    price_unit: Optional[str] = Field(default=None, max_length=24)
+    price_negotiable: Optional[bool] = None
+    listing_type: Literal["direct", "auction"] = "direct"
+    location: Optional[str] = Field(default=None, max_length=80)
+
+    @field_validator("attributes", mode="before")
+    @classmethod
+    def _bounded_attributes(cls, v):
+        """Category details ("storage": "128GB"), clipped rather than
+        refused: a seller must not be stopped by a long value."""
+        if not isinstance(v, dict):
+            return {}
+        out = {}
+        for key, value in list(v.items())[:_ATTR_MAX]:
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            out[str(key)[:_ATTR_KEY_MAX]] = str(value)[:_ATTR_VALUE_MAX]
+        return out
+
+
+class DescribeIn(BaseModel):
+    draft: ListingDraftIn = Field(default_factory=ListingDraftIn)
+    # The first listing photo, by its upload id (POST /media/images) - or,
+    # from a build whose upload hasn't finished, inline.
+    photo_id: Optional[str] = Field(default=None, max_length=64)
+    image_base64: Optional[str] = Field(default=None, max_length=_IMAGE_MAX_B64_CHARS)
+    language: str = Field(default="english", max_length=20)
+
+
+@router.post("/listing-draft/describe")
+async def describe_listing_draft(
+    body: DescribeIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Zeno writes the listing's description from its first photo. Premium:
+    each one spends one of the plan's AI descriptions (a 402 without one).
+    The seller edits the result in the description step - nothing here
+    touches a listing.
+
+    Rate-limited on Zeno's per-user bucket: it is a model call."""
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+    return await selling.describe(
+        db, current_user["id"], body.draft.model_dump(), body.language,
+        photo_id=body.photo_id, image_base64=body.image_base64,
+    )
+
+
+class PriceTurnIn(BaseModel):
+    draft: ListingDraftIn
+    message: str = Field(default="", max_length=1000)
+    history: list[dict] = Field(default_factory=list)
+    language: str = Field(default="english", max_length=20)
+    # The seller tapped "check BROKA": search similar live listings and
+    # price against them. The one counted step.
+    research: bool = False
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _recent_history_only(cls, v):
+        return _recent_history(v)
+
+    @model_validator(mode="after")
+    def _something_to_answer(self):
+        if not self.message.strip() and not self.research:
+            raise ValueError("Say something, or ask Zeno to check BROKA.")
+        return self
+
+
+@router.post("/listing-draft/price/turn")
+async def price_listing_draft(
+    body: PriceTurnIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One turn of Zeno helping a seller price their listing (Pro and
+    Elite). {"reply", "suggested_price", "offer_research", "comparables"} -
+    comparables only on a turn with research=true, which spends one of the
+    plan's price checks."""
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+    message = body.message.strip() or "Check how similar listings on BROKA are priced."
+    return await selling.price_turn(
+        db, current_user["id"], body.draft.model_dump(), message, body.history,
+        body.language, research=body.research,
     )

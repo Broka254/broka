@@ -78,6 +78,18 @@ AI_PER_NEW_LISTING = 3 * ai_call_cost(2_000, 400)
 # ten exchanges, each a negotiation message plus the agent deciding its move.
 AI_PER_AUTO_NEGOTIATION = 10 * (AI_PER_NEGOTIATION_MESSAGE + AI_PER_ASSISTANT_TURN)
 
+# Zeno writing a listing's description from its first photo (a premium
+# allowance): the photo is ~1,300 tokens on top of ~1,200 of instructions
+# and the seller's details, ~350 out. Costed at DeepSeek's rates like
+# every call here; Gemini Flash, which usually sees the photo, is cheaper.
+AI_LISTING_DESCRIPTION = ai_call_cost(2_500, 350)
+
+# A price check: Zeno pricing a seller's draft against what similar live
+# listings on BROKA ask (zeno_assistant/pricing.py). One model call with
+# the draft and up to a dozen comparables, ~4,000 tokens in and ~300 out;
+# the search itself is a database query.
+AI_PRICE_CHECK = ai_call_cost(4_000, 300)
+
 
 # ── Messaging ────────────────────────────────────────────────────────────────
 # Mobitech, BROKA's SMS provider, charges KES 0.35 a message, whatever its

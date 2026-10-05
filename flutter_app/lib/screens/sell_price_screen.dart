@@ -8,18 +8,36 @@
 //   * fixed or open to offers - Zeno is told which (Listing.price_negotiable)
 //     and says so to buyers, instead of inviting offers on a fixed price.
 // An auction has neither: it sells the lot, and bidding is its negotiation.
+//
+// Pricing with Zeno (2026-10-05), for Pro sellers (PRICING.md section 4):
+// a card at the top opens Zeno's pricing screen, where Zeno suggests a
+// price and can check what similar live listings on BROKA ask. The price
+// the seller picks there comes back into the field. Without Pro the card
+// opens the plans, saying why: a listing priced right sells faster.
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../core/utils/result.dart';
+import '../features/premium/data/premium_repository.dart';
+import '../features/premium/domain/premium.dart';
+import '../features/premium/presentation/premium_upsell.dart';
+import '../features/zeno_assistant/presentation/zeno_pricing_screen.dart';
 import '../main.dart';
 import '../services/sell_wizard_data.dart';
 import '../utils/price_format.dart';
 import '../utils/price_unit.dart';
 import '../widgets/sell_step_scaffold.dart';
+import '../widgets/sell_zeno_boost_card.dart';
 import 'sell_flow.dart';
 
 class SellPriceScreen extends StatefulWidget {
   final SellWizardData data;
-  const SellPriceScreen({super.key, required this.data});
+
+  /// For tests: where the plan is read, and how Zeno's pricing screen is
+  /// opened (it resolves to the price the seller chose).
+  final PremiumRepository? premium;
+  final Future<int?> Function(BuildContext context, SellWizardData data)? openPricing;
+
+  const SellPriceScreen({super.key, required this.data, this.premium, this.openPricing});
   @override
   State<SellPriceScreen> createState() => _SellPriceScreenState();
 }
@@ -33,6 +51,10 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
   late bool _customUnit;
   Timer? _debounce;
   String? _error;
+
+  // The seller's plan; null until known, and then the card opens Zeno and
+  // the server decides.
+  PremiumStatus? _premium;
 
   SellWizardData get _data => widget.data;
   List<String> get _suggestions =>
@@ -69,6 +91,44 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
         widget.data.auctionStartsAt!.isBefore(now)) {
       widget.data.auctionStartsAt = now;
     }
+    _loadPremium();
+  }
+
+  Future<void> _loadPremium() async {
+    final r = await (widget.premium ?? premiumRepository).me();
+    if (mounted && r is Success<PremiumStatus>) setState(() => _premium = r.data);
+  }
+
+  /// No price checks on this plan: the card leads to Pro instead.
+  bool get _pricingLocked => !(_premium?.includes(PremiumFeature.priceChecks) ?? true);
+
+  String? get _checksLeftText {
+    final p = _premium;
+    if (p == null || !p.enabled || !p.hasPlan || _pricingLocked) return null;
+    final all = p.usage[PremiumFeature.priceChecks]?.allowance ?? 0;
+    return '${p.left(PremiumFeature.priceChecks)} of $all price checks left this month';
+  }
+
+  Future<void> _priceWithZeno() async {
+    if (_pricingLocked) {
+      final opened = await showPremiumUpsell(context,
+          message: 'Pricing with Zeno is part of BROKA Pro. A listing priced right from the start '
+              'sells faster - Zeno suggests your price and checks it against similar listings on BROKA.',
+          upgradeTo: 'pro');
+      if (opened && mounted) await _loadPremium();
+      return;
+    }
+    // What is typed so far goes with the draft: Zeno weighs in on it.
+    _onEdited();
+    final chosen = await (widget.openPricing ?? ZenoPricingScreen.open)(context, _data);
+    if (!mounted) return;
+    if (_premium?.enabled ?? false) unawaited(_loadPremium());
+    if (chosen == null) return;
+    setState(() {
+      _priceCtrl.text = formatKesAmount(chosen);
+      _error = null;
+    });
+    _onEdited();
   }
 
   /// A stored amount ("2500000") as the field shows it ("2,500,000").
@@ -347,6 +407,18 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
       error: _error,
       onNext: _next,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SellZenoBoostCard(
+          key: const Key('sell-zeno-price'),
+          icon: Icons.insights_rounded,
+          title: isAuction ? 'Set the right starting bid with Zeno' : 'Price it to sell with Zeno',
+          benefit: 'Listings priced right from the start sell faster. Zeno suggests your price and '
+              'checks what similar listings on BROKA ask.',
+          badge: 'PRO',
+          locked: _pricingLocked,
+          footnote: _checksLeftText,
+          onTap: _priceWithZeno,
+        ),
+        const SizedBox(height: 18),
         sellStepLabel(isAuction ? 'STARTING PRICE (KES)' : 'ASKING PRICE (KES)'),
         const SizedBox(height: 8),
         TextFormField(

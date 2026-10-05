@@ -29,6 +29,10 @@
 // then a plan's monthly tries. The step says how many are left, and once
 // they are gone the button leads to the plans instead of a refusal. A cover
 // from the gallery stays free.
+//
+// 2026-10-05: the step says what a cover is for - it is the first thing a
+// buyer sees on Home, and a listing that gets tapped sells sooner - since
+// the listing flow as a whole makes the case for a plan.
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
@@ -143,7 +147,8 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
         ? "You've used this month's AI cover tries on BROKA ${p.planName}"
             '${renews == null ? '.' : '. They renew on ${renews.day} ${months[renews.month - 1]}.'}'
         : "You've used your free AI cover tries. A BROKA plan gives you more every month.";
-    _offerPlans('$message You can still upload a cover from your gallery, free.');
+    _offerPlans('$message A cover that stands out on Home gets more taps, and more taps sell faster. '
+        'You can still upload a cover from your gallery, free.');
   }
 
   @override
@@ -289,7 +294,8 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
     return Stack(children: [
       SellStepScaffold(
         step: SellFlow.showcase, totalSteps: SellFlow.total, title: SellFlow.title(SellFlow.showcase),
-        subtitle: 'Optional. The picture your listing shows on Home - make it stand out.',
+        subtitle: 'The first thing buyers see on Home. A cover that stands out gets more taps - '
+            'and sells faster.',
         data: _data,
         error: _error,
         nextLabel: _data.hasShowcase ? 'CONTINUE' : 'SKIP - USE MY PHOTO',
@@ -306,7 +312,9 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
                   _themePicker(),
                   const SizedBox(height: 14),
                   _noteField(),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
+                  const _SellsFasterNote(),
+                  const SizedBox(height: 12),
                   _MagicButton(
                     key: const Key('showcase-generate'),
                     label: _coversLocked ? '🔒  Get more AI covers' : '✨  Create my ${_themeInfo.name} cover',
@@ -1062,5 +1070,33 @@ class _Tag extends StatelessWidget {
         ),
         child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 9.5,
             fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+      );
+}
+
+
+/// Why a cover is worth making: what it does for the sale.
+class _SellsFasterNote extends StatelessWidget {
+  const _SellsFasterNote();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const Key('showcase-sells-faster'),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: BrokaColors.neonGreen.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.trending_up_rounded, color: BrokaColors.neonGreen, size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Listings with a striking cover get noticed first on Home - more taps, '
+              'more offers, a faster sale. Zeno keeps your item exactly as it is.',
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 12, height: 1.4),
+            ),
+          ),
+        ]),
       );
 }

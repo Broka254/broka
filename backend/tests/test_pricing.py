@@ -219,7 +219,8 @@ class TestPlans:
         for lower, upper in zip(tiers, tiers[1:]):
             assert upper.monthly_price > lower.monthly_price
             for field in ("voice_requests", "sms_alerts", "agent_watches", "auto_negotiations",
-                          "ai_covers", "auctions_hosted", "priority_support_minutes"):
+                          "ai_covers", "auctions_hosted", "ai_descriptions", "price_checks",
+                          "priority_support_minutes"):
                 assert getattr(upper, field) >= getattr(lower, field), field
 
     def test_bigger_stores_pay_less_per_listing(self):

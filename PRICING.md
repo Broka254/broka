@@ -23,8 +23,8 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 | **Commission**, auction | Buyer pays **5%**: BROKA 4% (never under KES 20) + E-Confirm 1% |
 | **Listing fee** | Monthly, per listing: `f = C × R`. KES 9–3,000 a month depending on category, value, quantity and the seller's record. **Charged from day one, 30% off at launch** (the launch offer, §2). 1 to 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
-| **Plus** | KES 199 / month: voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
-| **Pro** | KES 599 / month: Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
+| **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
+| **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
 | **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
 | **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus 2 AI cover tries |
 | **Store** | KES 299 to open (waived on 6+ months), then KES 499 (20 listings) to KES 6,999 (500 listings) a month; store listings pay no listing fee |
@@ -377,7 +377,9 @@ days (minimum KES 150, maximum 3,000) and a third of that for 7 days
 **What is premium.** The features that cost BROKA money every time they are
 used, or that are worth real money to the user: voice mode, texts from Zeno,
 the Buying Agent's watches and Zeno negotiating for a buyer, **AI cover
-images while posting a listing**, and hosting auctions. **Bidding on auctions
+images while posting a listing**, **Zeno writing a listing's description
+from its photo**, **pricing a listing with Zeno against what similar BROKA
+listings ask**, and hosting auctions. **Bidding on auctions
 stays free for everyone** - buyers are an auction's liquidity, and gating
 them would starve the sellers who pay. Typing to Zeno, negotiating yourself,
 dictating a message, and uploading your own cover photo stay free.
@@ -405,6 +407,8 @@ dictating a message, and uploading your own cover photo stay free.
 | **Price / month** (VAT included) | **KES 199** | **KES 599** | **KES 1,499** |
 | For | Buyers who want Zeno on their side, occasional sellers | People who buy or sell every week | People who trade for a living |
 | AI cover tries (≈ listings) | 6 (≈ 2) | 20 (≈ 7) | 60 (≈ 20) |
+| Descriptions Zeno writes from your photo | 30 | 100 | 300 |
+| Price checks against similar BROKA listings | - | 40 | 150 |
 | Voice requests (≈ minutes) | 90 (≈ 30) | 180 (≈ 60) | 360 (≈ 120) |
 | Texts from Zeno (a buyer waiting, a message you asked it to send) | 30 | 80 | 150 |
 | Buying Agent watches, at once | 1 | 3 | 10 |
@@ -432,6 +436,15 @@ cover does to a listing before paying for more. Nothing else is on trial.
 While `PREMIUM_ENABLED` is off, AI covers are off too (the other premium
 features are free then): with no plans sold, every cover would be paid for
 by BROKA alone.
+
+**Zeno's selling help** (2026-10-05) is what the listing wizard offers to
+make a listing sell faster, and the wizard's own case for a plan: a
+description written from the photo (KES 0.07 a time) on every plan, and
+price checks against similar live BROKA listings (KES 0.09 a time: the
+Buying Agent's search, which is a database query, plus one model call) from
+Pro up - "pro sellers" are
+who they are for. Both are cents a use, so the allowances are sized for a
+busy seller rather than for the margin, and neither moved a price.
 
 Voice requests are the next most expensive (KES 0.71 each, a third of it the
 text-to-speech reserve). If the free voice keeps working, they can go up
@@ -483,6 +496,8 @@ builds show it as it is. Background work has nobody to show a 402 to:
 | Feature | Refused in the app | Refused in the background |
 |---|---|---|
 | AI cover | The cover step says how many tries are left and, with none, offers the plans; the gallery stays free | - |
+| Description by Zeno | The Description step's card offers the plans instead of asking; writing your own stays free | - |
+| Pricing with Zeno | The Price step's card offers Pro; the conversation itself is free once a plan has it, and only the BROKA check is counted | - |
 | Voice mode | Zeno says why, stops listening, offers the plans; typing still works | - |
 | Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |
 | Zeno negotiating for you | 402 and the plans | The automatic opener on a new match skips the buyer |

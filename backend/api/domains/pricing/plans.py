@@ -74,6 +74,8 @@ class PremiumPlan:
     auto_negotiations: int          # sellers Zeno opens a negotiation with for you
     ai_covers: int                  # AI cover tries while posting listings
     auctions_hosted: int            # auctions you start (bidding is free for everyone)
+    ai_descriptions: int = 0        # descriptions Zeno writes from a listing's photo
+    price_checks: int = 0           # Zeno pricing a listing against similar ones on BROKA
     priority_support_minutes: int = 0
 
     def max_monthly_cost(self) -> float:
@@ -84,6 +86,8 @@ class PremiumPlan:
             + self.auto_negotiations * costs.AI_PER_AUTO_NEGOTIATION
             + self.ai_covers * costs.AI_SHOWCASE_IMAGE
             + self.auctions_hosted * costs.AUCTION_HOSTED
+            + self.ai_descriptions * costs.AI_LISTING_DESCRIPTION
+            + self.price_checks * costs.AI_PRICE_CHECK
             + self.priority_support_minutes * costs.SUPPORT_PER_MINUTE
         )
         return usage * costs.OVERHEAD + costs.mpesa_collection_cost(self.monthly_price)
@@ -110,6 +114,8 @@ class PremiumPlan:
                 # 7 listings than 6.
                 "ai_cover_listings": round(self.ai_covers / costs.AI_COVER_TRIES_PER_LISTING),
                 "auctions_hosted": self.auctions_hosted,
+                "ai_descriptions": self.ai_descriptions,
+                "price_checks": self.price_checks,
                 "priority_support_minutes": self.priority_support_minutes,
             },
         }
@@ -126,24 +132,33 @@ class PremiumPlan:
 # subscription - Netflix Kenya KES 200-1,100, Spotify KES 419 - and one
 # negotiation Zeno wins for a Pro buyer (5% off a KES 20,000 phone) is
 # worth more than the month.
+#
+# Zeno's selling help (2026-10-05) is what the listing wizard offers to
+# make a listing sell faster: a description written from the photo on
+# every plan, and price checks against similar BROKA listings from Pro up -
+# "pro sellers" are who it is for. Both cost cents a use (costs.py), so the
+# allowances are sized for a busy seller, not for the margin.
 PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
     PremiumPlan(
         id="plus", name="Plus", monthly_price=199,
-        pitch="Talk to Zeno, let it text you when a buyer is waiting, and give your listings AI covers.",
+        pitch="Zeno writes your listings from their photos, gives them AI covers, "
+              "talks with you and texts you when a buyer is waiting.",
         voice_requests=90, sms_alerts=30, agent_watches=1, auto_negotiations=0,
-        ai_covers=6, auctions_hosted=0,
+        ai_covers=6, auctions_hosted=0, ai_descriptions=30,
     ),
     PremiumPlan(
         id="pro", name="Pro", monthly_price=599,
-        pitch="Zeno hunts and haggles for you, covers for a week of listings, and your own auctions.",
+        pitch="Zeno prices your listings against the market, hunts and haggles for you, "
+              "covers for a week of listings, and your own auctions.",
         voice_requests=180, sms_alerts=80, agent_watches=3, auto_negotiations=25,
-        ai_covers=20, auctions_hosted=2,
+        ai_covers=20, auctions_hosted=2, ai_descriptions=100, price_checks=40,
     ),
     PremiumPlan(
         id="elite", name="Elite", monthly_price=1499,
         pitch="Everything, in volume - for people who buy and sell for a living.",
         voice_requests=360, sms_alerts=150, agent_watches=10, auto_negotiations=50,
-        ai_covers=60, auctions_hosted=5, priority_support_minutes=15,
+        ai_covers=60, auctions_hosted=5, ai_descriptions=300, price_checks=150,
+        priority_support_minutes=15,
     ),
 )
 PREMIUM_BY_ID: dict[str, PremiumPlan] = {p.id: p for p in PREMIUM_PLANS}

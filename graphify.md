@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-202 endpoints served by `backend/main.py`. **Auth** is read from each
+204 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 55, token 4, user 121.
+Counts: admin 20, optional 2, public 55, token 4, user 123.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -262,7 +262,9 @@ Counts: admin 20, optional 2, public 55, token 4, user 121.
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:121) |
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:379) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:115) |
-| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:75) |
+| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:82) |
+| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:173) |
+| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:213) |
 
 ## Backend modules
 
@@ -419,6 +421,7 @@ Counts: admin 20, optional 2, public 55, token 4, user 121.
 - `knowledge.py` — What Zeno knows about the user it is talking to - fetched only when a question needs it.
 - `listing_context.py` — The listing a user is asking Zeno about, when they opened Zeno from it.
 - `router.py` — Zeno as the user's assistant - POST /zeno/assistant/turn.
+- `selling.py` — Zeno helping a seller while they write a listing (2026-10-05).
 - `service.py` — One turn of Zeno as the user's assistant - text or voice, it is the same turn.
 
 ### `backend/api/core/`
@@ -593,7 +596,7 @@ of a change.
 - **trust** — domains: listings; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
-- **zeno_assistant** — domains: ai_broker, buy_agent, listings, premium, trust; core: rate_limit, vision; database, security
+- **zeno_assistant** — domains: ai_broker, buy_agent, listings, media, premium, trust; core: image_processing, rate_limit, vision; database, security
 
 ## Background jobs
 
@@ -726,6 +729,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
 - `test_zeno_assistant.py` — BROKA - Zeno as the user's assistant (POST /zeno/assistant/turn) Run: pytest backend/tests/test_zeno_assistant.py -v
 - `test_zeno_draft_sms.py` — Zeno texting the other side of a negotiation (POST /negotiate/zeno-action/draft-sms).
+- `test_zeno_selling.py` — BROKA - Zeno helping a seller write a listing (zeno_assistant/selling.py) Run: pytest backend/tests/test_zeno_selling.py -v
 - `test_zeno_vision.py` — Zeno looking at photos (2026-10-02).
 - `test_zetupay.py` — ZetuPay: money users pay BROKA (api/core/zetupay.py, api/domains/payments/).
 
@@ -906,12 +910,15 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/features/zeno_assistant/`
 
 - `data/zeno_assistant_repository.dart` — lib/features/zeno_assistant/data/zeno_assistant_repository.dart
+- `data/zeno_selling_repository.dart` — lib/features/zeno_assistant/data/zeno_selling_repository.dart
 - `domain/zeno_about_listing.dart` — The listing a buyer opened Zeno from, to ask about it.
 - `domain/zeno_action.dart` — What Zeno, the assistant, can do in the app - the app's side of the closed vocabulary in backend/api/domains/zeno_assistant/intents.py.
+- `domain/zeno_selling.dart` — Zeno helping a seller while they write a listing (2026-10-05) - the app's side of backend/api/domains/zeno_assistant/selling.py.
 - `presentation/zeno_action_card.dart` — What Zeno is doing, or asking to do, under its reply - in the typed conversation and, larger, in voice mode.
 - `presentation/zeno_guide_card.dart` — A guide from Zeno - "how do I open a store?", "tips to sell faster" - as steps to follow rather than a paragraph to remember.
 - `presentation/zeno_live_overlay.dart` — Voice mode - talking to Zeno the way one talks to Siri.
 - `presentation/zeno_orb.dart` — Zeno's orb - what the user talks to in voice mode.
+- `presentation/zeno_pricing_screen.dart` — Zeno pricing the listing a seller is writing (2026-10-05) - opened from the sell wizard's Price step, for Pro and Elite (PRICING.md section…
 - `presentation/zeno_session_host.dart` — Where Zeno's session (zeno_session.dart) shows: above every screen.
 - `zeno_action_runner.dart` — Doing what Zeno said it would.
 - `zeno_session.dart` — Zeno, staying with the user from screen to screen.
@@ -1000,6 +1007,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `product_grid_view.dart` — Reusable 2-column paginated grid used by the home feed, category zones, search results, and Trending "See All" (Design Journal Volume 6, Ch…
 - `protection_badge.dart` — BROKA - Protection Badge (Volume 2 §2.1)
 - `sell_step_scaffold.dart` — BROKA - Sell Wizard Step Scaffold
+- `sell_zeno_boost_card.dart` — Zeno's premium help in the sell wizard (2026-10-05): a description written from the photo, the price checked against BROKA - one card each,…
 - `seller_setup.dart` — BROKA - the seller questions, shared.
 - `seller_standing_tiles.dart` — A seller's standing as buyers see it: the seller dashboard's rating, deal completion rate and response time, and how long their deals take…
 - `splash_painters.dart` — Visual-effects painters for the BROKA "AI boot sequence" splash screen.
@@ -1057,6 +1065,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `receipts_and_charts_test.dart` — The Seller Dashboard's graphs and its Payment Receipts screen.
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
+- `sell_zeno_premium_test.dart` — Zeno's premium help in the sell wizard (2026-10-05), and the case the wizard makes for a plan while a seller is posting.
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
 - `seller_names_test.dart` — The names a listing's seller is shown under (models/seller_names.dart).
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.

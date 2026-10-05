@@ -40,7 +40,9 @@ class Feature:
     AUTO_NEGOTIATION = "auto_negotiations"
     AI_COVER = "ai_covers"
     AUCTION = "auctions_hosted"
-    COUNTED = (VOICE, SMS, AUTO_NEGOTIATION, AI_COVER, AUCTION)
+    AI_DESCRIPTION = "ai_descriptions"
+    PRICE_CHECK = "price_checks"
+    COUNTED = (VOICE, SMS, AUTO_NEGOTIATION, AI_COVER, AUCTION, AI_DESCRIPTION, PRICE_CHECK)
     # Not counted per month but held at once: watches running now.
     WATCHES = "agent_watches"
 
@@ -52,6 +54,9 @@ _NAMES = {
     Feature.AUTO_NEGOTIATION: ("negotiation by Zeno", "negotiations by Zeno", "Zeno negotiating for you"),
     Feature.AI_COVER: ("AI cover try", "AI cover tries", "AI covers"),
     Feature.AUCTION: ("auction", "auctions", "Hosting auctions"),
+    Feature.AI_DESCRIPTION: ("description by Zeno", "descriptions by Zeno",
+                             "Zeno writing your description from your photo"),
+    Feature.PRICE_CHECK: ("price check", "price checks", "Pricing your listing with Zeno"),
     Feature.WATCHES: ("Buying Agent watch", "Buying Agent watches", "The Buying Agent"),
 }
 
@@ -118,9 +123,19 @@ def _refusal(feature: str, plan: Optional[PremiumPlan], sub: Optional[Subscripti
                    + (f"{up.name} - from KES {up.monthly_price} a month." if up else "Premium."))
         code = "PREMIUM_REQUIRED"
     if feature == Feature.AI_COVER:
-        message += " You can still upload a cover from your gallery, free."
+        message += (" A cover that stands out on Home gets more taps, and more taps sell "
+                    "faster. You can still upload a cover from your gallery, free.")
     if feature == Feature.AUCTION:
         message += " Bidding stays free for everyone."
+    # The selling help says why it is worth paying for - a seller deciding
+    # whether to upgrade is deciding whether it sells their item sooner -
+    # and that the free way is still there.
+    if feature == Feature.AI_DESCRIPTION:
+        message += (" Listings with a clear, detailed description sell faster - buyers don't "
+                    "have to ask the basics. You can still write your own, free.")
+    if feature == Feature.PRICE_CHECK:
+        message += (" A listing priced right from the start sells faster - Zeno checks it "
+                    "against similar listings on BROKA.")
     return HTTPException(status_code=402, detail={
         "code": code, "message": message.strip(), "feature": feature,
         "plan": plan.id if plan else None, "upgrade_to": up.id if up else None,
@@ -186,6 +201,19 @@ async def consume(db: AsyncSession, user_id: str, feature: str, n: int = 1) -> N
         raise _refusal(feature, plan, sub, now, spent=False)
     if not await _add(db, user_id, feature, key, n, limit):
         raise _refusal(feature, plan, sub, now, spent=True)
+
+
+async def require(db: AsyncSession, user_id: str, feature: str) -> None:
+    """The 402 PREMIUM_REQUIRED unless the user's plan includes `feature` -
+    without spending any of it. For a screen the feature opens (Zeno's
+    pricing conversation), where only the costly step inside it is
+    counted: a spent month still opens it, and is refused at that step."""
+    if not enabled():
+        return
+    now = datetime.utcnow()
+    sub, plan, limit, _key = await _allowance(db, user_id, feature, now)
+    if limit <= 0:
+        raise _refusal(feature, plan, sub, now, spent=False)
 
 
 async def try_consume(db: AsyncSession, user_id: str, feature: str, n: int = 1) -> bool:

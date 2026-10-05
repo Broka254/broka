@@ -14,9 +14,11 @@ class PremiumFeature {
   static const negotiations = 'auto_negotiations';
   static const aiCovers = 'ai_covers';
   static const auctions = 'auctions_hosted';
+  static const aiDescriptions = 'ai_descriptions';
+  static const priceChecks = 'price_checks';
 
-  /// In the order a plan card lists them.
-  static const all = [aiCovers, voice, sms, watches, negotiations, auctions];
+  /// In the order a plan card lists them: what helps a listing sell first.
+  static const all = [aiDescriptions, aiCovers, priceChecks, voice, sms, watches, negotiations, auctions];
 
   /// "20 AI cover tries", "90 voice requests to Zeno"...
   static String describe(String feature, int n) => switch (feature) {
@@ -26,6 +28,8 @@ class PremiumFeature {
         watches => n == 1 ? '1 Buying Agent watch' : '$n Buying Agent watches',
         negotiations => '$n negotiations by Zeno',
         auctions => n == 1 ? '1 auction to host' : '$n auctions to host',
+        aiDescriptions => '$n descriptions written by Zeno from your photos',
+        priceChecks => '$n price checks against similar BROKA listings',
         _ => '$n $feature',
       };
 
@@ -36,6 +40,8 @@ class PremiumFeature {
         watches => 'Buying Agent watches',
         negotiations => 'Zeno negotiating for you',
         auctions => 'Auctions',
+        aiDescriptions => 'Descriptions by Zeno',
+        priceChecks => 'Price checks',
         _ => feature,
       };
 }
@@ -148,6 +154,11 @@ class PremiumStatus {
   bool canUse(String feature) => !enabled || (usage[feature]?.left ?? 0) > 0;
 
   int left(String feature) => usage[feature]?.left ?? 0;
+
+  /// Whether the plan has [feature] at all, used up this month or not:
+  /// always while premium is off. A screen the feature opens (Zeno's
+  /// pricing conversation) asks this; the step that spends it, canUse.
+  bool includes(String feature) => !enabled || (usage[feature]?.allowance ?? 0) > 0;
 
   static DateTime? _date(Object? v) =>
       v is String ? DateTime.tryParse('${v}Z')?.toLocal() : null;
