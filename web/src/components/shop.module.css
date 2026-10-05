@@ -35,6 +35,14 @@
   color: var(--green);
 }
 
+/* On the narrowest phones the rule ends in an ellipsis beside "Get the
+   app", rather than being cut off mid-letter. */
+.topbar strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .topbarApp {
   flex: none;
   margin-right: max(0px, calc((100vw - var(--page-width)) / 2));
@@ -1556,13 +1564,6 @@
   text-align: right;
 }
 
-.good {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--green);
-}
-
 .summary .summaryTotal {
   border-bottom: 0;
   padding-top: 12px;
@@ -1611,6 +1612,17 @@
 }
 
 .steps strong {
+  color: var(--text-high);
+}
+
+.stepsNote {
+  margin: 12px 0 0;
+  color: var(--text-mid);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.stepsNote strong {
   color: var(--text-high);
 }
 
@@ -1664,7 +1676,7 @@
   font-weight: 700;
 }
 
-.protect {
+.payNote {
   display: flex;
   gap: 12px;
   margin-top: 16px;
@@ -1674,12 +1686,12 @@
   background: rgb(16 185 129 / 0.08);
 }
 
-.protect svg {
+.payNote svg {
   flex: none;
   color: var(--green);
 }
 
-.protect p {
+.payNote p {
   margin: 0;
   font-size: 14px;
   line-height: 1.5;
@@ -1794,7 +1806,7 @@
   letter-spacing: 0.5px;
 }
 
-.escrowTag {
+.payTag {
   display: inline-flex;
   align-items: center;
   gap: 4px;

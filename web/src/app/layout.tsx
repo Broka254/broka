@@ -4,13 +4,14 @@ import { Constellation } from '@/components/Constellation'
 import { OpenInApp } from '@/components/OpenInApp'
 import { SITE_URL } from '@/lib/config'
 import { DEFAULT_PREVIEW_IMAGE, asset } from '@/lib/links'
+import { PAY_RULE } from '@/lib/safety'
 
 import './globals.css'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: 'BROKA', template: '%s · BROKA' },
-  description: "Shop Kenyan stores on BROKA: every purchase protected until you've received it.",
+  description: `Shop Kenyan stores on BROKA. ${PAY_RULE}.`,
   applicationName: 'BROKA',
   // In public/store-assets, not app/icon.png: /icon.png on broka.co.ke is
   // the BROKA website's (see ASSET_PREFIX).

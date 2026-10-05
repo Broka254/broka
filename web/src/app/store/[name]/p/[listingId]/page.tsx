@@ -1,8 +1,9 @@
 // One product in a store: https://broka.co.ke/store/<name>/p/<id> - a shop's
 // product page: the path back through the store, the gallery, the price,
 // how many, Add to cart and Buy now, the seller, and more from the store.
-// Checkout is in the BROKA app for now (one web payment comes with orders);
-// this page is what a shared product link opens.
+// Deals are agreed in the BROKA app, and paid to the store directly while
+// BROKA holds no payments (lib/safety.ts) - the box under the buy buttons
+// says so; this page is what a shared product link opens.
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound, permanentRedirect, redirect } from 'next/navigation'
@@ -24,6 +25,7 @@ import { getListing, getStore, getStoreListings } from '@/lib/api'
 import { filtersQuery, toProductCard } from '@/lib/catalogue'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
 import { productPath, storeCartPath, storePath, viaTag } from '@/lib/links'
+import { NO_DEPOSIT, PAY_LINE, SEE_FIRST } from '@/lib/safety'
 import { API_URL } from '@/lib/server-config'
 import {
   jsonLdScript,
@@ -148,11 +150,10 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 }}
               />
             )}
-            <div className={shopStyles.protect}>
-              <Icon name="shield" size={22} />
+            <div className={shopStyles.payNote}>
+              <Icon name="check" size={22} />
               <p>
-                <strong>Buyer protection.</strong> Pay by M-Pesa into BROKA escrow: the store is paid only after you
-                confirm you received the item.
+                <strong>{SEE_FIRST.lead}</strong> {PAY_LINE} {NO_DEPOSIT}
               </p>
             </div>
 

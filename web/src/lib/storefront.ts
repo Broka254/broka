@@ -6,6 +6,7 @@ import { categoryVisual } from './categories'
 import { clip, formatUnitPrice, placeLine, plural } from './format'
 import { type ResolvedSizes, resolveImage, resolveSizes, srcSet } from './images'
 import { DEFAULT_PREVIEW_IMAGE, absoluteUrl, previewImageUrl, productPath, storePath } from './links'
+import { PAY_RULE } from './safety'
 import { API_URL } from './server-config'
 import type { Listing, Store } from './types'
 
@@ -73,7 +74,7 @@ export function storeDescription(store: Store): string {
   return [
     store.category ? `${store.category} store` : 'Store',
     where ? `in ${where}` : null,
-    `· ${plural(store.listing_count, 'product')} on BROKA, every purchase protected.`,
+    `· ${plural(store.listing_count, 'product')} on BROKA. ${PAY_RULE}.`,
   ]
     .filter(Boolean)
     .join(' ')

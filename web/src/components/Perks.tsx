@@ -1,14 +1,17 @@
 // What buying from a store on BROKA means, in the strip shops put under
-// their banner. Every line is true of every store: payment is held in
-// escrow, it's by M-Pesa, and delivery or pickup is agreed in the deal. A
+// their banner. Every line is true of every store: you see the item before
+// you pay, you pay the store directly (BROKA doesn't hold payments for now:
+// lib/safety.ts), and delivery or pickup is agreed with the store. A
 // verified seller gets a fourth.
+import { PERK_PAY_DIRECT, PERK_SEE_FIRST } from '@/lib/safety'
+
 import { Icon, type IconName } from './Icon'
 import styles from './shop.module.css'
 
 export function Perks({ verified }: { verified: boolean }) {
   const perks: Array<[IconName, string, string]> = [
-    ['shield', 'Escrow protected', 'Paid only when you confirm delivery'],
-    ['phone', 'Pay with M-Pesa', 'One prompt on your phone'],
+    ['check', PERK_SEE_FIRST.title, PERK_SEE_FIRST.sub],
+    ['phone', PERK_PAY_DIRECT.title, PERK_PAY_DIRECT.sub],
     ['truck', 'Delivery or pickup', 'Agreed with the store'],
   ]
   if (verified) perks.push(['verified', 'Verified seller', 'Holds the BROKA Verified badge'])

@@ -2,12 +2,14 @@
 // know about a store before buying from it - which store it is, who runs it
 // and their record (deals done, rating, the year they joined), the shop's
 // photos, what it says about itself, where it is, how to reach it, and how
-// paying through BROKA protects them. The same sections, in the same order,
-// as the app's Store details screen (store_details_view.dart).
+// to pay the store safely while BROKA holds no payments (lib/safety.ts). The
+// same sections, in the same order, as the app's Store details screen
+// (store_details_view.dart).
 //
 // Its own page (/store/<name>/about), linked from "More details" under the
 // store's name, so the store's home is left to its products.
 import { monthYearOf, placeLine, plural, yearOf } from '@/lib/format'
+import { PAYING_SAFELY } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
 import styles from './store.module.css'
@@ -202,10 +204,16 @@ export function StoreDetails({ view }: { view: StoreView }) {
         <h2 id="safety-title" className={styles.detailsLabel}>
           Buying safely
         </h2>
-        <p className={styles.safety}>
-          🛡 Pay only through BROKA. Your money is held in escrow, and the seller is paid once you confirm you have the
-          item. Never send money to a seller directly.
-        </p>
+        {/* This section used to send buyers to BROKA to pay, never to the
+            seller: with payments paused, the opposite of what they must do,
+            and the script of a "pay BROKA here" scam. */}
+        <ul className={styles.safety}>
+          {PAYING_SAFELY.map((a) => (
+            <li key={a.lead}>
+              <strong>{a.lead}</strong> {a.text}
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   )

@@ -2,10 +2,10 @@
 // open/closed state - shared by every component on the page through one
 // small store, read with useSyncExternalStore.
 //
-// One cart per store: an order belongs to one store, so one seller and one
-// escrow (STORES_PLAN.md phase 4). Prices here are what the product card
-// said when it was added: a display total, never a price anyone pays -
-// checkout happens in the deal room, which reads the listing again.
+// One cart per store: an order belongs to one store, so one seller to agree
+// with and to pay (STORES_PLAN.md phase 4). Prices here are what the product
+// card said when it was added: a display total, never a price anyone pays -
+// the price is agreed in the deal room, which reads the listing again.
 import { useSyncExternalStore } from 'react'
 
 import type { ProductCardData } from './catalogue'

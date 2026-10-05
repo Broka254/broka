@@ -312,8 +312,11 @@
 }
 
 .safety {
+  display: grid;
+  gap: 8px;
   margin: 0;
   padding: 14px 16px;
+  list-style: none;
   border-radius: var(--radius);
   border: 1px solid rgb(16 185 129 / 0.35);
   background: rgb(16 185 129 / 0.08);

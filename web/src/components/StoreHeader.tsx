@@ -2,13 +2,17 @@
 // with what buying here means, then the store's own header - its name as
 // the brand, the search pill and filter button (as on the app's Home), More
 // (the store's details), share, and the cart. It stays on screen while the
-// catalogue scrolls. BROKA is the "Protected by BROKA" line, not the brand:
-// a seller sharing "my shop" gets a page that's theirs (STORES_UI_REVIEW.md H2).
+// catalogue scrolls. BROKA is the "Store on BROKA" line under the name, not
+// the brand: a seller sharing "my shop" gets a page that's theirs
+// (STORES_UI_REVIEW.md H2). The bar says how paying works while BROKA holds
+// no payments (lib/safety.ts): the rule first, as it's all a phone has room
+// for.
 import Link from 'next/link'
 
 import type { CatalogueFilters } from '@/lib/catalogue'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
 import { storeDetailsPath } from '@/lib/links'
+import { PAY_RULE } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
 import { CartButton } from './CartButton'
@@ -23,11 +27,9 @@ export function StoreHeader({ view, filters }: { view: StoreView; filters?: Cata
     <>
       <div className={styles.topbar}>
         <p>
-          <Icon name="shield" size={15} />
-          <span>
-            Protected by <strong>BROKA</strong> escrow
-          </span>
-          <span className={styles.topbarMore}>· Pay by M-Pesa · Delivery or pickup agreed with the store</span>
+          <Icon name="check" size={15} />
+          <strong>{PAY_RULE}</strong>
+          <span className={styles.topbarMore}>· Delivery or pickup agreed with the store</span>
         </p>
         <a href={APP_DOWNLOAD_URL} rel="nofollow" className={styles.topbarApp}>
           Get the app
@@ -37,7 +39,7 @@ export function StoreHeader({ view, filters }: { view: StoreView; filters?: Cata
         <div className={styles.headerInner}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
             <span className={styles.brandName}>{store.name}</span>
-            <span className={styles.brandTag}>Store on BROKA · protected</span>
+            <span className={styles.brandTag}>Store on BROKA</span>
           </Link>
           <div className={styles.headerSearch}>
             <CatalogueControls basePath={view.path} storeName={store.name} filters={store.is_active ? filters : undefined} />

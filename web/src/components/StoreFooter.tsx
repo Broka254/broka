@@ -1,11 +1,12 @@
 // The foot of a store's pages, as a shop's website ends: the store, its
-// departments, help with buying, and how paying works - then "powered by
-// BROKA".
+// departments, help with buying, and how paying works (the store directly,
+// while BROKA holds no payments: lib/safety.ts) - then "powered by BROKA".
 import Link from 'next/link'
 
 import { filtersQuery } from '@/lib/catalogue'
 import { placeLine } from '@/lib/format'
 import { storeCartPath, storeDetailsPath } from '@/lib/links'
+import { NO_DEPOSIT, PAY_LINE, PERK_SEE_FIRST } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 import type { StoreCategory } from '@/lib/types'
 
@@ -59,12 +60,12 @@ export function StoreFooter({ view, categories = [] }: { view: StoreView; catego
           <p className={styles.footerTitle}>Paying</p>
           <p className={styles.footerPay}>
             <span className={styles.mpesa}>M-PESA</span>
-            <span className={styles.escrowTag}>
-              <Icon name="shield" size={14} /> Escrow
+            <span className={styles.payTag}>
+              <Icon name="check" size={14} /> {PERK_SEE_FIRST.title}
             </span>
           </p>
           <p className={styles.footerMuted}>
-            Your money is held by BROKA until you confirm you received what you paid for.
+            {PAY_LINE} {NO_DEPOSIT}
           </p>
         </div>
       </div>

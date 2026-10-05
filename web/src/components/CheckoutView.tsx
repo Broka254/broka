@@ -1,14 +1,17 @@
 'use client'
 
-// The cart page: every product, how many, the total - and checkout.
+// The cart page: every product, how many, the total - and how to buy them.
 //
-// Checkout is in the BROKA app, where every purchase already goes through
-// escrow: "Checkout in the app" opens this cart there (a /store/<name>/cart
-// link with the products and quantities; the app reads each product again
-// and fills its own cart), and each product is agreed with the store and
-// paid by M-Pesa. One payment for the whole cart on the web comes with
-// orders (STORES_PLAN.md phase 4). The app is on Android: on an iPhone or a
-// computer the page says how to finish on an Android phone rather than
+// Deals are made in the BROKA app: the button opens this cart there (a
+// /store/<name>/cart link with the products and quantities; the app reads
+// each product again and fills its own cart), and each product is agreed
+// with the store in its deal room. The money doesn't go through BROKA for
+// now - in-app payments are paused - so the page says how to pay the store
+// safely instead of promising a safeguard BROKA can't give (lib/safety.ts):
+// the button says "agree", not "checkout", and the summary's Payment row
+// says who is paid. One payment for the whole cart on the web would come
+// with orders (STORES_PLAN.md phase 4). The app is on Android: on an iPhone
+// or a computer the page says how to finish on an Android phone rather than
 // offering a download that can't be installed (STORES_UI_REVIEW.md H3).
 import Link from 'next/link'
 import { useState, useSyncExternalStore } from 'react'
@@ -18,6 +21,7 @@ import { cart, cartCount, cartItemsParam, cartTotal, useCart } from '@/lib/cart'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
 import { formatPrice, formatUnitPrice } from '@/lib/format'
 import { absoluteUrl, androidAppLink } from '@/lib/links'
+import { ESCROW_SERVICES, PAY_DIRECT, SEE_FIRST } from '@/lib/safety'
 
 import { QtyStepper } from './AddToCart'
 import { Icon } from './Icon'
@@ -132,10 +136,8 @@ export function CheckoutView({
             <dd>Agreed with the store</dd>
           </div>
           <div>
-            <dt>Buyer protection</dt>
-            <dd className={styles.good}>
-              <Icon name="shield" size={15} /> Included
-            </dd>
+            <dt>Payment</dt>
+            <dd>To the store directly</dd>
           </div>
           <div className={styles.summaryTotal}>
             <dt>Total</dt>
@@ -145,14 +147,14 @@ export function CheckoutView({
 
         {android ? (
           <a className={`button ${styles.checkoutButton}`} href={appCart}>
-            <Icon name="lock" size={18} /> Checkout in the BROKA app
+            <Icon name="handshake" size={18} /> Agree with the store in the BROKA app
           </a>
         ) : (
           <div className={styles.checkoutElsewhere} role="note">
             <p>
-              <strong>Checkout is in the BROKA app for Android.</strong>{' '}
-              {ios ? 'Open this store on an Android phone' : 'Open this store on your Android phone'} to pay: your
-              money is held safely until you confirm delivery.
+              <strong>Deals are agreed in the BROKA app for Android.</strong>{' '}
+              {ios ? 'Open this store on an Android phone' : 'Open this store on your Android phone'} to agree each
+              product with the store, then pay the store directly once you&apos;ve seen it.
             </p>
             <button type="button" className={`button ${styles.checkoutButton}`} onClick={copyLink}>
               <Icon name={copied ? 'check' : 'share'} size={18} /> {copied ? 'Store link copied' : 'Copy the store link'}
@@ -172,13 +174,15 @@ export function CheckoutView({
           <li>
             <strong>Agree each one with the store</strong> in its deal room - price, delivery or pickup.
           </li>
-          <li>
-            <strong>Pay by M-Pesa.</strong> BROKA holds the money.
-          </li>
-          <li>
-            <strong>Confirm you received it</strong> and the store is paid.
-          </li>
+          {[SEE_FIRST, PAY_DIRECT].map((a) => (
+            <li key={a.lead}>
+              <strong>{a.lead}</strong> {a.text}
+            </li>
+          ))}
         </ol>
+        <p className={styles.stepsNote}>
+          <strong>{ESCROW_SERVICES.lead}</strong> {ESCROW_SERVICES.text}
+        </p>
       </aside>
     </div>
   )

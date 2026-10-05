@@ -8,6 +8,7 @@ import { useEffect, useRef } from 'react'
 
 import { cart, cartCount, cartTotal, closeCartDrawer, openCartDrawer, useCart, useCartDrawer, useLastAdded } from '@/lib/cart'
 import { formatPrice, formatUnitPrice } from '@/lib/format'
+import { PAY_LINE, SEE_FIRST } from '@/lib/safety'
 
 import { QtyStepper } from './AddToCart'
 import { Icon } from './Icon'
@@ -128,12 +129,13 @@ export function CartDrawer({ storeId, storeName, cartPath }: { storeId: string; 
                     <span>Subtotal</span>
                     <strong>{formatPrice(cartTotal(lines))}</strong>
                   </p>
+                  {/* How paying works, said before checkout - not a padlock
+                      on the button, which reads as a payment BROKA secures. */}
                   <p className={styles.drawerNote}>
-                    <Icon name="shield" size={16} /> Paid by M-Pesa into BROKA escrow. The store is paid once you confirm
-                    you received your order.
+                    <Icon name="info" size={16} /> {PAY_LINE} {SEE_FIRST.lead}
                   </p>
                   <Link href={cartPath} className={`button ${styles.drawerCheckout}`} onClick={closeCartDrawer}>
-                    <Icon name="lock" size={18} /> Checkout
+                    <Icon name="bag" size={18} /> Checkout
                   </Link>
                   <button type="button" className={styles.linkButton} onClick={closeCartDrawer}>
                     Continue shopping

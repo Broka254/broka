@@ -147,8 +147,11 @@ describe('StoreHero', () => {
 describe('Perks', () => {
   it('says what buying here means, and adds verified only for a verified seller', () => {
     const { rerender } = render(<Perks verified={false} />)
-    expect(screen.getByText('Escrow protected')).toBeTruthy()
-    expect(screen.getByText('Pay with M-Pesa')).toBeTruthy()
+    expect(screen.getByText('See it, then pay')).toBeTruthy()
+    expect(screen.getByText('Pay the store directly')).toBeTruthy()
+    // BROKA holds no payments while they're paused: no escrow perk.
+    expect(screen.queryByText('Escrow protected')).toBeNull()
+    expect(screen.queryByText(/escrow/i)).toBeNull()
     expect(screen.queryByText('Verified seller')).toBeNull()
     rerender(<Perks verified />)
     expect(screen.getByText('Verified seller')).toBeTruthy()
@@ -183,6 +186,17 @@ describe('StoreDetails', () => {
     expect(screen.getByText('sales@clanix.co.ke').getAttribute('href')).toBe('mailto:sales@clanix.co.ke')
     expect(screen.getByText('September 2026')).toBeTruthy()
     expect(screen.getByText('3 products on sale')).toBeTruthy()
+  })
+
+  it('tells buyers to pay the store directly after seeing the item - never to pay through BROKA', () => {
+    render(<StoreDetails view={storeView(shop())} />)
+    const safety = screen.getByRole('heading', { name: 'Buying safely' }).parentElement!
+    expect(within(safety).getByText('Pay the store directly.')).toBeTruthy()
+    expect(within(safety).getByText('See it before you pay.')).toBeTruthy()
+    expect(safety.textContent).toContain('Never send a deposit to "hold" an item.')
+    expect(safety.textContent).toContain('They are not run by BROKA.')
+    // The old advice sent buyers to "BROKA escrow" and away from the seller.
+    expect(safety.textContent).not.toMatch(/pay only through BROKA|held in escrow|never send money to a seller/i)
   })
 
   it('never shows an unverified email, a rating without deals, or photos it does not have', () => {
@@ -300,6 +314,8 @@ describe('Cart drawer', () => {
     expect(within(drawer).getByText('Samsung A15')).toBeTruthy()
     expect(within(drawer).getByText('KES 1,500')).toBeTruthy()
     expect(within(drawer).getByText('Checkout').closest('a')!.getAttribute('href')).toBe('/store/clanix/cart')
+    expect(drawer.textContent).toContain("BROKA doesn't hold payments for now: you pay the store directly")
+    expect(drawer.textContent).not.toMatch(/escrow/i)
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
@@ -376,15 +392,21 @@ describe('Checkout', () => {
     cart.add('s1', { ...lineOf(card('p2')), price: 250 })
     render(<CheckoutView {...props} />)
     expect(screen.getByTestId('cart-total').textContent).toBe('KES 2,250')
-    const go = screen.getByText('Checkout in the BROKA app').closest('a')!
+    const go = screen.getByText('Agree with the store in the BROKA app').closest('a')!
     expect(go.getAttribute('href')).toMatch(/^intent:\/\/broka\.co\.ke\/store\/clanix\/cart\?items=p1%3A2%2Cp2%3A1#Intent;/)
     expect(go.getAttribute('href')).toContain('package=com.broka.app;')
+    // Who is paid, and no promise that BROKA keeps the money meanwhile.
+    expect(within(screen.getByText('Payment').parentElement!).getByText('To the store directly')).toBeTruthy()
+    expect(screen.queryByText('Buyer protection')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/BROKA holds the money|held safely|escrow protected/i)
+    expect(document.body.textContent).toContain('They are not run by BROKA.')
   })
   it('elsewhere, says checkout is in the Android app - never an APK on an iPhone', () => {
     setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1')
     cart.add('s1', lineOf(card('p1')))
     render(<CheckoutView {...props} />)
-    expect(screen.getByText('Checkout is in the BROKA app for Android.')).toBeTruthy()
+    expect(screen.getByText('Deals are agreed in the BROKA app for Android.')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/held safely/i)
     expect(screen.queryByText('Get the Android app')).toBeNull()
     expect(screen.getByText('Copy the store link')).toBeTruthy()
   })
@@ -510,6 +532,22 @@ describe('Opening the app', () => {
     )
     expect(screen.queryByText('Open')).toBeNull()
     expect(screen.getByText('Get it').getAttribute('href')).toMatch(/broka-release\.apk$/)
+  })
+})
+
+describe('Paying', () => {
+  it('no page promises that BROKA holds or protects the payment while payments are paused', () => {
+    // BROKA takes no deal payments (IN_APP_PAYMENTS_ENABLED is off), so
+    // these are false - and "pay into BROKA escrow" is a scammer's line.
+    // Every page takes its wording from lib/safety.ts; this reads the
+    // source, so a promise can't come back in a page no test renders.
+    const promises =
+      /escrow protected|buyer protection|money is held|held (safely|in escrow|by BROKA)|BROKA holds (the|your) money|into BROKA escrow|protected by BROKA|pay only through BROKA|purchase (is )?protected|paid (only )?(once|when|after) you confirm/i
+    const src = resolve(process.cwd(), 'src')
+    const offenders = (readdirSync(src, { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f) && !f.includes('.test.'))
+      .filter((f) => promises.test(readFileSync(resolve(src, f), 'utf8')))
+    expect(offenders).toEqual([])
   })
 })
 

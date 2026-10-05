@@ -121,11 +121,14 @@ describe('store view', () => {
   it('describes itself from the owner text, or from what it sells and where', () => {
     expect(storeDescription(store({ description: '  Phones   and accessories ' }))).toBe('Phones and accessories')
     expect(storeDescription(store())).toBe(
-      'Electronics store in Starehe, Nairobi · 3 products on BROKA, every purchase protected.',
+      'Electronics store in Starehe, Nairobi · 3 products on BROKA. See it, then pay the store.',
     )
     expect(storeDescription(store({ category: null, county: null, subcounty: null, listing_count: 1 }))).toBe(
-      'Store · 1 product on BROKA, every purchase protected.',
+      'Store · 1 product on BROKA. See it, then pay the store.',
     )
+    // Link previews no longer promise a protected purchase: BROKA holds no
+    // payments while they're paused.
+    expect(storeDescription(store())).not.toMatch(/protected/i)
   })
 
   it('gives search engines absolute image URLs only', () => {
