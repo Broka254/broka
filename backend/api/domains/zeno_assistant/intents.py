@@ -121,8 +121,12 @@ _GUIDE_DIRECT = (
     ("sell_faster", r"^(?:tips?|advice) (?:for|on|to) sell(?:ing)? (?:faster|quicker|more)$|"
                     r"^why (?:isn'?t|is not|aren'?t|are not) (?:my (?:\w+ )?)?(?:stuff|things|items|listings?|"
                     r"\w+) selling$|^why (?:is|are) my (?:\w+ )?(?:stuff|things|items|listings?|\w+) not selling$"),
+    # The app's opener chip became "How do I pay a seller safely?" when
+    # payments were paused; without it here that chip went to the model
+    # instead of the free, always-correct guide.
     ("escrow", r"^(?:how does (?:broka(?:'s)? |the )?escrow work|what is (?:broka(?:'s)? )?escrow|"
-               r"what'?s escrow|explain (?:broka(?:'s)? )?escrow|escrow)$"),
+               r"what'?s escrow|explain (?:broka(?:'s)? )?escrow|escrow|"
+               r"how (?:do i|should i|to|can i) pay (?:a |the )?(?:seller|store) safely|paying safely)$"),
 )
 
 _CHAT = re.compile(

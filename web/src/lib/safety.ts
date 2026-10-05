@@ -41,12 +41,20 @@ export const SEE_FIRST: Advice = {
 // the list can change without a deploy here - and each sits beside the
 // app's note that BROKA doesn't run them.
 export const ESCROW_SERVICES: Advice = {
-  lead: 'Land, a car, or a deal at a distance?',
+  lead: 'A deal at a distance?',
   text: 'An independent escrow service can hold the money until you have the item; the BROKA app lists some under "Paying safely". They are not run by BROKA.',
 }
 
+// Land and cars are not escrow deals: an M-Pesa payment tops out at
+// KES 250,000, and only the official search shows who owns the plot or the
+// car - the same advice the server gives (backend safe_payment.ADVICE).
+export const LAND_AND_CARS: Advice = {
+  lead: 'Land or a car?',
+  text: 'Do the official search first (Ardhisasa for land, NTSA for the logbook) and pay through a bank or an advocate.',
+}
+
 /** The advice in full: the store's details page. */
-export const PAYING_SAFELY: readonly Advice[] = [PAY_DIRECT, SEE_FIRST, ESCROW_SERVICES]
+export const PAYING_SAFELY: readonly Advice[] = [PAY_DIRECT, SEE_FIRST, ESCROW_SERVICES, LAND_AND_CARS]
 
 /** The perks strip's lines about paying (a title, and the line under it);
  *  the first title is the store footer's tag too. */

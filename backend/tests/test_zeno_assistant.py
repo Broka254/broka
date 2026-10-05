@@ -455,6 +455,7 @@ class TestGuides:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("message,guide", [
         ("How does BROKA escrow work?", "escrow"),
+        ("How do I pay a seller safely?", "escrow"),   # the app's opener chip
         ("How do I spot a fake listing?", "stay_safe"),
         ("How do I open an online store?", "open_store"),
         ("why are my listings not selling", "sell_faster"),

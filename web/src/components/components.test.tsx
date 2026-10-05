@@ -9,6 +9,7 @@ import { storeView } from '@/lib/storefront'
 import type { ImageSizes, Store } from '@/lib/types'
 
 import { cart } from '@/lib/cart'
+import { ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
 
 import { AddToCart } from './AddToCart'
 import { AppButton } from './AppButton'
@@ -548,6 +549,15 @@ describe('Paying', () => {
       .filter((f) => /\.tsx?$/.test(f) && !f.includes('.test.'))
       .filter((f) => promises.test(readFileSync(resolve(src, f), 'utf8')))
     expect(offenders).toEqual([])
+  })
+
+  it('sends land and car buyers to the official search, not to an escrow service', () => {
+    // An M-Pesa payment tops out at KES 250,000, so M-Pesa escrow can't
+    // carry a plot or a car; the server's advice says the same.
+    expect(ESCROW_SERVICES.lead).not.toMatch(/land|car/i)
+    const all = PAYING_SAFELY.map((a) => `${a.lead} ${a.text}`).join(' ')
+    expect(all).toMatch(/Ardhisasa/)
+    expect(all).toMatch(/NTSA/)
   })
 })
 

@@ -161,8 +161,12 @@ def _static(guide_id: str) -> dict:
             "steps": [
                 _step("Meet and inspect first", "Somewhere busy and public. Pay once you have the item."),
                 _step("Never pay a deposit", "Not to 'hold' an item, whatever the reason given."),
-                _step("Far away or expensive?", "Use an independent escrow service - see Paying "
-                      "safely for some.", "how_broka_works"),
+                _step("Far away?", "Use an independent escrow service - see Paying safely for "
+                      "some.", "how_broka_works"),
+                # Not escrow: M-Pesa can't carry more than KES 250,000 a
+                # payment, and only the official search shows who owns it.
+                _step("Land or a car?", "Do the official search first (Ardhisasa, or NTSA for the "
+                      "logbook) and pay through a bank or an advocate."),
             ],
         } if not settings.in_app_payments_enabled else {
             "title": "How escrow keeps you safe",

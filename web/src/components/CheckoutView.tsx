@@ -21,7 +21,7 @@ import { cart, cartCount, cartItemsParam, cartTotal, useCart } from '@/lib/cart'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
 import { formatPrice, formatUnitPrice } from '@/lib/format'
 import { absoluteUrl, androidAppLink } from '@/lib/links'
-import { ESCROW_SERVICES, PAY_DIRECT, SEE_FIRST } from '@/lib/safety'
+import { ESCROW_SERVICES, LAND_AND_CARS, PAY_DIRECT, SEE_FIRST } from '@/lib/safety'
 
 import { QtyStepper } from './AddToCart'
 import { Icon } from './Icon'
@@ -180,9 +180,11 @@ export function CheckoutView({
             </li>
           ))}
         </ol>
-        <p className={styles.stepsNote}>
-          <strong>{ESCROW_SERVICES.lead}</strong> {ESCROW_SERVICES.text}
-        </p>
+        {[ESCROW_SERVICES, LAND_AND_CARS].map((a) => (
+          <p key={a.lead} className={styles.stepsNote}>
+            <strong>{a.lead}</strong> {a.text}
+          </p>
+        ))}
       </aside>
     </div>
   )
