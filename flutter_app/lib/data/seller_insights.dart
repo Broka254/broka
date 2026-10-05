@@ -22,6 +22,12 @@
 // why none of them is a nag: "route this through BROKA" and "get more
 // buyers" are the same instruction.
 //
+// Except while BROKA holds no payments (IN_APP_PAYMENTS_ENABLED off): then
+// no deal can settle through escrow, and a card telling a seller to sell
+// escrow has them promising buyers protection that doesn't exist - the
+// promise a fraudster's "pay BROKA escrow at this number" borrows. The two
+// payment cards say how to get paid safely instead.
+//
 // A real Zeno advisory conversation — one that knows the seller's goals and
 // can be reasoned with — is a separate, deliberate feature. These cards do
 // not pretend to be it.
@@ -41,11 +47,12 @@ class SellerInsight {
 /// Ordered loosely by how directly the seller controls the lever.
 const List<SellerInsight> kSellerInsights = [
   SellerInsight(
-    'Close it here, not in cash',
-    'Only deals settled through BROKA escrow count toward your completion '
-    'rate. A cash handshake outside the app earns you nothing on your record '
-    'and leaves you with no evidence if the buyer disputes it later.',
-    Icons.verified_user_rounded, BrokaColors.neonGreen,
+    'Agree it in the chat',
+    "BROKA doesn't hold payments for now, so the buyer pays you directly. "
+    'Agree the price and the handover in the BROKA chat anyway: it is the '
+    'record of what was promised if anything is disputed later. Check the '
+    'money is in your M-Pesa before you hand anything over.',
+    Icons.handshake_outlined, BrokaColors.neonGreen,
   ),
   SellerInsight(
     'Your completion rate decides your reach',
@@ -97,11 +104,12 @@ const List<SellerInsight> kSellerInsights = [
     Icons.videocam_rounded, BrokaColors.neonBlue,
   ),
   SellerInsight(
-    'Escrow is a selling point, so sell it',
-    'Buyers hesitate most on payment. Telling them their money is held until '
-    'they confirm delivery removes the main reason a first-time buyer walks '
-    'away.',
-    Icons.lock_rounded, BrokaColors.neonGreen,
+    'Make paying you feel safe',
+    "Buyers hesitate most on payment, and BROKA doesn't hold payments for "
+    'now. Offer to meet somewhere public, or let them check the item on '
+    'delivery before they pay - and never ask for a deposit to hold it. '
+    'Buyers are told that is a warning sign.',
+    Icons.visibility_outlined, BrokaColors.neonGreen,
   ),
   SellerInsight(
     'Photos do the work your description cannot',

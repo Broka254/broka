@@ -1614,11 +1614,16 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         color: BrokaColors.bgCard.withOpacity(0.86),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45))),
+      // This promised "the seller is paid only after you've received the
+      // item" - escrow, which BROKA doesn't run while payments are paused.
+      // The button opens the Paying safely sheet then (escrow_actions.dart),
+      // so it says "How to pay" rather than "Pay".
       child: Row(children: [
-        const Icon(Icons.lock_rounded, color: BrokaColors.neonGreen, size: 20),
+        const Icon(Icons.visibility_outlined, color: BrokaColors.neonGreen, size: 20),
         const SizedBox(width: 10),
         const Expanded(child: Text(
-            "Pay securely - the seller is paid only after you've received the item.",
+            "BROKA doesn't hold payments for now. See the item, then pay the seller "
+            'directly - never a deposit.',
             style: TextStyle(color: BrokaColors.neonGreen,
                 fontSize: 12, fontWeight: FontWeight.w600))),
         GestureDetector(
@@ -1628,7 +1633,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(color: BrokaColors.neonGreen,
                 borderRadius: BorderRadius.circular(8)),
-            child: const Text('Pay', style: TextStyle(color: Colors.black87,
+            child: const Text('How to pay', style: TextStyle(color: Colors.black87,
                 fontWeight: FontWeight.w800, fontSize: 12)),
           ),
         ),
@@ -1690,13 +1695,23 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.25)),
               ),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.shield_outlined, size: 13, color: BrokaColors.neonGreen),
-                SizedBox(width: 6),
-                Text('Keep payments on BROKA to stay protected',
-                    style: TextStyle(
-                        color: BrokaColors.neonGreen,
-                        fontSize: 11, fontWeight: FontWeight.w600)),
+              // Was "Keep payments on BROKA to stay protected": there is no
+              // paying on BROKA while payments are paused, and "pay through
+              // BROKA" is what a fraudster's fake escrow number leans on.
+              // Each side gets its own half of a safe handover.
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.visibility_outlined, size: 13, color: BrokaColors.neonGreen),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                      _role == 'buyer'
+                          ? 'See the item before you pay'
+                          : 'Check the money has arrived before you hand over',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: BrokaColors.neonGreen,
+                          fontSize: 11, fontWeight: FontWeight.w600)),
+                ),
               ]),
             ),
           ]),

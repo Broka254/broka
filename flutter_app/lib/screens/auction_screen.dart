@@ -24,6 +24,7 @@ import '../core/network/auction_ws_client.dart';
 import '../core/utils/result.dart';
 import '../features/auctions/data/repositories/auctions_repository.dart';
 import '../features/auctions/domain/models/auction.dart' as auction_model;
+import '../features/safe_payment/safe_payment.dart';
 import '../widgets/zeno_avatar.dart';
 
 class AuctionScreen extends StatefulWidget {
@@ -32,7 +33,10 @@ class AuctionScreen extends StatefulWidget {
   // this edit - so the bare '/auction' route registration in main.dart
   // (no arguments) keeps working exactly as it did.
   final String? listingId;
-  const AuctionScreen({super.key, this.listingId});
+
+  /// Whether BROKA takes payments now; tests pass their own.
+  final SafePaymentRepository? safePayment;
+  const AuctionScreen({super.key, this.listingId, this.safePayment});
   @override
   State<AuctionScreen> createState() => _AuctionScreenState();
 }
@@ -594,9 +598,22 @@ class _AuctionScreenState extends State<AuctionScreen> {
   /// screen. Deliberately not a separate auction payment path - the win
   /// already produced an ordinary Deal on the backend, so from here on it
   /// is an ordinary BROKA purchase.
+  ///
+  /// While BROKA holds no payments the winner gets the Paying safely sheet
+  /// instead, as a deal room's Pay does (escrow_actions.dart): the form
+  /// below says "your payment is held in escrow" and would only be refused
+  /// (409 IN_APP_PAYMENTS_OFF) - after the winner had read that promise.
   Future<void> _payForWin(auction_model.Auction auction) async {
     final dealId = auction.dealId;
     if (dealId == null) return;
+
+    final safePayment = widget.safePayment ?? safePaymentRepository;
+    final payments = await safePayment.fetch();
+    if (!mounted) return;
+    if (payments != null && !payments.inAppPayments) {
+      await showSafePaymentSheet(context, repository: safePayment);
+      return;
+    }
 
     final phoneCtrl = TextEditingController(
         text: ApiService.currentUserPhone ?? '');

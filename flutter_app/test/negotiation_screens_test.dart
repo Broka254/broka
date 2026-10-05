@@ -109,6 +109,12 @@ void main() {
       expect(find.byType(BrokaHeaderButton), findsNWidgets(2)); // direct chat, voice
       expect(find.byType(ChatComposerPill), findsOneWidget);
       expect(find.text('Zeno is composing...'), findsNothing);
+      // BROKA holds no payments while they are paused: the header no longer
+      // says "Escrow protected", and the pay chip doesn't promise security.
+      expect(find.text('Zeno mediating · See it before you pay'), findsOneWidget);
+      expect(find.textContaining('Escrow protected'), findsNothing);
+      expect(find.text('How to pay safely'), findsOneWidget);
+      expect(find.text('Pay securely'), findsNothing);
     });
 
     testWidgets('the history is there at once; a new reply is written out',
@@ -166,6 +172,11 @@ void main() {
       // No "agree the deal" step: the buyer pays straight from the chat.
       expect(find.byTooltip('Agree the deal'), findsNothing);
       expect(find.byKey(const Key('pay-now')), findsOneWidget);
+      // Not "Pay securely - the seller is paid only after you've received
+      // the item": that was escrow, which BROKA doesn't run while payments
+      // are paused.
+      expect(find.textContaining("BROKA doesn't hold payments for now"), findsOneWidget);
+      expect(find.textContaining('Pay securely'), findsNothing);
       expect(find.byTooltip('Ask Zeno'), findsOneWidget);
       expect(find.byType(ChatComposerPill), findsOneWidget);
 

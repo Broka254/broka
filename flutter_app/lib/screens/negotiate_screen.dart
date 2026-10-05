@@ -964,11 +964,13 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     // ── BUYER ───────────────────────────────────────────────────────────────
     if (_role == 'buyer') {
       // Nothing paid yet: pay straight into escrow - the payment opens the
-      // deal, there is nothing to "finalize" first.
+      // deal, there is nothing to "finalize" first. While BROKA holds no
+      // payments the tap opens the Paying safely sheet instead, so the chip
+      // says "How to pay safely", not "Pay securely" - a promise of escrow.
       if (!_hasFundedDeal && _listing != null && _listing!.listingType != 'auction') {
         chips.add(_chip(
-          label: 'Pay securely',
-          icon: Icons.lock_rounded,
+          label: 'How to pay safely',
+          icon: Icons.payments_outlined,
           gradient: const [BrokaColors.neonGreen, BrokaColors.success],
           onTap: () => _payNow(agreedPrice: _currentOffer),
         ));
@@ -1344,12 +1346,16 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           const ZoneGlowText('Negotiation',
               gradient: kChatGradient, fontSize: 18, maxLines: 1, letterSpacing: 1.4),
           const SizedBox(height: 3),
+          // Was "Escrow protected": BROKA holds no payments while they
+          // are paused, and a buyer who thinks it does is the one who pays
+          // a fraudster's "BROKA escrow" number. What keeps them safe now
+          // is seeing the item first.
           Row(children: [
-            const Icon(Icons.verified_user_rounded, size: 12, color: BrokaColors.neonGreen),
+            const Icon(Icons.visibility_outlined, size: 12, color: BrokaColors.neonGreen),
             const SizedBox(width: 5),
             Flexible(
               child: Text(
-                'Zeno mediating · Escrow protected',
+                'Zeno mediating · See it before you pay',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: BrokaColors.textMid.withOpacity(0.95), fontSize: 11.5),
@@ -1528,9 +1534,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
 
   // "Make Offer" and "Escrow" are gone - typing a number is already picked
   // up as a real offer by the relay classifier, and Zeno already explains
-  // escrow contextually when it's relevant. Once a number is on the table
-  // the buyer can pay it straight into escrow - this used to be "Tap to
-  // finalize", a step most buyers didn't understand, before they could pay.
+  // payment contextually when it's relevant. Once a number is on the table
+  // the buyer can act on it - this used to be "Tap to finalize", a step
+  // most buyers didn't understand, before they could pay. The label says
+  // "how to pay safely", not "pay it into escrow": while BROKA holds no
+  // payments the tap opens the Paying safely sheet (escrow_actions.dart),
+  // and with payments on it opens the escrow payment, which is that too.
   Widget _buildActionBar() {
     if (_currentOffer == null || _role != 'buyer' || _hasFundedDeal) return const SizedBox.shrink();
     if (_listing?.listingType == 'auction') return const SizedBox.shrink();
@@ -1539,9 +1548,9 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       child: GestureDetector(
         onTap: () => _payNow(agreedPrice: _currentOffer),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.lock_outline_rounded, size: 15, color: BrokaColors.success),
+          const Icon(Icons.payments_outlined, size: 15, color: BrokaColors.success),
           const SizedBox(width: 5),
-          Text('Agreed on ${formatKes(_currentOffer!)}? Pay it into escrow',
+          Text('Agreed on ${formatKes(_currentOffer!)}? How to pay safely',
               style: const TextStyle(color: BrokaColors.success, fontSize: 12, fontWeight: FontWeight.w700)),
         ]),
       ),

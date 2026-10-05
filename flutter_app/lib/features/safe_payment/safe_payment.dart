@@ -156,7 +156,10 @@ class SafePaymentView extends StatelessWidget {
               const Text('Escrow services',
                   style: TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
-              const Text('For a deal at a distance, or anything expensive.', style: body),
+              // Not "anything expensive": an M-Pesa escrow carries at most
+              // KES 250,000 a payment, and the advice above sends land and
+              // cars through a bank or an advocate.
+              const Text("For a deal at a distance, or anything you can't collect.", style: body),
               const SizedBox(height: 8),
               for (final p in info!.providers)
                 ListTile(

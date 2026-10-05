@@ -215,8 +215,10 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
       return;
     }
     if (price > maxListingPriceKes) {
+      // Not "the most BROKA can hold in escrow": it holds none while
+      // payments are paused. The limit is the server's either way.
       setState(() => _error = "The price can't be more than "
-          '${formatKes(maxListingPriceKes)} - the most BROKA can hold in escrow for one deal.');
+          '${formatKes(maxListingPriceKes)} on BROKA.');
       return;
     }
 

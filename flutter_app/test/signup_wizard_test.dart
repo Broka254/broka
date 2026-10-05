@@ -273,6 +273,10 @@ void main() {
       await pumpAuth(tester);
       await tester.tap(find.text('Create Account'));
       await settle(tester);
+      // No "buy safely through escrow": BROKA holds no payments while they
+      // are paused.
+      expect(find.textContaining('see it before you pay'), findsOneWidget);
+      expect(find.textContaining('escrow'), findsNothing);
       await tester.tap(find.text('I want to buy'));
       await settle(tester);
       await tester.tap(find.text('Continue'));

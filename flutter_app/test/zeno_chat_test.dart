@@ -382,6 +382,22 @@ void main() {
     expect(find.byType(ZenoAvatar), findsWidgets);
     expect(tester.takeException(), isNull);
   });
+
+  // The opener asked "How does BROKA escrow work?" - there is no BROKA
+  // escrow while payments are paused, and asking invites a description of
+  // one.
+  testWidgets('the openers ask how to pay safely, not about BROKA escrow', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
+    await _settle(tester);
+    // The rail builds its chips as they scroll in: take it to the end.
+    final rail = Offset(400, tester.getCenter(find.text('🚗')).dy);
+    for (var i = 0; i < 8; i++) {
+      await tester.dragFrom(rail, const Offset(-300, 0));
+      await _settle(tester);
+    }
+    expect(find.text('How do I pay a seller safely?'), findsOneWidget);
+    expect(find.textContaining('escrow'), findsNothing);
+  });
 }
 
 /// pumpAndSettle never returns here (the constellation animates forever).

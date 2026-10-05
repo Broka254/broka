@@ -395,8 +395,13 @@ class _StoreCardState extends State<_StoreCard> {
                             text: rating != null ? rating.toStringAsFixed(1) : 'New seller'),
                         _Fact(icon: Icons.handshake_outlined, color: BrokaColors.neonCyan,
                             text: '$deals deal${deals == 1 ? '' : 's'} done'),
-                        const _Fact(icon: Icons.shield_outlined, color: BrokaColors.success,
-                            text: 'Escrow protected'),
+                        // Not "Escrow protected": BROKA holds no payments
+                        // while they are paused, and a buyer who believes
+                        // it does is the one who sends money to a fake
+                        // "BROKA escrow" number. Delivery or pickup is
+                        // agreed with every store, whatever the payment.
+                        const _Fact(icon: Icons.local_shipping_outlined, color: BrokaColors.success,
+                            text: 'Delivery or pickup'),
                       ]),
                       const SizedBox(height: 12),
                       Container(height: 1, color: BrokaColors.border.withOpacity(0.8)),

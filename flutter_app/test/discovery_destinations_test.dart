@@ -433,6 +433,9 @@ void main() {
       expect(find.descendant(of: first, matching: find.text('4.7')), findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('9 products')), findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('Visit store')), findsOneWidget);
+      // No escrow promise: BROKA holds no payments while they are paused.
+      expect(find.descendant(of: first, matching: find.text('Delivery or pickup')), findsOneWidget);
+      expect(find.textContaining('Escrow'), findsNothing);
       // Taller than the old 80dp row, the same full-width shape.
       expect(tester.getSize(first).height, greaterThan(240));
       // Visit store is a pill as wide as its words at the card's foot, not

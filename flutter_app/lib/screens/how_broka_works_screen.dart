@@ -146,8 +146,10 @@ const List<_Topic> _topics = [
       'Put that link on WhatsApp status, on Instagram, on your shop sign. A '
       'customer who came for one item sees everything else you stock, which '
       'is the difference between a sale and a customer.',
-      'It is free. Every sale still runs through escrow and still counts '
-      'toward your rating and ranking, exactly as it would otherwise.',
+      // Not "every sale still runs through escrow": none does while BROKA
+      // holds no payments, and this screen shows either way.
+      'It is free. A sale from your store counts toward your rating and '
+      'ranking exactly as any other sale does.',
     ],
   ),
   _Topic(
@@ -177,9 +179,13 @@ const _payingSafely = _Topic(
   [
     'Buyers are advised to meet somewhere public and check the item before '
     'paying, and never to send a deposit to hold something.',
-    'For land, a car, or a deal at a distance, an independent escrow service '
-    'can hold the money until the buyer has the item. Tap below for some. '
-    'They are not run by BROKA.',
+    // Land and cars apart: M-Pesa moves at most KES 250,000 a payment, so
+    // an M-Pesa escrow can't carry them, and the official search is what
+    // proves the seller owns it (the server's advice, safe_payment.py).
+    'For a deal at a distance, an independent escrow service can hold the '
+    'money until the buyer has the item; they are not run by BROKA. Land and '
+    'cars go through an official search and a bank or advocate. Tap below '
+    'for both.',
   ],
 );
 

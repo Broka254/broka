@@ -13,7 +13,8 @@
 //   location   where the shop is, with a way to find it on a map
 //   contact    the verified business email, and how to ask about a product
 //   info       category, link, products, when it opened
-//   safety     how paying through BROKA protects the buyer
+//   safety     how to pay the store safely while BROKA holds no payments,
+//              and the Paying safely sheet (escrow services BROKA doesn't run)
 //
 // The web storefront has the same page at /store/<name>/about, and that
 // link opens this screen in the app.
@@ -24,6 +25,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../main.dart' show BrokaColors;
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/constellation_background.dart';
+import '../../../safe_payment/safe_payment.dart';
 import '../../domain/models/store.dart';
 import '../my_store_screen.dart' show StoreLogo;
 
@@ -233,15 +235,35 @@ class StoreDetailsView extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: BrokaColors.success.withOpacity(0.35)),
         ),
-        child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(Icons.shield_outlined, color: BrokaColors.success),
-          SizedBox(width: 12),
-          Expanded(child: Text(
-            'Pay only through BROKA. Your money is held in escrow, and the seller '
-            'is paid once you confirm you have the item. Never send money to a '
-            'seller directly.',
-            style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.45),
-          )),
+        // This said "Pay only through BROKA. Your money is held in escrow" -
+        // untrue while BROKA holds no payments, and the very line a
+        // fraudster quotes when asking for money "into BROKA escrow" at
+        // their own number. The escrow services are in the Paying safely
+        // sheet, beside the note that BROKA doesn't run them, and so is the
+        // land and car advice: an M-Pesa escrow can't carry those amounts
+        // (KES 250,000 a payment), and the official search is what proves
+        // the seller owns it.
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.visibility_outlined, color: BrokaColors.success),
+            SizedBox(width: 12),
+            Expanded(child: Text(
+              "BROKA doesn't hold payments for now: you pay the store directly, by "
+              'M-Pesa. See the item before you pay - meet somewhere public or take '
+              'delivery, and check it first. Never send a deposit to "hold" an item. '
+              'For a deal at a distance, an independent escrow service can hold the '
+              "money; BROKA doesn't run them. Land or a car: see Paying safely.",
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.45),
+            )),
+          ]),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const Key('store-paying-safely'),
+              onPressed: () => showSafePaymentSheet(context, openUrl: openUrl),
+              child: const Text('Paying safely'),
+            ),
+          ),
         ]),
       ),
     ]);

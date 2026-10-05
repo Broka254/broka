@@ -13,9 +13,12 @@
 // leave without seeing the rest. The feature is the answer to that, so the
 // answer goes second.
 //
-// It also does not pretend to be free-of-charge-but. It is free, every sale
-// still runs through escrow, and the rating still applies. Saying so plainly
-// removes the "what is the catch" reflex that any free upgrade triggers.
+// It also does not pretend to be free-of-charge-but. It is free, buyers
+// pay the same way as for any listing, and the rating still applies. Saying
+// so plainly removes the "what is the catch" reflex that any free upgrade
+// triggers. It used to say every sale runs through escrow; none does while
+// BROKA holds no payments, and a seller repeating that to buyers is
+// promising a protection that isn't there.
 //
 // A preview strip is stubbed at the bottom, ready for real screenshots.
 
@@ -77,11 +80,12 @@ class _StoreExplainerScreenState extends State<StoreExplainerScreen> {
           'willing to pay first and ask questions later.',
     ),
     (
-      Icons.shield_rounded,
-      'Nothing about your protection changes',
-      'Every sale still runs through BROKA escrow. Your completion rate, '
-          'your rating and your ranking all work exactly as they do now. A '
-          'store changes how buyers find you, not how you get paid.',
+      Icons.verified_rounded,
+      'Nothing about your record changes',
+      'Your completion rate, your rating and your ranking all work exactly as '
+          'they do now. Buyers pay you directly, as for any listing - BROKA '
+          "doesn't hold payments for now. A store changes how buyers find you, "
+          'not how you get paid.',
     ),
   ];
 

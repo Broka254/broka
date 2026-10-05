@@ -1177,10 +1177,14 @@ class _ProductScreenState extends State<ProductScreen> {
           color: BrokaColors.textHigh, fontSize: 20,
           fontWeight: FontWeight.w800)),
     ),
+    // Said "Escrow protected" (and "3% fee" on an auction): BROKA holds no
+    // payments and takes no commission while payments are paused, and a
+    // buyer who believes it holds the money is the one who pays a
+    // fraudster's "BROKA escrow" number. See it first is what protects them.
     Text(
       _isAuction
-          ? 'Escrow protected · 3% fee'
-          : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · Escrow protected',
+          ? 'Auction · See it before you pay'
+          : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · See it before you pay',
       maxLines: 1, overflow: TextOverflow.ellipsis,
       style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
   ]);

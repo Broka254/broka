@@ -8,7 +8,8 @@
 //             (the old rounded-square logo read as a profile picture, and
 //             its initial as a placeholder). Whether the owner is online,
 //             the seller's record, and the More button for everything else
-//   perks     what buying here means: escrow, M-Pesa, delivery or pickup
+//   perks     what buying here means: see it before you pay, M-Pesa,
+//             delivery or pickup
 //   products  Home's search pill and filter button (sort, condition,
 //             price), the category rail, and the catalogue as shop cards
 //             with Add to cart
@@ -16,8 +17,7 @@
 //
 // More (and the bar's More button) opens Store details
 // (widgets/store_details_view.dart): the seller's record, the shop's photos,
-// about, location, contact, store info and how paying through BROKA
-// protects the buyer.
+// about, location, contact, store info and how to pay the store safely.
 //
 // Opened with arguments {storeId} or {slug}, plus an optional {via} (the
 // shared link's source tag) and {view: 'details'} to open Store details
@@ -1056,15 +1056,18 @@ class _MoreButton extends StatelessWidget {
 }
 
 /// What buying from a store on BROKA means, in the strip shops put under
-/// their banner. Every word is true of every store: payment is held in
-/// escrow, it's by M-Pesa, and delivery (or pickup) is agreed in the deal.
+/// their banner. Every word is true of every store: the buyer sees the item
+/// before paying the store, it's by M-Pesa, and delivery (or pickup) is
+/// agreed in the deal. It said "Escrow" while BROKA held payments; it holds
+/// none now, and a strip promising escrow is what a fraudster quotes when
+/// asking for money "into BROKA escrow".
 class _Perks extends StatelessWidget {
   const _Perks();
 
   @override
   Widget build(BuildContext context) {
     const perks = [
-      (Icons.shield_rounded, BrokaColors.success, 'Escrow'),
+      (Icons.visibility_outlined, BrokaColors.success, 'See, then pay'),
       (Icons.phone_iphone_rounded, BrokaColors.neonGreen, 'M-Pesa'),
       (Icons.local_shipping_outlined, BrokaColors.neonCyan, 'Delivery'),
     ];

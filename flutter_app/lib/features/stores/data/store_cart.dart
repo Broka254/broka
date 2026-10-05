@@ -1,10 +1,11 @@
 // A store's cart, kept on the phone.
 //
 // One cart per store: an order belongs to one store, so one seller and one
-// escrow (STORES_PLAN.md phase 4). The cart never takes money itself. Until
+// payment (STORES_PLAN.md phase 4). The cart never takes money itself. Until
 // single-payment checkout exists, checkout hands each item to its deal
-// room, where it is agreed with the store and paid by M-Pesa into BROKA's
-// escrow like any other purchase (presentation/store_cart_screen.dart).
+// room, where it is agreed with the store like any other purchase; while
+// BROKA holds no payments the buyer then pays the store directly
+// (presentation/store_cart_screen.dart).
 //
 // Prices here are what the listing said when it was added - a display
 // total, never a price anyone pays: the deal room reads the listing again.

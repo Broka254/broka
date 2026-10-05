@@ -180,6 +180,11 @@ void main() {
         expect(find.text(text), findsNothing, reason: text);
       }
       expect(find.byKey(const Key('store-perks')), findsOneWidget);
+      // What buying here means, without the escrow BROKA doesn't run while
+      // payments are paused.
+      expect(find.descendant(of: find.byKey(const Key('store-perks')),
+          matching: find.text('See, then pay')), findsOneWidget);
+      expect(find.text('Escrow'), findsNothing);
       expect(find.byKey(const Key('category-pill-all')), findsOneWidget);
       expect(find.byKey(const Key('category-pill-Gaming')), findsOneWidget);
       expect(find.byType(StoreProductCard), findsNWidgets(3));
@@ -290,6 +295,20 @@ void main() {
       await show(find.byKey(const Key('store-email')));
       expect(find.text('sales@clanix.co.ke'), findsOneWidget);
       await show(find.byKey(const Key('store-buying-safely')));
+      // Pay the store directly, after seeing the item - never "pay only
+      // through BROKA, your money is held in escrow", the line a fake
+      // "BROKA escrow" number borrows.
+      final safely = find.byKey(const Key('store-buying-safely'));
+      expect(find.descendant(of: safely,
+          matching: find.textContaining("BROKA doesn't hold payments for now")), findsOneWidget);
+      expect(find.descendant(of: safely,
+          matching: find.textContaining('Never send a deposit')), findsOneWidget);
+      expect(find.descendant(of: safely,
+          matching: find.textContaining("BROKA doesn't run them")), findsOneWidget);
+      expect(find.textContaining('held in escrow'), findsNothing);
+      expect(find.textContaining('Pay only through BROKA'), findsNothing);
+      expect(find.descendant(of: safely, matching: find.byKey(const Key('store-paying-safely'))),
+          findsOneWidget);
       for (final text in ['Electronics', 'broka.co.ke/store/clanix', '3 on sale',
           'September 2026']) {
         expect(find.descendant(of: details, matching: find.text(text)), findsOneWidget,
@@ -622,6 +641,20 @@ void main() {
       expect(find.byKey(const Key('cart-checkout')), findsNothing);
     });
 
+    // It said "Buyer protection: Included" and "You pay by M-Pesa into BROKA
+    // escrow" - escrow BROKA doesn't run while payments are paused, and the
+    // line a fake "BROKA escrow" number borrows.
+    testWidgets('says who is paid and how to pay safely, without escrow', (tester) async {
+      await pumpCart(tester, [item('l1', 'Samsung A15', 18000), item('l2', 'Case', 500)]);
+      expect(find.text('To the store directly'), findsOneWidget);
+      await tester.dragUntilVisible(find.byKey(const Key('cart-paying-note')),
+          find.byKey(const Key('cart-list')), const Offset(0, -200));
+      expect(find.descendant(of: find.byKey(const Key('cart-paying-note')),
+          matching: find.textContaining('See the item first')), findsOneWidget);
+      expect(find.text('Buyer protection'), findsNothing);
+      expect(find.textContaining('escrow'), findsNothing);
+    });
+
     testWidgets('checkout pays each product in its own deal room', (tester) async {
       final opened = await pumpCart(
           tester, [item('l1', 'Samsung A15', 18000), item('l2', 'Case', 500)]);
@@ -629,6 +662,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('checkout-sheet')), findsOneWidget);
       expect(find.text('Checkout · Clanix Electronics'), findsOneWidget);
+      expect(find.textContaining('pay the store directly once you have seen it'), findsOneWidget);
+      expect(find.textContaining('escrow'), findsNothing);
 
       await tester.tap(find.byKey(const Key('checkout-pay-l2')));
       await tester.pumpAndSettle();

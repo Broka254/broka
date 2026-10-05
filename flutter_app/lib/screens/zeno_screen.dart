@@ -332,7 +332,10 @@ class _ZenoScreenState extends State<ZenoScreen>
     ('⭐', 'What do you think of my rating?'),
     ('🤝', 'Tips to close a deal faster'),
     ('🔍', 'How do I spot a fake listing?'),
-    ('🏠', 'How does BROKA escrow work?'),
+    // Was "How does BROKA escrow work?" - there is no BROKA escrow while
+    // payments are paused, and an opener asking about one invites Zeno to
+    // describe it. Zeno is told how to answer this one (safe_payment.py).
+    ('🛡️', 'How do I pay a seller safely?'),
   ];
 
   // Openers, not filters: each one is deliberately under-specified so Zeno

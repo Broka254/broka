@@ -1,10 +1,12 @@
 // A store's cart: what the buyer picked, how many, the total, and checkout.
 //
-// Checkout pays through BROKA, item by item, until one-payment checkout
-// arrives with orders (STORES_PLAN.md phase 4): each item opens its deal
-// room, where it is agreed with the store and paid by M-Pesa into escrow -
-// the same protection as every purchase on BROKA. The cart says so before
-// anyone taps, rather than promising a single payment that doesn't exist.
+// Checkout goes item by item, until one-payment checkout arrives with
+// orders (STORES_PLAN.md phase 4): each item opens its deal room, where it
+// is agreed with the store. BROKA holds no payments for now, so the buyer
+// pays the store directly, after seeing the item. The cart says so before
+// anyone taps, rather than promising a single payment that doesn't exist -
+// or an escrow that doesn't either, which is the line a fraudster asking
+// for money "into BROKA escrow" relies on.
 import 'package:flutter/material.dart';
 
 import '../../../main.dart' show BrokaColors;
@@ -387,12 +389,11 @@ class _Summary extends StatelessWidget {
             style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w700))),
         row('Delivery', const Text('Agreed with the store',
             style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600))),
-        row('Buyer protection', const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.verified_user_rounded, size: 15, color: BrokaColors.success),
-          SizedBox(width: 4),
-          Text('Included', style: TextStyle(color: BrokaColors.success,
-              fontWeight: FontWeight.w700)),
-        ])),
+        // Was "Buyer protection: Included" - escrow, which BROKA doesn't
+        // offer while payments are paused. Who is paid is what the buyer
+        // needs to know: the store, not a number claiming to be BROKA.
+        row('Payment', const Text('To the store directly',
+            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600))),
         const Divider(color: BrokaColors.border, height: 18),
         row('Subtotal', Text(formatKes(cart.subtotal), key: const Key('cart-subtotal'),
             style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17,
@@ -407,6 +408,7 @@ class _PayingNote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
+        key: const Key('cart-paying-note'),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: BrokaColors.success.withOpacity(0.08),
@@ -414,12 +416,13 @@ class _PayingNote extends StatelessWidget {
           border: Border.all(color: BrokaColors.success.withOpacity(0.35)),
         ),
         child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(Icons.shield_rounded, color: BrokaColors.success, size: 22),
+          Icon(Icons.visibility_outlined, color: BrokaColors.success, size: 22),
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              'You pay by M-Pesa into BROKA escrow. The store is paid only after you '
-              'confirm you received your order.',
+              "BROKA doesn't hold payments for now: you pay the store directly, by "
+              'M-Pesa. See the item first - meet somewhere public or take delivery - '
+              'then pay. Never send a deposit to "hold" an item.',
               style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.4)),
           ),
         ]),
@@ -530,8 +533,8 @@ class _CheckoutSheetState extends State<_CheckoutSheet> {
                     fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
             const Text(
-              'Pay for each product in its deal room: agree it with the store, then pay by '
-              'M-Pesa into BROKA escrow.',
+              'Each product has its own deal room: agree it with the store there, then '
+              'pay the store directly once you have seen it.',
               style: TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
             const SizedBox(height: 14),
             for (final item in widget.items)

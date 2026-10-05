@@ -1095,7 +1095,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       selected: _accountType == 'buyer',
       icon: Icons.shopping_bag_outlined,
       title: 'I want to buy',
-      body: 'Browse, negotiate and buy safely through escrow. '
+      // Not "buy safely through escrow": BROKA holds no payments while
+      // they are paused, and a new buyer told it does is easy prey for a
+      // "pay BROKA escrow at this number" message.
+      body: "Browse, negotiate with Zeno's help, and see it before you pay. "
             'You can start selling later from the Menu.',
       onTap: () => setState(() => _accountType = 'buyer'),
     ),

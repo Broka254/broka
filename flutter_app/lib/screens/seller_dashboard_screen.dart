@@ -2007,7 +2007,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                   style: TextStyle(color: BrokaColors.textHigh,
                       fontSize: 13.5, fontWeight: FontWeight.w800)),
               SizedBox(height: 2),
-              Text('Escrow, your rating, your ranking — and what moves them',
+              Text('Paying safely, your rating, your ranking — and what moves them',
                   style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
             ])),
           const Icon(Icons.arrow_forward_ios_rounded,
@@ -2527,12 +2527,16 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           shape: BoxShape.circle, color: BrokaColors.neonBlue.withOpacity(0.14)),
         child: const Icon(Icons.shield_rounded, color: BrokaColors.neonBlue, size: 18)),
       const SizedBox(width: 12),
+      // Said "Escrow holds payment until delivery": no deal can be paid
+      // through BROKA while payments are paused, so the buyer pays the
+      // seller directly - and a seller who hands over before the money has
+      // landed is the one a fake M-Pesa message catches.
       const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Keep this deal on BROKA', style: TextStyle(
+        Text('Agree this deal in the chat', style: TextStyle(
             color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 12)),
         SizedBox(height: 3),
-        Text('Escrow holds payment until delivery — '
-             'you only get paid when the buyer confirms receipt.',
+        Text("BROKA doesn't hold payments for now: the buyer pays you directly. "
+             'Check the money is in your M-Pesa before you hand anything over.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 11, height: 1.4)),
       ])),
     ]),
@@ -2690,24 +2694,29 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       borderRadius: BorderRadius.circular(14),
       border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.28))),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // This was "BROKA Escrow Protection ... Never accept payment outside
+      // the platform": while BROKA holds no payments, outside the platform
+      // is the only way a seller can be paid, and a seller promising
+      // buyers escrow is promising what doesn't exist.
       const Row(children: [
-        Icon(Icons.shield_rounded, color: BrokaColors.neonBlue, size: 18),
+        Icon(Icons.shield_outlined, color: BrokaColors.neonBlue, size: 18),
         SizedBox(width: 8),
-        Text('BROKA Escrow Protection', style: TextStyle(
+        Text('Getting paid safely', style: TextStyle(
             color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 13)),
       ]),
       const SizedBox(height: 8),
       const Text(
-        'When buyers pay through BROKA, their payment is held in escrow. '
-        'You receive the funds only after the buyer confirms receipt — '
-        'giving both parties full protection. Never accept payment outside the platform.',
+        "BROKA doesn't hold payments for now: buyers pay you directly, by M-Pesa. "
+        'Agree the price and the handover in the chat, and let the buyer see the '
+        'item before they pay. Hand it over only once the money is in your '
+        'M-Pesa balance - a payment SMS can be faked.',
         style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.5)),
       const SizedBox(height: 10),
       // Wrap, not Row: three chips don't fit one line on a small phone.
       Wrap(spacing: 8, runSpacing: 6, children: [
-        _chip2('No cash risks'),
-        _chip2('Dispute protection'),
-        _chip2('Instant release'),
+        _chip2('Agree it in the chat'),
+        _chip2('Meet somewhere public'),
+        _chip2('Check your balance'),
       ]),
     ]),
   );

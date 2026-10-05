@@ -231,7 +231,7 @@ class _MenuScreenState extends State<MenuScreen> {
           icon: Icons.help_outline_rounded,
           tint: BrokaColors.neonBlue,
           title: 'Help & how BROKA works',
-          subtitle: 'Escrow, Zeno and staying safe',
+          subtitle: 'Paying safely, Zeno and your rating',
           onTap: () => _open('/how-broka-works'),
         ),
       ]),
