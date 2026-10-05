@@ -114,9 +114,26 @@ class _ProductScreenState extends State<ProductScreen> {
   }
 
   /// The seller dashboard's rating, completion rate and response time, and
-  /// the seller's deal time, as buyers are shown them. Figures the seller
-  /// doesn't have yet are null.
-  SellerStanding get _standing => SellerStanding.fromProfile(_sellerInfo);
+  /// the seller's deal time, as buyers are shown them. Prefer the authenticated
+  /// profile when it has standing data, but fall back to the public listing
+  /// snapshot so the product screen does not render empty tiles while the
+  /// profile request is unavailable or delayed.
+  SellerStanding get _standing {
+    if (_sellerInfo?['seller_standing'] != null) {
+      return SellerStanding.fromProfile(_sellerInfo);
+    }
+    final l = _listing;
+    if (l == null) return const SellerStanding();
+    return SellerStanding.fromListing({
+      'seller_standing': l.sellerStanding,
+      'seller_completed_deals': l.sellerCompletedDeals,
+      'seller_dcr': l.sellerDcr,
+      'seller_dcr_provisional': l.sellerDcrProvisional,
+      'seller_response_minutes': l.sellerResponseMinutes,
+      'seller_avg_deal_time_minutes': l.sellerAvgDealTimeMinutes,
+      'seller_timed_deals': l.sellerTimedDeals,
+    });
+  }
 
   /// Gallery sources, first photo first: the stored images' large size
   /// when the listing has them, else the legacy base64 photos. BrokaImage

@@ -97,6 +97,26 @@ class SellerStanding {
     );
   }
 
+  /// Buyer-facing standing carried by a public listing detail. This avoids
+  /// making the product screen depend on the authenticated profile request.
+  static SellerStanding fromListing(Map<String, dynamic>? listing) {
+    final nested = fromJson(listing?['seller_standing']);
+    final completed = (listing?['seller_completed_deals'] as num?)?.toInt()
+        ?? nested?.completedDeals
+        ?? 0;
+    return SellerStanding(
+      overallRating: nested?.overallRating,
+      dcr: (listing?['seller_dcr'] as num?)?.toDouble() ?? nested?.dcr,
+      dcrProvisional: listing?['seller_dcr_provisional'] == true
+          || (nested?.dcrProvisional ?? false),
+      responseMinutes: (listing?['seller_response_minutes'] as num?)?.toDouble()
+          ?? nested?.responseMinutes,
+      completedDeals: completed,
+      dealTimeMinutes: (listing?['seller_avg_deal_time_minutes'] as num?)?.toDouble(),
+      timedDeals: (listing?['seller_timed_deals'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// "25m", "2.5h", "1.5d" - the dashboard's response-time chart labels.
   static String formatMinutes(double v) => v < 60
       ? '${v.round()}m'

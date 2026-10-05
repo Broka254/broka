@@ -50,6 +50,13 @@ class Listing {
   final String? sellerName;
   final double? sellerRating;
   final int?    sellerCompletedDeals;
+  /// Buyer-facing standing snapshot returned by the public listing detail.
+  final Map<String, dynamic>? sellerStanding;
+  final double? sellerDcr;
+  final bool sellerDcrProvisional;
+  final double? sellerResponseMinutes;
+  final double? sellerAvgDealTimeMinutes;
+  final int? sellerTimedDeals;
   final bool    sellerVerified;
   // Added (home-redesign brief, 2026-08-16) - see BrokaListing's matching
   // field for the full rationale.
@@ -97,6 +104,12 @@ class Listing {
     this.sellerName,
     this.sellerRating,
     this.sellerCompletedDeals,
+    this.sellerStanding,
+    this.sellerDcr,
+    this.sellerDcrProvisional = false,
+    this.sellerResponseMinutes,
+    this.sellerAvgDealTimeMinutes,
+    this.sellerTimedDeals,
     this.sellerVerified = false,
     this.sellerProfilePhoto,
     this.sellerAvatarUrl,
@@ -142,6 +155,13 @@ class Listing {
         sellerName:           j['seller_name']      as String?,
         sellerRating:         (j['seller_rating']   as num?)?.toDouble(),
         sellerCompletedDeals: (j['seller_completed_deals'] as num?)?.toInt(),
+        sellerStanding:       j['seller_standing'] is Map
+            ? Map<String, dynamic>.from(j['seller_standing'] as Map) : null,
+        sellerDcr:             (j['seller_dcr'] as num?)?.toDouble(),
+        sellerDcrProvisional:  j['seller_dcr_provisional'] as bool? ?? false,
+        sellerResponseMinutes: (j['seller_response_minutes'] as num?)?.toDouble(),
+        sellerAvgDealTimeMinutes: (j['seller_avg_deal_time_minutes'] as num?)?.toDouble(),
+        sellerTimedDeals:      (j['seller_timed_deals'] as num?)?.toInt(),
         // FIX (redesign-guide audit): backend previously never returned
         // seller_verified at all for this endpoint, so ProductCard fell
         // back to "sellerName != null" as a proxy for verification. Real
