@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from api.database import get_db, Deal, DealStatus, User, MpesaTransaction, MpesaStatus
 from api.security import get_current_user, verify_password_async
 from api.core.events import publish, EscrowFunded, MpesaCallbackReceived
+from api.domains.pricing.safe_payment import require_in_app_payments
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -114,7 +115,7 @@ class StkQueryRequest(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@router.post("/stk-push")
+@router.post("/stk-push", dependencies=[Depends(require_in_app_payments)])
 async def initiate_stk_push(
     data: StkPushRequest,
     current_user=Depends(get_current_user),

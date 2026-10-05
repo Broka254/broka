@@ -189,6 +189,15 @@ void main() {
       expect(feeReasons(ListingFeeQuote.fromJson(_quote(launch: 30))).join(), contains('Launch offer: 30%'));
     });
 
+    test('with payments off the price is explained by the listing\'s value, not a record', () {
+      final j = _quote()
+        ..['listing_value'] = 540000
+        ..['discounts'] = {'apply': false, 'record_percent': 0, 'launch_percent': 0};
+      final lines = feeReasons(ListingFeeQuote.fromJson(j));
+      expect(lines.first, contains('KES 540,000'));
+      expect(lines.join(), isNot(contains('complete through BROKA')));
+    });
+
     test('recommends months for land, says nothing when a month will do', () {
       final land = recommendationText(ListingFeeQuote.fromJson(_quote()));
       expect(land, contains('about 4 months'));

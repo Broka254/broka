@@ -6,6 +6,8 @@
 // screen shows: why this price, and how long to list. They live here, not in
 // the widget, so they can be tested with plain values.
 
+import '../../../utils/price_format.dart';
+
 int _int(Object? v) => (v as num?)?.toInt() ?? 0;
 double _double(Object? v) => (v as num?)?.toDouble() ?? 0;
 
@@ -94,6 +96,8 @@ class ListingFeeQuote {
     required this.featuredAvailable,
     required this.featuredPlans,
     required this.feesEnabled,
+    this.discountsApply = true,
+    this.listingValue = 0,
     this.monthsAvailable,
     this.state,
   });
@@ -121,6 +125,14 @@ class ListingFeeQuote {
 
   /// False: listing is free right now and there is nothing to pay.
   final bool feesEnabled;
+
+  /// False while BROKA handles no deal payments: the record discount and
+  /// launch offer are measured in deals paid through BROKA, so neither
+  /// applies, and the price is the listing's value alone.
+  final bool discountsApply;
+
+  /// Price x units, KES - what the fee is charged on.
+  final double listingValue;
 
   /// For an existing listing: months that can still be paid for.
   final int? monthsAvailable;
@@ -155,6 +167,9 @@ class ListingFeeQuote {
           FeaturedPlan.fromJson((p as Map).cast<String, dynamic>()),
       ],
       feesEnabled: j['fees_enabled'] != false,
+      // Absent from older servers, which always applied the discounts.
+      discountsApply: discounts['apply'] != false,
+      listingValue: _double(j['listing_value']),
       monthsAvailable: j['months_available'] == null ? null : _int(j['months_available']),
       state: FeeState.fromJson(j['listing_fee']),
     );
@@ -251,6 +266,13 @@ String _pct(double rate) => '${(rate * 100).round()}%';
 /// Why the price is what it is - one line per discount.
 List<String> feeReasons(ListingFeeQuote q) {
   final lines = <String>[];
+  if (!q.discountsApply) {
+    if (q.listingValue > 0) {
+      lines.add('Priced on what you\'re listing: ${formatKes(q.listingValue)} (price \u00d7 units).');
+    }
+    lines.add('The rate falls as the value rises, so bigger listings pay a smaller share.');
+    return lines;
+  }
   if (q.pricedOnOwnRecord) {
     lines.add('${_pct(q.completionRate)} of your deals complete through BROKA'
         '${q.recordPercent > 0 ? ' - ${q.recordPercent}% off' : ''}.');

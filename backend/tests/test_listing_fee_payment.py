@@ -173,6 +173,54 @@ class TestFeesOff:
         assert mpesa.prompts == []
 
 
+# ── Free listings: a seller's first ones pay nothing ────────────────────────
+
+@pytest.fixture
+def two_free(monkeypatch):
+    _settings(monkeypatch, listing_fees_enabled=True, mpesa_callback_secret=SECRET,
+              free_listings_per_seller=2)
+
+
+class TestFreeListings:
+    @pytest.mark.asyncio
+    async def test_the_first_two_go_live_free_and_the_third_waits_for_its_fee(self, client, two_free):
+        _, h = await _user()
+        quote = (await client.get("/pricing/listing-fee/quote", headers=h,
+                                  params={"category": "Electronics", "price": 20000})).json()
+        assert quote["free_listing"] is True
+        # An app build that predates free listings reads this and skips the fee step.
+        assert quote["fees_enabled"] is False
+
+        first, second = await _listing(client, h), await _listing(client, h)
+        assert first["listing_fee"]["status"] == second["listing_fee"]["status"] == "free"
+        assert await _in_feed(client, first["id"]) and await _in_feed(client, second["id"])
+
+        quote = (await client.get("/pricing/listing-fee/quote", headers=h,
+                                  params={"category": "Electronics", "price": 20000})).json()
+        assert quote["free_listing"] is False and quote["fees_enabled"] is True
+        third = await _listing(client, h)
+        assert third["listing_fee"]["status"] == "unpaid"
+        assert not await _in_feed(client, third["id"])
+
+    @pytest.mark.asyncio
+    async def test_a_free_place_comes_back_when_a_free_listing_is_sold(self, client, two_free):
+        seller, h = await _user()
+        first, _ = await _listing(client, h), await _listing(client, h)
+        async with AsyncSessionLocal() as db:
+            (await db.get(Listing, first["id"])).status = ListingStatus.completed
+            await db.commit()
+        assert (await _listing(client, h))["listing_fee"]["status"] == "free"
+
+    @pytest.mark.asyncio
+    async def test_each_seller_has_their_own_free_places(self, client, two_free):
+        _, a = await _user()
+        _, b = await _user()
+        await _listing(client, a)
+        await _listing(client, a)
+        assert (await _listing(client, a))["listing_fee"]["status"] == "unpaid"
+        assert (await _listing(client, b))["listing_fee"]["status"] == "free"
+
+
 # ── Fees on: hidden until paid ───────────────────────────────────────────────
 
 class TestUnpaidIsHidden:

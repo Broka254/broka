@@ -28,6 +28,7 @@ import httpx
 
 from api.core import gemini
 from api.core.config import settings
+from api.domains.pricing.safe_payment import ai_payment_policy
 from api.core.circuit_breaker import (
     gemini_breaker, deepseek_breaker, openrouter_breaker, groq_breaker, CircuitOpenError,
 )
@@ -727,8 +728,11 @@ class AIBrokerService:
                 "of Kenyan prices for this kind of item and say it is a general estimate.\n"
                 "- The seller's standing numbers are measured by BROKA; quote them as they are. A "
                 "seller with no figure yet is new or unmeasured, not bad.\n"
-                "- Never tell them to pay, meet or continue outside BROKA - escrow protects them only "
-                "inside it.\n"
+                + ("- Never tell them to pay, meet or continue outside BROKA - escrow protects them only "
+                   "inside it.\n" if settings.in_app_payments_enabled else
+                   "- BROKA doesn't handle payments right now: they pay the seller directly. Advise "
+                   "meeting to check the item before paying, or an independent escrow service for a "
+                   "deal at a distance.\n")
                 + ("" if listing.get("own") else
                    "- If it does not fit what they want (wrong spec, over budget, fixed price when they "
                    "want to haggle, no delivery when they need it, too far), say so honestly and OFFER "
@@ -757,6 +761,7 @@ class AIBrokerService:
             f"User's name: {user_name or '(unknown)'}\n"
             f"Conversation so far:\n{transcript}\n\n"
             f"User's newest message: \"{_clip(message, 1000) or '(just the photo)'}\"\n\n"
+            + ai_payment_policy().strip() + ("\n\n" if ai_payment_policy() else "")
             + photo +
             "THINGS YOU CAN DO (at most one per turn, and only when the user asks for it or "
             "clearly wants it):\n"

@@ -21,6 +21,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.database import Listing, ListingStatus, User
 from . import knowledge
 
@@ -155,6 +156,15 @@ def _static(guide_id: str) -> dict:
             ],
         },
         "escrow": {
+            "title": "Paying safely",
+            "intro": "BROKA doesn't handle payments right now: you pay the seller directly.",
+            "steps": [
+                _step("Meet and inspect first", "Somewhere busy and public. Pay once you have the item."),
+                _step("Never pay a deposit", "Not to 'hold' an item, whatever the reason given."),
+                _step("Far away or expensive?", "Use an independent escrow service - see Paying "
+                      "safely for some.", "how_broka_works"),
+            ],
+        } if not settings.in_app_payments_enabled else {
             "title": "How escrow keeps you safe",
             "intro": "BROKA holds the money until the buyer has what they paid for.",
             "steps": [
@@ -177,9 +187,13 @@ def _static(guide_id: str) -> dict:
         },
         "stay_safe": {
             "title": "Staying safe on BROKA",
-            "intro": "Nearly every scam starts by moving the money or the chat off BROKA.",
+            "intro": ("Nearly every scam starts by moving the money or the chat off BROKA."
+                      if settings.in_app_payments_enabled else
+                      "Nearly every scam starts with money sent before the item is in your hands."),
             "steps": [
                 _step("Pay through escrow, always", "Never send money by M-Pesa outside BROKA, whatever "
+                      "the reason given.") if settings.in_app_payments_enabled else
+                _step("Pay only once you have the item", "Never send a deposit first, whatever "
                       "the reason given."),
                 _step("Check who you're dealing with", "Rating, completed deals, the verified badge."),
                 _step("Inspect before you confirm", "Meet somewhere public; confirm delivery only once "

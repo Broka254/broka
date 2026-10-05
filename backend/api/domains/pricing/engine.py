@@ -1,14 +1,15 @@
 """The monthly listing fee: f = C x R.
 
-  C  what the listing is worth to list for a month at full price - the cost
-     of serving it (costs.listing_month_cost) plus a share of its market
-     value, capped per category, and scaled for how many units it offers.
-     This is the "list price" a seller sees crossed out.
+  C  what the listing costs to list for a month at full price: a banded
+     share of its value - price x quantity - and never under the cost of
+     serving it (costs.listing_month_cost). This is the "list price" a
+     seller sees crossed out.
   R  the risk coefficient, 0.4-1.0: how likely this seller's deals are to
      leave BROKA before the money moves. 1.0 pays the full list price; a
      seller whose deals reliably complete through escrow pays as little as
      40% of it. Worked out from the seller's own completion record, smoothed
      toward their category's (Bayesian smoothing - see completion_estimate).
+     Only while buyers pay through BROKA (quote's `discounts_apply`).
 
 The fee never goes below what the listing costs to serve, whatever the
 discount - counting only what BROKA keeps after VAT. Paying for several
@@ -29,41 +30,59 @@ from api.domains.pricing.categories import CategoryPricing
 
 # ── C: the list price ────────────────────────────────────────────────────────
 
-# A listing's value adds sqrt(price) shillings to its monthly list price.
-# The square root is what lets a plot and a shirt share one formula: a buyer
-# for a KES 1.5M plot is worth far more to its seller than one for a
-# KES 1,500 dress, but not a thousand times more. Doubling the price raises
-# the fee by 41%.
-def value_component(unit_price: float) -> float:
-    return math.sqrt(max(unit_price, 0.0))
+# The fee is charged on what the listing is worth: its price times the units
+# it offers. 200 phones are 200 phones' worth of stock and pay on that, not
+# on one phone's price nudged up for quantity - the old square-root-per-unit
+# fee, capped per category and grown only by the log of the quantity, had 200
+# KES 180k iPhones (KES 36M) paying 3.7 times what one did.
+#
+# Marginal bands, like income-tax brackets: each rate applies only to the
+# part of the value inside its band, so the fee rises smoothly with no edge
+# where one more shilling of price jumps the fee. The rates fall as value
+# rises because a listing fee is paid whether or not anything sells - a flat
+# percentage of KES 36M of stock would be an up-front commission with no sale
+# behind it. PRICING.md §2 has the worked examples.
+VALUE_BANDS: tuple[tuple[float, float], ...] = (
+    (20_000, 0.0035),          # 0.35% of the first KES 20,000
+    (200_000, 0.0015),         # 0.15% of KES 20,000 - 200,000
+    (2_000_000, 0.0008),       # 0.08% of KES 200,000 - 2M
+    (math.inf, 0.0002),        # 0.02% above KES 2M
+)
 
+# The most one listing pays for a month, however much it offers. Reached at
+# about KES 43M; a seller listing that much stock wants a store.
+MAX_MONTHLY_FEE = 10_000
 
-# More units in one listing, more buyers - but 200 phones must not cost 200
-# times one phone. The log keeps it gentle: 2 units x1.35, 10 x2.15,
-# 100 x3.30, 200 x3.65. Past QUANTITY_CAP it stops growing; that seller
-# wants a store.
-QUANTITY_WEIGHT = 0.5
+# Only the duration advice caps quantity: stock past this clears at the same
+# pace. The fee itself counts every unit.
 QUANTITY_CAP = 1_000
 
 
-def quantity_factor(quantity: int) -> float:
-    q = min(max(int(quantity or 1), 1), QUANTITY_CAP)
-    return 1.0 + QUANTITY_WEIGHT * math.log(q)
+def listing_value(unit_price: float, quantity: int = 1) -> float:
+    """What the listing offers, in shillings: price x units."""
+    return max(unit_price, 0.0) * max(int(quantity or 1), 1)
 
 
-# A month's listing never costs more than 5% of what the listing is worth,
-# so a KES 300 shirt is not charged the same as a KES 3,000 one just
-# because both sit near the cost floor.
-AFFORDABILITY_SHARE = 0.05
+def value_fee(value: float) -> float:
+    """The banded fee on a listing worth `value` shillings."""
+    fee, lower = 0.0, 0.0
+    for upper, rate in VALUE_BANDS:
+        if value <= lower:
+            break
+        fee += (min(value, upper) - lower) * rate
+        lower = upper
+    return fee
 
 
 def list_price(category: CategoryPricing, unit_price: float, quantity: int = 1) -> float:
-    """C for the whole listing: the full monthly fee before any discount."""
+    """C for the whole listing: the full monthly fee before any discount.
+
+    Never under what serving the listing costs (with the VAT on it): a KES
+    300 shirt's 0.35% is a shilling, and Zeno answering its buyers is not.
+    """
     cost = costs.listing_month_cost(category.chats_per_month)
-    per_unit = min(category.max_fee, cost + value_component(unit_price))
-    full = per_unit * quantity_factor(quantity)
-    affordable = AFFORDABILITY_SHARE * max(unit_price, 0.0) * max(int(quantity or 1), 1)
-    return max(costs.with_vat(cost), min(full, affordable))
+    banded = min(value_fee(listing_value(unit_price, quantity)), MAX_MONTHLY_FEE)
+    return max(costs.with_vat(cost), banded)
 
 
 # ── R: the risk coefficient ──────────────────────────────────────────────────
@@ -234,17 +253,24 @@ class SellerRecord:
 def quote(
     category: CategoryPricing, unit_price: float, quantity: int,
     record: SellerRecord, category_completed_deals: int,
+    discounts_apply: bool = True,
 ) -> dict:
-    """Everything the sell screen shows: list price, today's price, why, and 1-6 months."""
-    quantity = min(max(int(quantity or 1), 1), QUANTITY_CAP)
+    """Everything the sell screen shows: list price, today's price, why, and 1-6 months.
+
+    `discounts_apply` is False while buyers pay sellers outside BROKA
+    (IN_APP_PAYMENTS_ENABLED off): R and the launch offer are both measured
+    in deals completed through BROKA's escrow, and with no such deals
+    possible they would only price every seller on a guess.
+    """
+    quantity = max(int(quantity or 1), 1)
     cost = costs.listing_month_cost(category.chats_per_month)
     full = list_price(category, unit_price, quantity)
     list_kes = max(round_kes(full), math.ceil(costs.with_vat(cost)))
 
     rate = completion_estimate(category.prior_completion, record.completed_weight,
                                record.leaked_weight, record.quality)
-    risk = risk_coefficient(rate)
-    launch = launch_discount(category_completed_deals)
+    risk = risk_coefficient(rate) if discounts_apply else 1.0
+    launch = launch_discount(category_completed_deals) if discounts_apply else 0.0
     fee = monthly_fee(full, risk, launch, cost)
 
     advice = recommend_months(category, unit_price, quantity)
@@ -263,12 +289,14 @@ def quote(
         "category": category.name,
         "unit_price": unit_price,
         "quantity": quantity,
+        "listing_value": listing_value(unit_price, quantity),
         "currency": "KES",
         "list_price": list_kes,
-        "category_max_fee": category.max_fee,
+        "max_monthly_fee": MAX_MONTHLY_FEE,
         "monthly_fee": fee,
         "discount_percent": max(0, round(100 * (1 - fee / list_kes))) if list_kes else 0,
         "discounts": {
+            "apply": discounts_apply,
             "record_percent": round(100 * (1 - risk)),
             "launch_percent": round(100 * launch),
         },

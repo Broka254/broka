@@ -96,7 +96,7 @@ def _refuse_unless_payable(listing: Listing) -> None:
     if not fee_applies(listing):
         raise HTTPException(status_code=409, detail="Auctions don't pay a listing fee.")
     if listing.paid_until is None:
-        raise HTTPException(status_code=409, detail="This listing is free - it was posted before listing fees.")
+        raise HTTPException(status_code=409, detail="This listing is free - one of your free listings, or posted before listing fees.")
     if listing.status != ListingStatus.active:
         raise HTTPException(status_code=409, detail="This listing is no longer for sale.")
 

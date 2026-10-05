@@ -525,6 +525,19 @@ class TestPaymentDeadline:
         assert abs((result.payment_deadline - expected).total_seconds()) < 120
 
     @pytest.mark.asyncio
+    async def test_no_deadline_while_in_app_payments_are_off(self, payments_off):
+        """The winner pays the seller directly: a deadline to pay on BROKA
+        would cancel every won auction and relist it."""
+        seller = await _user("Seller no deadline")
+        winner = await _user("Winner no deadline")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, winner, 25000)
+        result = await _close(listing.id)
+
+        assert result.outcome == "won" and result.deal_id
+        assert result.payment_deadline is None
+
+    @pytest.mark.asyncio
     async def test_unpaid_win_lapses_and_frees_the_listing(self):
         from sqlalchemy import select
 

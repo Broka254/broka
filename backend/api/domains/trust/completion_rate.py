@@ -34,6 +34,7 @@ from typing import List
 from sqlalchemy import select, func, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.database import Deal, DealStatus, Listing, User, SellerMetrics, NegotiationMessage, AuditLog
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,14 @@ async def flag_leaked_deals(db: AsyncSession) -> int:
     across the whole candidate batch in 2 queries total, then does the
     per-deal time-scoping in memory, where it's cheap.
     """
+    # With in-app payments off (IN_APP_PAYMENTS_ENABLED) no deal CAN be
+    # paid through BROKA, so "unpaid here and they swapped numbers" is how
+    # every honest deal looks, not a leak. Flagging them would sink every
+    # seller's completion rate - and their rank - for paying the only way
+    # left.
+    if not settings.in_app_payments_enabled:
+        return 0
+
     now = datetime.utcnow()
     # A deal can't qualify until the FULL 7-day window plus the FULL
     # further 5-day silence period have both elapsed - 12 days total from

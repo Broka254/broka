@@ -85,37 +85,54 @@ class TestRiskCoefficient:
 # ── C: the list price ────────────────────────────────────────────────────────
 
 class TestListPrice:
-    def test_a_plot_and_a_shirt_share_one_formula(self):
-        shirt = engine.list_price(FASHION, 1_500)
-        phone = engine.list_price(ELECTRONICS, 20_000)
-        plot = engine.list_price(LAND, 1_500_000)
-        assert shirt < phone < plot
-        # ...but a plot 1,000 times the price is nowhere near 1,000 times the fee.
-        assert plot / shirt < 50
+    def test_the_fee_is_charged_on_price_times_quantity(self):
+        """The founder's case: 200 iPhones are not 3 iPhones.
 
-    def test_the_category_ceiling_holds_however_valuable_the_item(self):
+        Regression: the fee used to be the square root of ONE unit's price,
+        capped per category, grown only by the log of the quantity - so 200
+        KES 180k phones (KES 36M) paid 3.7 times one phone, and 2.4 times
+        three.
+        """
+        one = engine.list_price(ELECTRONICS, 180_000, 1)
+        three = engine.list_price(ELECTRONICS, 180_000, 3)
+        two_hundred = engine.list_price(ELECTRONICS, 180_000, 200)
+        assert one < three < two_hundred
+        assert two_hundred > 10 * three
+        # Only the value counts: ten KES 20k phones are one KES 200k item.
+        assert engine.list_price(ELECTRONICS, 20_000, 10) == engine.list_price(ELECTRONICS, 200_000, 1)
+
+    @pytest.mark.parametrize("price, quantity, fee", [
+        (20_000, 1, 70),            # a phone
+        (180_000, 1, 310),          # an iPhone
+        (180_000, 3, 610),          # three of them (612 before rounding)
+        (180_000, 200, 8_580),      # two hundred
+        (800_000, 1, 820),          # a car
+        (1_500_000, 1, 1_380),      # a plot
+    ])
+    def test_the_worked_examples_in_pricing_md(self, price, quantity, fee):
+        assert engine.round_kes(engine.list_price(ELECTRONICS, price, quantity)) == fee
+
+    def test_rates_fall_as_value_rises_with_no_step_to_game(self):
+        rates = [rate for _, rate in engine.VALUE_BANDS]
+        assert all(a > b for a, b in zip(rates, rates[1:]))
+        # Continuous at every band edge: a shilling more never jumps the fee.
+        for upper, rate in engine.VALUE_BANDS[:-1]:
+            assert engine.value_fee(upper + 1) - engine.value_fee(upper) < rate + 1e-9
+        values = [10 ** e for e in range(2, 10)]
+        fees = [engine.value_fee(v) for v in values]
+        assert all(a < b for a, b in zip(fees, fees[1:]))
+
+    def test_the_monthly_ceiling_holds_however_valuable_the_listing(self):
         for c in CATEGORIES.values():
-            assert engine.list_price(c, 10**9) <= c.max_fee + 1e-9
+            assert engine.list_price(c, 10**9, 100) == engine.MAX_MONTHLY_FEE
 
-    def test_a_dearer_house_pays_more_than_a_cheap_plot(self):
-        """At a KES 1,500 cap the square root reached it at KES 2.25M, so a
-        KES 20M house paid what a KES 2.25M one did."""
-        property_ = CATEGORIES["Property"]
-        assert engine.list_price(property_, 20_000_000) > engine.list_price(property_, 2_250_000)
-        # Nothing under KES 2.25M moved.
-        assert engine.list_price(LAND, 1_500_000) < 1_500
+    def test_quantity_is_not_capped_for_the_fee(self):
+        """QUANTITY_CAP limits only the duration advice; 5,000 units are priced as 5,000."""
+        assert engine.quote(ELECTRONICS, 1_000, 5_000, NEW, 0)["quantity"] == 5_000
+        assert engine.list_price(ELECTRONICS, 1_000, 5_000) > engine.list_price(ELECTRONICS, 1_000, 1_000)
 
-    def test_quantity_raises_the_fee_gently(self):
-        one = engine.list_price(ELECTRONICS, 15_000, 1)
-        ten = engine.list_price(ELECTRONICS, 15_000, 10)
-        two_hundred = engine.list_price(ELECTRONICS, 15_000, 200)
-        assert one < ten < two_hundred
-        assert two_hundred < 5 * one, "200 phones must not cost 200 phones' fees"
-
-    def test_cheap_items_pay_at_most_five_percent_of_their_value(self):
-        assert engine.list_price(FASHION, 300) == pytest.approx(0.05 * 300)
-        # ...unless that is under cost: then cost, with the VAT on it.
-        assert engine.list_price(FASHION, 50) == pytest.approx(
+    def test_cheap_items_pay_the_cost_of_serving_them(self):
+        assert engine.list_price(FASHION, 300) == pytest.approx(
             costs.with_vat(costs.listing_month_cost(FASHION.chats_per_month)))
 
     def test_never_below_what_the_listing_costs(self):
@@ -197,7 +214,6 @@ class TestCategories:
     def test_rates_are_rates(self):
         for c in CATEGORIES.values():
             assert 0 < c.prior_completion < 1
-            assert c.max_fee > costs.listing_month_cost(c.chats_per_month)
 
 
 # ── Plans ────────────────────────────────────────────────────────────────────
@@ -229,7 +245,7 @@ class TestPlans:
 
     def test_a_store_listing_costs_less_than_listing_it_alone(self):
         """The store is the considerate price for long-term sellers."""
-        alone = _fee(NEW, ELECTRONICS, 20_000)["monthly_fee"]
+        alone = _fee(NEW, ELECTRONICS, 20_000)["list_price"]
         assert max(s.monthly_price / s.listings for s in plans.STORE_PLANS) < alone / 2
 
     def test_ai_covers_come_in_listings_worth_of_tries(self):

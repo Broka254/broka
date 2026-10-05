@@ -542,7 +542,11 @@ async def close_auction(db: AsyncSession, listing_id: str) -> Optional[CloseResu
         outcome = OUTCOME_WON
         winner_id = top.bidder_id
         winning_amount = money(top.amount)
-        deadline = now + timedelta(hours=settings.auction_payment_deadline_hours)
+        # No deadline while in-app payments are off: the winner pays the
+        # seller directly, so "not paid on BROKA in time" would cancel
+        # every won auction and relist it.
+        deadline = (now + timedelta(hours=settings.auction_payment_deadline_hours)
+                    if settings.in_app_payments_enabled else None)
 
     claim = await db.execute(
         update(AuctionMeta)

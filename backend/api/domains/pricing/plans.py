@@ -264,4 +264,7 @@ def catalog() -> dict:
             "plans": [s.to_dict() for s in STORE_PLANS],
         },
         "commission": commission(),
+        # False while buyers pay sellers outside BROKA: no commission is
+        # charged, so the app must not show the rates above as a price.
+        "commission_charged": settings.in_app_payments_enabled,
     }

@@ -7,6 +7,7 @@
   GET  /pricing/listing-fee/mine                     your listings waiting for payment
   POST /pricing/listing-fee/callback/{secret}        Safaricom's result
   GET  /pricing/plans, /pricing/categories           the public price lists
+  GET  /pricing/safe-payment                         paying a seller safely, outside BROKA
 
 PRICING.md explains the prices; pricing/payments.py the payment.
 """
@@ -21,7 +22,7 @@ from api.core.config import settings
 from api.core.idempotency import IdempotencyResult, idempotency_guard
 from api.core.rate_limit import stk_limiter
 from api.database import get_db
-from api.domains.pricing import engine, payments, plans, service
+from api.domains.pricing import engine, payments, plans, safe_payment, service
 from api.security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,8 @@ async def listing_fee_quote(
     category table (GET /pricing/categories) shows everyone the new-seller
     price.
     """
-    return await service.listing_fee_quote(db, current_user["id"], category, price, quantity)
+    return await service.listing_fee_quote(db, current_user["id"], category, price, quantity,
+                                           new_listing=True)
 
 
 @router.get("/listing-fee/listings/{listing_id}/quote")
@@ -143,5 +145,13 @@ async def pricing_plans():
 
 @router.get("/categories")
 async def pricing_categories():
-    """Every category's risk coefficient, fee ceiling and typical price."""
+    """Every category's risk coefficient, cost to serve and typical price."""
     return {"currency": "KES", "categories": service.category_table()}
+
+
+@router.get("/safe-payment")
+async def safe_payment_info():
+    """How to pay a seller safely while BROKA moves no deal money, and
+    independent escrow services (pricing/safe_payment.py). Public: a buyer
+    reads it before deciding to deal."""
+    return safe_payment.safe_payment_info()

@@ -19,9 +19,6 @@ one-line change, and the listing-fee engine never hardcodes a category.
                     has ~200 completed deals.
   chats_per_month   Buyer negotiations one listing attracts in 30 days - the
                     driver of Zeno's cost for it.
-  max_fee           The most one unit of a listing in this category ever
-                    pays for a month, however valuable. The "list price"
-                    ceiling a seller's discount is measured from.
   days_to_sell      How long a typical item takes to find a buyer - drives
                     the duration recommendation.
   typical_price     A middle-of-the-market price, so pricier items are
@@ -42,38 +39,34 @@ class CategoryPricing:
     name: str
     prior_completion: float
     chats_per_month: float
-    max_fee: int
     days_to_sell: int
     typical_price: int
     memory_days: int = 180
 
 
 _TABLE = [
-    #               name                  prior  chats   max  days     typical  memory
-    # Land, cars and property cap at KES 3,000 a month: at 1,500 the square
-    # root of the price hit the cap at KES 2.25M, so a KES 20M house paid
-    # what a KES 2.25M plot did. Nothing under KES 2.25M is affected.
-    CategoryPricing("Automobiles",          0.45,  2.5, 3000,   60,    800_000, 360),
-    CategoryPricing("Property",             0.40,  2.5, 3000,   75,  3_000_000, 360),
-    CategoryPricing("Land",                 0.35,  2.0, 3000,  120,  1_500_000, 360),
-    CategoryPricing("Electronics",          0.80,  1.5,  400,   14,     20_000),
-    CategoryPricing("Fashion",              0.70,  0.8,  100,   10,      1_500),
-    CategoryPricing("Agriculture",          0.50,  1.2,  600,   21,     10_000),
-    CategoryPricing("Home & Furniture",     0.62,  1.0,  300,   30,     15_000),
-    CategoryPricing("Food & Beverages",     0.55,  0.8,  100,    5,      1_000),
-    CategoryPricing("Construction",         0.55,  1.0,  600,   30,     20_000),
-    CategoryPricing("Beauty & Personal Care", 0.70, 0.6, 100,   10,      1_500),
-    CategoryPricing("Health & Medical",     0.68,  0.6,  200,   14,      3_000),
-    CategoryPricing("Baby & Kids",          0.72,  0.8,  150,   14,      3_000),
-    CategoryPricing("Gaming",               0.80,  1.2,  300,   14,     15_000),
-    CategoryPricing("Sports & Fitness",     0.72,  0.8,  200,   21,      5_000),
-    CategoryPricing("Books & Education",    0.72,  0.5,  100,   21,      1_000),
-    CategoryPricing("Music & Instruments",  0.72,  0.8,  300,   30,     15_000),
-    CategoryPricing("Arts & Crafts",        0.72,  0.6,  150,   30,      3_000),
-    CategoryPricing("Business & Industrial", 0.55, 1.0,  800,   45,    100_000),
-    CategoryPricing("Pets & Animals",       0.55,  1.0,  400,   14,     10_000),
-    CategoryPricing("Services",             0.45,  1.0,  300,   30,      3_000),
-    CategoryPricing("Other",                0.65,  0.8,  200,   21,      3_000),
+    #               name                  prior  chats  days     typical  memory
+    CategoryPricing("Automobiles",          0.45,  2.5,   60,    800_000, 360),
+    CategoryPricing("Property",             0.40,  2.5,   75,  3_000_000, 360),
+    CategoryPricing("Land",                 0.35,  2.0,  120,  1_500_000, 360),
+    CategoryPricing("Electronics",          0.80,  1.5,   14,     20_000),
+    CategoryPricing("Fashion",              0.70,  0.8,   10,      1_500),
+    CategoryPricing("Agriculture",          0.50,  1.2,   21,     10_000),
+    CategoryPricing("Home & Furniture",     0.62,  1.0,   30,     15_000),
+    CategoryPricing("Food & Beverages",     0.55,  0.8,    5,      1_000),
+    CategoryPricing("Construction",         0.55,  1.0,   30,     20_000),
+    CategoryPricing("Beauty & Personal Care", 0.70, 0.6,   10,      1_500),
+    CategoryPricing("Health & Medical",     0.68,  0.6,   14,      3_000),
+    CategoryPricing("Baby & Kids",          0.72,  0.8,   14,      3_000),
+    CategoryPricing("Gaming",               0.80,  1.2,   14,     15_000),
+    CategoryPricing("Sports & Fitness",     0.72,  0.8,   21,      5_000),
+    CategoryPricing("Books & Education",    0.72,  0.5,   21,      1_000),
+    CategoryPricing("Music & Instruments",  0.72,  0.8,   30,     15_000),
+    CategoryPricing("Arts & Crafts",        0.72,  0.6,   30,      3_000),
+    CategoryPricing("Business & Industrial", 0.55, 1.0,   45,    100_000),
+    CategoryPricing("Pets & Animals",       0.55,  1.0,   14,     10_000),
+    CategoryPricing("Services",             0.45,  1.0,   30,      3_000),
+    CategoryPricing("Other",                0.65,  0.8,   21,      3_000),
 ]
 
 CATEGORIES: dict[str, CategoryPricing] = {c.name: c for c in _TABLE}

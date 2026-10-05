@@ -19,6 +19,7 @@ import '../../../main.dart';
 import '../../../services/api_service.dart';
 import '../../../widgets/units_stepper.dart';
 import '../../../utils/price_format.dart';
+import '../../safe_payment/safe_payment.dart';
 import '../data/repositories/escrow_repository.dart';
 
 double? _num(dynamic v) => (v as num?)?.toDouble();
@@ -144,6 +145,7 @@ Future<bool> showEscrowPayDialog(
   String? unitLabel,
   String? defaultPhone,
   EscrowRepository? repository,
+  SafePaymentRepository? safePayment,
 }) async {
   assert(dealId != null || listingId != null);
   final repo = repository ?? escrowRepository;
@@ -162,6 +164,14 @@ Future<bool> showEscrowPayDialog(
   final first = await quoteFor(null);
   if (!context.mounted) return false;
   Navigator.pop(context); // the spinner
+
+  // BROKA handles no deal payments for now (IN_APP_PAYMENTS_ENABLED off on
+  // the server): instead of a payment form that would only be refused, the
+  // buyer gets what to do instead - pay the seller directly, safely.
+  if (first case Failure(code: paymentsOffCode)) {
+    await showSafePaymentSheet(context, repository: safePayment);
+    return false;
+  }
 
   Map<String, dynamic>? quote = first is Success<Map<String, dynamic>> ? first.data : null;
   if (quote?['paid_in_full'] == true) {

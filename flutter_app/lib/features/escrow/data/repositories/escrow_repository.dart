@@ -43,7 +43,7 @@ class EscrowRepository {
       final data = await send();
       return Success((data as Map).cast<String, dynamic>());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(e.message, statusCode: e.statusCode, code: e.code);
     } catch (e) {
       return Failure(e.toString());
     }

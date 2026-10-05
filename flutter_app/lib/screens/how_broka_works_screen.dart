@@ -15,6 +15,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../features/safe_payment/safe_payment.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/motion_widgets.dart';
@@ -166,8 +167,42 @@ const List<_Topic> _topics = [
   ),
 ];
 
-class HowBrokaWorksScreen extends StatelessWidget {
-  const HowBrokaWorksScreen({super.key});
+// While BROKA handles no deal payments (GET /pricing/safe-payment says
+// so), the escrow topic would describe a payment buyers can't make: it is
+// replaced by how to pay a seller safely.
+const _payingSafely = _Topic(
+  Icons.shield_outlined, BrokaColors.neonGreen,
+  'Paying safely',
+  "BROKA doesn't handle payments yet. The buyer pays you directly.",
+  [
+    'Buyers are advised to meet somewhere public and check the item before '
+    'paying, and never to send a deposit to hold something.',
+    'For land, a car, or a deal at a distance, an independent escrow service '
+    'can hold the money until the buyer has the item. Tap below for some. '
+    'They are not run by BROKA.',
+  ],
+);
+
+class HowBrokaWorksScreen extends StatefulWidget {
+  const HowBrokaWorksScreen({super.key, this.repository});
+
+  final SafePaymentRepository? repository;
+
+  @override
+  State<HowBrokaWorksScreen> createState() => _HowBrokaWorksScreenState();
+}
+
+class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
+  List<_Topic> _shown = _topics;
+
+  @override
+  void initState() {
+    super.initState();
+    (widget.repository ?? safePaymentRepository).fetch().then((info) {
+      if (!mounted || info == null || info.inAppPayments) return;
+      setState(() => _shown = [_payingSafely, ..._topics.skip(1)]);
+    });
+  }
 
   @override
   Widget build(BuildContext context) => ChatAmbientBackground(
@@ -185,7 +220,7 @@ class HowBrokaWorksScreen extends StatelessWidget {
           ),
           body: ListView.builder(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-            itemCount: _topics.length + 1,
+            itemCount: _shown.length + 1,
             itemBuilder: (_, i) {
               if (i == 0) {
                 return const Padding(
@@ -198,7 +233,7 @@ class HowBrokaWorksScreen extends StatelessWidget {
                   ),
                 );
               }
-              final t = _topics[i - 1];
+              final t = _shown[i - 1];
               return FadeSlideIn(
                 index: i,
                 child: Container(
@@ -242,6 +277,13 @@ class HowBrokaWorksScreen extends StatelessWidget {
                                 fontSize: 12.5, height: 1.55)),
                         if (para != t.body.last) const SizedBox(height: 10),
                       ],
+                      if (identical(t, _payingSafely))
+                        TextButton.icon(
+                          onPressed: () => showSafePaymentSheet(context,
+                              repository: widget.repository),
+                          icon: const Icon(Icons.open_in_new, size: 16),
+                          label: const Text('Escrow services and safety tips'),
+                        ),
                     ],
                   ),
                 ),

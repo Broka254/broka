@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
-from api.database import Deal, Listing, SellerTier, User
+from api.database import Deal, Listing, ListingStatus, ListingType, SellerTier, User
 from api.domains.pricing import engine
 from api.domains.pricing.categories import (
     CATEGORIES, CategoryPricing, for_category, stored_names,
@@ -118,18 +118,49 @@ def featured_options(seller_tier: Optional[SellerTier]) -> dict:
     }
 
 
+async def free_listings_left(db: AsyncSession, seller_id: str) -> int:
+    """How many more listings this seller can post free (FREE_LISTINGS_PER_SELLER).
+
+    Counts the seller's own listings still for sale that pay no fee
+    (paid_until NULL): ones posted free, and ones from before fees. Auctions
+    are left out - they pay no listing fee, so they use up no free place.
+    """
+    allowance = settings.free_listings_per_seller
+    if allowance <= 0:
+        return 0
+    used = (await db.execute(
+        select(func.count(Listing.id)).where(
+            Listing.seller_id == seller_id,
+            Listing.paid_until.is_(None),
+            Listing.listing_type != ListingType.auction,
+            Listing.status.in_((ListingStatus.active, ListingStatus.pending)),
+        )
+    )).scalar() or 0
+    return max(0, allowance - int(used))
+
+
 async def listing_fee_quote(
     db: AsyncSession, user_id: str, category_name: str, unit_price: float, quantity: int,
+    new_listing: bool = False,
 ) -> dict:
     category = for_category(category_name)
     record = await seller_record(db, user_id)
     in_category = await category_completed_deals(db, category)
     tier = (await db.execute(select(User.seller_tier).where(User.id == user_id))).scalar()
-    result = engine.quote(category, unit_price, quantity, record, in_category)
+    result = engine.quote(category, unit_price, quantity, record, in_category,
+                          discounts_apply=settings.in_app_payments_enabled)
     result["featured"] = featured_options(tier)
-    # Whether sellers are charged yet (LISTING_FEES_ENABLED). Off, the app
-    # shows no fee step and listings go live as they always have.
-    result["fees_enabled"] = settings.listing_fees_enabled
+    # A listing about to be posted into one of the seller's free places
+    # pays nothing: ListingService.create posts it live, unpaid.
+    free = (new_listing and settings.listing_fees_enabled
+            and await free_listings_left(db, user_id) > 0)
+    result["free_listing"] = free
+    result["free_listings_per_seller"] = settings.free_listings_per_seller
+    # Whether this seller is charged (LISTING_FEES_ENABLED, and not a free
+    # listing). Off, the app shows no fee step and the listing goes live -
+    # which is also what an app build that predates free listings needs to
+    # hear, or it would ask to be paid for one that is free.
+    result["fees_enabled"] = settings.listing_fees_enabled and not free
     return result
 
 
@@ -145,7 +176,9 @@ async def monthly_fees_at_prices(
     category = for_category(category_name)
     record = await seller_record(db, seller_id)
     in_category = await category_completed_deals(db, category)
-    return [engine.quote(category, p, quantity, record, in_category)["monthly_fee"] for p in prices]
+    return [engine.quote(category, p, quantity, record, in_category,
+                         discounts_apply=settings.in_app_payments_enabled)["monthly_fee"]
+            for p in prices]
 
 
 # The category table shows the lasting price, without the launch offer:
@@ -162,7 +195,6 @@ def category_table() -> list[dict]:
             "category": c.name,
             "category_completion_rate": c.prior_completion,
             "new_seller_risk_coefficient": q["risk"]["coefficient"],
-            "max_fee": c.max_fee,
             "cost_to_serve": q["cost_to_serve"],
             "days_to_sell": c.days_to_sell,
             "typical_price": c.typical_price,

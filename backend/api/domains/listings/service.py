@@ -381,7 +381,12 @@ class ListingService:
         # payment (pricing/payments.py): paid_until == created_at is how
         # "never paid" reads (listings/paid.py). Created while fees are off,
         # it stays free - paid_until NULL - even after they are switched on.
+        # A seller's first FREE_LISTINGS_PER_SELLER listings are posted free
+        # (pricing/service.free_listings_left).
         awaiting_fee = settings.listing_fees_enabled and fee_applies(listing)
+        if awaiting_fee:
+            from api.domains.pricing.service import free_listings_left
+            awaiting_fee = await free_listings_left(self.db, seller_id) <= 0
         if awaiting_fee:
             listing.created_at = listing.paid_until = datetime.utcnow()
         # Hosting an auction is premium (PRICING.md): one of the seller's

@@ -373,6 +373,20 @@ class Settings:
     # taken out. Only items under ~KES 573 are affected.
     commission_minimum_kes: float = 20.0
 
+    # ── Buyer-to-seller payments ─────────────────────────────────────────────
+    # Off: BROKA moves no deal money. Buyers pay sellers directly, advised
+    # to meet and inspect first or use an independent escrow service
+    # (GET /pricing/safe-payment). No new escrow payment can start; deals
+    # already paid still finish (delivery, refunds, disputes). Everything
+    # that reads "unpaid on BROKA" as "the deal leaked" stands down with it -
+    # leak flags, the contact-sharing rank penalty, the listing fee's record
+    # discount, an auction winner's payment deadline - or every honest
+    # seller would be punished for the only way left to pay. Turn on only
+    # once an escrow provider's API works end to end.
+    in_app_payments_enabled: bool = field(default_factory=lambda: os.getenv(
+        "IN_APP_PAYMENTS_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+
     # ── Listing fees (PRICING.md) ─────────────────────────────────────────────
     # Off until the app build with the Listing fee screen is the one sellers
     # have. On, a new listing stays hidden from buyers until its fee is paid
@@ -381,6 +395,12 @@ class Settings:
     listing_fees_enabled: bool = field(default_factory=lambda: os.getenv(
         "LISTING_FEES_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
+    # How many active listings each seller keeps free of the fee: their
+    # first ones list free, the fee starts after (PRICING.md §2). A sold or
+    # removed free listing frees its place for the next one.
+    free_listings_per_seller: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "FREE_LISTINGS_PER_SELLER", "2"
+    ))))
     # Where Safaricom posts the result of a listing-fee STK push. Unset, it is
     # derived from MPESA_CALLBACK_SECRET (pricing/payments.py), the same way
     # mpesa.py derives its own - so the secret-protected route is the default.

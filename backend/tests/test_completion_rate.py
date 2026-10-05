@@ -151,6 +151,27 @@ async def test_leak_flagged_after_full_window_plus_silence():
         assert deal.leak_detected_at is not None
 
 
+@pytest.mark.asyncio
+async def test_nothing_is_a_leak_while_in_app_payments_are_off(payments_off):
+    """With no way to pay through BROKA, an unpaid deal and a shared phone
+    number are how every honest deal looks: flagging them would sink every
+    seller's completion rate for paying the only way left."""
+    async with AsyncSessionLocal() as db:
+        seller = await _make_user(db, "SellerOff")
+        buyer  = await _make_user(db, "BuyerOff")
+        listing = await _make_listing(db, seller.id)
+        now = datetime.utcnow()
+        deal = await _make_deal(
+            db, listing.id, seller.id, buyer.id,
+            now - timedelta(days=LEAK_WINDOW_DAYS + SILENCE_WINDOW_DAYS + 1),
+        )
+        await db.commit()
+
+        assert await flag_leaked_deals(db) == 0
+        await db.refresh(deal)
+        assert deal.leak_flag is False
+
+
 # ── Cross-deal contamination (the audit's second finding) ──────────────────
 
 @pytest.mark.asyncio

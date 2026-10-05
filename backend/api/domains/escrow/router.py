@@ -17,10 +17,15 @@ from api.database import get_db
 from api.core.client_ip import client_ip_or_none
 from api.security import get_current_user
 from api.core.idempotency import idempotency_guard, IdempotencyResult
+from api.domains.pricing.safe_payment import require_in_app_payments
 from .service import EscrowService
 from . import protection
 
 router = APIRouter()
+
+# Starting a payment (pay-quote, pay, fee-quote, fund) is refused while
+# IN_APP_PAYMENTS_ENABLED is off (pricing/safe_payment.py). Everything that
+# finishes a deal already paid - delivery, refunds, disputes - stays open.
 
 
 # Hard ceiling on a single deal's agreed price, in KES. Well above any
@@ -109,7 +114,7 @@ class PayIn(BaseModel):
     quantity: Optional[int] = Field(None, ge=1, le=1_000_000)
 
 
-@router.get("/pay-quote/{listing_id}")
+@router.get("/pay-quote/{listing_id}", dependencies=[Depends(require_in_app_payments)])
 async def pay_quote(
     listing_id: str,
     amount: Optional[float] = Query(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False),
@@ -126,7 +131,7 @@ async def pay_quote(
         listing_id, current_user["id"], amount=amount, agreed_price=agreed_price, quantity=quantity)
 
 
-@router.post("/pay")
+@router.post("/pay", dependencies=[Depends(require_in_app_payments)])
 async def pay(
     body: PayIn,
     request: Request,
@@ -149,7 +154,7 @@ async def pay(
     return result
 
 
-@router.get("/{deal_id}/fee-quote")
+@router.get("/{deal_id}/fee-quote", dependencies=[Depends(require_in_app_payments)])
 async def get_fee_quote(
     deal_id: str,
     amount: Optional[float] = Query(None, gt=0, le=MAX_AGREED_PRICE_KES, allow_inf_nan=False),
@@ -164,7 +169,7 @@ async def get_fee_quote(
     return await svc.get_fee_quote(deal_id, current_user["id"], amount=amount)
 
 
-@router.post("/{deal_id}/fund")
+@router.post("/{deal_id}/fund", dependencies=[Depends(require_in_app_payments)])
 async def fund_deal_escrow(
     deal_id: str,
     body: FundEscrowIn,

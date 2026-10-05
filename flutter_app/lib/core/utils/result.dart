@@ -13,7 +13,11 @@ final class Success<T> extends Result<T> {
 final class Failure<T> extends Result<T> {
   final String message;
   final int? statusCode;
-  const Failure(this.message, {this.statusCode});
+
+  /// The server's machine-readable reason, when it gave one
+  /// (ApiException.code) - e.g. IN_APP_PAYMENTS_OFF.
+  final String? code;
+  const Failure(this.message, {this.statusCode, this.code});
 }
 
 extension ResultExtension<T> on Result<T> {
