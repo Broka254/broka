@@ -523,6 +523,17 @@ class ListingService:
         assets = await load_listing_media(self.db, [listing], [seller])
         d = self._listing_dict(listing, seller=seller, store=store, assets=assets)
         d.update(await self._availability(listing))
+        # Buyer-facing standing, matching the app's seller tiles. This is a
+        # fresh-enough nightly snapshot and deliberately excludes rank/backlog.
+        if seller is not None:
+            from api.domains.trust.public_standing import public_seller_standing
+            standing = await public_seller_standing(self.db, seller.id)
+            d["seller_standing"] = standing
+            if standing:
+                d["seller_dcr"] = standing.get("dcr")
+                d["seller_dcr_provisional"] = standing.get("dcr_provisional", False)
+                d["seller_response_minutes"] = standing.get("median_response_minutes")
+                d["seller_standing_as_of"] = standing.get("as_of")
         # How long this seller's deals take, agreement to payout - on the
         # listing itself, for the web storefront's product page, which has
         # no profile to read it from (the app's listing screen reads the
