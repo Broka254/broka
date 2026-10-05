@@ -385,10 +385,15 @@ class ListingService:
         # (pricing/service.free_listings_left).
         awaiting_fee = settings.listing_fees_enabled and fee_applies(listing)
         if awaiting_fee:
-            from api.domains.pricing.service import free_listings_left
+            from api.domains.pricing.service import founding_discount, free_listings_left
             awaiting_fee = await free_listings_left(self.db, seller_id) <= 0
         if awaiting_fee:
             listing.created_at = listing.paid_until = datetime.utcnow()
+            # A founding seller on 100% off is posted live, paid up to the
+            # end of their offer; from then on it renews at the full fee.
+            founding = await founding_discount(self.db, seller_id)
+            if founding.percent >= 100:
+                listing.paid_until = founding.ends_at
         # Hosting an auction is premium (PRICING.md): one of the seller's
         # plan's auctions, spent last - every check that could refuse the
         # listing has already run - and given back below if this turns out

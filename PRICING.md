@@ -21,7 +21,7 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 |---|---|
 | **Buyer-to-seller payments** | **Paused** (`IN_APP_PAYMENTS_ENABLED=false`): buyers pay sellers directly, so BROKA charges **no commission** for now. The app advises meeting to inspect first, and lists independent escrow services for deals at a distance (`GET /pricing/safe-payment`). See "While BROKA handles no payments" below |
 | **Commission**, when payments return | Negotiated deal: buyer pays **4.49%** (BROKA 3.49%, never under KES 20, + E-Confirm 1%). Auction: **5%** (BROKA 4% + E-Confirm 1%) |
-| **Listing fee** | Monthly, per listing, on its **value - price × quantity** - in falling bands (0.35% of the first KES 20,000 ... 0.02% above KES 2M), never under what the listing costs to serve, at most KES 10,000. A KES 20,000 phone pays KES 70 a month; 200 KES 180,000 iPhones pay KES 8,580. **Each seller's first 2 active listings are free** (`FREE_LISTINGS_PER_SELLER`). 1 to 6 months at a time; longer is cheaper per month |
+| **Listing fee** | Monthly, per listing, on its **value - price × quantity** - in falling bands (0.35% of the first KES 20,000 ... 0.02% above KES 2M), never under what the listing costs to serve, at most KES 10,000. A KES 20,000 phone pays KES 70 a month; 200 KES 180,000 iPhones pay KES 8,580. **Founding sellers get a launch discount by the order they first listed**: the first 50 sellers 100% off, the next 50 80%, the next 100 60%, the next 200 40%, the next 400 20%, each for 90 days from their first listing (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`). 1 to 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
 | **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
@@ -180,9 +180,39 @@ runs when payments are on.
 A seller pays per listing, per month, for 1 to 6 months at a time. The
 monthly price is **C** (the listing's value, banded) times **R** (the
 seller's risk coefficient, 0.4 to 1.0, only while payments run through
-BROKA). **Each seller's first `FREE_LISTINGS_PER_SELLER` (2) active
-listings pay nothing**: a sold or removed free listing frees its place.
-Auctions pay no listing fee and use no free place.
+BROKA), less the founding-seller offer below.
+
+### The founding-seller offer
+
+BROKA needs income as soon as it has sellers, so the launch discount is
+not "free until there is traction" but a discount that shrinks with every
+seller who joins. Sellers are numbered by when they posted their first
+listing, and each band gets its discount (`FOUNDING_SELLER_TIERS`,
+count:percent - the numbers are a starting guess, not yet what the
+business can be shown to carry):
+
+| Sellers | 1-50 | 51-100 | 101-200 | 201-400 | 401-800 | After |
+|---|---|---|---|---|---|---|
+| Off the listing fee | 100% | 80% | 60% | 40% | 20% | 0% |
+
+- **Sellers, not users.** Buyers never pay a listing fee; an early buyer
+  must not use up a place. Auctions don't count either.
+- **It ends.** Each seller's offer lasts `FOUNDING_DISCOUNT_DAYS` (90) from
+  their first listing, so the earliest sellers start paying too. Time
+  bought at a founding price can't run past that end: on day 80 only one
+  discounted month is offered.
+- **100% means posted live**, paid up to the end of the offer; it renews
+  at the full fee. A partial discount never prices a month under what the
+  listing costs to serve (80% off a KES 70 phone fee is KES 14, under cost,
+  so it charges the floor).
+- It replaces the category launch offer while payments are paused (that one
+  fades with escrow deals, which can't happen); with payments on, the
+  larger of the two applies.
+
+`FREE_LISTINGS_PER_SELLER` (default 0) can instead give every seller a
+number of free active listings for good. It earns sooner from dealers - a
+dealer's third listing pays on day one, where among the first 50 founding
+sellers all their listings are free for 90 days - but it never ends.
 
 ### C - the list price
 

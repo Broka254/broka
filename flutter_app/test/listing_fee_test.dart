@@ -198,6 +198,12 @@ void main() {
       expect(lines.join(), isNot(contains('complete through BROKA')));
     });
 
+    test('a founding seller is told their discount', () {
+      final j = _quote()
+        ..['discounts'] = {'apply': false, 'record_percent': 0, 'launch_percent': 80};
+      expect(feeReasons(ListingFeeQuote.fromJson(j)).last, contains('Founding seller: 80% off'));
+    });
+
     test('recommends months for land, says nothing when a month will do', () {
       final land = recommendationText(ListingFeeQuote.fromJson(_quote()));
       expect(land, contains('about 4 months'));

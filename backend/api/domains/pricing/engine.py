@@ -254,6 +254,7 @@ def quote(
     category: CategoryPricing, unit_price: float, quantity: int,
     record: SellerRecord, category_completed_deals: int,
     discounts_apply: bool = True,
+    seller_launch: float = 0.0,
 ) -> dict:
     """Everything the sell screen shows: list price, today's price, why, and 1-6 months.
 
@@ -261,6 +262,12 @@ def quote(
     (IN_APP_PAYMENTS_ENABLED off): R and the launch offer are both measured
     in deals completed through BROKA's escrow, and with no such deals
     possible they would only price every seller on a guess.
+
+    `seller_launch` is the founding-seller offer (service.founding_discount),
+    0-1. It needs no escrow record, so it applies either way; where the
+    category's launch offer also applies, the larger one counts. A full
+    100% is never priced here - the fee floor would turn it into the cost
+    of serving the listing - but posted free by the caller.
     """
     quantity = max(int(quantity or 1), 1)
     cost = costs.listing_month_cost(category.chats_per_month)
@@ -270,7 +277,8 @@ def quote(
     rate = completion_estimate(category.prior_completion, record.completed_weight,
                                record.leaked_weight, record.quality)
     risk = risk_coefficient(rate) if discounts_apply else 1.0
-    launch = launch_discount(category_completed_deals) if discounts_apply else 0.0
+    launch = max(launch_discount(category_completed_deals) if discounts_apply else 0.0,
+                 min(max(seller_launch, 0.0), 1.0))
     fee = monthly_fee(full, risk, launch, cost)
 
     advice = recommend_months(category, unit_price, quantity)

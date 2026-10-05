@@ -30,6 +30,22 @@ def _client_ip_header_default() -> str:
     return "" if raw in ("", "none") else raw
 
 
+def _parse_tiers(raw: str) -> tuple:
+    """"50:100,50:80" -> ((50, 100), (50, 80)). A malformed pair is a typo in
+    an env var: refusing to start says so, where skipping it would quietly
+    hand out a different discount than the one written."""
+    tiers = []
+    for pair in (raw or "").split(","):
+        if not pair.strip():
+            continue
+        count, _, percent = pair.partition(":")
+        count, percent = int(count), int(percent)
+        if count <= 0 or not 0 <= percent <= 100:
+            raise ValueError(f"FOUNDING_SELLER_TIERS: bad pair {pair!r}")
+        tiers.append((count, percent))
+    return tuple(tiers)
+
+
 @dataclass(frozen=True)
 class Settings:
     # ── App ──────────────────────────────────────────────────────────────────
@@ -399,7 +415,18 @@ class Settings:
     # first ones list free, the fee starts after (PRICING.md §2). A sold or
     # removed free listing frees its place for the next one.
     free_listings_per_seller: int = field(default_factory=lambda: max(0, int(os.getenv(
-        "FREE_LISTINGS_PER_SELLER", "2"
+        "FREE_LISTINGS_PER_SELLER", "0"
+    ))))
+    # The founding-seller offer (PRICING.md §2): sellers are numbered by when
+    # they posted their first listing, and "count:percent" pairs give each
+    # band its discount - the first 50 sellers 100% off, the next 50 80%...
+    # It lasts FOUNDING_DISCOUNT_DAYS from that first listing, so the
+    # earliest sellers start paying too. Empty switches it off.
+    founding_seller_tiers: tuple = field(default_factory=lambda: _parse_tiers(os.getenv(
+        "FOUNDING_SELLER_TIERS", "50:100,50:80,100:60,200:40,400:20"
+    )))
+    founding_discount_days: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "FOUNDING_DISCOUNT_DAYS", "90"
     ))))
     # Where Safaricom posts the result of a listing-fee STK push. Unset, it is
     # derived from MPESA_CALLBACK_SECRET (pricing/payments.py), the same way

@@ -99,7 +99,11 @@ services:
                              # Off: buyers pay sellers directly (PRICING.md, "While BROKA
                              # handles no payments"). Only once an escrow provider works.
       - key: FREE_LISTINGS_PER_SELLER
-        value: "2"           # Each seller's first N active listings pay no listing fee.
+        value: "0"           # Each seller's first N active listings pay no listing fee.
+      - key: FOUNDING_SELLER_TIERS
+        value: "50:100,50:80,100:60,200:40,400:20"  # count:percent by order of first listing.
+      - key: FOUNDING_DISCOUNT_DAYS
+        value: "90"          # How long each seller's founding offer lasts.
       - key: LISTING_FEES_ENABLED
         value: "false"       # true: a new listing is hidden until its monthly fee is paid
                              # (PRICING.md). Only once the app build that can pay is required -

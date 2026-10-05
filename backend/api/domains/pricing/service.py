@@ -5,7 +5,9 @@ category's trade so far and whether they are a short- or long-term seller.
 """
 from __future__ import annotations
 
-from datetime import datetime
+import math
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -139,21 +141,88 @@ async def free_listings_left(db: AsyncSession, seller_id: str) -> int:
     return max(0, allowance - int(used))
 
 
+@dataclass(frozen=True)
+class FoundingDiscount:
+    rank: int                  # 1 = the first seller to list
+    percent: int               # 0-100, 0 once the offer has ended
+    ends_at: datetime          # the end of this seller's offer
+
+
+def tier_percent(rank: int, tiers=None) -> int:
+    """The discount for the seller numbered `rank` (FOUNDING_SELLER_TIERS)."""
+    seen = 0
+    for count, percent in (settings.founding_seller_tiers if tiers is None else tiers):
+        seen += count
+        if rank <= seen:
+            return percent
+    return 0
+
+
+async def founding_discount(
+    db: AsyncSession, seller_id: str, at: Optional[datetime] = None,
+) -> FoundingDiscount:
+    """The founding-seller offer for this seller, for listing time starting `at`.
+
+    Sellers are numbered by their first listing, not by signing up: buyers
+    never pay a listing fee, and an early buyer must not use up a place a
+    seller would have paid less in. Auctions don't count - they pay no fee.
+    The offer runs FOUNDING_DISCOUNT_DAYS from that first listing (from now,
+    for a seller about to post their first), so the earliest sellers start
+    paying too; time bought from its end on is full price.
+    """
+    now = datetime.utcnow()
+    not_auction = Listing.listing_type != ListingType.auction
+    first = (await db.execute(
+        select(func.min(Listing.created_at)).where(Listing.seller_id == seller_id, not_auction)
+    )).scalar()
+    firsts = (select(Listing.seller_id, func.min(Listing.created_at).label("first"))
+              .where(not_auction).group_by(Listing.seller_id).subquery())
+    if first is None:
+        ahead = (await db.execute(select(func.count()).select_from(firsts))).scalar() or 0
+        first = now
+    else:
+        ahead = (await db.execute(
+            select(func.count()).select_from(firsts).where(firsts.c.first < first)
+        )).scalar() or 0
+    rank = int(ahead) + 1
+    ends_at = first + timedelta(days=settings.founding_discount_days)
+    percent = tier_percent(rank) if (at or now) < ends_at else 0
+    return FoundingDiscount(rank=rank, percent=percent, ends_at=ends_at)
+
+
 async def listing_fee_quote(
     db: AsyncSession, user_id: str, category_name: str, unit_price: float, quantity: int,
-    new_listing: bool = False,
+    new_listing: bool = False, starts_at: Optional[datetime] = None,
 ) -> dict:
+    """`starts_at`: when the time being priced begins (the end of time
+    already paid, for a renewal); now when left out."""
     category = for_category(category_name)
     record = await seller_record(db, user_id)
     in_category = await category_completed_deals(db, category)
     tier = (await db.execute(select(User.seller_tier).where(User.id == user_id))).scalar()
+    start = starts_at or datetime.utcnow()
+    founding = await founding_discount(db, user_id, start)
+    # 100% is not priced (the fee floor would charge the cost of serving
+    # the listing): the listing is posted live until the offer ends.
+    founding_free = founding.percent >= 100
     result = engine.quote(category, unit_price, quantity, record, in_category,
-                          discounts_apply=settings.in_app_payments_enabled)
+                          discounts_apply=settings.in_app_payments_enabled,
+                          seller_launch=0.0 if founding_free else founding.percent / 100)
+    if 0 < founding.percent:
+        # Discounted time can't run past the offer's end: six months bought
+        # on its last day would otherwise be six months at founding prices.
+        left = max(1, math.ceil((founding.ends_at - start) / timedelta(days=30)))
+        result["options"] = [o for o in result["options"] if o["months"] <= left]
+    result["founding"] = {
+        "rank": founding.rank, "percent": founding.percent,
+        "ends_at": founding.ends_at.isoformat(),
+    }
     result["featured"] = featured_options(tier)
-    # A listing about to be posted into one of the seller's free places
-    # pays nothing: ListingService.create posts it live, unpaid.
+    # A listing about to be posted into one of the seller's free places, or
+    # by a seller whose founding offer is 100%, pays nothing:
+    # ListingService.create posts it live.
     free = (new_listing and settings.listing_fees_enabled
-            and await free_listings_left(db, user_id) > 0)
+            and (founding_free or await free_listings_left(db, user_id) > 0))
     result["free_listing"] = free
     result["free_listings_per_seller"] = settings.free_listings_per_seller
     # Whether this seller is charged (LISTING_FEES_ENABLED, and not a free

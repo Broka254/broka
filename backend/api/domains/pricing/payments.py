@@ -106,6 +106,7 @@ async def listing_quote(db: AsyncSession, user_id: str, listing_id: str) -> dict
     listing = await _owned_listing(db, user_id, listing_id)
     quote = await service.listing_fee_quote(
         db, user_id, listing.category, float(listing.price), listing.quantity or 1,
+        starts_at=max(datetime.utcnow(), listing.paid_until or datetime.utcnow()),
     )
     available = months_available(listing)
     quote["options"] = [o for o in quote["options"] if o["months"] <= available]
@@ -149,8 +150,15 @@ async def start_payment(
 
     quote = await service.listing_fee_quote(
         db, user_id, listing.category, float(listing.price), listing.quantity or 1,
+        starts_at=max(datetime.utcnow(), listing.paid_until or datetime.utcnow()),
     )
-    option = next(o for o in quote["options"] if o["months"] == months)
+    option = next((o for o in quote["options"] if o["months"] == months), None)
+    if option is None:
+        # The founding offer sells discounted time only up to its end.
+        raise HTTPException(status_code=409, detail=(
+            f"Your founding-seller price covers up to {len(quote['options'])} "
+            f"month{'s' if len(quote['options']) != 1 else ''} from now. Choose fewer months."
+        ))
 
     featured_amount = 0
     if featured_plan:
