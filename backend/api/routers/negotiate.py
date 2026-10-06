@@ -3496,7 +3496,19 @@ async def get_history(
                                    is_agent_initiated=bool(getattr(m, "is_agent_initiated", False)))
                     )
 
-        elif m.role == actual_role and m.sender_id == authenticated_uid:
+        elif m.role == actual_role and (
+            m.sender_id == authenticated_uid
+            # A call card carries the CALLER's role but the id of whichever
+            # side logged the result first - the callee as often as the
+            # caller (calls.py log_call_result). Asking for the caller's own
+            # id here hid every call the other side logged from the caller,
+            # while the chat socket's replay of the thread still sent it, and
+            # the app put a card it had never seen at the bottom: "Call from
+            # You · 4d ago" under today's messages. Its own thread only - a
+            # call card always names its buyer.
+            or (msg_type == "call" and m.buyer_id is not None
+                and m.buyer_id == effective_buyer_id)
+        ):
             # BUG FIX (communications audit, 2026-09-14): this branch had no
             # buyer_id scoping, unlike every other branch here. A listing
             # with several buyer threads therefore showed the SELLER their

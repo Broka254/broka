@@ -388,6 +388,57 @@ async def test_a_call_that_was_answered_or_declined_is_not_announced(client, out
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("logged_by", ["caller", "callee"])
+async def test_a_call_card_is_in_both_sides_history_whoever_logged_it(client, logged_by):
+    """Reported from a phone (2026-10-06): "Call from You · 4d ago" under
+    today's messages. The card carries the caller's role but the id of
+    whichever side logged the result first. The caller's history wanted
+    their own id on it, so a call the callee logged was missing from it -
+    while the chat socket's replay of the thread still sent it, and the app
+    put a card it had never seen at the bottom."""
+    listing_id, seller, [buyer] = await _people()
+    await _direct(client, buyer, "buyer", listing_id, "hi")
+    room_id = await _call(listing_id, caller=seller, callee=buyer)
+    with patch("api.routers.calls._send_fcm", new=AsyncMock(return_value=True)):
+        r = await client.post("/calls/log-result",
+                              headers=_auth(seller if logged_by == "caller" else buyer),
+                              json={"room_id": room_id, "outcome": "completed",
+                                    "duration_secs": 42})
+    assert r.status_code == 200, r.text
+
+    for uid, params in ((seller, {"buyer_id": buyer}), (buyer, {})):
+        history = (await client.get(f"/negotiate/{listing_id}/history",
+                                    params=params, headers=_auth(uid))).json()
+        calls = [m for m in history if m["msg_type"] == "call"]
+        assert [(c["role"], c["content"], c["duration_secs"]) for c in calls] == \
+            [("seller", "completed", 42)], (uid == seller and "caller") or "callee"
+
+
+@pytest.mark.asyncio
+async def test_a_call_card_stays_in_its_own_buyers_thread(client):
+    """Showing the caller a card they did not log must not show one buyer's
+    call to another buyer of the same listing."""
+    listing_id, seller, [b1, b2] = await _people(2)
+    await _direct(client, b1, "buyer", listing_id, "hi")
+    await _direct(client, b2, "buyer", listing_id, "hello")
+    room_id = await _call(listing_id, caller=b1, callee=seller)
+    r = await client.post("/calls/log-result", headers=_auth(seller),
+                          json={"room_id": room_id, "outcome": "declined"})
+    assert r.status_code == 200, r.text
+
+    def calls(history):
+        return [m["content"] for m in history if m["msg_type"] == "call"]
+
+    mine = (await client.get(f"/negotiate/{listing_id}/history", headers=_auth(b1))).json()
+    other = (await client.get(f"/negotiate/{listing_id}/history", headers=_auth(b2))).json()
+    sellers_view_of_b2 = (await client.get(f"/negotiate/{listing_id}/history",
+                                           params={"buyer_id": b2}, headers=_auth(seller))).json()
+    assert calls(mine) == ["declined"]
+    assert calls(other) == []
+    assert calls(sellers_view_of_b2) == []
+
+
+@pytest.mark.asyncio
 async def test_a_seller_calling_a_buyer_tells_the_buyer_they_missed_it(client):
     listing_id, seller, [buyer] = await _people()
     await _direct(client, buyer, "buyer", listing_id, "hi")

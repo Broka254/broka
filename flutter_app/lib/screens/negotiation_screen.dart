@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
+import '../features/calls/domain/call_record.dart' show callSummary;
 import '../services/chat_screen_memory.dart';
 import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
@@ -640,9 +641,37 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       if (cid != null) _uploads.remove(cid);
       _messages[i] = m;
     } else {
-      _messages.add(m);
+      _messages.insert(_slotFor(_messages, m), m);
     }
     return true;
+  }
+
+  /// Where [m] goes in [list] so the thread reads in time order: after
+  /// everything not later than it. What arrives here is not always new -
+  /// the chat socket replays the thread's last fifty messages on every
+  /// connect, and the poll returns the whole thread - so anything this
+  /// screen had not seen yet went to the bottom whatever its age: a call
+  /// from four days ago under today's "Yooh". A message with no time stays
+  /// where it is put, and nothing moves past it.
+  static int _slotFor(List<ChatMessage> list, ChatMessage m) {
+    final at = m.createdAt;
+    var i = list.length;
+    if (at == null) return i;
+    while (i > 0) {
+      final before = list[i - 1].createdAt;
+      if (before == null || !before.isAfter(at)) break;
+      i--;
+    }
+    return i;
+  }
+
+  /// [msgs] in time order; equal times keep their order.
+  static List<ChatMessage> _inTimeOrder(Iterable<ChatMessage> msgs) {
+    final out = <ChatMessage>[];
+    for (final m in msgs) {
+      out.insert(_slotFor(out, m), m);
+    }
+    return out;
   }
 
   /// Index of my not-yet-confirmed bubble that [m] is the server's copy of,
@@ -675,7 +704,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       if (i >= 0) {
         _messages[i] = server;
       } else {
-        _messages.add(server);
+        _messages.insert(_slotFor(_messages, server), server);
       }
     });
     unawaited(_cacheMessages());
@@ -760,7 +789,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         }
       }
       setState(() {
-        _messages = restored;
+        // A cache this screen saved out of order (see _slotFor) reads in
+        // order from now on, even before the server's copy arrives.
+        _messages = _inTimeOrder(restored);
         _loading = false;
       });
       _markSeen(_messages);
@@ -1551,13 +1582,15 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                   fontWeight: FontWeight.w800, fontSize: 15.5)),
           const SizedBox(height: 2),
           Row(children: [
-            // The live connection, folded into the status line rather than
-            // a lone dot among the buttons.
+            // Their presence, as the words beside it give it. It was this
+            // phone's chat socket: green beside "Active 22h ago", which
+            // reads as "online" to anyone, about someone who is not.
             Container(
+              key: const Key('direct-chat-presence-dot'),
               width: 6, height: 6, margin: const EdgeInsets.only(right: 5),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _wsConnected ? BrokaColors.neonGreen : BrokaColors.textLow),
+                color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textLow),
             ),
             Flexible(child: Text(
               _counterpartyLastSeen ?? (_counterpartyOnline ? 'Active now' : 'Direct chat'),
@@ -1828,7 +1861,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                       decoration: InputDecoration(
                         isDense: true,
                         filled: false,
-                        hintText: _role == 'buyer' ? 'Message seller' : 'Message buyer',
+                        // By name, as the header says it - not "Message buyer".
+                        hintText: 'Message $_counterpartyName',
                         hintStyle: const TextStyle(
                             color: BrokaColors.textMid, fontSize: 15),
                         border: InputBorder.none,
@@ -2185,32 +2219,32 @@ class _CallCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final outcome = message.content; // "missed" | "completed" | "declined" | "cancelled"
+    // The card carries the caller's role: mine when I placed the call.
+    final outgoing = message.role == userRole;
+    final outcome = message.content; // "completed" | "missed" | "declined" | "cancelled"
     final callType = message.callType ?? 'audio';
-    final isVideo    = callType == 'video';
-    final isMissed    = outcome == 'missed';
-    final isDeclined  = outcome == 'declined';
-    final isCancelled = outcome == 'cancelled';
-    final color = isMissed || isDeclined || isCancelled ? BrokaColors.danger : BrokaColors.neonGreen;
-    final isMe = message.role == userRole;
-    final icon = isMissed
+    final isVideo = callType == 'video';
+    // It rang me and nobody picked up; "cancelled" only says the caller gave
+    // up first. The Calls screen's rule (backend calls.py get_call_history).
+    final missed = !outgoing && (outcome == 'missed' || outcome == 'cancelled');
+    // Said as the Calls screen says it. This card said "Call from Buyer"
+    // with an outgoing arrow for a call that came in, "Call cancelled from
+    // You" in red for one the user simply hung up on, and the other
+    // person's side of the deal where the header names them.
+    final kind = isVideo ? 'video call' : 'call';
+    final title = missed ? 'Missed $kind' : '${outgoing ? 'Outgoing' : 'Incoming'} $kind';
+    final when = _relativeTime(message.createdAt);
+    final detail = [
+      if (!missed)
+        callSummary(outcome: outcome, isOutgoing: outgoing, durationSecs: message.durationSecs),
+      if (when.isNotEmpty) when,
+    ].join(' · ');
+    final color = missed
+        ? BrokaColors.danger
+        : (outgoing ? BrokaColors.neonBlue : BrokaColors.neonGreen);
+    final icon = missed
         ? Icons.call_missed_rounded
-        : (isDeclined || isCancelled)
-            ? Icons.call_end_rounded
-            : (isVideo ? Icons.videocam_rounded : Icons.call_made_rounded);
-    final label = isMissed
-        ? (isVideo ? 'Missed video call' : 'Missed call')
-        : isDeclined
-            ? (isVideo ? 'Video call declined' : 'Call declined')
-            : isCancelled
-                ? (isVideo ? 'Video call cancelled' : 'Call cancelled')
-                : (isVideo ? 'Video call' : 'Call');
-    // Phrase relative to whoever is viewing this card, not just the caller's
-    // raw role - "from You" if the viewer placed the call, otherwise name
-    // the other party.
-    final callerLabel = isMe
-        ? 'from You'
-        : (message.role == 'buyer' ? 'from Buyer' : 'from Seller');
+        : (outgoing ? Icons.call_made_rounded : Icons.call_received_rounded);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -2227,13 +2261,14 @@ class _CallCard extends StatelessWidget {
             Icon(icon, color: color, size: 20),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('$label $callerLabel', style: const TextStyle(
-                  color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 13)),
-              if (message.createdAt != null)
-                Text(_relativeTime(message.createdAt), style: const TextStyle(
+              Text(title, style: TextStyle(
+                  color: missed ? BrokaColors.danger : BrokaColors.textHigh,
+                  fontWeight: FontWeight.w700, fontSize: 13)),
+              if (detail.isNotEmpty)
+                Text(detail, style: const TextStyle(
                     color: BrokaColors.textLow, fontSize: 11)),
             ])),
-            if ((isMissed || isDeclined || isCancelled) && !isMe)
+            if (!outgoing && outcome != 'completed')
               GestureDetector(
                 onTap: () => onCallBack(callType),
                 child: Container(

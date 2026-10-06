@@ -70,17 +70,9 @@ class CallRecord {
   String get peerDisplayName => peer.name.isEmpty ? peerRoleLabel : peer.name;
 
   /// What happened, in the user's words.
-  String get summary {
-    if (missed) return 'Missed';
-    if (outcome == 'completed') {
-      final d = durationSecs;
-      return d == null || d <= 0 ? 'Answered' : formatCallDuration(d);
-    }
-    if (outcome == 'declined') return isOutgoing ? 'Declined' : 'You declined';
-    // An outgoing call nobody answered, cancelled or rung out.
-    if (isOutgoing) return outcome == 'cancelled' ? 'Cancelled' : 'No answer';
-    return 'Missed';
-  }
+  String get summary => missed
+      ? 'Missed'
+      : callSummary(outcome: outcome, isOutgoing: isOutgoing, durationSecs: durationSecs);
 
   static CallRecord? fromJson(Map<String, dynamic> j, Map<String, CallPeer> people) {
     final id = j['id'] as String?;
@@ -132,6 +124,22 @@ class CallHistoryPage {
     }
     return CallHistoryPage(calls: calls, nextBefore: j['next_before'] as String?);
   }
+}
+
+/// What happened on a call, in the words of the person looking at it -
+/// the Calls screen and the call cards in a chat say the same thing.
+/// [isOutgoing]: they placed the call. [outcome] is the call card's:
+/// completed | missed | declined | cancelled.
+String callSummary({required String outcome, required bool isOutgoing, int? durationSecs}) {
+  if (outcome == 'completed') {
+    final d = durationSecs;
+    return d == null || d <= 0 ? 'Answered' : formatCallDuration(d);
+  }
+  if (outcome == 'declined') return isOutgoing ? 'Declined' : 'You declined';
+  // An outgoing call nobody answered, cancelled or rung out.
+  if (isOutgoing) return outcome == 'cancelled' ? 'Cancelled' : 'No answer';
+  // To the person called, a call the caller gave up on is missed too.
+  return 'Missed';
 }
 
 /// 75 -> "1:15", 3725 -> "1:02:05".
