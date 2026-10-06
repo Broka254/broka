@@ -2047,18 +2047,26 @@
   min-height: 300px;
   padding: 34px clamp(24px, 4vw, 52px);
   border-radius: 24px;
-  background: rgb(8 10 20 / 0.74);
+  background: #080a14;
   border-color: var(--border);
-  box-shadow: 0 28px 70px -44px var(--hero-a), inset 0 1px rgb(255 255 255 / 0.05);
+  box-shadow: 0 28px 70px -44px rgb(0 0 0 / 0.9), inset 0 1px rgb(255 255 255 / 0.05);
+}
+
+.heroArt {
+  background:
+    radial-gradient(ellipse 65% 100% at 12% 50%, rgb(84 215 233 / 0.10), transparent 70%),
+    radial-gradient(ellipse 62% 110% at 88% 45%, rgb(139 117 255 / 0.14), transparent 72%),
+    #080a14;
 }
 
 .heroArt::after {
-  background: linear-gradient(90deg, rgb(5 6 13 / 0.72), rgb(5 6 13 / 0.18) 78%);
+  background: linear-gradient(90deg, rgb(5 6 13 / 0.38), rgb(5 6 13 / 0.16) 78%);
 }
 
-.blob { filter: blur(64px); opacity: 0.42; }
-.orbit { opacity: 0.5; }
-.sheen { opacity: 0.35; }
+.blob { filter: blur(72px); opacity: 0.12; mix-blend-mode: normal; }
+.blob4 { opacity: 0.06; }
+.orbit { opacity: 0.24; }
+.sheen { opacity: 0.12; }
 
 .glassChip {
   padding: 6px 11px;
@@ -2073,7 +2081,7 @@
   font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
   font-size: clamp(42px, 7vw, 76px);
   letter-spacing: -0.045em;
-  background: linear-gradient(100deg, #f7f7fc 0%, #ded8ff 36%, #8b75ff 72%, #54d7e9 100%);
+  background: linear-gradient(100deg, #f7f7fc 0%, #ded8ff 50%, #b3a7ff 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -2096,7 +2104,7 @@
 
 .perks li {
   border-color: var(--border);
-  background: rgb(12 16 32 / 0.66);
+  background: rgb(12 16 32 / 0.82);
 }
 
 .perkIcon {
