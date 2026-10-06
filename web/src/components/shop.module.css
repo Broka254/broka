@@ -1960,3 +1960,233 @@
     margin-bottom: -10px;
   }
 }
+
+
+/* ========================================================================
+   BROKA WEBSITE PARITY PASS
+   Preserve route, query, cart, and API contracts; tune only the visual layer.
+   ======================================================================== */
+
+.topbar {
+  padding: 8px clamp(16px, 4vw, 52px);
+  background: linear-gradient(90deg, rgb(139 117 255 / 0.16), rgb(84 215 233 / 0.08));
+  border-bottom-color: rgb(195 202 226 / 0.13);
+  color: var(--text-mid);
+  font-size: 12px;
+}
+
+.topbar strong { color: var(--text-high); }
+.topbar svg { color: var(--cyan); }
+.topbarApp { color: #b3a7ff; }
+
+.header {
+  background: rgb(5 6 13 / 0.88);
+  border-bottom-color: rgb(195 202 226 / 0.13);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.28);
+}
+
+.headerInner {
+  max-width: 1280px;
+  padding: 10px clamp(16px, 4vw, 52px);
+  gap: 16px;
+}
+
+.brandName {
+  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-size: 21px;
+  letter-spacing: 0.04em;
+  background: linear-gradient(95deg, #ded8ff, #a895ff 45%, #7aa2ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brandTag {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: var(--text-low);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.iconButton,
+.filterButton,
+.searchPill {
+  border-color: var(--border-strong);
+  background: rgb(12 16 32 / 0.78);
+}
+
+.iconButton:hover,
+.filterButton:hover { border-color: #a895ff; }
+
+.searchPill {
+  height: 44px;
+  border-color: rgb(96 140 255 / 0.42);
+}
+
+.searchPill:focus-within {
+  border-color: #8b75ff;
+  box-shadow: 0 0 0 3px rgb(139 117 255 / 0.18);
+}
+
+.searchLabel input { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+.searchGo { background: var(--cta); }
+
+.filterPanel {
+  border-color: var(--border-strong);
+  background: rgb(8 10 20 / 0.98);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.48);
+}
+
+.storePage {
+  width: min(1280px, calc(100% - clamp(32px, 8vw, 104px)));
+  max-width: none;
+  padding-top: 20px;
+}
+
+.hero {
+  min-height: 300px;
+  padding: 34px clamp(24px, 4vw, 52px);
+  border-radius: 24px;
+  background: rgb(8 10 20 / 0.74);
+  border-color: var(--border);
+  box-shadow: 0 28px 70px -44px var(--hero-a), inset 0 1px rgb(255 255 255 / 0.05);
+}
+
+.heroArt::after {
+  background: linear-gradient(90deg, rgb(5 6 13 / 0.72), rgb(5 6 13 / 0.18) 78%);
+}
+
+.blob { filter: blur(64px); opacity: 0.42; }
+.orbit { opacity: 0.5; }
+.sheen { opacity: 0.35; }
+
+.glassChip {
+  padding: 6px 11px;
+  border-color: rgb(195 202 226 / 0.18);
+  background: rgb(8 10 20 / 0.54);
+  color: var(--text-high);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+}
+
+.heroName {
+  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(42px, 7vw, 76px);
+  letter-spacing: -0.045em;
+  background: linear-gradient(100deg, #f7f7fc 0%, #ded8ff 36%, #8b75ff 72%, #54d7e9 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 18px rgb(139 117 255 / 0.32));
+}
+
+.heroPlace { color: var(--text-mid); }
+.moreWidget {
+  padding: 9px 13px 9px 16px;
+  background: rgb(12 16 32 / 0.84);
+  border-color: #8b75ff;
+  animation: none;
+  box-shadow: 0 8px 24px -16px rgb(139 117 255 / 0.9);
+}
+
+.perks {
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.perks li {
+  border-color: var(--border);
+  background: rgb(12 16 32 / 0.66);
+}
+
+.perkIcon {
+  background: rgb(139 117 255 / 0.12);
+  color: #b3a7ff;
+}
+
+.catalogue { margin-top: 28px; }
+.toolbar { margin: 0 0 6px; }
+.toolbar h2,
+.empty h2 { font-family: Montserrat, ui-sans-serif, system-ui, sans-serif; }
+.countTag { background: rgb(139 117 255 / 0.16); color: #ded8ff; }
+
+.grid { gap: 14px; margin-top: 16px; }
+
+.product {
+  border-color: var(--border);
+  background: rgb(12 16 32 / 0.76);
+  box-shadow: 0 12px 28px -24px rgb(0 0 0 / 0.9);
+}
+
+.product:hover {
+  border-color: rgb(139 117 255 / 0.58);
+  box-shadow: 0 18px 36px -22px rgb(139 117 255 / 0.48);
+}
+
+.productImage {
+  aspect-ratio: 4 / 3;
+  background: #0c1020;
+}
+
+.badge {
+  border-color: rgb(195 202 226 / 0.22);
+  background: rgb(5 6 13 / 0.78);
+  color: #ded8ff;
+}
+
+.productBody { padding: 12px 13px 4px; }
+.productName {
+  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+}
+.productPrice { color: #b3a7ff; font-family: Montserrat, ui-sans-serif, system-ui, sans-serif; }
+.productAction { padding: 8px 13px 13px; }
+.addToCart { box-shadow: 0 8px 22px -12px rgb(139 117 255 / 0.88); }
+.viewButton { border-color: var(--border-strong); }
+
+.empty {
+  border-color: var(--border);
+  background: rgb(12 16 32 / 0.68);
+}
+
+.footer {
+  margin-top: 72px;
+  padding: 56px clamp(16px, 4vw, 52px) 28px;
+  border-top-color: var(--border);
+  background: rgb(5 6 13 / 0.88);
+}
+
+.footerGrid {
+  max-width: 1280px;
+  gap: 36px;
+}
+
+.footerBrand {
+  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+.footerTitle { color: var(--text-low); }
+.footer li a { color: var(--text-mid); }
+.footer li a:hover { color: #b3a7ff; }
+.footerMuted { color: var(--text-low); }
+.footerBase { border-top-color: var(--border); color: var(--text-low); }
+.footerBase a { color: #b3a7ff; }
+
+@media (max-width: 860px) {
+  .storePage { width: calc(100% - 32px); }
+}
+
+@media (max-width: 600px) {
+  .storePage { width: calc(100% - 24px); padding-top: 14px; }
+  .hero { padding: 20px 18px 18px; border-radius: 20px; }
+  .heroName { font-size: clamp(38px, 13vw, 58px); }
+  .grid { gap: 10px; }
+  .productBody { padding: 10px 10px 3px; }
+  .productAction { padding: 7px 10px 10px; }
+  .footer { margin-top: 52px; padding-top: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brandName, .heroName { animation: none; }
+}
