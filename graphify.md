@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-206 endpoints served by `backend/main.py`. **Auth** is read from each
+207 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 57, token 4, user 123.
+Counts: admin 20, optional 2, public 57, token 4, user 124.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -264,9 +264,10 @@ Counts: admin 20, optional 2, public 57, token 4, user 123.
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:121) |
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:379) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:115) |
-| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:82) |
-| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:173) |
-| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:213) |
+| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:83) |
+| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:178) |
+| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:227) |
+| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:268) |
 
 ## Backend modules
 
@@ -924,6 +925,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/zeno_action.dart` — What Zeno, the assistant, can do in the app - the app's side of the closed vocabulary in backend/api/domains/zeno_assistant/intents.py.
 - `domain/zeno_selling.dart` — Zeno helping a seller while they write a listing (2026-10-05) - the app's side of backend/api/domains/zeno_assistant/selling.py.
 - `presentation/zeno_action_card.dart` — What Zeno is doing, or asking to do, under its reply - in the typed conversation and, larger, in voice mode.
+- `presentation/zeno_describe_screen.dart` — Zeno writing a listing's description with the seller (2026-10-06) opened from the sell wizard's Description step when Zeno's look at the ph…
 - `presentation/zeno_guide_card.dart` — A guide from Zeno - "how do I open a store?", "tips to sell faster" - as steps to follow rather than a paragraph to remember.
 - `presentation/zeno_live_overlay.dart` — Voice mode - talking to Zeno the way one talks to Siri.
 - `presentation/zeno_orb.dart` — Zeno's orb - what the user talks to in voice mode.
@@ -1177,7 +1179,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Changing a listing's price, a fee that follows it, land that isn't delivered (2026-10-05)
+- `CHANGES.md` — Zeno's listing descriptions: lines a buyer scans, and questions for the seller (2026-10-06)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

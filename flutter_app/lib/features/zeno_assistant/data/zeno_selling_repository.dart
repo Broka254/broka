@@ -13,9 +13,10 @@ class ZenoSellingRepository {
 
   final ApiClient _client;
 
-  /// The description Zeno writes from the listing's first photo
-  /// ([photoId], its upload id) and the [draft] so far.
-  Future<String> describe({
+  /// Zeno's look at the listing's first photo ([photoId], its upload id)
+  /// and the [draft] so far: the description, and what to ask the seller
+  /// for what the photo can't show. One of the plan's AI descriptions.
+  Future<ZenoDescribeTurn> describe({
     required Map<String, dynamic> draft,
     required String photoId,
     required String language,
@@ -24,12 +25,37 @@ class ZenoSellingRepository {
       'draft': draft,
       'photo_id': photoId,
       'language': language,
+      // This build asks the seller Zeno's questions: without it they come
+      // back as blank lines in the description.
+      'conversation': true,
     }, timeout: const Duration(seconds: 75));
-    final text = res is Map ? res['description'] : null;
-    if (text is! String || text.trim().isEmpty) {
+    final turn = res is Map ? ZenoDescribeTurn.fromJson(res.cast<String, dynamic>()) : null;
+    if (turn == null || (turn.description.isEmpty && turn.questions.isEmpty)) {
       throw const ApiException(502, "Zeno couldn't write that one. Please try again.");
     }
-    return text.trim();
+    return turn;
+  }
+
+  /// The seller's answer ([message]) to what Zeno asked about the
+  /// [description] it is writing. Free once the plan has descriptions.
+  Future<ZenoDescribeTurn> describeTurn({
+    required Map<String, dynamic> draft,
+    required String description,
+    required List<ZenoDescribeQuestion> questions,
+    required String message,
+    required List<Map<String, String>> history,
+    required String language,
+  }) async {
+    final res = await _client.post('/zeno/listing-draft/describe/turn', {
+      'draft': draft,
+      'description': description,
+      'questions': [for (final q in questions) q.toJson()],
+      'message': message,
+      'history': history,
+      'language': language,
+    });
+    if (res is! Map) throw const ApiException(502, 'Zeno sent back nothing usable.');
+    return ZenoDescribeTurn.fromJson(res.cast<String, dynamic>());
   }
 
   /// One turn of pricing the [draft] with Zeno. [research]: check what

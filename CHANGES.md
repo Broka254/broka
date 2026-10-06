@@ -1,3 +1,31 @@
+# Zeno's listing descriptions: lines a buyer scans, and questions for the seller (2026-10-06)
+
+Raised by the owner: the description Zeno wrote from a listing's photo read
+like a long report ("It has a RAM of 4 GB and storage of 128 GB"), and what
+the photo couldn't show was left as blanks instead of asked about.
+
+**Lines, not a report** (`api/domains/ai_broker/service.py`). The
+description is now one fact per line, `Label: value` - `RAM: 4 GB`,
+`Storage: 128 GB`, `Condition: Used - light scratches on the back` - with
+no introduction, summary or sales talk. What it covers comes from the
+fields buyers filter that category on (the Buying Agent's list from
+`categories/seed.py`) plus what buyers of that kind of item always ask.
+`selling.clean_description` strips the markdown and bullets models add.
+
+**A conversation** (`POST /zeno/listing-draft/describe/turn`,
+`lib/features/zeno_assistant/presentation/zeno_describe_screen.dart`).
+Zeno's look at the photo now also returns `questions` - the essentials it
+couldn't see (battery health, mileage, a title deed), at most five, never
+a guess. The app asks them in a chat in the Zeno screen's look; each answer
+goes back with the description so far and comes back folded in as lines.
+Those turns are text only and free once the plan has descriptions: only the
+look at the photo is counted. "Use this description" (or Back) puts it in
+the seller's box, any question still open as a blank `Label: ` line.
+
+**Older builds** don't send `conversation: true`, so their questions come
+back inside the description as blank `Label: ` lines - what those builds
+already tell the seller to fill in.
+
 # Changing a listing's price, a fee that follows it, land that isn't delivered (2026-10-05)
 
 Raised by the owner: a seller couldn't change a listing's price, though it

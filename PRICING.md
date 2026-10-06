@@ -510,7 +510,9 @@ by BROKA alone.
 
 **Zeno's selling help** (2026-10-05) is what the listing wizard offers to
 make a listing sell faster, and the wizard's own case for a plan: a
-description written from the photo (KES 0.07 a time) on every plan, and
+description written from the photo (KES 0.07 a time) on every plan - the
+seller's answers to what Zeno asks about it after that are text turns,
+not counted - and
 price checks against similar live BROKA listings (KES 0.09 a time: the
 Buying Agent's search, which is a database query, plus one model call) from
 Pro up - "pro sellers" are
@@ -567,7 +569,7 @@ builds show it as it is. Background work has nobody to show a 402 to:
 | Feature | Refused in the app | Refused in the background |
 |---|---|---|
 | AI cover | The cover step says how many tries are left and, with none, offers the plans; the gallery stays free | - |
-| Description by Zeno | The Description step's card offers the plans instead of asking; writing your own stays free | - |
+| Description by Zeno | The Description step's card offers the plans instead of asking; writing your own stays free. Answering Zeno's questions about the photo is free once a plan has it: only the look at the photo is counted | - |
 | Pricing with Zeno | The Price step's card offers Pro; the conversation itself is free once a plan has it, and only the BROKA check is counted | - |
 | Voice mode | Zeno says why, stops listening, offers the plans; typing still works | - |
 | Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |

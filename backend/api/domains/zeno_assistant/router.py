@@ -4,7 +4,8 @@ The one endpoint behind the Zeno tab, typed or spoken. See service.py for
 the turn and intents.py for what Zeno may do.
 
 And Zeno helping a seller write a listing (selling.py):
-POST /zeno/listing-draft/describe and POST /zeno/listing-draft/price/turn.
+POST /zeno/listing-draft/describe, POST /zeno/listing-draft/describe/turn
+and POST /zeno/listing-draft/price/turn.
 """
 from __future__ import annotations
 
@@ -167,6 +168,10 @@ class DescribeIn(BaseModel):
     photo_id: Optional[str] = Field(default=None, max_length=64)
     image_base64: Optional[str] = Field(default=None, max_length=_IMAGE_MAX_B64_CHARS)
     language: str = Field(default="english", max_length=20)
+    # Set by app builds that let the seller answer Zeno's questions. Older
+    # builds show only the description, so the questions come back in it
+    # as blank "Label: " lines for the seller to fill in.
+    conversation: bool = False
 
 
 @router.post("/listing-draft/describe")
@@ -175,9 +180,11 @@ async def describe_listing_draft(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Zeno writes the listing's description from its first photo. Premium:
-    each one spends one of the plan's AI descriptions (a 402 without one).
-    The seller edits the result in the description step - nothing here
+    """Zeno writes the listing's description from its first photo:
+    {"description", "reply", "questions"} - "Label: value" lines, and what
+    to ask the seller for what the photo can't show. Premium: each one
+    spends one of the plan's AI descriptions (a 402 without one). The
+    seller edits the result in the description step - nothing here
     touches a listing.
 
     Rate-limited on Zeno's per-user bucket: it is a model call."""
@@ -185,6 +192,54 @@ async def describe_listing_draft(
     return await selling.describe(
         db, current_user["id"], body.draft.model_dump(), body.language,
         photo_id=body.photo_id, image_base64=body.image_base64,
+        conversation=body.conversation,
+    )
+
+
+class DescribeQuestionIn(BaseModel):
+    label: str = Field(max_length=60)
+    question: str = Field(default="", max_length=300)
+
+
+class DescribeTurnIn(BaseModel):
+    draft: ListingDraftIn = Field(default_factory=ListingDraftIn)
+    # The description so far and what Zeno asked last - both as the
+    # previous turn returned them.
+    description: str = Field(default="", max_length=2000)
+    questions: list[DescribeQuestionIn] = Field(default_factory=list, max_length=10)
+    message: str = Field(max_length=1000)
+    history: list[dict] = Field(default_factory=list)
+    language: str = Field(default="english", max_length=20)
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _recent_history_only(cls, v):
+        return _recent_history(v)
+
+    @model_validator(mode="after")
+    def _something_to_answer(self):
+        if not self.message.strip():
+            raise ValueError("Answer Zeno, or use the description as it is.")
+        return self
+
+
+@router.post("/listing-draft/describe/turn")
+async def describe_listing_draft_turn(
+    body: DescribeTurnIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller answers what Zeno asked while writing their description:
+    {"description", "reply", "questions"} with the answer folded in. Free
+    once the plan has descriptions - only the look at the photo is counted
+    (above).
+
+    Rate-limited on Zeno's per-user bucket: it is a model call."""
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+    return await selling.describe_turn(
+        db, current_user["id"], body.draft.model_dump(), body.description,
+        [q.model_dump() for q in body.questions], body.message.strip(), body.history,
+        body.language,
     )
 
 

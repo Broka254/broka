@@ -7,6 +7,10 @@
 //     plans instead of asking the server;
 //   * with a plan, Zeno's description lands in the seller's box with the
 //     draft and the photo's id sent, and the box stays editable;
+//   * when the photo couldn't show what a buyer needs, Zeno asks first: the
+//     seller answers in a conversation, the answers go back with the
+//     description so far, and what lands in the box is the finished lines -
+//     a question skipped is a blank line to fill in, on Use or on Back;
 //   * a 402 the app didn't expect shows the server's words and the plans;
 //   * the Price step offers pricing with Zeno, marked PRO, and opens the
 //     plans without it; with Pro it opens Zeno's screen and takes back the
@@ -22,6 +26,7 @@ import 'package:broka/features/premium/data/premium_repository.dart';
 import 'package:broka/features/premium/domain/premium.dart';
 import 'package:broka/features/zeno_assistant/data/zeno_selling_repository.dart';
 import 'package:broka/features/zeno_assistant/domain/zeno_selling.dart';
+import 'package:broka/features/zeno_assistant/presentation/zeno_describe_screen.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_pricing_screen.dart';
 import 'package:broka/screens/sell_description_screen.dart';
 import 'package:broka/screens/sell_price_screen.dart';
@@ -69,27 +74,60 @@ class _FakePremium extends PremiumRepository {
   }
 }
 
-class _FakeSelling extends ZenoSellingRepository {
-  _FakeSelling({this.description = 'A clean phone.\nBattery health:', this.error, this.turns});
+const _phoneQuestions = [
+  ZenoDescribeQuestion(label: 'Battery health', question: "What's the battery health?"),
+  ZenoDescribeQuestion(label: 'RAM', question: 'How much RAM does it have?'),
+];
 
-  final String description;
+class _FakeSelling extends ZenoSellingRepository {
+  _FakeSelling({
+    this.look = const ZenoDescribeTurn(description: 'Brand: Samsung\nCondition: Clean, no scratches'),
+    this.answers = const [],
+    this.error,
+    this.turns,
+  });
+
+  /// Zeno's look at the photo.
+  final ZenoDescribeTurn look;
+
+  /// Answers for successive describeTurn calls.
+  final List<ZenoDescribeTurn> answers;
   final ApiException? error;
 
   /// Answers for successive priceTurn calls.
   final List<ZenoPriceTurn>? turns;
 
   final describeCalls = <Map<String, dynamic>>[];
+  final describeTurnCalls = <Map<String, dynamic>>[];
   final priceCalls = <Map<String, dynamic>>[];
 
   @override
-  Future<String> describe({
+  Future<ZenoDescribeTurn> describe({
     required Map<String, dynamic> draft,
     required String photoId,
     required String language,
   }) async {
     describeCalls.add({'draft': draft, 'photo_id': photoId, 'language': language});
     if (error != null) throw error!;
-    return description;
+    return look;
+  }
+
+  @override
+  Future<ZenoDescribeTurn> describeTurn({
+    required Map<String, dynamic> draft,
+    required String description,
+    required List<ZenoDescribeQuestion> questions,
+    required String message,
+    required List<Map<String, String>> history,
+    required String language,
+  }) async {
+    describeTurnCalls.add({
+      'description': description,
+      'questions': [for (final q in questions) q.label],
+      'message': message,
+      'history': history,
+    });
+    return answers[describeTurnCalls.length - 1];
   }
 
   @override
@@ -213,13 +251,65 @@ void main() {
       // What the seller had already written goes with it, so Zeno keeps it.
       expect(draft['description'], 'Bought it last year');
 
+      // Nothing to ask: the lines land straight in the box.
       expect(tester.widget<TextFormField>(find.byKey(const Key('sell-description-field')))
-          .controller?.text, 'A clean phone.\nBattery health:');
-      expect(data.description, 'A clean phone.\nBattery health:');
+          .controller?.text, 'Brand: Samsung\nCondition: Clean, no scratches');
+      expect(data.description, 'Brand: Samsung\nCondition: Clean, no scratches');
       // Still the seller's to finish.
-      await tester.enterText(find.byKey(const Key('sell-description-field')), 'A clean phone. 128GB.');
+      await tester.enterText(find.byKey(const Key('sell-description-field')), 'Brand: Samsung\nRAM: 8 GB');
       await tester.pump();
-      expect(data.description, 'A clean phone. 128GB.');
+      expect(data.description, 'Brand: Samsung\nRAM: 8 GB');
+    });
+
+    testWidgets('asks what the photo could not show, and the answers become lines', (tester) async {
+      final selling = _FakeSelling(
+        look: const ZenoDescribeTurn(
+          description: 'Brand: Samsung\nModel: Galaxy A54',
+          reply: 'A clean Galaxy A54.',
+          questions: _phoneQuestions,
+        ),
+        answers: const [
+          ZenoDescribeTurn(
+            description: 'Brand: Samsung\nModel: Galaxy A54\nBattery health: 87%\nRAM: 8 GB',
+            reply: 'Added both. Your description is ready.',
+          ),
+        ],
+      );
+      final data = _draft();
+      await _open(tester, SellDescriptionScreen(
+        data: data,
+        premium: _FakePremium(_me(plan: 'plus', descriptions: 30)),
+        selling: selling,
+        openConversation: (context, data, first) async =>
+            await Navigator.of(context).push<String>(MaterialPageRoute(
+                builder: (_) => ZenoDescribeScreen(
+                    data: data, first: first, repository: selling, animateBackground: false))) ??
+            first.withBlanks,
+      ));
+      await _tap(tester, find.byKey(const Key('sell-zeno-describe')));
+
+      // Zeno asks before anything lands in the box.
+      expect(find.byType(ZenoDescribeScreen), findsOneWidget);
+      expect(find.text('A clean Galaxy A54.'), findsOneWidget);
+      expect(find.text("1. What's the battery health?"), findsOneWidget);
+      expect(find.text('2. How much RAM does it have?'), findsOneWidget);
+      expect(find.byKey(const Key('zeno-describe-preview')), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('zeno-describe-input')), '87%, and 8GB RAM');
+      await _tap(tester, find.byKey(const Key('zeno-describe-send')));
+
+      // The answer went back with the description so far and what was asked.
+      final sent = selling.describeTurnCalls.single;
+      expect(sent['message'], '87%, and 8GB RAM');
+      expect(sent['description'], 'Brand: Samsung\nModel: Galaxy A54');
+      expect(sent['questions'], ['Battery health', 'RAM']);
+      expect((sent['history'] as List).single['content'], contains("What's the battery health?"));
+      expect(find.text('Added both. Your description is ready.'), findsOneWidget);
+
+      await _tap(tester, find.byKey(const Key('zeno-describe-use')));
+      expect(find.byType(ZenoDescribeScreen), findsNothing);
+      expect(data.description, 'Brand: Samsung\nModel: Galaxy A54\nBattery health: 87%\nRAM: 8 GB');
+      expect(find.text('Zeno wrote this from your photo. Check it before you go on.'), findsOneWidget);
     });
 
     testWidgets("a refusal the app didn't expect shows the server's words", (tester) async {
@@ -232,6 +322,65 @@ void main() {
       expect(selling.describeCalls, hasLength(1));
       expect(tester.widget<Text>(find.byKey(const Key('upsell-message'))).data,
           "You've used this month's 30 descriptions by Zeno on BROKA Plus.");
+    });
+  });
+
+  group("Zeno's description conversation", () {
+    const look = ZenoDescribeTurn(
+      description: 'Brand: Samsung\nModel: Galaxy A54',
+      reply: 'A clean Galaxy A54.',
+      questions: _phoneQuestions,
+    );
+
+    Future<String?> openAndClose(WidgetTester tester, Future<void> Function() close) async {
+      String? result;
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await Navigator.of(context).push<String>(MaterialPageRoute(
+                    builder: (_) => ZenoDescribeScreen(
+                        data: _draft(), first: look, repository: _FakeSelling(), animateBackground: false)));
+              },
+              child: const Text('describe it'),
+            ),
+          ),
+        ),
+      ));
+      await _tap(tester, find.text('describe it'));
+      await close();
+      return result;
+    }
+
+    testWidgets('a question skipped is a blank line to fill in', (tester) async {
+      final result = await openAndClose(tester, () => _tap(tester, find.byKey(const Key('zeno-describe-use'))));
+      expect(result, 'Brand: Samsung\nModel: Galaxy A54\nBattery health: \nRAM: ');
+    });
+
+    testWidgets('Back keeps what Zeno wrote', (tester) async {
+      final result = await openAndClose(tester, () async {
+        final handled = await tester.binding.handlePopRoute();
+        expect(handled, isTrue);
+        await tester.pumpAndSettle();
+      });
+      expect(result, 'Brand: Samsung\nModel: Galaxy A54\nBattery health: \nRAM: ');
+    });
+
+    test('reads the server turn', () {
+      final turn = ZenoDescribeTurn.fromJson(const {
+        'description': 'Brand: Samsung\n',
+        'reply': 'Hi',
+        'questions': [
+          {'label': 'RAM', 'question': ''},
+          {'label': ' ', 'question': 'No label, no line to fill'},
+          'junk',
+        ],
+      });
+      expect(turn.description, 'Brand: Samsung');
+      expect(turn.questions.single.question, 'RAM?');
+      expect(turn.withBlanks, 'Brand: Samsung\nRAM: ');
+      expect(const ZenoDescribeTurn(description: '').withBlanks, '');
     });
   });
 

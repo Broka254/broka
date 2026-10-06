@@ -2,7 +2,9 @@
 // app's side of backend/api/domains/zeno_assistant/selling.py.
 //
 // There is no listing yet, so the draft goes with each request: the
-// seller's own entries in the sell wizard, nothing else.
+// seller's own entries in the sell wizard, nothing else. The same holds
+// for a description Zeno is writing with the seller: the app keeps it and
+// what Zeno asked, and sends both back with each answer.
 import '../../../services/sell_wizard_data.dart';
 import '../../../utils/price_format.dart';
 
@@ -102,4 +104,56 @@ class ZenoPriceTurn {
       comparables: ZenoComparables.fromJson(json['comparables']),
     );
   }
+}
+
+/// Something Zeno needs from the seller that the photo couldn't show.
+class ZenoDescribeQuestion {
+  const ZenoDescribeQuestion({required this.label, required this.question});
+
+  /// The description line the answer fills: "Battery health".
+  final String label;
+
+  /// "What's the battery health? Settings > Battery shows it."
+  final String question;
+
+  Map<String, String> toJson() => {'label': label, 'question': question};
+}
+
+/// One turn of Zeno writing a listing's description with the seller
+/// (backend selling.describe and describe_turn).
+class ZenoDescribeTurn {
+  const ZenoDescribeTurn({required this.description, this.reply = '', this.questions = const []});
+
+  /// "Label: value" lines - what buyers will read.
+  final String description;
+
+  /// What Zeno says to the seller; the questions are shown under it.
+  final String reply;
+
+  /// What Zeno still needs to know; empty once the description has the
+  /// essentials.
+  final List<ZenoDescribeQuestion> questions;
+
+  /// The description with a blank "Label: " line for each question still
+  /// open - what goes in the seller's box when they stop answering, for
+  /// them to fill in there.
+  String get withBlanks => [
+        if (description.trim().isNotEmpty) description.trim(),
+        for (final q in questions) '${q.label}: ',
+      ].join('\n');
+
+  factory ZenoDescribeTurn.fromJson(Map<String, dynamic> json) => ZenoDescribeTurn(
+        description: (json['description'] as String? ?? '').trim(),
+        reply: (json['reply'] as String? ?? '').trim(),
+        questions: [
+          for (final q in (json['questions'] as List? ?? const []))
+            if (q is Map && q['label'] is String && (q['label'] as String).trim().isNotEmpty)
+              ZenoDescribeQuestion(
+                label: (q['label'] as String).trim(),
+                question: (q['question'] as String? ?? '').trim().isEmpty
+                    ? '${(q['label'] as String).trim()}?'
+                    : (q['question'] as String).trim(),
+              ),
+        ],
+      );
 }

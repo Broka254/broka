@@ -4,7 +4,10 @@ Run: pytest backend/tests/test_zeno_selling.py -v
 
   * POST /zeno/listing-draft/describe: a description from the first photo,
     on every plan - one AI description spent per success, given back when
-    the model fails.
+    the model fails. "Label: value" lines, and questions for what the photo
+    can't show; builds from before the questions get them as blank lines.
+  * POST /zeno/listing-draft/describe/turn: the seller answers, Zeno folds
+    the answers in - free once the plan has descriptions, and text only.
   * POST /zeno/listing-draft/price/turn: Zeno pricing the draft, Pro and
     Elite only; research=true runs the Buying Agent's search over live
     listings and spends one price check.
@@ -148,19 +151,96 @@ class TestDescribe:
 
     async def test_a_plan_gets_a_description_from_the_photo(self, client, premium_on, monkeypatch):
         prompts, images = [], []
-        _model(monkeypatch, raw="**Samsung Galaxy A54** in clean condition.\nBattery health: ",
-               prompts=prompts, images=images)
+        _model(monkeypatch, raw=json.dumps({
+            "reply": "A clean Galaxy A54.",
+            "description": "**Brand:** Samsung\n- Model: Galaxy A54\n- Storage : 128 GB\n"
+                           "Condition: Used - light scratches on the back",
+            "questions": [{"label": "Battery health", "question": "What's the battery health?"}],
+        }), prompts=prompts, images=images)
         _, headers = await _user("plus")
         r = await client.post("/zeno/listing-draft/describe", headers=headers,
                               json={"draft": {**DRAFT, "description": "Barely used"},
-                                    "image_base64": _photo_b64()})
+                                    "image_base64": _photo_b64(), "conversation": True})
         assert r.status_code == 200, r.text
-        assert r.json()["description"] == "Samsung Galaxy A54 in clean condition.\nBattery health:"
+        body = r.json()
+        # Lines a buyer scans, with the model's markdown and bullets gone.
+        assert body["description"] == ("Brand: Samsung\nModel: Galaxy A54\nStorage: 128 GB\n"
+                                       "Condition: Used - light scratches on the back")
+        assert body["questions"] == [{"label": "Battery health", "question": "What's the battery health?"}]
+        assert body["reply"] == "A clean Galaxy A54."
         # The photo went to a model that must see it, and the seller's own
         # words went with it.
         assert images[0][0] and images[0][1] is True
         assert "Samsung Galaxy A54" in prompts[0] and "Barely used" in prompts[0]
         assert await _used(client, headers, "ai_descriptions") == 1
+
+    async def test_it_asks_for_lines_not_a_report(self, client, premium_on, monkeypatch):
+        """The seller's complaint (2026-10-06): "It has a RAM of 4 GB and
+        storage of 128 GB" reads like a report - a buyer wants "RAM: 4 GB".
+        And it asks for what buyers of this kind of item filter on."""
+        prompts = []
+        _model(monkeypatch, raw=json.dumps({"description": "Brand: Samsung", "questions": []}),
+               prompts=prompts)
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe", headers=headers,
+                              json={"draft": {**DRAFT, "subcategory": "Phones"},
+                                    "image_base64": _photo_b64(), "conversation": True})
+        assert r.status_code == 200, r.text
+        assert '"RAM: 4 GB", not "It has a RAM of 4 GB"' in prompts[0]
+        assert "No introduction, summary paragraph" in prompts[0]
+        # The phone's own fields, from the same list the wizard asked in.
+        assert "battery health" in prompts[0] and "ram" in prompts[0]
+        assert '"questions"' in prompts[0]
+        assert r.json()["questions"] == [] and r.json()["reply"]
+
+    async def test_it_does_not_ask_for_what_it_wrote_and_asks_for_what_it_left_blank(
+            self, client, premium_on, monkeypatch):
+        _model(monkeypatch, raw=json.dumps({
+            "description": "Storage: 128 GB\nRAM:\nOpen 8:00-17:00",
+            "questions": [{"label": "Storage", "question": "How much storage?"}] +
+                         [{"label": f"Thing {i}", "question": f"Thing {i}?"} for i in range(8)],
+        }))
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe", headers=headers,
+                              json={"draft": DRAFT, "image_base64": _photo_b64(), "conversation": True})
+        body = r.json()
+        # A colon inside a value is not a label.
+        assert body["description"] == "Storage: 128 GB\nOpen 8:00-17:00"
+        labels = [q["label"] for q in body["questions"]]
+        assert "Storage" not in labels
+        assert len(labels) == 5 and "Thing 0" in labels
+
+    async def test_an_older_build_gets_the_questions_as_lines_to_fill(self, client, premium_on, monkeypatch):
+        """A build from before the conversation shows only the description,
+        and tells the seller to fill in what Zeno left blank."""
+        _model(monkeypatch, raw=json.dumps({
+            "description": "Brand: Samsung",
+            "questions": [{"label": "Battery health", "question": "What's the battery health?"},
+                          {"label": "RAM", "question": "How much RAM?"}],
+        }))
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe", headers=headers,
+                              json={"draft": DRAFT, "image_base64": _photo_b64()})
+        assert r.status_code == 200, r.text
+        assert r.json()["description"] == "Brand: Samsung\nBattery health: \nRAM: "
+
+    async def test_prose_is_still_a_description(self, client, premium_on, monkeypatch):
+        _model(monkeypatch, raw="**Samsung Galaxy A54** in clean condition.\nBattery health: ")
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe", headers=headers,
+                              json={"draft": DRAFT, "image_base64": _photo_b64(), "conversation": True})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["description"] == "Samsung Galaxy A54 in clean condition."
+        assert body["questions"] == [{"label": "Battery health", "question": "Battery health?"}]
+
+    async def test_nothing_usable_gives_the_description_back(self, client, premium_on, monkeypatch):
+        _model(monkeypatch, raw=json.dumps({"reply": "Hmm.", "description": "", "questions": []}))
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe", headers=headers,
+                              json={"draft": DRAFT, "image_base64": _photo_b64(), "conversation": True})
+        assert r.status_code == 502
+        assert await _used(client, headers, "ai_descriptions") == 0
 
     async def test_a_failed_model_gives_the_description_back(self, client, premium_on, monkeypatch):
         _model(monkeypatch, fail=True)
@@ -192,6 +272,75 @@ class TestDescribe:
         with pytest.raises(HTTPException) as exc:
             await svc.write_listing_description("aGk=", ["Title: x"], "", "English")
         assert exc.value.status_code == 503
+
+
+TURN = {
+    "draft": DRAFT,
+    "description": "Brand: Samsung\nModel: Galaxy A54",
+    "questions": [{"label": "Battery health", "question": "What's the battery health?"},
+                  {"label": "RAM", "question": "How much RAM?"}],
+    "message": "Battery is 87%, RAM I don't know",
+    "history": [{"role": "assistant", "content": "A clean Galaxy A54."}],
+}
+
+
+class TestDescribeTurn:
+    async def test_the_answers_go_in_as_lines_for_free(self, client, premium_on, monkeypatch):
+        prompts, images = [], []
+        _model(monkeypatch, prompts=prompts, images=images, raw=json.dumps({
+            "reply": "Added the battery health. That covers it.",
+            "description": "Brand: Samsung\nModel: Galaxy A54\nBattery health: 87%",
+            "questions": [],
+        }))
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe/turn", headers=headers, json=TURN)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["description"] == "Brand: Samsung\nModel: Galaxy A54\nBattery health: 87%"
+        assert body["questions"] == [] and body["reply"].startswith("Added the battery health")
+        # Zeno read the description so far, what it asked and the answer -
+        # and no photo: the answer is the seller's, not something to see.
+        assert "Model: Galaxy A54" in prompts[0]
+        assert "Battery health: What's the battery health?" in prompts[0]
+        assert "Battery is 87%, RAM I don't know" in prompts[0]
+        assert images[0] == (None, False)
+        assert await _used(client, headers, "ai_descriptions") == 0
+
+    async def test_a_spent_month_still_finishes_the_description(self, client, premium_on, monkeypatch):
+        _model(monkeypatch, raw=json.dumps({"description": "Brand: Samsung", "questions": []}))
+        me, headers = await _user("plus")
+        from api.domains.premium import entitlements
+        async with AsyncSessionLocal() as db:
+            await entitlements.consume(db, me.id, entitlements.Feature.AI_DESCRIPTION,
+                                       n=plans.PREMIUM_BY_ID["plus"].ai_descriptions)
+            await db.commit()
+        r = await client.post("/zeno/listing-draft/describe/turn", headers=headers, json=TURN)
+        assert r.status_code == 200, r.text
+
+    async def test_without_a_plan_it_is_refused(self, client, premium_on, monkeypatch):
+        _model(monkeypatch, raw="should not be called", fail=True)
+        _, headers = await _user()
+        r = await client.post("/zeno/listing-draft/describe/turn", headers=headers, json=TURN)
+        assert r.status_code == 402
+
+    async def test_a_lost_model_keeps_the_description(self, client, premium_on, monkeypatch):
+        """A model that answers in prose must not replace the seller's
+        description with whatever it said."""
+        _model(monkeypatch, raw="Sorry, could you say that again?")
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe/turn", headers=headers, json=TURN)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["description"] == TURN["description"]
+        assert [q["label"] for q in body["questions"]] == ["Battery health", "RAM"]
+        assert body["reply"] == "Sorry, could you say that again?"
+
+    async def test_an_answer_needs_words(self, client, premium_on, monkeypatch):
+        _model(monkeypatch, raw="{}")
+        _, headers = await _user("plus")
+        r = await client.post("/zeno/listing-draft/describe/turn", headers=headers,
+                              json={**TURN, "message": "  "})
+        assert r.status_code == 422
 
 
 class TestPrice:

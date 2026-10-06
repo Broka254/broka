@@ -131,6 +131,89 @@ def _clip(text, limit: int) -> str:
     return s if len(s) <= limit else s[:limit]
 
 
+# ── Listing descriptions (write_listing_description) ─────────────────────────
+#
+# How Zeno lays a listing's description out (2026-10-06). Sellers asked for
+# what a buyer scans, not a report: "RAM: 4 GB", never "It has a RAM of 4 GB".
+# Shared by the first draft and the turns that fold the seller's answers in,
+# so the description keeps one shape through the conversation.
+_DESCRIPTION_FORMAT = (
+    "FORMAT of the description - a buyer scans it in seconds:\n"
+    "- One fact per line, written \"Label: value\", e.g. \"Brand: Samsung\", \"RAM: 4 GB\", "
+    "\"Storage: 128 GB\", \"Battery health: 87%\", \"Condition: Used - light scratches on "
+    "the back\", \"Included: charger and box\".\n"
+    "- Values are a few words, never sentences: \"RAM: 4 GB\", not \"It has a RAM of 4 GB\".\n"
+    "- No introduction, summary paragraph, sales talk or closing line.\n"
+    "- What it is first (brand, model, type), then the key specs, then its condition, then "
+    "what's included and anything else a buyer must know. At most 15 lines.\n"
+    "- No phone numbers, links, prices, emoji, hashtags, bullets or markdown.\n"
+)
+
+_DESCRIPTION_QUESTIONS = (
+    "QUESTIONS for the seller:\n"
+    "- A fact a buyer of this kind of item needs before deciding (battery health, RAM, "
+    "mileage, size, title deed...) that neither the photo nor the seller has given you is a "
+    "question - never a guess, and never a blank line in the description.\n"
+    "- Essentials only, most important first, at most 5. Never ask for what you already know.\n"
+    "- Each has a label - the description line its answer fills, e.g. \"Battery health\" - "
+    "and a short, friendly question, e.g. \"What's the battery health? Settings > Battery "
+    "shows it.\"\n"
+    "- Nothing essential missing: questions is [].\n"
+)
+
+_DESCRIPTION_JSON = (
+    "Respond with JSON only, no markdown fences:\n"
+    '{"reply": "<to the seller>", "description": "<the lines, separated by \\n>", '
+    '"questions": [{"label": "<label>", "question": "<question>"}]}'
+)
+
+
+def _essentials_hint(essentials) -> str:
+    """The details buyers filter this category on - the same vocabulary the
+    sell wizard asked the seller in (categories/seed.py), so Zeno asks for
+    RAM on a phone and mileage on a car rather than "any other details?"."""
+    names = [str(e).replace("_", " ") for e in essentials or () if e]
+    if not names:
+        return ""
+    return (
+        f"Buyers filter this category on: {', '.join(names)}. Cover those, and whatever else a "
+        "buyer of this kind of item always asks (a phone: screen and body condition, what's in "
+        "the box; a car: year, mileage, engine, logbook, service history; land: size, title "
+        "deed, road access, water and power; clothes: size, material, colour).\n"
+    )
+
+
+def _description_turn(raw: str, prose_is: str) -> dict:
+    """{"reply", "description", "questions"} from the model's JSON. A model
+    that answered in prose instead gave either the description (the first
+    look, prose_is="description" - what this feature returned before it
+    asked anything) or its reply (a later turn, where its words must not
+    replace the description the seller has built up)."""
+    raw = (raw or "").strip()
+    try:
+        parsed = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+        if not isinstance(parsed, dict):
+            raise ValueError("not an object")
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("[ai_broker] listing description returned no usable JSON - using it as prose")
+        if prose_is == "description":
+            return {"reply": "", "description": raw, "questions": []}
+        return {"reply": raw, "description": None, "questions": None}
+    description = parsed.get("description")
+    # Models hand the lines back as a list, or as an object of label to
+    # value, now and then: both are still the lines.
+    if isinstance(description, dict):
+        description = "\n".join(f"{k}: {v}" for k, v in description.items())
+    elif isinstance(description, list):
+        description = "\n".join(str(line) for line in description)
+    questions = parsed.get("questions")
+    return {
+        "reply": str(parsed.get("reply") or "").strip(),
+        "description": str(description or "").strip(),
+        "questions": questions if isinstance(questions, list) else [],
+    }
+
+
 async def _cache_get(key: str) -> Optional[str]:
     try:
         if not settings.redis_enabled:
@@ -824,49 +907,117 @@ class AIBrokerService:
         details: list[str],
         existing: str,
         language_instruction: str,
-    ) -> str:
-        """A buyer-facing description of the item in [image_base64], the
-        seller's first listing photo (a prepared JPEG, core/vision.py).
+        essentials: list[str] = (),
+    ) -> dict:
+        """Zeno's first look at the item in [image_base64], the seller's
+        first listing photo (a prepared JPEG, core/vision.py): the
+        description buyers will read, as "Label: value" lines, and what to
+        ask the seller for what the photo can't show.
 
         [details] is what the seller already told the wizard (title,
         category, condition, category details) and [existing] whatever they
         had written - the seller's own words about their own item, so they
-        go into the prompt as given. Only a model that can see the photo
-        writes it (require_sight): the seller posts this as theirs, and a
-        description guessed from the title is one they could be held to in
-        a "not as described" dispute.
+        go into the prompt as given. [essentials] are the details buyers
+        filter this category on (categories/seed.py). Only a model that can
+        see the photo writes it (require_sight): the seller posts this as
+        theirs, and a description guessed from the title is one they could
+        be held to in a "not as described" dispute.
 
-        Returns plain text, or "" when the model returned nothing usable.
+        Returns {"reply", "description", "questions"} raw, for the caller
+        to clean (zeno_assistant/selling.py); a model that answered in prose
+        has written the description and asked nothing.
         """
         known = "\n".join(f"- {d}" for d in details) or "- (nothing yet)"
         prompt = (
             "You are Zeno, the AI assistant inside BROKA, an East African marketplace. A seller "
             "is listing the item in this photo. Write the description buyers will read on the "
-            "listing - in the seller's voice (\"I\", not \"the seller\"), honest and specific, so "
-            "a buyer can decide without messaging to ask the basics.\n\n"
+            "listing, and ask the seller for what a buyer needs to know that the photo can't "
+            "show you.\n\n"
             f"What the seller told BROKA about it:\n{known}\n"
-            + (f"What the seller has written so far (keep every fact in it; improve the wording):\n"
+            + (f"What the seller has written so far (keep every fact in it, as lines):\n"
                f"\"{_clip(existing, 1500)}\"\n" if existing.strip() else "")
-            + "\nRULES:\n"
-            "- Describe only what the photo shows and what the seller said: the item, its visible "
-            "condition (marks, wear, or that it looks clean), and what is visibly included.\n"
-            "- Never invent specs, model numbers, sizes, age, warranty, accessories or a reason for "
-            "selling. Anything a buyer will ask that the photo can't show (battery health, "
-            "mileage, size, what's in the box...) goes on its own line ending in \": \" for the "
-            "seller to fill in, e.g. \"Battery health: \".\n"
-            "- No phone numbers, links, prices, emoji, hashtags or markdown.\n"
-            "- 50-120 words: a sentence or two on what it is and its condition, then short lines "
-            "of key facts.\n"
-            f"LANGUAGE: {language_instruction}\n\n"
-            "Reply with the description only."
+            + _essentials_hint(essentials)
+            + "\nWHAT GOES IN:\n"
+            "- Only what the photo shows and what the seller said: the item, its visible "
+            "condition (marks, wear, or that it looks clean), what is visibly included.\n"
+            "- A brand or model only when the seller said it or it is plainly readable in the "
+            "photo. Never invent specs, model numbers, sizes, age, warranty, accessories or a "
+            "reason for selling - ask for them.\n\n"
+            + _DESCRIPTION_FORMAT + "\n" + _DESCRIPTION_QUESTIONS + "\n"
+            "reply: one or two short, friendly sentences to the seller - what you made of the "
+            "photo and, if you have questions, that you need a few details buyers will ask "
+            "about. Don't repeat the questions: the app shows them under your reply.\n"
+            f"LANGUAGE: {language_instruction} The labels too.\n\n"
+            + _DESCRIPTION_JSON
         )
         raw = await self._call_ai([{"role": "user", "content": prompt}], cache_key=None,
                                   image_base64=image_base64, require_sight=True)
-        text = (raw or "").strip().strip('"').strip()
-        # Models wrap prose in fences or bold now and then; a listing shows
-        # them as literal asterisks.
-        text = text.replace("```", "").replace("**", "").replace("__", "").strip()
-        return text
+        return _description_turn(raw, prose_is="description")
+
+    async def continue_listing_description(
+        self,
+        details: list[str],
+        description: str,
+        questions: list[dict],
+        message: str,
+        history: list[dict],
+        language_instruction: str,
+        essentials: list[str] = (),
+    ) -> dict:
+        """One turn of the seller answering what Zeno asked while writing
+        their description (write_listing_description): their answers folded
+        in as lines, and what is still missing asked again.
+
+        Text only: what the photo showed is in [description] already, and
+        what this turn adds is the seller's own answer - no model needs to
+        see the photo again for it. [description], [questions] and
+        [message] are the seller's own draft and words, so they go in as
+        given.
+
+        Returns {"reply", "description", "questions"} raw, as above; from a
+        model that answered in prose, its words are the reply and the
+        description and questions are None - kept as they were, not
+        replaced by whatever it said.
+        """
+        known = "\n".join(f"- {d}" for d in details) or "- (nothing yet)"
+        asked = "\n".join(
+            f"- {_clip(q.get('label'), 60)}: {_clip(q.get('question'), 300)}"
+            for q in questions if isinstance(q, dict)
+        ) or "(none)"
+        transcript = "\n".join(
+            f"{'Seller' if h.get('role') == 'user' else 'Zeno'}: "
+            f"{_clip(h.get('content', ''), _HISTORY_ENTRY_MAX_CHARS)}"
+            for h in history[-12:]
+            if isinstance(h, dict)
+        ) or "(nothing yet)"
+        prompt = (
+            "You are Zeno, the AI assistant inside BROKA, an East African marketplace. You are "
+            "writing a listing's description with the seller: you wrote it from their photo and "
+            "asked them for what the photo couldn't show. They have answered.\n\n"
+            f"What the seller told BROKA about the item:\n{known}\n"
+            + _essentials_hint(essentials)
+            + f"\nTHE DESCRIPTION SO FAR:\n{_clip(description, 2000).strip() or '(empty)'}\n\n"
+            f"WHAT YOU ASKED THEM (still open):\n{asked}\n\n"
+            f"Conversation so far:\n{transcript}\n\n"
+            f"Seller's newest message: \"{_clip(message, 1000)}\"\n\n"
+            "WHAT TO DO:\n"
+            "- Put every fact in their message into the description as its own line: an answer "
+            "fills its question's label, and anything else they tell you about the item goes in "
+            "too.\n"
+            "- Keep every line already there unless they correct it.\n"
+            "- An answered question is no longer open. One they can't or won't answer (\"I don't "
+            "know\", \"skip\") is dropped: never ask it again, never write a guess for it.\n"
+            "- questions lists every question still open, plus a new one only when an answer "
+            "raises something essential (\"it has a crack\" - where?).\n\n"
+            + _DESCRIPTION_FORMAT + "\n" + _DESCRIPTION_QUESTIONS + "\n"
+            "reply: one short, friendly sentence - what you added and, if questions are left, "
+            "that a few remain. Don't repeat the questions: the app shows them under your "
+            "reply. When none are left, say the description is ready to use.\n"
+            f"LANGUAGE: {language_instruction} The labels too.\n\n"
+            + _DESCRIPTION_JSON
+        )
+        raw = await self._call_ai([{"role": "user", "content": prompt}], cache_key=None)
+        return _description_turn(raw, prose_is="reply")
 
     async def price_listing(
         self,

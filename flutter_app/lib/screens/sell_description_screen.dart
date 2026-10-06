@@ -13,6 +13,11 @@
 // message to ask the basics. Without a plan the card opens the plans;
 // writing your own stays free. What Zeno writes lands in the box below,
 // for the seller to check and finish - nothing is posted from here.
+//
+// As lines a buyer scans, and as a conversation (2026-10-06): Zeno writes
+// "RAM: 4 GB", not "It has a RAM of 4 GB", and when the photo can't show
+// what a buyer needs to know it asks the seller (zeno_describe_screen.dart)
+// before the description lands here.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/network/api_client.dart';
@@ -22,6 +27,7 @@ import '../features/premium/domain/premium.dart';
 import '../features/premium/presentation/premium_upsell.dart';
 import '../features/zeno_assistant/data/zeno_selling_repository.dart';
 import '../features/zeno_assistant/domain/zeno_selling.dart';
+import '../features/zeno_assistant/presentation/zeno_describe_screen.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/photo_upload_tracker.dart';
@@ -37,7 +43,14 @@ class SellDescriptionScreen extends StatefulWidget {
   final ZenoSellingRepository? selling;
   final PremiumRepository? premium;
 
-  const SellDescriptionScreen({super.key, required this.data, this.selling, this.premium});
+  /// Opens the conversation in which the seller answers Zeno's questions;
+  /// resolves to the description for the box. ZenoDescribeScreen.open
+  /// unless a test says otherwise.
+  final Future<String> Function(BuildContext context, SellWizardData data, ZenoDescribeTurn first)?
+      openConversation;
+
+  const SellDescriptionScreen(
+      {super.key, required this.data, this.selling, this.premium, this.openConversation});
   @override
   State<SellDescriptionScreen> createState() => _SellDescriptionScreenState();
 }
@@ -112,20 +125,31 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
       final ids = await _data.photoUploads.idsFor([_data.verifiedPhotos.first]);
       // What the seller already wrote goes with it: Zeno keeps its facts.
       _data.description = _descCtrl.text.trim();
-      final text = await (widget.selling ?? zenoSellingRepository).describe(
+      final turn = await (widget.selling ?? zenoSellingRepository).describe(
         draft: zenoListingDraft(_data),
         photoId: ids.first,
         language: ApiService.currentUserLanguage,
       );
       if (!mounted) return;
+      if (_premium?.enabled ?? false) unawaited(_loadPremium());
+      var text = turn.description;
+      if (turn.questions.isNotEmpty) {
+        // The photo couldn't show it all: the seller answers Zeno first.
+        // The card stops spinning - Zeno is waiting on them now.
+        setState(() => _writing = false);
+        text = await (widget.openConversation ?? ZenoDescribeScreen.open)(context, _data, turn);
+        if (!mounted) return;
+      }
       _descCtrl.text = text;
       _descCtrl.selection = TextSelection.collapsed(offset: text.length);
       _onChanged(text);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Zeno wrote this from your photo. Check it, and fill in anything it left blank.'),
+      final blanks = text.split('\n').any((l) => l.trimRight().endsWith(':'));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(blanks
+            ? 'Zeno wrote this from your photo. Check it, and fill in the blank lines.'
+            : 'Zeno wrote this from your photo. Check it before you go on.'),
         behavior: SnackBarBehavior.floating,
       ));
-      if (_premium?.enabled ?? false) unawaited(_loadPremium());
     } on PhotoUploadIncomplete {
       if (mounted) {
         setState(() => _error = "Your photo hasn't finished uploading. Check your connection and try again.");

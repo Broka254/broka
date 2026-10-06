@@ -4,9 +4,12 @@ Two things the sell wizard offers to make a listing sell faster, both
 premium (PRICING.md section 4, entitlements.py):
 
   * DESCRIBE (every plan): Zeno writes the description from the listing's
-    first photo and what the seller has entered. The seller reads and edits
-    it before it goes anywhere - it lands in their description box, not on
-    a listing.
+    first photo and what the seller has entered - "Label: value" lines a
+    buyer scans, not a report - and asks the seller for the essentials the
+    photo can't show (battery health, mileage, title deed). The seller
+    answers in a short conversation (describe_turn), which is free: only
+    the look at the photo is counted. They read and edit the result before
+    it goes anywhere - it lands in their description box, not on a listing.
   * PRICE (Pro and Elite): a conversation in the Zeno screen about what to
     ask, and - when the seller taps for it - a check of what similar live
     listings on BROKA ask, found with the Buying Agent's search
@@ -25,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import statistics
 from typing import Optional
 
@@ -49,6 +53,12 @@ MIN_COMPARABLE_SCORE = 0.5
 MAX_COMPARABLES = 8
 
 _TITLE_MAX = 60
+
+# What Zeno asks the seller at a time, at most: more than a handful reads
+# as a form, not a conversation.
+MAX_QUESTIONS = 5
+_LABEL_MAX = 40
+_QUESTION_MAX = 160
 
 
 def _one_line(value, limit: int) -> str:
@@ -84,6 +94,93 @@ def draft_lines(draft: dict) -> list[str]:
 
 # ── Describe ─────────────────────────────────────────────────────────────────
 
+# A bullet or a number a model put in front of a line - "- RAM: 4 GB",
+# "2) Storage: 128 GB". Needs the space after it, so "1.5 acres" stays.
+_BULLET = re.compile(r"^\s*(?:[-*\u2022\u00b7\u2013]+|\d{1,2}[.)])\s+")
+# "Label: value" - a short label, so a sentence with a colon in it is not
+# taken for one, and a colon with a space after it, so "Open 8:00-17:00"
+# is not rewritten as "Open 8: 00-17:00".
+_LABELLED = re.compile(r"^([^:]{1,%d}?)\s*:(?=\s|$)\s*(.*)$" % _LABEL_MAX)
+
+
+def clean_description(text: str) -> tuple[str, list[str]]:
+    """The model's description as plain lines - and the labels it left
+    blank ("Battery health:"), which are questions it should have asked.
+
+    Models wrap text in fences or bold now and then, and bullet the lines;
+    a listing shows all of that as literal characters."""
+    text = (text or "").replace("```", "").replace("**", "").replace("__", "").strip().strip('"')
+    lines, blanks = [], []
+    for raw in text.splitlines():
+        line = " ".join(_BULLET.sub("", raw).split())
+        if not line:
+            continue
+        labelled = _LABELLED.match(line)
+        if labelled:
+            label, value = labelled.group(1).strip(), labelled.group(2).strip()
+            if not value:
+                blanks.append(label)
+                continue
+            line = f"{label}: {value}"
+        lines.append(line)
+    return "\n".join(lines), blanks
+
+
+def _labels_in(description: str) -> set[str]:
+    return {
+        m.group(1).strip().lower()
+        for m in map(_LABELLED.match, description.splitlines()) if m
+    }
+
+
+def clean_questions(raw, description: str, blanks: list[str] = ()) -> list[dict]:
+    """At most MAX_QUESTIONS {"label", "question"}: one per label, none for
+    a line the description already fills (a model asks for what it has just
+    written down now and then). A label left blank in the description is
+    asked about instead."""
+    filled = _labels_in(description)
+    candidates = list(raw or []) + [{"label": b} for b in blanks]
+    out, seen = [], set()
+    for q in candidates:
+        if not isinstance(q, dict):
+            continue
+        label = _one_line(q.get("label"), _LABEL_MAX).rstrip(":").strip()
+        if not label or label.lower() in seen or label.lower() in filled:
+            continue
+        seen.add(label.lower())
+        out.append({"label": label, "question": _one_line(q.get("question"), _QUESTION_MAX) or f"{label}?"})
+    return out[:MAX_QUESTIONS]
+
+
+def with_blanks(description: str, questions: list[dict]) -> str:
+    """The description with a blank "Label: " line for each open question,
+    for the seller to fill in the description box."""
+    blanks = [f"{q['label']}: " for q in questions]
+    return "\n".join([description, *blanks] if description else blanks)
+
+
+def _default_reply(questions: list[dict], first_look: bool) -> str:
+    if first_look:
+        return ("Here's what I could tell from your photo. A few things buyers will ask "
+                "that a photo can't show:" if questions else
+                "Here's your description. Check it before you post.")
+    return "Got it. A few things are still open:" if questions else "Got it - your description is ready."
+
+
+def _essentials(draft: dict) -> list[str]:
+    """The details buyers filter the draft's category on, as the sell wizard
+    asked for them - the Buying Agent's list (buy_agent/conversation.py)."""
+    from api.domains.buy_agent.conversation import _attribute_hints
+
+    return _attribute_hints(draft.get("category"), draft.get("subcategory"))
+
+
+def _details(draft: dict) -> list[str]:
+    # Not the price: a description with a price in it goes stale the first
+    # time the seller changes their mind.
+    return draft_lines({**draft, "description": None, "asking_price": None})
+
+
 async def _photo_from_asset(db: AsyncSession, user_id: str, photo_id: str) -> str:
     """The seller's uploaded listing photo as raw base64 JPEG at the medium
     size (960px) - what a model reads, and what core/vision.py would make of
@@ -114,9 +211,17 @@ async def describe(
     language: str,
     photo_id: Optional[str] = None,
     image_base64: Optional[str] = None,
+    conversation: bool = False,
 ) -> dict:
-    """{"description": str} written from the draft's photo, spending one of
-    the plan's AI descriptions - given back if no description came of it."""
+    """{"description", "reply", "questions"} from Zeno's look at the draft's
+    photo, spending one of the plan's AI descriptions - given back if
+    nothing came of it.
+
+    questions are [{"label", "question"}] for what a buyer needs that the
+    photo couldn't show; the seller answers them in describe_turn. An app
+    build from before that conversation (conversation=False) shows only
+    the description, so they come back in it as blank "Label: " lines -
+    what those builds tell the seller to fill in."""
     from api.core.vision import ImageRejected, prepare_for_model
     from api.domains.ai_broker.service import AIBrokerService
     from api.routers.negotiate import _language_instruction  # router module; imported late
@@ -134,22 +239,73 @@ async def describe(
 
     await entitlements.consume(db, user_id, entitlements.Feature.AI_DESCRIPTION)
     try:
-        # Not the price: a description with a price in it goes stale the
-        # first time the seller changes their mind.
-        details = draft_lines({**draft, "description": None, "asking_price": None})
-        text = await AIBrokerService().write_listing_description(
+        turn = await AIBrokerService().write_listing_description(
             image_base64=image,
-            details=details,
+            details=_details(draft),
             existing=str(draft.get("description") or ""),
             language_instruction=_language_instruction(language),
+            essentials=_essentials(draft),
         )
     except Exception:
         await entitlements.release(db, user_id, entitlements.Feature.AI_DESCRIPTION)
         raise
-    if not text:
+    description, blanks = clean_description(turn.get("description"))
+    questions = clean_questions(turn.get("questions"), description, blanks)
+    if not description and not questions:
         await entitlements.release(db, user_id, entitlements.Feature.AI_DESCRIPTION)
         raise HTTPException(status_code=502, detail="Zeno couldn't write that one. Please try again.")
-    return {"description": text[:MAX_DESCRIPTION_LEN]}
+    if not conversation:
+        description = with_blanks(description, questions)
+    return {
+        "description": description[:MAX_DESCRIPTION_LEN],
+        "reply": turn.get("reply") or _default_reply(questions, first_look=True),
+        "questions": questions,
+    }
+
+
+async def describe_turn(
+    db: AsyncSession,
+    user_id: str,
+    draft: dict,
+    description: str,
+    questions: list[dict],
+    message: str,
+    history: list[dict],
+    language: str,
+) -> dict:
+    """One turn of the seller answering what Zeno asked about their item:
+    {"description", "reply", "questions"} with the answer folded in and
+    what is still open.
+
+    Free once the plan has descriptions (require, not consume): the photo
+    was counted on the first look, and this is a typed Zeno turn about it,
+    as the pricing conversation's are. A month spent on that last
+    description still finishes it."""
+    from api.domains.ai_broker.service import AIBrokerService
+    from api.routers.negotiate import _language_instruction  # router module; imported late
+
+    await entitlements.require(db, user_id, entitlements.Feature.AI_DESCRIPTION)
+    before, _blanks = clean_description(description)
+    turn = await AIBrokerService().continue_listing_description(
+        details=_details(draft),
+        description=before,
+        questions=questions,
+        message=message,
+        history=history,
+        language_instruction=_language_instruction(language),
+        essentials=_essentials(draft),
+    )
+    after, blanks = clean_description(turn.get("description"))
+    # A model that lost the thread (prose, or no lines at all) must not
+    # take the seller's description with it: what they had stands.
+    after = after or before
+    still_open = turn.get("questions")
+    still_open = clean_questions(questions if still_open is None else still_open, after, blanks)
+    return {
+        "description": after[:MAX_DESCRIPTION_LEN],
+        "reply": turn.get("reply") or _default_reply(still_open, first_look=False),
+        "questions": still_open,
+    }
 
 
 # ── Price ────────────────────────────────────────────────────────────────────
