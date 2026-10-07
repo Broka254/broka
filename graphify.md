@@ -53,14 +53,14 @@ Where things usually are:
 
 ## Backend endpoints
 
-207 endpoints served by `backend/main.py`. **Auth** is read from each
+210 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 57, token 4, user 124.
+Counts: admin 20, optional 2, public 58, token 4, user 126.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:459) |
+| GET | `/` | public | `root` (backend/main.py:466) |
 | GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:136) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:224) |
 | POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:204) |
@@ -115,14 +115,17 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:830) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:453) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:639) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1240) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:428) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:390) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:929) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:616) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:996) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1421) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:527) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:769) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1522) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:460) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:422) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:512) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1095) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:707) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:684) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -160,7 +163,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 | GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:140) |
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:134) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:416) |
-| GET | `/health` | public | `health` (backend/main.py:487) |
+| GET | `/health` | public | `health` (backend/main.py:494) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:184) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:242) |
 | GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:787) |
@@ -179,7 +182,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1011) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1023) |
-| GET | `/live` | public | `live` (backend/main.py:543) |
+| GET | `/live` | public | `live` (backend/main.py:550) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
@@ -227,7 +230,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 | GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:142) |
 | GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:171) |
 | GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:148) |
-| GET | `/ready` | public | `ready` (backend/main.py:493) |
+| GET | `/ready` | public | `ready` (backend/main.py:500) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:30) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:64) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:45) |
@@ -456,6 +459,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 - `interest_arming.py` — Arms the seller availability nudge from the buyer's own messages.
 - `ledger.py`
 - `media_storage.py` — Where image bytes live: Cloudflare R2, or the database as a fallback.
+- `message_push.py` — Push every chat message to the person it is for, app open or not.
 - `migrations_guide.py` — ⚠️ STATUS AS OF THIS HARDENING PASS (2026-09) — READ THIS FIRST ⚠️
 - `money.py` — Monetary arithmetic that does not drift.
 - `mpesa_stk.py` — M-Pesa Express (STK push) for money that is BROKA's own: listing fees and premium plans.
@@ -466,6 +470,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 - `permissions.py` — BROKA - Fine-Grained Permission System Moves beyond simple buyer/seller/admin roles to granular capability flags.
 - `presence.py` — Shared "online / last seen" presence formatting.
 - `push.py` — BROKA v3.0 - FCM Push Notification Service
+- `push_devices.py` — Pushing to every phone a user is signed in on.
 - `push_subscribers.py` — BROKA v3.0 - Push Notification Event Subscribers
 - `rate_limit.py` — BROKA v3.0 - Rate Limiter (issue #3 fixed — Redis-backed for multi-instance)
 - `reconciliation.py` — BROKA - Reconciliation alerts
@@ -495,6 +500,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 - `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
 - `media.py` — Image assets - one uploaded image, stored as a few resized WebP files.
 - `payment.py` — FeaturedPayment and VerificationPayment models — re-exported from api.database (duplicate-table fix, see models/user.py).
+- `push_device.py` — Push devices - every phone a user is signed in on.
 - `review.py` — Review model — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `store.py` — BROKA - Store Model
 - `subscription.py` — Premium subscriptions: who has which plan until when, what they paid, and how much of each monthly allowance they have used.
@@ -506,7 +512,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 - `admin.py` — ⚠️ NOT MOUNTED — LEGACY / DEAD CODE (verified during Store hardening pass, 2026-09: never imported in main.py).
 - `auction.py` — BROKA - Auction Router: place bids, leaderboard ranking.
 - `auth.py` — ⚠️ NOT MOUNTED — LEGACY / DEAD CODE (verified during Store hardening pass, 2026-09: never imported in main.py).
-- `calls.py` — BROKA - Calls Router • WebSocket relay : /calls/ws/{room_id} (WebRTC signaling) • Register token : POST /calls/register-token • Initiate ca…
+- `calls.py` — BROKA - Calls Router • WebSocket relay : /calls/ws/{room_id} (WebRTC signaling) • Register token : POST /calls/register-token (and /unregis…
 - `deal.py` — BROKA - Deal Router: finalise agreed deals and reveal contacts.
 - `disputes.py` — ⚠️ NOT MOUNTED — LEGACY / DEAD CODE (verified during Store hardening pass, 2026-09: never imported in main.py).
 - `escrow.py` — BROKA - Escrow Router
@@ -553,6 +559,7 @@ Counts: admin 20, optional 2, public 57, token 4, user 124.
 | `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:989 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:454 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:245 |
+| `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
 | `refresh_tokens` | `RefreshToken` | backend/api/database.py:1009 |
 | `reviews` | `Review` | backend/api/database.py:1050 |
 | `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:880 |
@@ -579,7 +586,7 @@ of a change.
 - **ai_broker** — domains: categories, listings, pricing; core: circuit_breaker, config, gemini, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
-- **auth** — domains: media, trust; core: client_ip, config, email, events, fraud, geo, nudge_templates, presence, rate_limit, sms, text_search; database, security
+- **auth** — domains: media, trust; core: client_ip, config, email, events, fraud, geo, nudge_templates, presence, push_devices, rate_limit, sms, text_search; database, security
 - **buy_agent** — domains: ai_broker, categories, listings, premium; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
@@ -640,7 +647,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-96 files in `backend/tests/`.
+97 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -699,6 +706,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_negotiate_deepseek.py` — Tests for DeepSeek V4 Flash in api/routers/negotiate.py's own (separate from ai_broker/service.py) AI-provider fallback chain.
 - `test_negotiate_fallback_providers.py` — The text-only fallback providers in routers/negotiate.py must actually run.
 - `test_negotiation_actions.py` — Tests for Zeno's negotiation action vocabulary (api/core/negotiation_actions.py).
+- `test_notifications.py` — Notifications that reach a phone whose app is closed (2026-10-07).
 - `test_nudge_templates.py` — Tests for the system-generated availability-nudge SMS (api/core/nudge_templates.py).
 - `test_otp_sms_retriever.py` — Covers the OTP SMS body built for Android's SMS Retriever API.
 - `test_password_hashing.py` — Password hashing: what bcrypt is given, and what it costs the event loop.
@@ -1074,6 +1082,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
+- `push_delivery_test.dart` — Calls and messages that reach a phone whose app is closed (2026-10-07).
 - `receipts_and_charts_test.dart` — The Seller Dashboard's graphs and its Payment Receipts screen.
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `safe_payment_test.dart` — Paying safely while BROKA handles no deal payments (backend: GET /pricing/safe-payment).
@@ -1180,7 +1189,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno's listing descriptions: lines a buyer scans, and questions for the seller (2026-10-06)
+- `CHANGES.md` — Calls and messages with the app closed (2026-10-07)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
@@ -1192,6 +1201,7 @@ Modules:
 - `LAUNCH_DISCOUNT_MODEL.md` — What a launch discount costs BROKA, and how many sellers it can carry
 - `LISTING_OVERHAUL.md` — BROKA — Listing Flow Overhaul
 - `LISTING_POSTING_REVIEW.md` — BROKA — Listing Posting Review
+- `NOTIFICATIONS.md` — Notifications — calls and messages with the app closed (2026-10-07)
 - `PRICING.md` — BROKA pricing
 - `PRIVACY.md` — Message visibility — how the audience line is enforced
 - `README.md` — BROKA — AI-Mediated P2P Marketplace for East Africa
