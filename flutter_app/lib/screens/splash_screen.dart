@@ -130,14 +130,18 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final loggedIn = ApiService.currentUserId != null && ApiService.authToken != null;
     if (loggedIn) GlobalPollerService.instance.start();
 
-    // App was launched cold by tapping an incoming-call push notification -
-    // route straight there instead of the normal home/draft-recovery flow.
+    // App was launched cold by tapping one of our notifications (a call, a
+    // message, a missed call) - route straight there instead of the normal
+    // home/draft-recovery flow.
     // Only meaningful for a logged-in session (calls require
     // authentication); a stale/invalid value here for a logged-out user is
     // simply ignored, falling through to the normal flow below.
     final coldStartCall = pendingColdStartCallData;
     pendingColdStartCallData = null; // consume once, regardless of outcome
     if (loggedIn && coldStartCall != null) {
+      // Home underneath, so Back from the call or the conversation lands
+      // there - not on this splash screen, which has already done its job.
+      Navigator.of(context).pushReplacement(_smoothRoute(const HomeScreen()));
       await NotificationService.instance.navigateFromPayload(coldStartCall);
       DeepLinkService.instance.appReady(openPending: false);
       return;

@@ -383,6 +383,37 @@ jobs:
           } > key.properties
           echo "Signing with the release key."
 
+      - name: Firebase config (push notifications)
+        # Without android/app/google-services.json the APK is built with no
+        # Firebase at all: main.dart's Firebase.initializeApp() throws, the
+        # app falls back to polling while it is open, and no phone can be
+        # reached by a push. That is how every release so far was built -
+        # an incoming call rang only with BROKA open, and messages waited
+        # until it was opened. The file is kept out of git (.gitignore); the
+        # GOOGLE_SERVICES_JSON secret holds it, as the JSON itself or
+        # base64-encoded. NOTIFICATIONS.md has the setup.
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::warning title=No push notifications in this APK::Set the GOOGLE_SERVICES_JSON repository secret (android/app/google-services.json from the Firebase console). Without it, calls and messages reach a phone only while BROKA is open."
+            exit 0
+          fi
+          python3 - flutter_app/android/app/google-services.json <<'PY'
+          import base64, json, os, sys
+          raw = os.environ["GOOGLE_SERVICES_JSON"].strip()
+          if not raw.startswith("{"):
+              raw = base64.b64decode(raw).decode()
+          data = json.loads(raw)
+          packages = [c["client_info"]["android_client_info"]["package_name"]
+                      for c in data.get("client", [])]
+          if "com.broka.app" not in packages:
+              sys.exit(f"google-services.json is for {packages}, not com.broka.app")
+          with open(sys.argv[1], "w") as f:
+              f.write(raw)
+          print("Firebase project:", data["project_info"]["project_id"])
+          PY
+
       - name: Build APK
         # flutter build apk's own post-build .apk existence check can return
         # a false failure when used with --split-per-abi (it looks for a

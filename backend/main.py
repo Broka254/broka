@@ -111,6 +111,7 @@ from api.domains.media.router      import router as media_assets_router
 import api.core.deal_hub_subscribers  # noqa: F401  registers deal WS broadcasts
 import api.core.auction_hub_subscribers  # noqa: F401  registers auction WS broadcasts
 import api.core.push_subscribers      # noqa: F401  registers FCM push notifications
+import api.core.message_push         # noqa: F401  pushes every chat message to its recipient
 import api.core.zeno_subscribers                    # noqa: F401  Zeno reacts to platform events
 import api.core.trader_specialization_subscribers   # noqa: F401  derives seller specializations from listings
 import api.core.buy_agent_subscribers               # noqa: F401  matches new listings against standing buy requests
@@ -128,6 +129,10 @@ async def lifespan(app: FastAPI):
     _init_event_counter()   # Prometheus event counter (no-op if prom not installed)
     from api.core.workers import start_periodic_sweep, stop_periodic_sweep
     await start_periodic_sweep()  # enforces AI-announced deal auto-resolution timers
+    if _has_calls:
+        # Settles calls nobody answered and no phone reported (see
+        # api/routers/calls.py ring_watchdog_tick).
+        calls.start_ring_watchdog()
 
     # Log registered workflow versions and event subscribers
     from api.core.workflow import all_versions, CURRENT_VERSION
@@ -139,6 +144,8 @@ async def lifespan(app: FastAPI):
     yield
     # ── Shutdown ──────────────────────────────────────────────────────────────
     await stop_periodic_sweep()
+    if _has_calls:
+        await calls.stop_ring_watchdog()
     await worker.stop()
     logging.getLogger(__name__).info("🛑 BROKA v6.0 stopped")
 

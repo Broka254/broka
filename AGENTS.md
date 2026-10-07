@@ -154,5 +154,6 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Zeno (the AI broker) | `backend/api/routers/negotiate.py`, `backend/api/domains/ai_broker/`, `ZENO_ACTIONS.md` |
 | Zeno as the assistant (the Zeno tab, voice mode, the pill across screens, guides) | `backend/api/domains/zeno_assistant/`, `flutter_app/lib/features/zeno_assistant/` (`zeno_session.dart`), `ZENO_ACTIONS.md` |
 | Calls | `backend/api/routers/calls.py`, `CALLING.md` |
+| Push notifications (calls, messages, alerts to a closed app) | `backend/api/core/push_devices.py`, `message_push.py`, `flutter_app/lib/services/notification_service.dart`, `NOTIFICATIONS.md` |
 | Scheduled work | `backend/api/core/workers.py` (the 5-minute sweep) |
 | The Rust extension, chat contact-leak scanning, distances | `backend/native/README.md`, `backend/api/core/native.py`, `text_guard.py`, `geo.py` |

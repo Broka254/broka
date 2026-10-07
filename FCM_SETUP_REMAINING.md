@@ -1,5 +1,12 @@
 # FCM Setup — Remaining Steps
 
+> **Superseded (2026-10-07): see NOTIFICATIONS.md §3 for the current setup.**
+> Two things below were not true. The server never stored a token
+> (`/calls/register-token` returned 500 on every call), and CI never put
+> `google-services.json` into the APK, so no push ever reached a phone.
+> Both are fixed. CI now writes the file from the `GOOGLE_SERVICES_JSON`
+> secret, and chat messages are pushed too.
+
 All the code-side FCM client integration is now done (calling-hardening
 pass, see CHANGES.md's "Round 22" entry for the full detail). What's left
 is entirely **external configuration** that only Xavier can do — none of

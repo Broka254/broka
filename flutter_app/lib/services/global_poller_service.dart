@@ -19,7 +19,12 @@
 //
 // IMPORTANT: this only works while the Dart VM is alive (app open or
 // recently backgrounded, depending on OS). It does NOT wake a fully-killed
-// app on its own - only real push (FCM) can do that.
+// app on its own - only real push (FCM) can do that. Once this phone's push
+// token is registered with a server that can push ([pushReady]), the sweep
+// stops while the app is in the background: the server pushes calls and
+// messages there, and polling behind the user's back only costs battery and
+// data. It still runs in the foreground, where it keeps the Inbox badge and
+// receipts current.
 //
 // This is also where the device's FCM token gets (re-)registered with the
 // backend - start() is the one function every login/session-restore path
@@ -38,11 +43,27 @@ import 'notification_service.dart';
 import 'callkit_service.dart';
 
 class GlobalPollerService {
-  GlobalPollerService._();
+  GlobalPollerService._() {
+    NotificationService.instance.isThreadOnScreen =
+        (listingId, buyerId) => _isOnScreen({'listing_id': listingId, 'buyer_id': buyerId});
+  }
   static final GlobalPollerService instance = GlobalPollerService._();
+
+  static const Duration sweepInterval = Duration(seconds: 7);
 
   Timer? _timer;
   bool _checking = false;
+  // start() has run and stop() hasn't: someone is signed in.
+  bool _running = false;
+
+  /// This phone's push token is registered with a server that can push:
+  /// calls and messages reach it with the app closed, so the background
+  /// sweep is redundant.
+  bool pushReady = false;
+
+  // Whether GET /calls/incoming exists on the server; until it answers 404
+  // the per-thread /calls/pending fallback is not used.
+  bool _incomingEndpoint = true;
 
   // Threads currently "owned" by an open negotiation/direct-chat screen -
   // that screen already polls live, so notifying about them here would be
@@ -67,13 +88,31 @@ class GlobalPollerService {
   // not yet taken down. Lets a later poll cancel the exact notification it
   // raised once that call stops ringing.
   final Map<String, String> _shownCallNotifications = {};
+  // Rooms this phone has already told the server it is ringing for.
+  final Set<String> _acknowledgedRooms = {};
 
   /// Whether the app is on screen (main.dart sets it from the lifecycle).
   /// A thread "being viewed" is only being viewed while the app is in
   /// front: a chat left open behind the phone's home screen used to
   /// silence that thread's notifications - messages and missed calls -
   /// for as long as it stayed open.
-  bool appInForeground = true;
+  bool get appInForeground => _appInForeground;
+  bool _appInForeground = true;
+  set appInForeground(bool value) {
+    _appInForeground = value;
+    if (!_running) return;
+    if (!value && pushReady) {
+      _timer?.cancel();
+      _timer = null;
+    } else if (value && _timer == null) {
+      _startTimer();
+    }
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(sweepInterval, (_) => _checkAll());
+  }
 
   /// Unread messages across all threads, as of the last sweep: the number
   /// on Home's Inbox tab. Seeded from the cached inbox at start so the
@@ -83,9 +122,11 @@ class GlobalPollerService {
   static int unreadIn(Iterable<Map<String, dynamic>> threads) => threads.fold(
       0, (sum, t) => sum + (((t['unread'] ?? t['unread_count']) as num?)?.toInt() ?? 0));
 
-  /// Call from a conversation screen's initState / onResume.
+  /// Call from a conversation screen's initState / onResume. Takes the
+  /// conversation's notification down: it is being read.
   void markScreenActive(String listingId, {String? buyerId}) {
     _activelyViewedThreads.add(threadKeyFor(listingId, buyerId));
+    unawaited(NotificationService.instance.cancelThread(listingId, buyerId));
   }
 
   /// Call from dispose. Must be symmetric: a thread left in this set is a
@@ -99,9 +140,9 @@ class GlobalPollerService {
   bool _primed = false;
 
   void start() {
-    _timer?.cancel();
+    _running = true;
     unawaited(_seedUnreadFromCache());
-    _timer = Timer.periodic(const Duration(seconds: 7), (_) => _checkAll());
+    _startTimer();
     // Run once immediately rather than waiting for the first tick.
     _checkAll();
     _registerFcmTokenIfAvailable();
@@ -121,7 +162,15 @@ class GlobalPollerService {
   /// the timer resumed from the current state of the world, and the
   /// messages and calls they'd missed produced nothing. Now the first thing
   /// that happens on resume is a full pass over every thread.
-  Future<void> catchUp() => _checkAll();
+  Future<void> catchUp() async {
+    // A push handled while the app was away was recorded by the FCM
+    // background isolate, in its own copy of the preferences: read them
+    // again, or the sweep announces those messages a second time.
+    try {
+      await (await SharedPreferences.getInstance()).reload();
+    } catch (_) {}
+    await _checkAll();
+  }
 
   /// Best-effort - throws if Firebase isn't initialized (no real project
   /// configured yet, see FCM_SETUP_REMAINING.md), which main.dart's own
@@ -130,7 +179,12 @@ class GlobalPollerService {
   Future<void> _registerFcmTokenIfAvailable() async {
     try {
       final token = await FirebaseMessaging.instance.getToken();
-      if (token != null) await ApiService.registerFcmToken(token);
+      if (token != null) {
+        pushReady = await ApiService.registerFcmToken(token) ?? false;
+        if (pushReady) {
+          unawaited(NotificationService.instance.maybeAskForBackgroundDelivery());
+        }
+      }
     } catch (_) {}
     // iOS additionally needs its PushKit VoIP token registered - a
     // different token over a different transport (see CallKitService).
@@ -141,10 +195,13 @@ class GlobalPollerService {
   }
 
   void stop() {
+    _running = false;
+    pushReady = false;
     _timer?.cancel();
     _timer = null;
     _activelyViewedThreads.clear();
     _shownCallNotifications.clear();
+    _acknowledgedRooms.clear();
     unreadTotal.value = 0;
   }
 
@@ -157,7 +214,7 @@ class GlobalPollerService {
   }
 
   bool _isOnScreen(Map<String, dynamic> thread) =>
-      appInForeground &&
+      _appInForeground &&
       _activelyViewedThreads.contains(
           threadKeyFor(thread['listing_id'] as String, thread['buyer_id'] as String?));
 
@@ -183,6 +240,10 @@ class GlobalPollerService {
       unreadTotal.value = unreadIn(threads.where(
           (t) => t['listing_id'] is String && !_isOnScreen(t)));
       final prefs = await SharedPreferences.getInstance();
+      // Incoming calls: one request for all of them. It used to be one
+      // GET /calls/pending per thread on every sweep - forty requests every
+      // seven seconds for someone with forty conversations.
+      final byListing = _incomingEndpoint ? await _checkIncomingCall(threads) : false;
       for (final thread in threads) {
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
@@ -231,7 +292,7 @@ class GlobalPollerService {
         // while the buyer's phone never rang. negotiation_screen.dart's own
         // in-screen poller had this exact gate removed for this exact
         // reason in the V2 pass; this copy was missed.
-        await _checkThreadForIncomingCall(thread);
+        if (!byListing) await _checkThreadForIncomingCall(thread);
       }
     } catch (_) {
       // Network hiccup or not logged in - just try again next tick.
@@ -246,11 +307,9 @@ class GlobalPollerService {
     return 'global_poll_seen_${listingId}_$buyerId';
   }
 
-  String _seenIdKeyFor(Map<String, dynamic> thread) {
-    final listingId = thread['listing_id'];
-    final buyerId   = thread['buyer_id'] ?? '';
-    return 'global_poll_seen_id_${listingId}_$buyerId';
-  }
+  String _seenIdKeyFor(Map<String, dynamic> thread) =>
+      NotificationService.seenMessageKey(
+          thread['listing_id'] as String, thread['buyer_id'] as String?);
 
   static String _textSignature(Map<String, dynamic> thread) =>
       '${thread['last_role'] ?? ''}|${thread['last_msg_type'] ?? 'text'}|'
@@ -315,6 +374,13 @@ class GlobalPollerService {
     if (lastRole == myRole) return;
 
     if (_alreadyHandled(thread, prefs)) return; // already notified for this message
+    // The server's push for it may have been shown by Android while this
+    // isolate wasn't looking - recorded by the FCM background isolate, in
+    // its own copy of the preferences. Read them again before announcing.
+    try {
+      await prefs.reload();
+    } catch (_) {}
+    if (_alreadyHandled(thread, prefs)) return;
     await _recordHandled(thread, prefs);
 
     // Suppression is now per-INSTALL, not per-thread.
@@ -378,7 +444,8 @@ class GlobalPollerService {
     await NotificationService.instance.showNewMessage(
       fromName: fromName,
       preview: _previewFor(msgType, lastMessage),
-      threadKey: 'thread_${thread['listing_id']}_${thread['buyer_id'] ?? ''}',
+      listingId: thread['listing_id'] as String,
+      buyerId: thread['buyer_id'] as String?,
       payload: {
         'type':      'new_message',
         'listingId': thread['listing_id'],
@@ -430,6 +497,7 @@ class GlobalPollerService {
           : (thread['buyer_id'] as String? ?? '');
       if (roomId == null) return;
       _shownCallNotifications[listingId] = roomId;
+      _acknowledge(roomId, callInfo['call_token'] as String?);
       await NotificationService.instance.showIncomingCall(
         roomId: roomId,
         callerName: callerName,
@@ -443,5 +511,64 @@ class GlobalPollerService {
         },
       );
     } catch (_) {}
+  }
+
+  /// The one call ringing for me, on any listing (GET /calls/incoming).
+  /// Returns false when the server doesn't have that endpoint, so the
+  /// sweep falls back to asking per thread.
+  Future<bool> _checkIncomingCall(List<Map<String, dynamic>> threads) async {
+    final res = await ApiService.checkAnyIncomingCall();
+    if (!res.supported) {
+      _incomingEndpoint = false;
+      return false;
+    }
+    final call = res.call;
+    final roomId = call?['room_id'] as String?;
+    final listingId = call?['listing_id'] as String?;
+    // Whatever was ringing and no longer is - cancelled, answered on
+    // another phone, timed out - comes down.
+    for (final entry in _shownCallNotifications.entries.toList()) {
+      if (entry.value != roomId) {
+        _shownCallNotifications.remove(entry.key);
+        await NotificationService.instance.cancelIncomingCall(entry.value);
+      }
+    }
+    if (call == null || roomId == null || listingId == null) return true;
+
+    // The server names the thread's buyer: a buyer can call a seller they
+    // have never messaged, so there may be no thread here to read it from.
+    final buyerId = call['buyer_id'] as String? ?? '';
+    String? listingName = call['listing_name'] as String?;
+    if (listingName == null || listingName.isEmpty) {
+      for (final t in threads) {
+        if (t['listing_id'] == listingId) {
+          listingName = t['listing_name'] as String?;
+          break;
+        }
+      }
+    }
+    _shownCallNotifications[listingId] = roomId;
+    _acknowledge(roomId, call['call_token'] as String?);
+    await NotificationService.instance.showIncomingCall(
+      roomId: roomId,
+      callerName: call['caller_name'] as String? ?? 'Someone',
+      listingName: (listingName == null || listingName.isEmpty) ? 'your listing' : listingName,
+      isVideo: call['call_type'] == 'video',
+      payload: {
+        'type':      'incoming_call',
+        'roomId':    roomId,
+        'listingId': listingId,
+        'buyerId':   buyerId,
+        'callType':  call['call_type'],
+      },
+    );
+    return true;
+  }
+
+  /// Tell the server this phone is ringing (the caller's "Ringing"), once
+  /// per call.
+  void _acknowledge(String roomId, String? callToken) {
+    if (callToken == null || !_acknowledgedRooms.add(roomId)) return;
+    unawaited(NotificationService.instance.acknowledgeIncomingCall(roomId, callToken));
   }
 }

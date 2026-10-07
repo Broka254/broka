@@ -162,6 +162,13 @@ async def revoke_all_tokens(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke ALL refresh tokens for the current user (logout all devices)."""
+    """Revoke ALL refresh tokens for the current user (logout all devices).
+
+    Also takes every phone off the account for pushes: a phone signed out
+    everywhere must stop ringing for this account's calls and showing its
+    messages. Each phone registers again when someone signs in on it.
+    """
+    from api.core import push_devices
     await revoke_all_refresh_tokens(db, current_user["id"])
+    await push_devices.unregister_all(db, current_user["id"])
     await db.commit()

@@ -610,3 +610,38 @@ its end calls back through the same path as every other call
 Tests: `backend/tests/test_call_history.py`;
 `flutter_app/test/voip_call_screen_test.dart`,
 `flutter_app/test/call_history_screen_test.dart`.
+
+
+---
+
+# Ringing a closed app, and "Ringing" that means it (2026-10-07)
+
+The full review is in NOTIFICATIONS.md. For calls:
+
+- **Nothing could reach a closed app.** Released APKs had no Firebase
+  (CI never wrote `google-services.json`), and `/calls/register-token`
+  failed with 500 on every call, so the server never had a token.
+- **Every phone rings.** Tokens are kept per phone (`push_devices`), and
+  `/initiate` pushes all of them. Answering or declining on one sends
+  `call_over` to the others.
+- **"Calling" vs "Ringing".** The push carries the callee's call token, and
+  the phone posts `POST /calls/{room_id}/alerted` with it while ringing,
+  even from the FCM background isolate. The caller's socket then gets the
+  server-authored `callee_ringing` (new in the signalling table: server ->
+  caller, never relayed). The screen used to guess from presence ("they
+  may not pick up"). A late push for a finished call gets 410 and stops
+  ringing.
+- **The caller rang for 30 seconds, then "failed".** WebRtcService's
+  connect timeout was armed on `calling`, which the caller enters before
+  anyone answers. It now arms once the offer is sent, after the callee
+  joins. The screen has its own 45s no-answer window ("No answer").
+- **Unanswered and unreported.** `ring_watchdog_tick` (every 5s, Redis
+  sorted set `broka:call:ringing`) records a call still ringing after 55s
+  as missed: the call card, the missed-call push, and `hangup` with
+  `reason: no_answer` to the caller.
+- **`GET /calls/incoming`** replaces the app's per-thread
+  `/calls/pending` sweep with one request.
+
+Tests: `backend/tests/test_notifications.py`,
+`flutter_app/test/push_delivery_test.dart`. Not device-verified.
+

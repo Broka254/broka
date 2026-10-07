@@ -90,22 +90,38 @@ def test_map_does_not_present_the_signup_coordinate_as_your_position():
     )
 
 
-def test_call_screen_checks_presence_before_claiming_a_phone_is_ringing():
-    """'Their phone is ringing' needs evidence the far end was reached."""
+def test_call_screen_claims_a_ringing_phone_only_on_a_delivery_receipt():
+    """'Their phone is ringing' needs evidence the far end was reached.
+
+    The evidence used to be presence (_peerOnline), which was the wrong
+    signal: a closed app is always "offline" and rings fine from a push, so
+    callers were told "they may not pick up" about phones that were
+    ringing. The evidence now is the callee's phone acknowledging the call
+    (POST /calls/{room}/alerted -> the server's `callee_ringing` ->
+    _calleeAlerted), which is what WhatsApp's "Ringing" means.
+    """
     src = _code_only((LIB / "screens" / "voip_call_screen.dart").read_text())
-    assert "_peerOnline" in src, (
-        "voip_call_screen no longer consults peer presence. CallState.calling "
-        "means our offer was SENT, not received - asserting a ringing phone "
-        "from it alone is a claim the app cannot support."
+    svc = _code_only((LIB / "services" / "webrtc_service.dart").read_text())
+    assert "'callee_ringing'" in svc and "onPeerRinging" in svc, (
+        "webrtc_service no longer handles the server's callee_ringing - the "
+        "caller has no evidence the callee's phone has the call."
+    )
+    assert "_calleeAlerted" in src, (
+        "voip_call_screen no longer tracks the delivery receipt. "
+        "CallState.calling means our offer was SENT, not received - asserting "
+        "a ringing phone from it alone is a claim the app cannot support."
     )
     ringing_claim = "Their phone is ringing"
     if ringing_claim in src:
         idx = src.index(ringing_claim)
         guard_window = src[max(0, idx - 400): idx]
-        assert "_peerOnline" in guard_window, (
-            "'Their phone is ringing' is stated without a presence check "
-            "nearby. Gate it on _peerOnline so an offline peer gets an "
-            "honest label instead."
+        assert "_calleeAlerted" in guard_window, (
+            "'Their phone is ringing' is stated without the delivery receipt "
+            "nearby. Gate it on _calleeAlerted."
+        )
+        assert "_peerOnline" not in guard_window, (
+            "'Their phone is ringing' is gated on presence again - a closed "
+            "app is 'offline' and rings from a push."
         )
 
 

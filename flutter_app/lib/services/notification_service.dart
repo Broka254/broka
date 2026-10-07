@@ -8,13 +8,19 @@
 //     handleForegroundFcmMessage below and firebaseMessagingBackgroundHandler
 //     in main.dart)
 //
-// FCM client integration is wired up (main.dart initializes Firebase,
-// registers the background/foreground/tap handlers) but only takes effect
-// once a real Firebase project + google-services.json exist - see
-// FCM_SETUP_REMAINING.md for exactly what's still externally configurable.
-// Until then, Firebase.initializeApp() throws, main.dart catches that, and
-// this service works exactly as it always has: local notifications only,
-// while the app process is alive (foreground or backgrounded).
+// FCM is the delivery path for a closed app (main.dart initializes Firebase
+// and registers the handlers; NOTIFICATIONS.md has the whole design). The
+// server pushes:
+//   incoming_call  data-only; drawn here, rung insistently, acknowledged
+//                  to the server so the caller's screen says "Ringing"
+//   call_over      data-only; another phone answered or declined - stop
+//   missed_call    a notification Android draws itself
+//   new_message    a notification Android draws itself, one per
+//                  conversation (tag thread_<listing>_<buyer>)
+//   deal / auction alerts, drawn by Android on the Updates channel
+// Without a google-services.json in the build, Firebase.initializeApp()
+// throws, main.dart catches it, and this service still works on what
+// GlobalPollerService finds while the app is alive.
 //
 // One shared call-routing mechanism regardless of source: local-notification
 // taps, FCM message taps (onMessageOpenedApp/getInitialMessage), foreground
@@ -25,8 +31,10 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' show DartPluginRegistrant, IsolateNameServer;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import 'ringtone_service.dart';
@@ -83,6 +91,28 @@ class NotificationService {
     description: 'New negotiation and chat messages',
     importance: Importance.high,
   );
+
+  // Deal, payment and auction alerts. The server used to name a channel
+  // the app never created ("broka_deals"), which Android files as
+  // "Miscellaneous" - impossible for anyone to find and tune.
+  static const AndroidNotificationChannel _updatesChannel =
+      AndroidNotificationChannel(
+    'broka_updates',
+    'Deals & updates',
+    description: 'Payments, deliveries, auctions and other deal updates',
+    importance: Importance.high,
+  );
+
+  /// White-on-transparent status-bar icon (res/drawable/ic_stat_broka.xml).
+  /// The launcher icon is a full-colour square, which Android draws in the
+  /// status bar as a white blob.
+  static const String smallIcon = '@drawable/ic_stat_broka';
+  static const Color _accent = Color(0xFF8B5CF6);
+
+  /// Set by GlobalPollerService: whether this conversation is on screen
+  /// right now, in which case its messages are being read as they arrive
+  /// and a notification for them would be noise.
+  bool Function(String listingId, String? buyerId)? isThreadOnScreen;
 
   // Channel ID for incoming calls. Bumped again ('..._v2' -> '..._v3')
   // for the same reason it was bumped the first time: Android channel
@@ -146,8 +176,7 @@ class NotificationService {
   }) async {
     navigatorKey = navKey;
 
-    const androidInit =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidInit = AndroidInitializationSettings(smallIcon);
     final iosInit = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -183,6 +212,7 @@ class NotificationService {
 
       // Register channels (Android 8+). No-op elsewhere.
       await android?.createNotificationChannel(_messageChannel);
+      await android?.createNotificationChannel(_updatesChannel);
       await android?.createNotificationChannel(_callChannel);
 
       _ready = true;
@@ -272,7 +302,11 @@ class NotificationService {
       if (details?.didNotificationLaunchApp != true || response == null) return null;
       if (response.actionId == callDeclineActionId) return null;
       final data = decodePayload(response.payload);
-      if (data?['type'] != 'incoming_call') return null;
+      // A message or missed-call notification the app posted itself opens
+      // its conversation, as the server's own pushes do.
+      final type = data?['type'];
+      if (type == 'new_message' || type == 'missed_call') return data;
+      if (type != 'incoming_call') return null;
       // Also how a locked phone's fullScreenIntent launches the app - only
       // Accept answers; see navigateFromPayload.
       return {...data!, 'answer': response.actionId == callAcceptActionId};
@@ -323,6 +357,15 @@ class NotificationService {
       await showMissedCallFromPush(data);
       return;
     }
+    if (data['type'] == 'call_over') {
+      final roomId = data['roomId'] as String?;
+      if (roomId != null && roomId.isNotEmpty) await cancelIncomingCall(roomId);
+      return;
+    }
+    if (data['type'] == 'new_message') {
+      await showMessageFromPush(data);
+      return;
+    }
     if (data['type'] != 'incoming_call') return;
     final roomId = data['roomId'] as String?;
     if (roomId == null) return;
@@ -365,6 +408,125 @@ class NotificationService {
       listingName: data['listingName'] as String? ?? 'your listing',
       isVideo: data['callType'] == 'video',
       payload: data,
+    );
+    await acknowledgeIncomingCall(roomId, data['callToken'] as String?);
+  }
+
+  /// Tell the server this phone is ringing (the caller's "Ringing"), and
+  /// stop at once if it answers that the call is already over - a push
+  /// that arrived late, or a call answered on another phone.
+  Future<void> acknowledgeIncomingCall(String roomId, String? callToken) async {
+    if (callToken == null || callToken.isEmpty) return;
+    final result = await ApiService.reportCallAlerted(roomId, callToken);
+    if (result == CallAlertResult.over) {
+      debugPrint('[Notifications] call $roomId is over - not ringing');
+      await cancelIncomingCall(roomId);
+    }
+  }
+
+  /// Every push that reaches the FCM background isolate - the app is in the
+  /// background or not running at all. main.dart's
+  /// firebaseMessagingBackgroundHandler hands them here; there is no
+  /// navigator and no main-isolate state, only this service and the
+  /// server.
+  static Future<void> handleBackgroundMessage(Map<String, dynamic> data) async {
+    final type = data['type'] as String?;
+    final svc = NotificationService.instance;
+    switch (type) {
+      case 'missed_call':
+      case 'call_over':
+        // missed_call is drawn by Android itself; call_over draws nothing.
+        // Either way the call's ringing notification, posted from the
+        // incoming-call push, may still be up and ringing - and nothing
+        // else can tell a closed app that the call stopped.
+        final roomId = data['roomId'] as String?;
+        if (roomId == null || roomId.isEmpty) return;
+        await svc.initialize(
+            navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+        await svc.cancelIncomingCall(roomId);
+        return;
+      case 'incoming_call':
+        // A fresh, throwaway navigator key - nothing in this isolate ever
+        // attaches a real Navigator to it, and nothing needs to: showing
+        // the notification is all that happens here. A tap on it is
+        // handled in the main isolate once the app is in front.
+        final roomId = data['roomId'] as String? ?? '';
+        await svc.initialize(
+            navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+        // Ring first: the acknowledgement is a network round trip, and a
+        // call must never wait on one to start ringing.
+        await svc.showIncomingCall(
+          roomId: roomId,
+          callerName: data['callerName'] as String? ?? 'Someone',
+          listingName: data['listingName'] as String? ?? 'your listing',
+          isVideo: data['callType'] == 'video',
+          payload: data,
+          // Nothing outside this isolate could stop a ringer started here -
+          // see showIncomingCall's ringInApp.
+          ringInApp: false,
+        );
+        await svc.acknowledgeIncomingCall(roomId, data['callToken'] as String?);
+        return;
+      case 'new_message':
+        // Android drew it from the push already. Record it as announced,
+        // so the app's own sweep doesn't announce it a second time when
+        // the app next runs.
+        await recordMessageAnnounced(data);
+        return;
+    }
+  }
+
+  /// The key GlobalPollerService keeps a thread's last announced message
+  /// id under. Shared, so a message announced by a push is not announced
+  /// again by the sweep, and the reverse.
+  static String seenMessageKey(String listingId, String? buyerId) =>
+      'global_poll_seen_id_${listingId}_${buyerId ?? ''}';
+
+  static Future<void> recordMessageAnnounced(Map<String, dynamic> data) async {
+    final listingId = data['listingId'] as String?;
+    final messageId = data['messageId'] as String?;
+    if (listingId == null || messageId == null || messageId.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          seenMessageKey(listingId, data['buyerId'] as String?), messageId);
+    } catch (_) {}
+  }
+
+  /// The server's message push with the app in front, where Android does
+  /// not draw it: shown here, unless that conversation is on screen.
+  Future<void> showMessageFromPush(Map<String, dynamic> data) async {
+    final listingId = data['listingId'] as String?;
+    if (listingId == null || listingId.isEmpty) return;
+    final buyerId = data['buyerId'] as String?;
+    final messageId = data['messageId'] as String?;
+    final prefs = await SharedPreferences.getInstance();
+    final key = seenMessageKey(listingId, buyerId);
+    final onScreen = isThreadOnScreen?.call(listingId, buyerId) ?? false;
+    if (!onScreen && messageId != null && prefs.getString(key) == messageId) {
+      return; // the sweep got there first
+    }
+    if (messageId != null) await prefs.setString(key, messageId);
+    if (onScreen) return;
+
+    final sender = data['senderName'] as String? ?? 'New message';
+    final listingName = (data['listingName'] as String? ?? '').trim();
+    final count = int.tryParse('${data['count'] ?? ''}') ?? 1;
+    final preview = data['preview'] as String? ?? '';
+    await showNewMessage(
+      fromName: data['title'] as String? ??
+          (listingName.isEmpty ? sender : '$sender · $listingName'),
+      preview: data['body'] as String? ??
+          (count > 1 ? '$count new messages · $preview' : preview),
+      listingId: listingId,
+      buyerId: buyerId,
+      payload: {
+        'type': 'new_message',
+        'listingId': listingId,
+        'buyerId': buyerId,
+        'myRole': data['myRole'],
+        if (data['screen'] == 'zeno') 'screen': 'zeno',
+      },
     );
   }
 
@@ -453,28 +615,44 @@ class NotificationService {
     }
   }
 
+  /// The tag a conversation's message notification is posted under - the
+  /// same string the server's message push uses (api/core/message_push.py
+  /// thread_tag). Android keys a notification on (tag, id), and FCM draws
+  /// its tagged ones with id 0, so a conversation is one notification
+  /// whether the push, the foreground handler or the sweep posted it, and
+  /// each new message updates it rather than stacking another.
+  static String threadTag(String listingId, String? buyerId) =>
+      'thread_${listingId}_${buyerId ?? ''}';
+
   /// Show a notification for a newly received message in a thread.
   Future<void> showNewMessage({
     required String fromName,
     required String preview,
-    String threadKey = 'chat',
+    required String listingId,
+    String? buyerId,
     Map<String, dynamic>? payload,
   }) async {
     if (!_ready) return;
-    const details = NotificationDetails(
+    final tag = threadTag(listingId, buyerId);
+    final details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'broka_messages',
-        'Messages',
-        channelDescription: 'New negotiation and chat messages',
+        _messageChannel.id,
+        _messageChannel.name,
+        channelDescription: _messageChannel.description,
         importance: Importance.high,
         priority: Priority.high,
-        icon: '@mipmap/ic_launcher',
+        category: AndroidNotificationCategory.message,
+        tag: tag,
+        icon: smallIcon,
+        color: _accent,
+        styleInformation: BigTextStyleInformation(preview),
       ),
-      iOS: DarwinNotificationDetails(),
+      iOS: DarwinNotificationDetails(threadIdentifier: tag),
     );
     try {
       await _plugin.show(
-        _idFor(threadKey),
+        // 0 with the tag: the pair FCM draws the server's push under.
+        0,
         fromName,
         preview,
         details,
@@ -482,6 +660,17 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint('[Notifications] showNewMessage failed: $e');
+    }
+  }
+
+  /// Take a conversation's message notification down - it has been opened,
+  /// so what it announced is being read.
+  Future<void> cancelThread(String listingId, String? buyerId) async {
+    if (!_ready) return;
+    try {
+      await _plugin.cancel(0, tag: threadTag(listingId, buyerId));
+    } catch (e) {
+      debugPrint('[Notifications] cancelThread failed: $e');
     }
   }
 
@@ -519,7 +708,8 @@ class NotificationService {
         priority: Priority.high,
         category: AndroidNotificationCategory.missedCall,
         tag: missedCallTag(listingId, buyerId),
-        icon: '@mipmap/ic_launcher',
+        icon: smallIcon,
+        color: _accent,
       ),
       iOS: const DarwinNotificationDetails(),
     );
@@ -680,7 +870,8 @@ class NotificationService {
         // Take the stale entry down by itself if every other teardown path
         // is missed, rather than leaving a dead "Incoming call" in the tray.
         timeoutAfter: ringFor.inMilliseconds + 5000,
-        icon: '@mipmap/ic_launcher',
+        icon: smallIcon,
+        color: _accent,
         // A channel sound plays once. When it is the only sound (no in-app
         // ringer), make it repeat like a ringtone until the notification
         // is answered, declined or cancelled.
@@ -736,6 +927,63 @@ class NotificationService {
       await _plugin.cancel(_idFor('call_$roomId'));
     } catch (e) {
       debugPrint('[Notifications] cancelIncomingCall failed: $e');
+    }
+  }
+
+  static const String _backgroundAskKey = 'asked_background_delivery_v1';
+
+  /// Once per install, on Android, once pushes work: ask to leave BROKA out
+  /// of battery optimisation, so a call rings and messages arrive with the
+  /// app closed. On the Android builds common in Kenya (Tecno, Infinix,
+  /// Xiaomi...) an optimised app that has been closed for a while often
+  /// gets its pushes late or never. Explained first, in BROKA's words; the
+  /// system dialog alone ("Let app always run in background?") reads like
+  /// a battery drain with no reason given.
+  Future<void> maybeAskForBackgroundDelivery() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_backgroundAskKey) ?? false) return;
+      if (await Permission.ignoreBatteryOptimizations.isGranted) {
+        await prefs.setBool(_backgroundAskKey, true);
+        return;
+      }
+      final nav = navigatorKey?.currentState;
+      if (nav == null) return;
+      // Never over a call, or before the user is past sign-in.
+      String? route;
+      nav.popUntil((r) {
+        route = r.settings.name;
+        return true;
+      });
+      if (route == '/voip-call' || route == '/splash' || route == '/auth') return;
+      await prefs.setBool(_backgroundAskKey, true);
+      final context = navigatorKey?.currentContext;
+      if (context == null || !context.mounted) return;
+      final allow = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Get calls when BROKA is closed'),
+          content: const Text(
+            'Let BROKA run in the background so calls ring and messages '
+            'arrive even when the app is closed. It only wakes up when '
+            'someone calls or writes to you.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Not now'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Allow'),
+            ),
+          ],
+        ),
+      );
+      if (allow == true) await Permission.ignoreBatteryOptimizations.request();
+    } catch (e) {
+      debugPrint('[Notifications] background-delivery prompt failed: $e');
     }
   }
 

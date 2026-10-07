@@ -1,10 +1,12 @@
 """
 BROKA - Calls Router
   • WebSocket relay  : /calls/ws/{room_id}   (WebRTC signaling)
-  • Register token   : POST /calls/register-token
-  • Initiate call    : POST /calls/initiate   (sends FCM to callee, issues room_id + call_token)
+  • Register token   : POST /calls/register-token   (and /unregister-token on sign-out)
+  • Initiate call    : POST /calls/initiate   (pushes every phone of the callee's, issues room_id + call_token)
   • Call token       : GET  /calls/{room_id}/token   (exchange for callee, e.g. after an FCM tap)
+  • Alerted          : POST /calls/{room_id}/alerted   (a callee's phone is ringing -> caller sees "Ringing")
   • Pending call     : GET  /calls/pending/{listing_id}   (callee poll fallback)
+  • Incoming call    : GET  /calls/incoming   (the same, on any listing, in one request)
   • TURN credentials : GET  /calls/turn-credentials  (Cloudflare Realtime TURN)
 
 Call SESSION/AUTHORIZATION state (who's on a call, what state it's in) lives
@@ -20,6 +22,7 @@ change to call_state.py itself.
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import logging
@@ -27,18 +30,19 @@ import secrets
 from typing import Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 
-from api.database import get_db, User, Listing, NegotiationMessage
+from api.database import get_db, AsyncSessionLocal, User, Listing, NegotiationMessage
 from api.security import get_current_user, create_call_token, decode_call_token
 import httpx
 
 from api.core.client_ip import client_ip as resolve_client_ip
 from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
-from api.core import cloudflare_turn_client, call_state
+from api.core import cloudflare_turn_client, call_state, push_devices
 from api.core.cloudflare_turn_client import CloudflareTurnError
 from api.core.call_state import CallState
 from api.core.rate_limit import (
@@ -178,11 +182,20 @@ class FcmResult:
 # at the edge of the window still has a call to join.
 CALL_PUSH_TTL_SECONDS = 60
 
+# When the server decides an unanswered call was missed, if neither phone
+# has said so by then. Both apps give up after 45 seconds of ringing and
+# report it themselves (POST /log-result); this is for when neither can: the
+# caller's app died or lost signal mid-ring, and the callee's app is closed
+# with only a notification ringing. Before it, such a call left nothing
+# behind - no missed-call notification, no card in the chat.
+CALL_RING_TIMEOUT_SECONDS = 55
+
 
 async def _send_fcm(
     token: str, title: str, body: str, data: dict, *,
     data_only: bool = False, ttl_seconds: Optional[int] = None,
     android_tag: Optional[str] = None, android_channel_id: Optional[str] = None,
+    apns_thread_id: Optional[str] = None,
 ) -> FcmResult:
     """Send an FCM push notification. Returns an FcmResult (truthy on success).
 
@@ -212,7 +225,8 @@ async def _send_fcm(
     for a visible push. The tag is what lets the app's own notification for
     the same event replace this one instead of standing beside it: Android
     keys a notification on (tag, id), and FCM draws a tagged one with id 0
-    (see NotificationService.missedCallTag in the app).
+    (see NotificationService.missedCallTag in the app). apns_thread_id is
+    iOS's equivalent grouping: a conversation's alerts stack together.
     """
     if not _get_fcm():
         logger.info("[calls] FCM not configured - skipping push")
@@ -237,9 +251,13 @@ async def _send_fcm(
             aps = messaging.Aps(content_available=True)
         else:
             apns_headers = {"apns-push-type": "alert", "apns-priority": "10"}
+            aps_kwargs = {}
+            if apns_thread_id:
+                aps_kwargs["thread_id"] = apns_thread_id
             aps = messaging.Aps(
                 alert=messaging.ApsAlert(title=title, body=body),
                 sound="default",
+                **aps_kwargs,
             )
         if ttl_seconds is not None:
             # APNs wants an absolute unix expiry; FCM wants a duration.
@@ -344,11 +362,25 @@ _apns_token_cache = None
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class RegisterTokenRequest(BaseModel):
-    fcm_token: str
+    fcm_token: str = Field(..., min_length=1, max_length=4096)
     # "fcm" (Android + iOS non-call notifications) or "apns_voip" (iOS
     # PushKit). Defaults to fcm so an older client that doesn't send this
     # keeps working unchanged.
     token_type: str = "fcm"
+    platform: Optional[str] = Field(default=None, max_length=16)
+
+
+class UnregisterTokenRequest(BaseModel):
+    fcm_token: str = Field(..., min_length=1, max_length=4096)
+
+
+class CallAlertedRequest(BaseModel):
+    # The callee's room-scoped call token, which the incoming-call push and
+    # GET /calls/pending both carry. A phone acknowledging a call from a
+    # closed app has nothing else: its access token is usually expired by
+    # then, and renewing it from a background isolate would race the app's
+    # own renewal for the same refresh token.
+    call_token: str = Field(..., min_length=1, max_length=2048)
 
 class InitiateCallRequest(BaseModel):
     listing_id:   str
@@ -428,25 +460,67 @@ async def get_turn_credentials(
 async def register_token(
     payload: RegisterTokenRequest,
     db:      AsyncSession = Depends(get_db),
-    current: User         = Depends(get_current_user),
+    current: dict         = Depends(get_current_user),
 ):
-    """Store a device push token so this user can receive incoming calls.
+    """Store a device push token so this user gets calls and messages on it.
 
-    Two transports, two columns. Android (and iOS non-call notifications)
+    Two transports, two kinds. Android (and iOS non-call notifications)
     use FCM. iOS calling additionally needs a PushKit VoIP token: only a
     VoIP push can wake a terminated app for a call, and it is delivered
-    over APNs against a different token. Writing both into one column
-    would make each registration clobber the other on a device that
-    registers both - which every iOS device does.
+    over APNs against a different token.
+
+    BUG FIX (notifications review, 2026-10-07): `current` is the dict
+    get_current_user returns, and this wrote `current.fcm_token` as if it
+    were the User row. Every registration raised AttributeError - a 500 the
+    app swallowed - so no phone's token was ever stored, and no call or
+    message could reach a phone whose app was closed.
+
+    Each phone is now its own row (api/models/push_device.py): a user signed
+    in on two phones gets pushes on both, and a phone that changes hands
+    stops getting the previous account's.
+
+    `push_enabled` tells the app whether the server can push at all, so it
+    knows whether it can stop polling while in the background.
     """
-    if payload.token_type == "apns_voip":
-        current.apns_voip_token = payload.fcm_token
-    else:
-        current.fcm_token = payload.fcm_token
-    await db.commit()
+    if payload.token_type not in push_devices.KINDS:
+        raise HTTPException(status_code=400, detail="Unknown token_type")
+    await push_devices.register(
+        db, current["id"], payload.fcm_token,
+        kind=payload.token_type, platform=payload.platform,
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # The same phone registering twice at once (a token refresh racing
+        # a sign-in): the other request created the row, so this one moves it.
+        await db.rollback()
+        await push_devices.register(
+            db, current["id"], payload.fcm_token,
+            kind=payload.token_type, platform=payload.platform,
+        )
+        await db.commit()
     logger.info("[calls] PUSH_TOKEN_REGISTERED user=%s type=%s",
-                current.id, payload.token_type)
-    return {"status": "ok", "token_type": payload.token_type}
+                current["id"], payload.token_type)
+    return {
+        "status": "ok",
+        "token_type": payload.token_type,
+        "push_enabled": _get_fcm() is not None,
+    }
+
+
+@router.post("/unregister-token")
+async def unregister_token(
+    payload: UnregisterTokenRequest,
+    db:      AsyncSession = Depends(get_db),
+    current: dict         = Depends(get_current_user),
+):
+    """Sign-out on one phone: it stops getting this user's calls, messages
+    and alerts. Without it a signed-out phone went on ringing for the
+    account that had left it."""
+    await push_devices.unregister(db, current["id"], payload.fcm_token)
+    await db.commit()
+    logger.info("[calls] PUSH_TOKEN_UNREGISTERED user=%s", current["id"])
+    return {"status": "ok"}
 
 
 @router.post("/initiate")
@@ -540,6 +614,9 @@ async def initiate_call(
         caller_name=payload.caller_name,
     )
     await call_state.update_state(room_id, CallState.ringing)
+    # The no-answer watchdog looks at it again once nobody could still be
+    # waiting for it (see ring_watchdog_tick).
+    await call_state.add_ringing(room_id, _time_now() + CALL_RING_TIMEOUT_SECONDS)
     call_token = create_call_token(current["id"], room_id)
 
     logger.info(
@@ -548,65 +625,56 @@ async def initiate_call(
     )
     logger.info("[calls] CALL_RINGING room=%s", room_id)
 
-    if not callee.fcm_token and not callee.apns_voip_token:
+    fcm_tokens = await push_devices.tokens_for(db, callee.id, "fcm")
+    voip_tokens = await push_devices.tokens_for(db, callee.id, "apns_voip")
+    if not fcm_tokens and not voip_tokens:
         # Callee has no push route on any transport. The call still goes
         # ahead - the foreground poller can still find it if their app is
-        # open - but the caller is told, so the UI can say "they may not be
-        # notified" rather than implying a phone is ringing somewhere.
+        # open - and if nobody answers, the missed call waits in the chat.
         logger.info("[calls] CALL_NO_PUSH_ROUTE room=%s callee=%s", room_id, callee.id)
         return {"status": "no_token", "message": "Callee has no push token yet",
                 "room_id": room_id, "call_token": call_token}
 
-    if callee.apns_voip_token:
+    call_data = {
+        "type":        "incoming_call",
+        "roomId":      room_id,
+        "callerName":  payload.caller_name,
+        "callerId":    current["id"],
+        "listingName": payload.listing_name or listing.name,
+        "listingId":   payload.listing_id,
+        "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
+        "callType":    payload.call_type,
+        # The callee's own token for this one room: the phone acknowledges
+        # the ring with it (POST /calls/{room_id}/alerted) even from a closed
+        # app whose access token has long expired.
+        "callToken":   create_call_token(callee.id, room_id),
+    }
+
+    for voip_token in voip_tokens:
         # iOS: a PushKit VoIP push is the ONLY thing that reliably wakes a
         # terminated app for a call, and AppDelegate.swift must report it to
         # CallKit the moment it arrives. Sent in addition to (not instead
         # of) FCM, since a user can be signed in on both platforms.
-        await _send_voip_push(
-            token=callee.apns_voip_token,
-            data={
-                "type": "incoming_call",
-                "roomId": room_id,
-                "callerName": payload.caller_name,
-                "listingName": payload.listing_name or listing.name,
-                "listingId": payload.listing_id,
-                "buyerId": buyer_id_for_thread,
-                "callType": payload.call_type,
-            },
-        )
+        await _send_voip_push(token=voip_token, data=call_data)
 
-    if not callee.fcm_token:
+    if not fcm_tokens:
         return {"status": "sent_voip", "room_id": room_id, "call_token": call_token}
 
     is_video = payload.call_type == "video"
-    pushed = await _send_fcm(
-        token=callee.fcm_token,
+    # Every phone the callee is signed in on rings at once, like WhatsApp;
+    # whichever answers or declines takes it, and the others get call_over
+    # (_push_ring_over) - or, unanswered, the missed-call push - and stop.
+    # Dead tokens are forgotten by push_user.
+    pushed = await push_devices.push_user(
+        callee.id, db=db,
         title=f"{'📹' if is_video else '📞'} Incoming {'video ' if is_video else ''}call from {payload.caller_name}",
         body=f"About: {payload.listing_name or listing.name}",
-        data={
-            "type":        "incoming_call",
-            "roomId":      room_id,
-            "callerName":  payload.caller_name,
-            "listingName": payload.listing_name or listing.name,
-            "listingId":   payload.listing_id,
-            "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
-            "callType":    payload.call_type,
-        },
+        data=call_data,
         data_only=True,
         # An incoming call is the definitive "only useful right now"
         # notification - see CALL_PUSH_TTL_SECONDS.
         ttl_seconds=CALL_PUSH_TTL_SECONDS,
     )
-    if getattr(pushed, "unregistered", False):
-        # FCM has told us this exact token is permanently dead. Leaving it
-        # on the row means every future call to this user pays for another
-        # doomed push, and - worse - /initiate keeps reporting "sent" for a
-        # notification that can never arrive. Clear it; the device
-        # re-registers a fresh token on its next GlobalPollerService.start()
-        # (every login/session-restore path) or onTokenRefresh.
-        callee.fcm_token = None
-        await db.commit()
-        logger.info("[calls] FCM_TOKEN_CLEARED user=%s reason=unregistered", callee.id)
 
     return {"status": "sent" if pushed else "fcm_disabled",
             "room_id": room_id, "call_token": call_token}
@@ -633,6 +701,68 @@ async def get_call_token(
     if call_state.is_terminal(session.state):
         raise HTTPException(status_code=410, detail="This call has already ended")
     return {"call_token": create_call_token(current["id"], room_id)}
+
+
+@router.post("/{room_id}/alerted")
+async def call_alerted(room_id: str, payload: CallAlertedRequest):
+    """A phone of the callee's is ringing with this call.
+
+    What turns the caller's "Calling..." into "Ringing...", as WhatsApp
+    does. The caller's screen used to decide that from the callee's
+    presence instead - "They were last seen offline - they may not pick
+    up" - which said nothing about whether their phone had the call: a
+    closed app is "offline" and rings perfectly well from a push.
+
+    Authorized by the callee's room-scoped call token rather than an access
+    token: the phone sends this from a closed app, straight from the push.
+    A call that is already over answers 410, so a push that arrived late
+    stops ringing at once.
+    """
+    claims = decode_call_token(payload.call_token)
+    if not claims or claims.get("room_id") != room_id:
+        raise HTTPException(status_code=401, detail="Invalid call token")
+    session = await call_state.get_session(room_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Call not found or no longer active")
+    if claims.get("sub") != session.callee_id:
+        raise HTTPException(status_code=403, detail="Only the person called can report ringing")
+    if call_state.is_terminal(session.state) or session.state not in (
+        CallState.initiating, CallState.ringing,
+    ):
+        # Answered (on this phone or another), declined, missed or ended.
+        raise HTTPException(status_code=410, detail="This call is no longer ringing")
+    first = not session.callee_alerted
+    await call_state.mark_callee_alerted(room_id)
+    if first:
+        logger.info("[calls] CALLEE_ALERTED room=%s", room_id)
+        await _tell_caller_ringing(room_id, session.caller_id)
+    return {"status": "ringing"}
+
+
+# Fire-and-forget pushes started from a request or socket. The event loop
+# keeps only a weak reference to a task, so one nobody holds can be
+# collected before it finishes.
+_background: set = set()
+
+
+def _spawn(coro) -> None:
+    # A fresh context: a task inheriting a request's is cancelled with it
+    # (see api/core/message_push.py schedule).
+    task = asyncio.create_task(coro, context=contextvars.Context())
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+async def _tell_caller_ringing(room_id: str, caller_id: str) -> None:
+    """Server-authored, never relayed: a participant cannot forge it."""
+    room = _rooms.get(room_id)
+    ws = room.get(caller_id) if room else None
+    if ws is None:
+        return
+    try:
+        await ws.send_json({"type": "callee_ringing"})
+    except Exception:
+        pass
 
 
 @router.post("/log-result")
@@ -686,40 +816,66 @@ async def log_call_result(
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found")
 
+    await _record_outcome(
+        db, session, listing, payload.outcome,
+        logged_by=current["id"], duration_secs=payload.duration_secs,
+    )
+    return {"status": "logged", "outcome": payload.outcome}
+
+
+_OUTCOME_TO_STATE = {
+    "declined":  CallState.declined,
+    "missed":    CallState.missed,
+    # "cancelled" (caller hung up before the callee ever answered) is a
+    # distinct outcome for call-history purposes, but reuses the
+    # existing `missed` CallState - both are "ringing ended with no
+    # answer" at the state-machine level; only who ended it differs,
+    # which the outcome label alone already captures.
+    "cancelled": CallState.missed,
+    "completed": CallState.ended,
+}
+
+
+async def _record_outcome(
+    db: AsyncSession, session, listing, outcome: str,
+    *, logged_by: Optional[str], duration_secs: Optional[int] = None,
+) -> None:
+    """Everything that follows a call's outcome, once mark_result_logged()
+    has made this the one record of it: the session's terminal state, the
+    caller told if they're still waiting, the call card in the thread, and
+    the callee's notifications - a missed call announced, a ring stopped on
+    their other phones.
+
+    `logged_by` is the participant who reported it, or None when the
+    no-answer watchdog decided it (ring_watchdog_tick).
+    """
     # Derived, not trusted - whichever of caller/callee ISN'T the listing's
     # seller is the buyer for chat-thread-scoping purposes, regardless of
     # which direction this particular call went (Section 13 symmetry).
     buyer_id    = session.callee_id if session.caller_id == listing.seller_id else session.caller_id
     caller_role = "seller" if session.caller_id == listing.seller_id else "buyer"
-    actual_role = "seller" if current["id"] == listing.seller_id else "buyer"
+    reporter    = logged_by or session.caller_id
+    reporter_is_seller = reporter == listing.seller_id
 
-    outcome_to_state = {
-        "declined":  CallState.declined,
-        "missed":    CallState.missed,
-        # "cancelled" (caller hung up before the callee ever answered) is a
-        # distinct outcome for call-history purposes, but reuses the
-        # existing `missed` CallState - both are "ringing ended with no
-        # answer" at the state-machine level; only who ended it differs,
-        # which the outcome label alone already captures.
-        "cancelled": CallState.missed,
-        "completed": CallState.ended,
-    }
     if not call_state.is_terminal(session.state):
-        await call_state.update_state(payload.room_id, outcome_to_state[payload.outcome])
+        await call_state.update_state(session.room_id, _OUTCOME_TO_STATE[outcome])
 
-    if payload.outcome == "declined":
+    hangup_reason = {"declined": "declined"}.get(outcome)
+    if logged_by is None and outcome == "missed":
+        hangup_reason = "no_answer"
+    if hangup_reason:
         # The caller's WS connection is very likely still open and waiting
         # (they navigate to the call screen and connect immediately on
         # placing the call) - nothing else tells them the callee declined
         # until their own ~45s ring timer gives up client-side. Notify
         # directly if we can reach them, reusing the existing 'hangup'
         # message type the client already handles - no new protocol needed.
-        room = _rooms.get(payload.room_id)
+        room = _rooms.get(session.room_id)
         if room:
             caller_ws = room.get(session.caller_id)
             if caller_ws is not None:
                 try:
-                    await caller_ws.send_json({"type": "hangup", "reason": "declined"})
+                    await caller_ws.send_json({"type": "hangup", "reason": hangup_reason})
                 except Exception:
                     pass
 
@@ -729,20 +885,20 @@ async def log_call_result(
     # same CALL_TIMEOUT event rather than a separate one.
     _event = {"declined": "CALL_DECLINED", "missed": "CALL_TIMEOUT",
               "cancelled": "CALL_CANCELLED", "completed": "CALL_ENDED"}
-    logger.info("[calls] %s room=%s listing=%s buyer=%s outcome=%s",
-                _event.get(payload.outcome, "CALL_RESULT"), payload.room_id, session.listing_id,
-                buyer_id, payload.outcome)
+    logger.info("[calls] %s room=%s listing=%s buyer=%s outcome=%s by=%s",
+                _event.get(outcome, "CALL_RESULT"), session.room_id, session.listing_id,
+                buyer_id, outcome, logged_by or "server")
 
     call_msg = NegotiationMessage(
         listing_id=session.listing_id,
-        sender_id=current["id"],
+        sender_id=reporter,
         role=caller_role,
         recipient_role=None,
-        content=payload.outcome,
+        content=outcome,
         buyer_id=buyer_id,
         via_ai=False,
         msg_type="call",
-        duration_secs=payload.duration_secs,
+        duration_secs=duration_secs,
         call_type=session.call_type,
     )
     db.add(call_msg)
@@ -754,20 +910,39 @@ async def log_call_result(
         from api.routers.media import broadcast_text_message
         await broadcast_text_message(
             session.listing_id, buyer_id,
-            call_msg, current["id"], actual_role == "seller",
+            call_msg, logged_by or "server", reporter_is_seller,
         )
     except Exception:
         pass
 
-    if payload.outcome in ("missed", "cancelled"):
+    if outcome in ("missed", "cancelled"):
         # Both are a call the callee never picked up - "cancelled" only says
         # the caller gave up first. Never a reason to fail the request.
         try:
             await _push_missed_call(db, session, listing, buyer_id)
         except Exception as exc:
-            logger.warning("[calls] missed-call push failed room=%s: %s", payload.room_id, exc)
+            logger.warning("[calls] missed-call push failed room=%s: %s", session.room_id, exc)
+    elif outcome == "declined":
+        # Declined on one phone: the callee's other phones are still ringing.
+        await _push_ring_over(session)
 
-    return {"status": "logged", "outcome": payload.outcome}
+
+async def _push_ring_over(session) -> None:
+    """Stop the ring on the callee's other phones once one of them has
+    answered or declined. Only worth a push when there IS another phone -
+    the one that acted has already taken its own notification down."""
+    try:
+        async with AsyncSessionLocal() as own:
+            tokens = await push_devices.tokens_for(own, session.callee_id)
+        if len(tokens) < 2:
+            return
+        await push_devices.push_user(
+            session.callee_id, title="", body="",
+            data={"type": "call_over", "roomId": session.room_id},
+            data_only=True, ttl_seconds=CALL_PUSH_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("[calls] ring-over push failed room=%s: %s", session.room_id, exc)
 
 
 # A missed call stays worth telling the callee about for a day; past that, a
@@ -787,16 +962,11 @@ async def _push_missed_call(db: AsyncSession, session, listing, buyer_id: str) -
     the app running. Its roomId lets the app take down that call's ringing
     notification when it is still up.
     """
-    callee = (await db.execute(
-        select(User).where(User.id == session.callee_id)
-    )).scalar_one_or_none()
-    if callee is None or not callee.fcm_token:
-        return
     is_video = session.call_type == "video"
     callee_role = "seller" if session.callee_id == listing.seller_id else "buyer"
     who = (session.caller_name or "").strip() or "Someone"
-    pushed = await _send_fcm(
-        token=callee.fcm_token,
+    await push_devices.push_user(
+        session.callee_id, db=db,
         title=f"Missed {'video ' if is_video else ''}call from {who}",
         body=f"About: {listing.name}",
         data={
@@ -815,10 +985,6 @@ async def _push_missed_call(db: AsyncSession, session, listing, buyer_id: str) -
         android_tag=f"missed_{session.listing_id}_{buyer_id}",
         android_channel_id="broka_messages",
     )
-    if getattr(pushed, "unregistered", False):
-        callee.fcm_token = None
-        await db.commit()
-        logger.info("[calls] FCM_TOKEN_CLEARED user=%s reason=unregistered", callee.id)
 
 
 # ── Call history ──────────────────────────────────────────────────────────────
@@ -1008,6 +1174,21 @@ async def call_signaling(
         await call_state.update_state(room_id, CallState.accepted)
         logger.info("[calls] CALL_ACCEPTED room=%s user=%s", room_id, uid)
     logger.info("[calls] user=%s joined room=%s peers=%d", uid, room_id, len(room))
+    if uid == session.caller_id:
+        # The callee's phone may have acknowledged the ring before the
+        # caller's socket existed (the push often beats the caller's own
+        # media setup). Re-read: the ack can land between the read above
+        # and this socket being registered, and would then reach no one.
+        latest = await call_state.get_session(room_id)
+        if latest is not None and latest.callee_alerted:
+            try:
+                await websocket.send_json({"type": "callee_ringing"})
+            except Exception:
+                pass
+    elif session.state in (CallState.initiating, CallState.ringing):
+        # Answered here: the callee's other phones stop ringing. Off the
+        # join path - the call must not wait on FCM.
+        _spawn(_push_ring_over(session))
 
     # Notify both peers when room is ready for SDP exchange
     if len(room) == 2:
@@ -1234,6 +1415,107 @@ async def call_signaling(
                         })
                     except Exception:
                         pass
+
+
+@router.get("/incoming")
+async def get_incoming_call(
+    db:      AsyncSession = Depends(get_db),
+    current: dict         = Depends(get_current_user),
+):
+    """The call ringing for the signed-in user right now, on any listing.
+
+    The app's foreground sweep used to ask GET /pending/{listing_id} once
+    per chat thread every seven seconds - forty requests for someone with
+    forty conversations, to learn there was no call. This answers the same
+    question in one lookup (call_state.get_incoming_call), with the same
+    shape as /pending plus the listing and thread the call is about.
+    """
+    session = await call_state.get_incoming_call(current["id"])
+    if session is None or session.caller_id == current["id"]:
+        return {"has_call": False}
+    listing = (await db.execute(
+        select(Listing.seller_id, Listing.name).where(Listing.id == session.listing_id)
+    )).one_or_none()
+    seller_id = listing.seller_id if listing else None
+    return {
+        "has_call":    True,
+        "room_id":     session.room_id,
+        "listing_id":  session.listing_id,
+        "listing_name": listing.name if listing else "",
+        # The thread the call belongs to. A buyer can call a seller they
+        # have never messaged, so the app may have no thread to read it from.
+        "buyer_id":    session.callee_id if session.caller_id == seller_id else session.caller_id,
+        "caller_name": session.caller_name,
+        "caller_id":   session.caller_id,
+        "call_type":   session.call_type,
+        "call_token":  create_call_token(current["id"], session.room_id),
+    }
+
+
+async def ring_watchdog_tick(now: Optional[float] = None) -> int:
+    """Settle every call whose ring deadline has passed with nobody having
+    answered or reported it. Returns how many were recorded as missed.
+
+    Normally a phone reports the outcome first (log-result), and this finds
+    the call already settled and does nothing. It matters when no phone
+    can: then the callee gets the missed-call notification and both sides
+    the call card, exactly as if the caller's app had hung up.
+    """
+    settled = 0
+    for room_id in await call_state.pop_due_ringing(now):
+        try:
+            session = await call_state.get_session(room_id)
+            if session is None:
+                continue
+            # `expired` is how get_session reports a session that outlived
+            # its TTL still ringing - unanswered all the same.
+            if session.state not in (CallState.initiating, CallState.ringing, CallState.expired):
+                continue
+            if not await call_state.mark_result_logged(room_id):
+                continue
+            async with AsyncSessionLocal() as db:
+                listing = (await db.execute(
+                    select(Listing).where(Listing.id == session.listing_id)
+                )).scalar_one_or_none()
+                if listing is None:
+                    continue
+                await _record_outcome(db, session, listing, "missed", logged_by=None)
+            settled += 1
+        except Exception as exc:
+            logger.warning("[calls] ring watchdog failed room=%s: %s", room_id, exc)
+    return settled
+
+
+RING_WATCHDOG_INTERVAL_SECONDS = 5
+_ring_watchdog_task: Optional[asyncio.Task] = None
+
+
+async def _ring_watchdog_loop() -> None:
+    while True:
+        await asyncio.sleep(RING_WATCHDOG_INTERVAL_SECONDS)
+        try:
+            await ring_watchdog_tick()
+        except Exception as exc:
+            logger.warning("[calls] ring watchdog tick failed: %s", exc)
+
+
+def start_ring_watchdog() -> None:
+    """Started from main.py's lifespan. One cheap read every few seconds:
+    the due calls, if any, from call_state's ringing index."""
+    global _ring_watchdog_task
+    if _ring_watchdog_task is None or _ring_watchdog_task.done():
+        _ring_watchdog_task = asyncio.create_task(_ring_watchdog_loop())
+
+
+async def stop_ring_watchdog() -> None:
+    global _ring_watchdog_task
+    task, _ring_watchdog_task = _ring_watchdog_task, None
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 @router.get("/pending/{listing_id}")

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -163,6 +164,14 @@ class ApiService {
   /// had signed out. Revoking is best effort - a phone with no signal still
   /// signs out locally.
   static Future<void> signOut() async {
+    // While still signed in: this phone stops getting this account's calls
+    // and messages. Before, a phone that changed hands kept ringing for
+    // whoever had signed out of it.
+    final pushToken = registeredPushToken;
+    if (pushToken != null) {
+      await unregisterPushToken(pushToken);
+      registeredPushToken = null;
+    }
     final refreshToken = _refreshToken;
     if (refreshToken != null) {
       try {
@@ -181,6 +190,7 @@ class ApiService {
   static Future<void> signOutEverywhere() async {
     await apiClient.post('/auth/token/revoke-all', const <String, dynamic>{},
         timeout: const Duration(seconds: 15));
+    registeredPushToken = null;
     await clearSession();
   }
 
@@ -1499,26 +1509,112 @@ class ApiService {
 
   // ── FCM / Push Notifications ───────────────────────────────────────────────
 
+  /// This phone's FCM token as last registered, so signing out can take it
+  /// off the account.
+  static String? registeredPushToken;
+
   /// Register this device's FCM token with the backend so we can receive
-  /// incoming-call push notifications.
-  static Future<void> registerFcmToken(String token) =>
+  /// calls, messages and alerts on it with the app closed.
+  static Future<bool?> registerFcmToken(String token) =>
       registerPushToken(token, tokenType: 'fcm');
 
-  /// Registers a push token for incoming-call delivery.
+  /// Registers a push token for this phone. Returns whether the server can
+  /// push at all (`push_enabled`), or null when registering failed.
   ///
   /// [tokenType] is 'fcm' (Android, and iOS non-call notifications) or
   /// 'apns_voip' (iOS PushKit). They are different tokens delivered over
   /// different transports and must be stored separately - iOS needs a VoIP
   /// push, not a normal alert, to wake a terminated app for a call.
-  static Future<void> registerPushToken(String token,
+  ///
+  /// Through [apiClient], which renews an expired session and retries: the
+  /// raw request this used to be sent the access token as it was - often
+  /// expired by the time a restored session got here - and ignored the 401.
+  static Future<bool?> registerPushToken(String token,
       {String tokenType = 'fcm'}) async {
     try {
-      await http.post(
-        Uri.parse('$baseUrl/calls/register-token'),
-        headers: _headers,
-        body: jsonEncode({'fcm_token': token, 'token_type': tokenType}),
-      ).timeout(const Duration(seconds: 10));
+      final res = await apiClient.post('/calls/register-token', {
+        'fcm_token': token,
+        'token_type': tokenType,
+        'platform': _platformName,
+      }, timeout: const Duration(seconds: 15));
+      if (tokenType == 'fcm') registeredPushToken = token;
+      return res is Map ? res['push_enabled'] == true : false;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Take this phone off the signed-in account, so it stops getting that
+  /// account's calls and messages. Best effort - signing out never waits
+  /// on it for long.
+  static Future<void> unregisterPushToken(String token) async {
+    try {
+      await apiClient.post('/calls/unregister-token', {'fcm_token': token},
+          timeout: const Duration(seconds: 6));
     } catch (_) {}
+  }
+
+  static String get _platformName {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return 'ios';
+      case TargetPlatform.android:
+        return 'android';
+      default:
+        return defaultTargetPlatform.name;
+    }
+  }
+
+  /// Tell the server this phone is ringing with [roomId], so the caller's
+  /// screen says "Ringing". Authorized by the call token the incoming-call
+  /// push (or GET /calls/pending) carries - it works from a closed app,
+  /// whose access token is usually long expired.
+  ///
+  /// [CallAlertResult.over] means the call already ended: the push arrived
+  /// late, and whatever is ringing should stop.
+  static Future<CallAlertResult> reportCallAlerted(
+      String roomId, String callToken) async {
+    if (roomId.isEmpty || callToken.isEmpty) return CallAlertResult.unknown;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/alerted'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'call_token': callToken}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) return CallAlertResult.ringing;
+      if (res.statusCode == 404 || res.statusCode == 410) {
+        return CallAlertResult.over;
+      }
+    } catch (_) {}
+    return CallAlertResult.unknown;
+  }
+
+  /// The call ringing for me right now, on any listing: one request instead
+  /// of one per chat thread. `supported` is false against a server without
+  /// GET /calls/incoming, so the caller can fall back to asking per listing.
+  static Future<({bool supported, Map<String, dynamic>? call})>
+      checkAnyIncomingCall() async {
+    Future<http.Response> send() => http
+        .get(Uri.parse('$baseUrl/calls/incoming'), headers: _headers)
+        .timeout(const Duration(seconds: 5));
+    try {
+      var response = await send();
+      if (response.statusCode == 401 && await _tryRelogin()) {
+        response = await send();
+      }
+      if (response.statusCode == 404 || response.statusCode == 405) {
+        return (supported: false, call: null);
+      }
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map && data['has_call'] == true) {
+          return (supported: true, call: Map<String, dynamic>.from(data));
+        }
+      }
+    } catch (_) {}
+    return (supported: true, call: null);
   }
 
   /// Notify the seller (via FCM) that a call is incoming, and get back the
@@ -1899,3 +1995,14 @@ class ApiService {
 }
 
 
+/// What the server said when this phone reported an incoming call ringing.
+enum CallAlertResult {
+  /// The call is still ringing; the caller now sees "Ringing".
+  ringing,
+
+  /// The call is over (answered elsewhere, declined, missed, ended).
+  over,
+
+  /// No answer from the server - assume it is still ringing.
+  unknown,
+}

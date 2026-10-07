@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Accent of notifications Android draws from a push (the manifest's
+         default_notification_color); NotificationService uses the same
+         violet for the ones the app posts. -->
+    <color name="notification_accent">#8B5CF6</color>
+</resources>

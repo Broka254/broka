@@ -1,3 +1,35 @@
+# Calls and messages with the app closed (2026-10-07)
+
+Raised by the owner: a call rang only while the app was open, the caller
+assumed anyone not "active" couldn't be reached, and messages sent while
+someone was away weren't there until they opened BROKA. NOTIFICATIONS.md
+has the review and the design.
+
+**Why nothing reached a closed app.** Released APKs were built without
+`google-services.json` (CI never wrote it), so Firebase never started. And
+`POST /calls/register-token` returned 500 on every call (it treated the
+user dict as a `User` row), so the server never had a token. CI now writes
+the file from the `GOOGLE_SERVICES_JSON` secret. The endpoint stores one
+row per phone (`push_devices`), takes a phone away from the account that
+had it before, and unregisters on sign-out.
+
+**Messages are pushed** (`api/core/message_push.py`). Every committed chat
+message goes to whoever `/history` says may see it, debounced per thread,
+as one notification per conversation ("3 new messages · ..."), drawn by
+Android with the app closed.
+
+**Calls ring every phone and report back.** The callee's phone
+acknowledges the ring (`POST /calls/{room}/alerted`), which turns the
+caller's "Calling…" into "Ringing…" instead of a guess from presence. A
+call nobody answered and no phone reported becomes a missed call
+(`ring_watchdog_tick`). The caller's ring is no longer cut off at 30
+seconds as a failure, and `GET /calls/incoming` replaces the per-thread
+call polling.
+
+**App.** The poller stops in the background once pushes work. There is a
+white status-bar icon, an Updates channel for deal alerts, and a one-time
+prompt to be left out of battery optimisation.
+
 # Zeno's listing descriptions: lines a buyer scans, and questions for the seller (2026-10-06)
 
 Raised by the owner: the description Zeno wrote from a listing's photo read

@@ -1221,6 +1221,7 @@ async def init_db():
         ("api.models.listing_payment", ("ListingPayment",)),
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
+        ("api.models.push_device", ("PushDevice",)),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))

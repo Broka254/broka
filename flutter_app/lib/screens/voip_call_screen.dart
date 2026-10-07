@@ -40,6 +40,10 @@ class VoipCallScreen extends StatefulWidget {
 
   static bool isPlaceholderName(String name) =>
       _placeholderNames.contains(name.trim().toLowerCase());
+
+  /// How long the caller waits for an answer: as long as the callee's
+  /// phone rings (NotificationService.showIncomingCall's ringFor).
+  static const Duration noAnswerAfter = Duration(seconds: 45);
   @override
   State<VoipCallScreen> createState() => _VoipCallScreenState();
 }
@@ -53,8 +57,17 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // Who the other person is, so a placeholder name can be replaced with
   // theirs (_resolvePeer). Empty from call sites that don't know.
   String _peerId      = '';
-  // Peer presence at dial time. null == unknown (older call sites).
+  // Peer presence at dial time, for the online dot on their face only.
+  // null == unknown (older call sites).
   bool? _peerOnline;
+  // Caller: a phone of theirs has the call ringing (the server's
+  // callee_ringing). This, not their "last seen", is what decides between
+  // "Calling" and "Ringing": an app that is closed is "offline" and still
+  // rings from a push.
+  bool _calleeAlerted = false;
+  // Caller: nobody answered within [noAnswerAfter], and we hung up.
+  bool _noAnswer = false;
+  Timer? _noAnswerTimer;
   String _listingName = '';
   bool   _isCaller    = true;
   bool   _argsLoaded  = false;
@@ -150,6 +163,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       if (!mounted) return;
       setState(() => _callState = s);
       if (s == CallState.connected) {
+        _noAnswerTimer?.cancel();
         _everConnected = true;
         CallKitService.instance.reportConnected(_svc.roomId);
         HapticFeedback.mediumImpact();
@@ -157,6 +171,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         _connectedCtrl.forward(from: 0);
       }
       if (s == CallState.ended || s == CallState.failed) {
+        _noAnswerTimer?.cancel();
         _logCallResultOnce();
         CallForegroundService.stop();
         // Take the call out of iOS's native UI - otherwise the system keeps
@@ -173,6 +188,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     };
     _svc.onError = (msg) {
       if (mounted) setState(() => _errorMsg = msg);
+    };
+    _svc.onPeerRinging = () {
+      if (mounted) setState(() => _calleeAlerted = true);
     };
     _svc.onLocalMediaReady = () {
       if (!mounted) return;
@@ -233,6 +251,20 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       CallKitService.instance.reportOutgoingCall(
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
       _svc.start();
+      // The caller's no-answer window - as long as the callee's phone
+      // rings. There wasn't one: the connect timeout stood in for it and
+      // ended every unanswered call after 30 seconds as a failure.
+      _noAnswerTimer = Timer(VoipCallScreen.noAnswerAfter, () {
+        // Answered and still connecting: the connect timeout owns that.
+        if (!mounted || _everConnected || _endingCall || _svc.peerJoined) return;
+        if (_callState != CallState.calling &&
+            _callState != CallState.connecting) {
+          return;
+        }
+        _endingCall = true;
+        setState(() => _noAnswer = true);
+        _svc.hangup(); // logged as "cancelled": the callee sees a missed call
+      });
     } else if (autoAccept) {
       // The user already answered (notification tap, or Answer in the
       // in-chat incoming-call dialog) - don't make them decide again.
@@ -316,6 +348,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
 
   @override
   void dispose() {
+    _noAnswerTimer?.cancel();
     RingtoneService.instance.stop();
     CallForegroundService.stop();
     CallKitService.instance.onEndedByNative = null;
@@ -432,10 +465,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // avatar ring visibly changes the moment the call actually reaches
       // them - gold = still our side, blue = their phone is ringing.
       case CallState.ringing:    return BrokaColors.neonBlue;
-      // Gold, not blue, when we have no reason to believe it reached them:
-      // the ring colour is the signal that the far end was alerted.
+      // Gold until their phone has the call: the ring colour is the signal
+      // that the far end was alerted.
       case CallState.calling:
-        return _peerOnline == false ? BrokaColors.gold : BrokaColors.neonBlue;
+        return _calleeAlerted ? BrokaColors.neonBlue : BrokaColors.gold;
       default:                   return BrokaColors.gold;
     }
   }
@@ -468,21 +501,19 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     switch (_callState) {
       case CallState.connecting:  return 'Connecting…';
       case CallState.calling:
-        // Only claim their phone is ringing if we have reason to think it
-        // is. `calling` means our offer is out - it does NOT mean anyone
-        // received it. When presence says the peer is offline, the offer is
-        // sitting in a room nobody is joined to, and telling the caller
-        // "Ringing… / Their phone is ringing" is a straightforward lie that
-        // keeps them holding the phone to their ear for 45 seconds.
-        //
-        // Unknown presence (null, from an older call site) keeps the
-        // optimistic label - no worse than before, and never asserted on
-        // evidence we do not have.
-        return _peerOnline == false ? 'Trying to reach them…' : 'Ringing…';
+        // WhatsApp's two words, on the same evidence: "Calling" while the
+        // call has reached only the server, "Ringing" once a phone of
+        // theirs acknowledged it (_calleeAlerted). It used to guess from
+        // presence - "Trying to reach them…" for anyone not "online", which
+        // a closed app always is, though its phone rings from a push.
+        return _calleeAlerted ? 'Ringing…' : 'Calling…';
       case CallState.ringing:     return 'Connecting…';
       case CallState.recovering:  return 'Reconnecting…';
       case CallState.ended:
-        return _everConnected ? 'Call ended · $_durationLabel' : 'Call ended';
+        if (_everConnected) return 'Call ended · $_durationLabel';
+        if (_svc.remoteEndReason == 'declined') return 'Call declined';
+        if (_noAnswer || _svc.remoteEndReason == 'no_answer') return 'No answer';
+        return 'Call ended';
       case CallState.failed:      return _errorMsg ?? 'Call failed';
       default:                    return '';
     }
@@ -504,9 +535,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       return 'The connection dropped - hold on';
     }
     if (_callState == CallState.calling && _isCaller) {
-      return _peerOnline == false
-          ? "They were last seen offline - they may not pick up"
-          : 'Their phone is ringing';
+      return _calleeAlerted
+          ? 'Their phone is ringing'
+          : "Reaching their phone - they'll see you called if they can't answer";
+    }
+    if (_callState == CallState.ended && _isCaller && !_everConnected &&
+        (_noAnswer || _svc.remoteEndReason == 'no_answer')) {
+      return "They'll see that you called";
     }
     return null;
   }

@@ -164,6 +164,10 @@ class CallSession:
     expires_at:   float  # hard TTL regardless of state - see DEFAULT_SESSION_TTL_SECONDS
     caller_connected: bool = False
     callee_connected: bool = False
+    # A phone of the callee's has the call on screen (it acknowledged the
+    # push, or found the call by polling) - what "Ringing" means on the
+    # caller's screen. Until then the caller sees "Calling".
+    callee_alerted: bool = False
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -315,6 +319,38 @@ class _RedisCallStore:
         await self._write(session, ttl_seconds=CONNECTED_SESSION_TTL_SECONDS)
         return session
 
+    async def mark_callee_alerted(self, room_id: str) -> Optional[CallSession]:
+        session = await self.get(room_id)
+        if session is None or session.callee_alerted or is_terminal(session.state):
+            return session
+        session.callee_alerted = True
+        remaining = max(int(session.expires_at - time.time()), 1)
+        await self._write(session, ttl_seconds=remaining)
+        return session
+
+    # Calls still ringing, scored by when they stop being worth ringing (see
+    # call_state.add_ringing). A sorted set rather than a key per call so
+    # the watchdog finds every due call in one read - and in Redis, so a
+    # restart in the middle of a ring doesn't lose it.
+    _RINGING_KEY = f"{_KEY_PREFIX}ringing"
+
+    async def add_ringing(self, room_id: str, deadline: float) -> None:
+        client = await self._get_client()
+        await client.zadd(self._RINGING_KEY, {room_id: deadline})
+
+    async def pop_due_ringing(self, now: float) -> list:
+        client = await self._get_client()
+        due = await client.zrangebyscore(self._RINGING_KEY, "-inf", now)
+        if not due:
+            return []
+        # ZREM reports what it removed, so of two instances racing for the
+        # same call only one gets it.
+        mine = []
+        for room_id in due:
+            if await client.zrem(self._RINGING_KEY, room_id):
+                mine.append(room_id)
+        return mine
+
     def _pending_key(self, listing_id: str, callee_id: str) -> str:
         return f"{_KEY_PREFIX}pending:{listing_id}:{callee_id}"
 
@@ -361,6 +397,7 @@ class _InMemoryCallStore:
         self._store: dict = {}
         self._pending: dict = {}
         self._logged: dict = {}  # room_id -> unix timestamp marked, for mark_result_logged()
+        self._ringing: dict = {}  # room_id -> ring deadline, for pop_due_ringing()
         self._lock = asyncio.Lock()
 
     async def create(self, session: CallSession, ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS) -> None:
@@ -419,6 +456,24 @@ class _InMemoryCallStore:
                 return session
             session.expires_at = time.time() + CONNECTED_SESSION_TTL_SECONDS
             return session
+
+    async def mark_callee_alerted(self, room_id: str) -> Optional[CallSession]:
+        async with self._lock:
+            session = self._store.get(room_id)
+            if session is not None and not is_terminal(session.state):
+                session.callee_alerted = True
+            return session
+
+    async def add_ringing(self, room_id: str, deadline: float) -> None:
+        async with self._lock:
+            self._ringing[room_id] = deadline
+
+    async def pop_due_ringing(self, now: float) -> list:
+        async with self._lock:
+            due = [r for r, d in self._ringing.items() if d <= now]
+            for room_id in due:
+                self._ringing.pop(room_id, None)
+            return due
 
     def _pending_key(self, listing_id: str, callee_id: str) -> str:
         return f"{listing_id}:{callee_id}"
@@ -507,7 +562,39 @@ async def create_session(
     # while a call rings - is a single direct lookup keyed by (listing_id,
     # callee_id) instead of a scan over every active call session.
     await _store.set_pending(listing_id, callee_id, room_id, ttl_seconds=ttl_seconds)
+    # And one keyed by the callee alone, for GET /calls/incoming: the app
+    # used to ask /pending once per chat thread on every 7-second sweep, so
+    # someone with 40 conversations made 40 requests to learn they had no
+    # call. A person takes one call at a time, so the latest is the one.
+    await _store.set_pending(_ANY_LISTING, callee_id, room_id, ttl_seconds=ttl_seconds)
     return session
+
+
+# The listing slot of the per-callee index above. Not a real listing id.
+_ANY_LISTING = "*"
+
+
+async def get_incoming_call(callee_id: str) -> Optional[CallSession]:
+    """The call ringing for this user right now, on any listing - or None.
+    Same liveness rule as get_pending_call."""
+    return await get_pending_call(_ANY_LISTING, callee_id)
+
+
+async def mark_callee_alerted(room_id: str) -> Optional[CallSession]:
+    """A phone of the callee's is showing the call. Idempotent; a no-op on
+    a call that is over."""
+    return await _store.mark_callee_alerted(room_id)
+
+
+async def add_ringing(room_id: str, deadline: float) -> None:
+    """Hand a ringing call to the no-answer watchdog (api/routers/calls.py
+    ring_watchdog_tick), which looks at it again at `deadline`."""
+    await _store.add_ringing(room_id, deadline)
+
+
+async def pop_due_ringing(now: Optional[float] = None) -> list:
+    """Room ids whose ring deadline has passed, each returned once."""
+    return await _store.pop_due_ringing(time.time() if now is None else now)
 
 
 async def get_session(room_id: str) -> Optional[CallSession]:

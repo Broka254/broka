@@ -7,7 +7,7 @@ self-register on import.
 
 For each deal event, we:
   1. Look up the FCM token of the recipient(s) in the DB
-  2. Send a notification via push_service
+  2. Send a notification to every phone they are signed in on (push_devices)
 
 Notifications are fire-and-forget — failures are logged, not raised.
 
@@ -43,7 +43,6 @@ from __future__ import annotations
 import logging
 
 from api.core.event_catalog import subscribe_to, EventType, EventEnvelope
-from api.core.push import push_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,21 +50,23 @@ logger = logging.getLogger(__name__)
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 async def _notify(user_id: str, title: str, body: str, data: dict) -> None:
-    """Fetch FCM token for user and send notification."""
-    try:
-        from api.database import AsyncSessionLocal, User
-        from sqlalchemy import select
-        async with AsyncSessionLocal() as db:
-            r = await db.execute(
-                select(User.fcm_token).where(User.id == user_id)
-            )
-            row = r.one_or_none()
-            token = row[0] if row else None
+    """Send a notification to every phone the user is signed in on.
 
-        if token:
-            await push_service.send(token, title, body, data)
-        else:
-            logger.debug("[push_sub] No FCM token for user %s", user_id)
+    It used to read the single users.fcm_token and send through
+    push_service, so a deal alert reached only the user's latest phone, a
+    dead token was retried forever, and Android filed every alert under a
+    channel the app never creates ("broka_deals"), which it shows as
+    "Miscellaneous". Now the same sender as calls and messages, on the
+    app's Updates channel.
+    """
+    try:
+        from api.core import push_devices
+        sent = await push_devices.push_user(
+            user_id, title=title, body=body, data=data,
+            android_channel_id="broka_updates",
+        )
+        if not sent:
+            logger.debug("[push_sub] no push delivered to user %s", user_id)
     except Exception as e:
         logger.error("[push_sub] Notify failed user=%s: %s", user_id, e)
 

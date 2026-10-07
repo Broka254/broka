@@ -30,6 +30,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+    <!-- Lets the app ask, once, to be left out of battery optimisation
+         (NotificationService.maybeAskForBackgroundDelivery). On the
+         aggressive Android builds common in Kenya, an optimised app that
+         is closed often gets its pushes late or not at all - an incoming
+         call that never rings. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.front" android:required="false"/>
@@ -121,6 +127,19 @@
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
             android:exported="false"/>
+        <!-- How Android draws a push itself (a message, a missed call, a
+             deal update) while the app is closed: the white status-bar
+             icon rather than the launcher square, BROKA's violet, and the
+             Messages channel when a push names none. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_broka"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_accent"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="broka_messages"/>
         <meta-data android:name="flutterEmbedding" android:value="2"/>
     </application>
 </manifest>

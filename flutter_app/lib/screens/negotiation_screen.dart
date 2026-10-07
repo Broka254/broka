@@ -593,6 +593,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   void _notifyIfAway(ChatMessage cm) {
     final listing = _listing;
     if (_appVisible || listing == null || cm.msgType == 'call') return;
+    // The server pushes every message, and Android shows that push with the
+    // app in any state - posting this one too would buzz twice.
+    if (GlobalPollerService.instance.pushReady) return;
     final who = _counterpartyName;
     final preview = switch (cm.msgType) {
       'image' => '\u{1F4F7} Photo',
@@ -602,9 +605,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     NotificationService.instance.showNewMessage(
       fromName: who,
       preview: preview,
-      // The key GlobalPollerService posts this thread's messages under, so
-      // the two collapse into one notification instead of stacking.
-      threadKey: 'thread_${listing.id}_${_buyerId ?? ''}',
+      // One notification per conversation, shared with GlobalPollerService
+      // and the server's push (NotificationService.threadTag).
+      listingId: listing.id,
+      buyerId: _buyerId,
       payload: {
         'type': 'new_message',
         'listingId': listing.id,

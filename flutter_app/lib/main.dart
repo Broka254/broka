@@ -72,39 +72,9 @@ Map<String, dynamic>? pendingColdStartCallData;
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  if (message.data['type'] == 'missed_call') {
-    // The phone draws this push itself (it is a notification push), so
-    // nothing to post - but the call's ringing notification, posted from
-    // the incoming-call push, may still be up and ringing: nothing else
-    // can tell a closed app that the caller gave up.
-    final roomId = message.data['roomId'] as String?;
-    if (roomId == null || roomId.isEmpty) return;
-    final svc = NotificationService.instance;
-    await svc.initialize(
-        navKey: GlobalKey<NavigatorState>(), requestPermission: false);
-    await svc.cancelIncomingCall(roomId);
-    return;
-  }
-  if (message.data['type'] == 'incoming_call') {
-    // A fresh, throwaway navigator key - nothing in this isolate ever
-    // attaches a real Navigator to it, and nothing needs to: showing the
-    // notification is all that happens here. A tap on it is handled
-    // separately, in the main isolate, via onMessageOpenedApp/
-    // getInitialMessage once the app actually comes to the foreground.
-    final svc = NotificationService.instance;
-    await svc.initialize(
-        navKey: GlobalKey<NavigatorState>(), requestPermission: false);
-    await svc.showIncomingCall(
-      roomId: message.data['roomId'] as String? ?? '',
-      callerName: message.data['callerName'] as String? ?? 'Someone',
-      listingName: message.data['listingName'] as String? ?? 'your listing',
-      isVideo: message.data['callType'] == 'video',
-      payload: message.data,
-      // Nothing outside this isolate could stop a ringer started here -
-      // see showIncomingCall's ringInApp.
-      ringInApp: false,
-    );
-  }
+  // Calls ring, rings stop, messages are recorded as announced - see
+  // NotificationService.handleBackgroundMessage.
+  await NotificationService.handleBackgroundMessage(message.data);
 }
 
 /// The session ended (ApiService.onSessionEnded): show sign-in, saying why.
@@ -168,7 +138,13 @@ void main() async {
     // (via the same showIncomingCall the poller already uses) is what the
     // user actually sees.
     FirebaseMessaging.onMessage.listen((message) {
-      NotificationService.instance.handleForegroundFcmMessage(message.data);
+      NotificationService.instance.handleForegroundFcmMessage({
+        ...message.data,
+        // A message push's own wording, which the app shows itself while
+        // in front (Android draws it only when the app is not).
+        if (message.notification?.title != null) 'title': message.notification!.title,
+        if (message.notification?.body != null) 'body': message.notification!.body,
+      });
     });
 
     // App was backgrounded (not terminated) and the user tapped the

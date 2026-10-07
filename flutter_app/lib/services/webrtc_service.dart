@@ -132,6 +132,16 @@ class WebRtcService {
   // ── Callbacks ─────────────────────────────────────────────────────────────
   ValueChanged<CallState>? onStateChange;
   ValueChanged<String>?    onError;
+  /// Caller only: a phone of the callee's is ringing (the server's
+  /// `callee_ringing`, sent once that phone acknowledged the call). Until
+  /// then the caller has only reached the server - "Calling", not
+  /// "Ringing".
+  VoidCallback?            onPeerRinging;
+
+  /// Why the other side ended the call, when the server said: "declined",
+  /// or "no_answer" when nobody picked up. Set before the `ended` state
+  /// change it explains.
+  String? remoteEndReason;
   // Fires once the remote party's media is flowing - for a video call this
   // is also the cue that remoteRenderer now has a live feed attached.
   VoidCallback?            onRemoteStreamConnected;
@@ -504,6 +514,14 @@ class WebRtcService {
     _armWsWatchdog();
   }
 
+  /// Caller: the callee has answered and joined (our offer went out to
+  /// them). From here a slow start is negotiation, not "no answer".
+  bool get peerJoined => _offerSent;
+
+  /// A signalling frame as if the server had sent it - for tests.
+  @visibleForTesting
+  void debugReceiveSignal(String raw) => _onSignal(raw);
+
   void _onSignal(dynamic raw, [int? epoch]) {
     if (epoch != null && epoch != _wsEpoch) return; // superseded socket
     _armWsWatchdog();
@@ -599,10 +617,20 @@ class WebRtcService {
             _onPeerSignalingRestored();
           }
           break;
+        case 'callee_ringing':
+          // Server-authored, never relayed: the callee's phone has the
+          // call. Only meaningful while we're still waiting for an answer.
+          if (isCaller && !_remoteDescriptionSet &&
+              _state != CallState.ended && _state != CallState.failed) {
+            onPeerRinging?.call();
+          }
+          break;
         case 'hangup':
           // Now genuinely only sent when somebody deliberately ended the
-          // call (the peer's own hangup, or the server relaying a decline).
-          debugPrint('WebRTC: CALL_ENDED room=$roomId reason=remote_hangup');
+          // call (the peer's own hangup, or the server relaying a decline
+          // or deciding nobody answered).
+          remoteEndReason = m['reason'] as String?;
+          debugPrint('WebRTC: CALL_ENDED room=$roomId reason=${remoteEndReason ?? 'remote_hangup'}');
           _cleanup();
           _setState(CallState.ended);
           break;
@@ -853,6 +881,8 @@ class WebRtcService {
     try {
       if (_pc == null) return;
       _offerSent = true;
+      // The callee has joined: from here the connect timeout applies.
+      if (_state == CallState.calling) _armConnectTimeout();
       debugPrint('WebRTC: OFFER_CREATED room=$roomId');
       final offer = await _pc!.createOffer(
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
@@ -1833,7 +1863,15 @@ class WebRtcService {
       return;
     }
     _state = s;
-    if (s == CallState.calling || s == CallState.ringing) {
+    // The caller is `calling` from the moment its socket is up - while the
+    // callee's phone is still ringing and nobody has answered. Arming the
+    // 30s connect timeout then cut every call off after 30 seconds of
+    // ringing as "Call timed out while connecting", fifteen seconds before
+    // the callee's phone stopped ringing. For the caller it starts when the
+    // offer goes out (_sendOffer): the callee has answered and joined, and
+    // from there 30s really is a stuck negotiation. The no-answer window is
+    // the call screen's (and the server's).
+    if (s == CallState.ringing || (s == CallState.calling && _offerSent)) {
       _armConnectTimeout();
     } else {
       _disarmConnectTimeout();
