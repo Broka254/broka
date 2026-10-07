@@ -71,3 +71,6 @@ node_modules/
 
 # ── Rust (backend/native) ───────────────────────────────────────────
 backend/native/target/
+
+# Redis snapshots from running the backend tests against a local Redis
+*.rdb
