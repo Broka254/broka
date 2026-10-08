@@ -30,6 +30,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../features/safe_payment/escrow_callout.dart';
 import '../features/stores/data/store_cart.dart';
 import '../features/stores/presentation/store_cart_screen.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
@@ -226,6 +227,15 @@ class _ProductScreenState extends State<ProductScreen> {
       _buildMediaSection(l),
       _buildInfoSection(l),
       _buildDealTerms(l),
+      // Where a buyer decides how to pay, before the seller and the
+      // description: BROKA holds no payments, and escrow is how a buyer
+      // who can't see it first is protected (EscrowCallout's header).
+      // "Ask Zeno" brings the listing with it.
+      if (!_isMine)
+        EscrowCallout(
+          margin: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+          onZeno: () => _openZeno(ZenoScreen.escrowOpener),
+        ),
       _buildSellerSection(l),
       if (_hasMapData) _buildMapPreview(l),
       _buildDescSection(l),
@@ -1183,8 +1193,8 @@ class _ProductScreenState extends State<ProductScreen> {
     // fraudster's "BROKA escrow" number. See it first is what protects them.
     Text(
       _isAuction
-          ? 'Auction · See it before you pay'
-          : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · See it before you pay',
+          ? 'Auction · Pay with escrow'
+          : '${l.priceNegotiable ? 'Negotiable' : 'Fixed price'} · Pay with escrow',
       maxLines: 1, overflow: TextOverflow.ellipsis,
       style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
   ]);

@@ -9,7 +9,7 @@ import { storeView } from '@/lib/storefront'
 import type { ImageSizes, Store } from '@/lib/types'
 
 import { cart } from '@/lib/cart'
-import { ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
+import { ESCROW_PROVIDERS, ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
 
 import { AddToCart } from './AddToCart'
 import { AppButton } from './AppButton'
@@ -18,6 +18,7 @@ import { CartDrawer } from './CartDrawer'
 import { CatalogueControls } from './CatalogueControls'
 import { CategoryPills } from './CategoryPills'
 import { CheckoutView } from './CheckoutView'
+import { EscrowBox } from './EscrowBox'
 import { OpenInApp } from './OpenInApp'
 import { ProductCard } from './ProductCard'
 import { Perks } from './Perks'
@@ -150,9 +151,11 @@ describe('Perks', () => {
     const { rerender } = render(<Perks verified={false} />)
     expect(screen.getByText('See it, then pay')).toBeTruthy()
     expect(screen.getByText('Pay the store directly')).toBeTruthy()
-    // BROKA holds no payments while they're paused: no escrow perk.
+    // BROKA holds no payments while they're paused: no "BROKA escrow"
+    // perk - escrow is named only as a way to pay the store.
     expect(screen.queryByText('Escrow protected')).toBeNull()
-    expect(screen.queryByText(/escrow/i)).toBeNull()
+    expect(screen.getByText('Through escrow, or by M-Pesa once you have it')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/BROKA escrow|escrow protected/i)
     expect(screen.queryByText('Verified seller')).toBeNull()
     rerender(<Perks verified />)
     expect(screen.getByText('Verified seller')).toBeTruthy()
@@ -198,6 +201,8 @@ describe('StoreDetails', () => {
     expect(safety.textContent).toContain('They are not run by BROKA.')
     // The old advice sent buyers to "BROKA escrow" and away from the seller.
     expect(safety.textContent).not.toMatch(/pay only through BROKA|held in escrow|never send money to a seller/i)
+    // ...and the escrow services themselves are there to pick from.
+    expect(within(safety).getByTestId('escrow-box')).toBeTruthy()
   })
 
   it('never shows an unverified email, a rating without deals, or photos it does not have', () => {
@@ -315,8 +320,8 @@ describe('Cart drawer', () => {
     expect(within(drawer).getByText('Samsung A15')).toBeTruthy()
     expect(within(drawer).getByText('KES 1,500')).toBeTruthy()
     expect(within(drawer).getByText('Checkout').closest('a')!.getAttribute('href')).toBe('/store/clanix/cart')
-    expect(drawer.textContent).toContain("BROKA doesn't hold payments for now: you pay the store directly")
-    expect(drawer.textContent).not.toMatch(/escrow/i)
+    expect(drawer.textContent).toContain("BROKA doesn't hold payments for now: pay the store through an independent escrow service")
+    expect(drawer.textContent).not.toMatch(/BROKA escrow|held in escrow|escrow protected/i)
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
@@ -397,7 +402,7 @@ describe('Checkout', () => {
     expect(go.getAttribute('href')).toMatch(/^intent:\/\/broka\.co\.ke\/store\/clanix\/cart\?items=p1%3A2%2Cp2%3A1#Intent;/)
     expect(go.getAttribute('href')).toContain('package=com.broka.app;')
     // Who is paid, and no promise that BROKA keeps the money meanwhile.
-    expect(within(screen.getByText('Payment').parentElement!).getByText('To the store directly')).toBeTruthy()
+    expect(within(screen.getByText('Payment').parentElement!).getByText('Escrow, or the store directly')).toBeTruthy()
     expect(screen.queryByText('Buyer protection')).toBeNull()
     expect(document.body.textContent).not.toMatch(/BROKA holds the money|held safely|escrow protected/i)
     expect(document.body.textContent).toContain('They are not run by BROKA.')
@@ -533,6 +538,39 @@ describe('Opening the app', () => {
     )
     expect(screen.queryByText('Open')).toBeNull()
     expect(screen.getByText('Get it').getAttribute('href')).toMatch(/broka-release\.apk$/)
+  })
+})
+
+describe('Pay with escrow', () => {
+  it("lists every escrow service with a link to its own site - a pointer, not BROKA's endorsement", () => {
+    render(<EscrowBox />)
+    const box = screen.getByTestId('escrow-box')
+    const links = within(box).getAllByRole('link')
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(ESCROW_PROVIDERS.map((p) => p.url))
+    for (const a of links) {
+      expect(a.getAttribute('href')).toMatch(/^https:\/\//)
+      expect(a.getAttribute('target')).toBe('_blank')
+      expect(a.getAttribute('rel')).toBe('noopener noreferrer nofollow')
+    }
+    // The rule a fake escrow site depends on breaking, and that they're not BROKA's.
+    expect(box.textContent).toContain('Never use an escrow link')
+    expect(box.textContent).toContain("BROKA doesn't run them")
+    expect(box.textContent).toContain('Zeno')
+  })
+
+  it("is the same list the app shows from the server (backend safe_payment.py)", () => {
+    const backend = readFileSync(resolve(process.cwd(), '../backend/api/domains/pricing/safe_payment.py'), 'utf8')
+    const urls = [...backend.matchAll(/"url": "(https:[^"]+)"/g)].map((m) => m[1])
+    expect(urls).toEqual(ESCROW_PROVIDERS.map((p) => p.url))
+  })
+
+  it('stands out on the cart page, before the steps', () => {
+    setUserAgent(ANDROID_UA)
+    cart.add('s1', lineOf(card('p1')))
+    render(<CheckoutView storeId="s1" storeName="Clanix" storePath="/store/clanix" cartPath="/store/clanix/cart"
+      storeUrl="https://broka.co.ke/store/clanix" />)
+    expect(screen.getByTestId('escrow-box')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: /E-Confirm/ })).toHaveLength(1)
   })
 })
 

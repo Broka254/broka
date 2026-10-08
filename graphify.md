@@ -80,11 +80,11 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 | POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:108) |
 | GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:301) |
 | WS | `/auction-ws/ws/{listing_id}` | token | `auction_ws` (backend/api/domains/auction_ws/router.py:15) |
-| POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:50) |
-| GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:113) |
-| GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:23) |
-| GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:140) |
-| PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:56) |
+| POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:51) |
+| GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:114) |
+| GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:24) |
+| GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:146) |
+| PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:62) |
 | PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:375) |
 | POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:181) |
 | POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:198) |
@@ -165,24 +165,24 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:134) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:416) |
 | GET | `/health` | public | `health` (backend/main.py:494) |
-| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:184) |
-| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:242) |
-| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:787) |
-| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:726) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:956) |
-| GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:178) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:991) |
-| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:336) |
-| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:999) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1034) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1045) |
-| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:589) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:973) |
+| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:185) |
+| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:243) |
+| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:793) |
+| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:732) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:962) |
+| GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:179) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:997) |
+| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:342) |
+| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1005) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1040) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1051) |
+| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:595) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:979) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1011) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1023) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1017) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1029) |
 | GET | `/live` | public | `live` (backend/main.py:550) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
@@ -263,11 +263,11 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
 | POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:101) |
 | GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:190) |
-| POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:297) |
-| POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:320) |
-| POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:121) |
-| GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:379) |
-| GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:115) |
+| POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:300) |
+| POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:323) |
+| POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:124) |
+| GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:382) |
+| GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:118) |
 | POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:85) |
 | POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:300) |
 | POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:363) |
@@ -295,6 +295,7 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 
 - `events.py` — Emitting auction lifecycle events.
 - `lifecycle.py` — The authoritative auction lifecycle: UPCOMING -> LIVE -> ENDED.
+- `paused.py` — Auctions switched off (AUCTIONS_ENABLED, off for launch).
 - `router.py` — Auctions Router — GET /auctions, GET /auctions/{listing_id}, PATCH /auctions/{listing_id}/terms.
 - `service.py` — Auctions Service — merges Listing + auction_meta + bid history for the Auction House and the auction detail screen.
 
@@ -428,6 +429,7 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 
 - `autolist.py` — Zeno listing an item from its photo (2026-10-08).
 - `contacts.py` — Who "Jane" is, when the user tells Zeno to call Jane.
+- `escrow_walkthrough.py` — Zeno walking a buyer or a seller through paying with an escrow service, one step at a time, as a conversation (2026-10-08).
 - `guides.py` — Zeno's guides: "how do I open a store?", "how do I sell faster?" answered with steps built from the user's own situation, and a button on e…
 - `intents.py` — What Zeno, the assistant, may do - and the commands it understands without asking a model.
 - `knowledge.py` — What Zeno knows about the user it is talking to - fetched only when a question needs it.
@@ -612,7 +614,7 @@ of a change.
 - **trust** — domains: listings; core: config; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
-- **zeno_assistant** — domains: ai_broker, buy_agent, categories, listings, media, premium, trust; core: config, image_processing, rate_limit, vision; database, security
+- **zeno_assistant** — domains: ai_broker, buy_agent, categories, listings, media, premium, pricing, trust; core: config, image_processing, rate_limit, vision; database, security
 
 ## Background jobs
 
@@ -630,7 +632,7 @@ of a change.
 - `task_expire_buy_agent_watches` (backend/api/core/workers.py:307) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
 - `task_expire_featured_listings` (backend/api/core/workers.py:457)
 - `task_fraud_sweep` (backend/api/core/workers.py:1809)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2040) — Release listings whose winner never paid.
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2046) — Release listings whose winner never paid.
 - `task_notify_auctions_ending_soon` (backend/api/core/workers.py:1964) — One reminder per auction, to everyone who has bid on it.
 - `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1217) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
 - `task_recompute_trust_score` (backend/api/core/workers.py:427)
@@ -648,11 +650,11 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
 
 ## Backend tests
 
-101 files in `backend/tests/`.
+103 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -661,6 +663,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_auction_leaderboard.py` — GET /auction/{listing_id}/leaderboard - the list the auction screen shows.
 - `test_auction_lifecycle.py` — BROKA - Auction lifecycle tests Run: pytest backend/tests/test_auction_lifecycle.py -v
 - `test_auctions.py` — BROKA - Auction Tests Run: pytest backend/tests/test_auctions.py -v
+- `test_auctions_off.py` — Auctions switched off for launch (AUCTIONS_ENABLED; auctions/paused.py).
 - `test_auth.py` — BROKA - Auth Endpoint Tests Run: pytest backend/tests/test_auth.py -v
 - `test_auth_hardening.py` — Auth hardening: what a token may be used for, who may claim admin, how OTP attempts are counted, and what the console providers do in produ…
 - `test_body_limit.py` — The request body ceiling (api/core/body_limit.py).
@@ -693,6 +696,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_email_otp.py` — Email OTP: request, verify, and the handoff into /auth/register.
 - `test_escrow.py` — BROKA - Escrow & Deal Tests (v3.0) Tests deal finalization, delivery confirmation, audit log creation.
 - `test_escrow_ledger_integrity.py` — Regression tests for the escrow audit (2026-09-14).
+- `test_escrow_walkthrough.py` — Zeno walking a buyer or seller through an escrow service, step by step (zeno_assistant/escrow_walkthrough.py), and the provider list behind…
 - `test_events_v4.py` — Tests for the upgraded durable event bus (v4.0).
 - `test_founding_sellers.py` — The founding-seller offer (PRICING.md §2; pricing/service.founding_discount).
 - `test_fraud.py` — BROKA - Fraud Engine Unit Tests (v3.0) Tests trust score computation and trust band classification.
@@ -773,6 +777,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/direct-chat` | `NegotiationScreen` |
 | `/dispute` | `DisputeScreen` |
 | `/escrow-payment` | `EConfirmPaymentScreen` |
+| `/escrow-services` | `EscrowServicesScreen` |
 | `/home` | `HomeScreen` |
 | `/how-broka-works` | `HowBrokaWorksScreen` |
 | `/inbox` | `InboxScreen` |
@@ -814,6 +819,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/features/auctions/`
 
 - `data/repositories/auctions_repository.dart` — lib/features/auctions/data/repositories/auctions_repository.dart
+- `domain/auctions_enabled.dart` — Whether this build offers auctions (2026-10-08: off for launch).
 - `domain/models/auction.dart` — lib/features/auctions/domain/models/auction.dart
 - `presentation/auction_house_screen.dart` — lib/features/auctions/presentation/auction_house_screen.dart Live Now / Ending Soon / Upcoming / Completed (Design Journal Volume 6, Ch.6/C…
 
@@ -901,6 +907,8 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/features/safe_payment/`
 
+- `escrow_callout.dart` — "Pay with escrow" - the callout every place a deal is struck carries (2026-10-08): Home, a listing, both deal chats, the store cart, the Me…
+- `escrow_services_screen.dart` — Pay with escrow - Kenya's independent escrow services, side by side, and Zeno to walk the user through whichever they pick (2026-10-08).
 - `safe_payment.dart` — BROKA - paying a seller safely while BROKA handles no deal payments (backend: GET /pricing/safe-payment, api/domains/pricing/safe_payment.p…
 
 ### `flutter_app/lib/features/stores/`
@@ -1175,6 +1183,7 @@ Modules:
 - `web/src/components/CategoryPills.tsx` — The store's categories, drawn like the app's home category rail: a gradient ring around the category's emoji, its name underneath, and here…
 - `web/src/components/CheckoutView.tsx` — The cart page: every product, how many, the total - and how to buy them.
 - `web/src/components/Constellation.tsx` — The glowing connected dots behind every page, as in the app.
+- `web/src/components/EscrowBox.tsx` — "Pay with escrow" - Kenya's independent escrow services, where a buyer decides how to pay: the cart, the product page and the store's detai…
 - `web/src/components/Gallery.tsx` — A product's photos: one large image and a strip of thumbnails.
 - `web/src/components/HomeLink.tsx` — A link to BROKA's home page.
 - `web/src/components/Icon.tsx` — The storefront's icons, as inline SVG: emoji and text glyphs (⌕, ✉, ⓘ) render differently on every phone and looked unfinished next to the…
@@ -1213,7 +1222,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Shop by category, by type of item, and by brand (2026-10-08)
+- `CHANGES.md` — Paying with escrow services, and no auctions for launch (2026-10-08)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

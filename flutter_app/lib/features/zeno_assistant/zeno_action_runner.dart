@@ -42,6 +42,7 @@ class ZenoActionRunner {
     'store_setup': '/store-setup',
     'my_store': '/store-manage',
     'start_selling': '/start-selling',
+    'escrow_services': '/escrow-services',
   };
 
   /// What the action chip says while it happens.
@@ -74,6 +75,7 @@ class ZenoActionRunner {
             'market_insights' => Icons.insights_rounded,
             'store_setup' || 'my_store' => Icons.store_mall_directory_rounded,
             'start_selling' => Icons.sell_rounded,
+            'escrow_services' => Icons.shield_rounded,
             _ => Icons.help_rounded,
           },
         ZenoActionType.search => Icons.search_rounded,

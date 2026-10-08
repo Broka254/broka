@@ -14,6 +14,7 @@ from api.database import AuctionMeta, Listing, get_db
 from api.security import get_current_user
 from . import lifecycle
 from .lifecycle import AuctionError
+from .paused import auctions_enabled, require_auctions
 from .service import AuctionsService
 
 router = APIRouter()
@@ -21,6 +22,11 @@ router = APIRouter()
 
 @router.get("")
 async def list_auctions(status: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    # Empty rather than refused while auctions are off (auctions/paused.py):
+    # an older build's Auction House then shows its "No auctions here yet"
+    # instead of an error.
+    if not auctions_enabled():
+        return []
     return await AuctionsService(db).list_auctions(status=status)
 
 
@@ -52,7 +58,7 @@ class AuctionTermsIn(BaseModel):
         return to_naive_utc(v) if v is not None else None
 
 
-@router.patch("/{listing_id}/terms")
+@router.patch("/{listing_id}/terms", dependencies=[Depends(require_auctions)])
 async def update_auction_terms(
     listing_id: str,
     body: AuctionTermsIn,

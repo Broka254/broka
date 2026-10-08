@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:broka/widgets/broka_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/safe_payment/escrow_callout.dart';
 import 'package:broka/screens/menu_screen.dart';
 import 'package:broka/screens/profile_screen.dart';
 import 'package:broka/screens/settings_screen.dart';
@@ -104,10 +105,20 @@ void main() {
         },
       );
 
+  // A phone's height (2026-10-08): the escrow callout leads the Menu, and
+  // the default 800x600 test window ends before the store section, which
+  // the list then never builds.
+  void phoneSize(WidgetTester tester) {
+    tester.view.physicalSize = const Size(390 * 3.0, 844 * 3.0);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+  }
+
   group('Menu', () {
     testWidgets('profile card, selling, store and account - on the constellation',
         (tester) async {
       setFakeRoute(_account());
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
 
@@ -129,9 +140,24 @@ void main() {
       expect(find.text('Sign out'), findsOneWidget);
     });
 
+    testWidgets('leads with paying through escrow, and hides in-app receipts while BROKA takes no payments',
+        (tester) async {
+      setFakeRoute(_account());
+      phoneSize(tester);
+      await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.byType(EscrowCallout), findsOneWidget);
+      expect(find.text('Pay with escrow'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Escrow payments'), 200);
+      expect(find.text('Escrow payments'), findsOneWidget);
+      // Receipts of BROKA's own escrow, which nobody can make while it is paused.
+      expect(find.text('Payment receipts'), findsNothing);
+    });
+
     testWidgets('a buyer is offered selling, and a store all the same',
         (tester) async {
       setFakeRoute(_account(me: _me(accountType: 'buyer', deals: 0)));
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
 
@@ -145,7 +171,10 @@ void main() {
       // setup directly, which used to make buyers sellers on its own.
       expect(find.text('Open your online store'), findsOneWidget);
       expect(find.text('Open a store'), findsNothing);
-      await tester.scrollUntilVisible(find.text('Set up my business'), 200);
+      // Built below the fold, it counts as "visible" to scrollUntilVisible;
+      // ensureVisible brings it on screen to be tapped.
+      await tester.ensureVisible(find.text('Set up my business'));
+      await _settle(tester);
       await tester.tap(find.text('Set up my business'));
       await _settle(tester);
       expect(find.text('Set up your business'), findsOneWidget);
@@ -156,6 +185,7 @@ void main() {
     testWidgets('a business seller without a store is offered one directly',
         (tester) async {
       setFakeRoute(_account(me: _me(accountType: 'buyer_seller')));
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
       expect(find.text('Open a store'), findsOneWidget);
@@ -165,6 +195,7 @@ void main() {
     testWidgets('with a store: its link, status, products and last week',
         (tester) async {
       setFakeRoute(_account(myStore: _store));
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
 
@@ -188,6 +219,7 @@ void main() {
         ..._store,
         'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
       }));
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
       final card = find.byKey(const Key('menu-store-card'));
@@ -201,6 +233,7 @@ void main() {
         (tester) async {
       setFakeRoute(_account(
           extra: (uri) => uri.path == '/stores/mine' ? const FakeResponse.error() : null));
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
       expect(find.text("Couldn't load your store"), findsOneWidget);
@@ -211,6 +244,7 @@ void main() {
       // A JPEG's base64 starts "/9j/": taken for a server path, it was
       // fetched from the API, failed, and the card showed "G".
       setFakeRoute(_account(me: _me(photo: _selfie)));
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
       final card = find.byKey(const Key('menu-profile-card'));
@@ -222,6 +256,7 @@ void main() {
 
     testWidgets('the profile card opens Profile', (tester) async {
       setFakeRoute(_account());
+      phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
       await tester.tap(find.byKey(const Key('menu-profile-card')));

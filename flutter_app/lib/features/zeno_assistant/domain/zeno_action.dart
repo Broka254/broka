@@ -118,6 +118,7 @@ const kZenoDestinations = <String, String>{
   'store_setup': 'Store setup',
   'my_store': 'Your store',
   'start_selling': 'Start selling',
+  'escrow_services': 'Escrow services',
 };
 
 class ZenoAction {
@@ -235,15 +236,49 @@ class ZenoAction {
   }
 }
 
-/// One of Zeno's turns: what it says, and what it would do.
+/// A link under one of Zeno's replies - "Open E-Confirm" in the escrow
+/// walkthrough (backend zeno_assistant/escrow_walkthrough.py). The server
+/// writes it from its own provider list, never from the model or another
+/// user; this side opens nothing but https.
+class ZenoLink {
+  const ZenoLink({required this.label, required this.url});
+
+  final String label;
+  final Uri url;
+
+  static ZenoLink? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final label = json['label'];
+    final url = Uri.tryParse(json['url'] is String ? json['url'] as String : '');
+    if (label is! String || label.trim().isEmpty || url == null || url.scheme != 'https' || url.host.isEmpty) {
+      return null;
+    }
+    return ZenoLink(label: label.trim(), url: url);
+  }
+}
+
+/// One of Zeno's turns: what it says, what it would do, and the replies
+/// the user can tap instead of typing ("I'm buying", "Done - what's
+/// next?"). A tapped suggestion is sent as the user's message, exactly as
+/// if typed.
 class ZenoTurnResult {
-  const ZenoTurnResult({required this.reply, this.action});
+  const ZenoTurnResult({required this.reply, this.action, this.suggestions = const [], this.link});
 
   final String reply;
   final ZenoAction? action;
+  final List<String> suggestions;
+  final ZenoLink? link;
+
+  /// At most this many chips: they sit under one bubble on a phone.
+  static const maxSuggestions = 6;
 
   factory ZenoTurnResult.fromJson(Map<String, dynamic> json) => ZenoTurnResult(
         reply: (json['reply'] as String? ?? '').trim(),
         action: ZenoAction.fromJson(json['action']),
+        suggestions: [
+          for (final s in (json['suggestions'] as List? ?? const []))
+            if (s is String && s.trim().isNotEmpty && s.trim().length <= 60) s.trim(),
+        ].take(maxSuggestions).toList(),
+        link: ZenoLink.fromJson(json['link']),
       );
 }

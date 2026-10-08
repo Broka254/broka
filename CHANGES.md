@@ -1,3 +1,84 @@
+# Paying with escrow services, and no auctions for launch (2026-10-08)
+
+Raised by the owner: no escrow provider's API can carry BROKA's payments or
+its auctions end to end, so for launch there is no in-built escrow and no
+auctions - kept in the code, out of the user's sight. Kenya's escrow
+services take their place, impossible to miss, and Zeno walks people
+through them step by step.
+
+**Escrow services** (`api/domains/pricing/safe_payment.py`,
+`GET /pricing/safe-payment`). E-Confirm, Escrow Kenya, Kenya Escrow,
+Lipasafe and Shikilia, each with how a buyer pays in, its fees and limits
+*as it publishes them* (or "check on its site" where it publishes none),
+how a deal starts, how the money is released and paid out, and disputes.
+TrustPay, ExWadda and JointPesa were left out: too little published to
+confirm they operate. Escrow Kenya and Kenya Escrow are two companies, and
+each entry says so. With them, the rules a fake-escrow scam needs broken:
+open the service yourself, never from a link the other side sends; buyers
+pay the service, never the seller; sellers trust the service, never a
+screenshot or an SMS.
+
+**Loud in the app** (`features/safe_payment/`). A Pay with escrow screen
+(`/escrow-services`: what escrow is, the rules, every service with its fees
+and "Zeno, guide me"), and a glowing callout on every listing, in both deal
+chats (sellers: "Get paid with escrow"), the store cart, the Menu and How
+BROKA works, plus a pill on Home's feed heading - on the heading's own row,
+so the feed still starts in the top half. Every pay button opens the escrow
+sheet, which leads with "Let Zeno guide me". The web store shows the same
+services on the cart, product and store pages (`web/src/components/
+EscrowBox.tsx`); a test fails if its list drifts from the server's.
+
+**Zeno's walkthrough, as a conversation**
+(`api/domains/zeno_assistant/escrow_walkthrough.py`). "Help me pay with
+escrow" (Zeno's first opener now) or "walk me through paying with
+Shikilia": Zeno asks whether you are buying or selling and which service,
+then gives one step at a time - "Step 3 of 7 · Buying with E-Confirm" -
+with replies to tap ("Done - what's next?", "Repeat this step", "Back") and
+an Open button for the service's own site. No model call; where the user is
+comes from Zeno's own last step in the transcript. A question in the middle
+goes to the model with that step and the service's published facts, and
+the reply brings the way back. The model's own escrow guide starts the
+walkthrough; the negotiation broker is told to offer it once a price is
+agreed, and never to recommend any other escrow service. Zeno's welcome
+says it helps with paying. English only for now, like the guides.
+
+**Auctions off** (`AUCTIONS_ENABLED`, default off; `api/domains/auctions/
+paused.py`). Creating, changing or bidding on one answers 409
+`AUCTIONS_OFF` with a message older builds show; no feed, search, store or
+the Auction House lists one (`listings/paid.live_clause` - with `IS NULL`
+kept, or every untyped legacy listing would have vanished); plans stop
+selling them and `/premium/me` shows none left; no "ending soon" reminder.
+An auction opened by its link still reads. The app hides the rail tile,
+the sell wizard's choice (a saved auction draft posts as a direct sale)
+and the plan allowance behind `kAuctionsEnabled`
+(`--dart-define=AUCTIONS_ENABLED=true` brings them back).
+
+**How BROKA works**, rewritten: buying and selling step by step, paying
+with escrow, what Zeno does, then the seller's numbers. Fixed on the way:
+it described BROKA's own escrow ("BROKA holds it") until the server
+answered, and for good when it couldn't be reached; it now assumes the
+launch setup until told otherwise. It said there was "no featured
+placement and no paid badge" - boosts and the Verified badge are both
+sold - and the completion rate now says why it isn't moving.
+
+**Weak spots fixed while here.**
+- The Verified badge was sold with "priority search placement", "appear
+  higher in search results", a verified-seller filter, a featured-seller
+  section, a "fraud-protection guarantee" and "40% more trust". None
+  exists: nothing in the listing order reads the badge, and BROKA holds no
+  money to guarantee. A seller who pays for an unkept promise is owed a
+  refund. The tiers now say what a badge does (`verification_screen.dart`,
+  `routers/verify.py`).
+- A question passed to Zeno from another screen (`initialQuery`) was
+  dropped unless it was the Buying Agent's or a listing's.
+- "Payment receipts" in the Menu listed receipts of BROKA's own escrow,
+  which nobody can make while it is paused; it shows only with payments on.
+
+Noticed, not changed: the store cart's per-product deal rooms can't take a
+whole cart in one escrow payment (one escrow deal per product); voice mode
+counts a plain command as a voice request; Swahili users get the
+walkthrough in English.
+
 # Shop by category, by type of item, and by brand (2026-10-08)
 
 Raised by the owner: a type of item had nowhere of its own. Phones were one

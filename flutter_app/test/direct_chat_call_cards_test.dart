@@ -132,6 +132,11 @@ void main() {
   });
 
   testWidgets('each card says which way the call went and how it ended', (tester) async {
+    // A phone's height: the chat's escrow panel sits above the thread, and
+    // all five cards must be on screen for the list to build them.
+    tester.view.physicalSize = const Size(390 * 3.0, 844 * 3.0);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
     backend(history: () => [
       call('c1', 'buyer', 'completed', const Duration(days: 4), secs: 75),
       call('c2', 'seller', 'cancelled', const Duration(days: 2)),

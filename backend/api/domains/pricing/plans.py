@@ -78,6 +78,9 @@ class PremiumPlan:
     ai_descriptions: int = 0        # descriptions Zeno writes from a listing's photo
     price_checks: int = 0           # Zeno pricing a listing against similar ones on BROKA
     priority_support_minutes: int = 0
+    # The pitch while auctions are off (AUCTIONS_ENABLED), for a plan whose
+    # pitch sells them; empty means the pitch never mentions auctions.
+    pitch_without_auctions: str = ""
 
     def max_monthly_cost(self) -> float:
         usage = (
@@ -97,10 +100,17 @@ class PremiumPlan:
         return int(getattr(self, feature))
 
     def to_dict(self) -> dict:
+        # While auctions are off, a plan must not sell them: nobody can
+        # host one (auctions/paused.py). The allowance stays in the plan -
+        # and in its cost above - for when they come back; it is only not
+        # offered, so the app lists nothing about auctions (it shows an
+        # allowance only when it is over 0, older builds included).
+        auctions = settings.auctions_enabled
         return {
             "id": self.id,
             "name": self.name,
-            "pitch": self.pitch,
+            "pitch": self.pitch if auctions or not self.pitch_without_auctions
+            else self.pitch_without_auctions,
             "monthly_price": self.monthly_price,
             "periods": period_prices(self.monthly_price),
             "allowances": {
@@ -114,7 +124,7 @@ class PremiumPlan:
                 # not floored: the app says "about", and 20 tries are nearer
                 # 7 listings than 6.
                 "ai_cover_listings": round(self.ai_covers / costs.AI_COVER_TRIES_PER_LISTING),
-                "auctions_hosted": self.auctions_hosted,
+                "auctions_hosted": self.auctions_hosted if auctions else 0,
                 "ai_descriptions": self.ai_descriptions,
                 "price_checks": self.price_checks,
                 "priority_support_minutes": self.priority_support_minutes,
@@ -151,6 +161,8 @@ PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
         id="pro", name="Pro", monthly_price=599,
         pitch="Zeno prices your listings against the market, hunts and haggles for you, "
               "covers for a week of listings, and your own auctions.",
+        pitch_without_auctions="Zeno prices your listings against the market, hunts and "
+                               "haggles for you, and makes covers for a week of listings.",
         voice_requests=180, sms_alerts=80, agent_watches=3, auto_negotiations=25,
         ai_covers=20, auctions_hosted=2, ai_descriptions=100, price_checks=40,
     ),

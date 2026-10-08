@@ -2,6 +2,8 @@
 // the plans (GET /pricing/plans) and where the signed-in user stands
 // (GET /premium/me). Every number is the server's.
 
+import '../../auctions/domain/auctions_enabled.dart';
+
 int _int(Object? v) => (v as num?)?.toInt() ?? 0;
 double _double(Object? v) => (v as num?)?.toDouble() ?? 0;
 
@@ -18,7 +20,12 @@ class PremiumFeature {
   static const priceChecks = 'price_checks';
 
   /// In the order a plan card lists them: what helps a listing sell first.
-  static const all = [aiDescriptions, aiCovers, priceChecks, voice, sms, watches, negotiations, auctions];
+  /// Auctions only while this build offers them (kAuctionsEnabled): a plan
+  /// must not sell what nobody can host.
+  static List<String> get all => [
+        aiDescriptions, aiCovers, priceChecks, voice, sms, watches, negotiations,
+        if (kAuctionsEnabled) auctions,
+      ];
 
   /// "20 AI cover tries", "90 voice requests to Zeno"...
   static String describe(String feature, int n) => switch (feature) {

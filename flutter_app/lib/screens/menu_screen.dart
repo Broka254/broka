@@ -17,6 +17,8 @@ import 'package:flutter/material.dart';
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/account/domain/models/my_account.dart';
+import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/safe_payment.dart' show safePaymentRepository;
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../main.dart';
 import '../services/api_service.dart';
@@ -51,10 +53,19 @@ class _MenuScreenState extends State<MenuScreen> {
   /// Bumped to remount the store section, which loads itself.
   int _storeNonce = 0;
 
+  /// Whether BROKA takes deal payments itself (GET /pricing/safe-payment).
+  /// "Payment receipts" lists M-Pesa receipts of BROKA's own escrow, which
+  /// nobody can make while payments are paused - so it shows only while
+  /// they're on, and not while it's unknown.
+  bool _inAppPayments = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    safePaymentRepository.fetch().then((info) {
+      if (mounted && info != null && info.inAppPayments) setState(() => _inAppPayments = true);
+    });
   }
 
   Future<void> _load() async {
@@ -168,6 +179,9 @@ class _MenuScreenState extends State<MenuScreen> {
     final account = _account;
     return [
       _profileCard(),
+      // Above everything else on the Menu: BROKA holds no payments, so how
+      // to pay a stranger safely is the most useful thing on it.
+      const EscrowCallout(margin: EdgeInsets.only(top: 14)),
       const MenuSectionLabel('Selling'),
       MenuGroup(children: [
         if (account?.isSeller ?? ApiService.currentUserAccountType == 'buyer_seller') ...[
@@ -220,18 +234,26 @@ class _MenuScreenState extends State<MenuScreen> {
           subtitle: 'Voice and video calls with buyers and sellers',
           onTap: () => _open('/call-history'),
         ),
+        if (_inAppPayments)
+          MenuTile(
+            icon: Icons.receipt_long_rounded,
+            tint: BrokaColors.neonBlue,
+            title: 'Payment receipts',
+            subtitle: 'M-Pesa receipts saved on this phone',
+            onTap: () => _open('/deal-history'),
+          ),
         MenuTile(
-          icon: Icons.receipt_long_rounded,
-          tint: BrokaColors.neonBlue,
-          title: 'Payment receipts',
-          subtitle: 'M-Pesa receipts saved on this phone',
-          onTap: () => _open('/deal-history'),
+          icon: Icons.shield_rounded,
+          tint: BrokaColors.neonGreen,
+          title: 'Escrow payments',
+          subtitle: 'Escrow services in Kenya, and Zeno to guide you',
+          onTap: () => _open('/escrow-services'),
         ),
         MenuTile(
           icon: Icons.help_outline_rounded,
           tint: BrokaColors.neonBlue,
           title: 'Help & how BROKA works',
-          subtitle: 'Paying safely, Zeno and your rating',
+          subtitle: 'Buying, selling, paying with escrow, and Zeno',
           onTap: () => _open('/how-broka-works'),
         ),
       ]),

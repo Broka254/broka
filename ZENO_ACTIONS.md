@@ -120,7 +120,25 @@ and the damaged-goods report sends its photo the same way. On the server
   about the photo.
 - Kept on the phone as "📷 Photo" in the saved conversation, not the photo.
 
-## Safety properties, all tested
+## Walking someone through an escrow service (2026-10-08)
+
+BROKA holds no deal money for launch, so paying a stranger safely means an
+independent escrow service - and most people have never used one.
+`zeno_assistant/escrow_walkthrough.py` turns that into a conversation:
+"Help me pay with escrow" -> buying or selling? -> which service (or "Help
+me choose") -> "Step 1 of 7 · Buying with E-Confirm", one step a turn,
+with `suggestions` to tap and, on the step that opens the service, a
+`link` to its own site. Like the guides it costs no model call, and every
+fact in it is what the service publishes (`pricing/safe_payment.py`).
+
+Stateless like every turn: where the user is is read from Zeno's own last
+step in the transcript (its first line is the marker). "next", "back",
+"repeat", "start over" and a service's name move it; anything else goes
+to the model with the step and the service's facts, and the reply carries
+the way back. A marker naming a service not on BROKA's list is ignored,
+and the only links it ever sends are the list's. The model asking for the
+`escrow` guide starts the walkthrough instead of a card.
+
 
 - **Only people the user already talks to.** `contacts.resolve` matches the
   words the user said against the other party of the user's own threads -

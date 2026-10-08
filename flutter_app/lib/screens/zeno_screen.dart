@@ -61,6 +61,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/broka_tts.dart';
 import '../services/photo_capture.dart';
 import '../services/realtime_stt.dart';
@@ -120,8 +121,16 @@ class _Turn {
 
   /// With [retry]: the photo to send again.
   final Uint8List? retryPhoto;
+
+  /// Replies the user can tap instead of typing, and a link to open - the
+  /// escrow walkthrough's "Done - what's next?" and "Open E-Confirm". For
+  /// the newest reply, this visit: an old "Done" chip tapped after the
+  /// conversation moved on would answer a question nobody is asking.
+  final List<String> suggestions;
+  final ZenoLink? link;
   const _Turn(this.message,
-      {this.matches = const [], this.retry, this.action, this.photo, this.retryPhoto});
+      {this.matches = const [], this.retry, this.action, this.photo, this.retryPhoto,
+       this.suggestions = const [], this.link});
 }
 
 /// What a photo turn reads as in the saved conversation and in the
@@ -152,6 +161,13 @@ _Lang _langByKey(String key) =>
 
 class ZenoScreen extends StatefulWidget {
   final ZenoMode mode;
+
+  /// Asking Zeno to walk you through paying with escrow. BROKA holds no
+  /// payments, and Zeno guides a buyer or seller through an escrow service
+  /// step by step (backend zeno_assistant/escrow_walkthrough.py) - free,
+  /// no model call, for this exact text. The opener chip, and every
+  /// "Ask Zeno" beside escrow, send it.
+  static const escrowOpener = 'Help me pay with escrow';
 
   /// Something the user already said elsewhere, sent as their first turn
   /// the moment the screen opens: the Buying Agent's query from Home's
@@ -327,15 +343,13 @@ class _ZenoScreenState extends State<ZenoScreen>
   }
 
   static const _assistantSuggestions = [
+    // First, because it is what a first deal needs most.
+    ('🛡️', ZenoScreen.escrowOpener),
     ('🚗', 'Is KES 800K fair for a Toyota Axio 2012?'),
     ('🏪', 'How do I open an online store?'),
     ('⭐', 'What do you think of my rating?'),
     ('🤝', 'Tips to close a deal faster'),
     ('🔍', 'How do I spot a fake listing?'),
-    // Was "How does BROKA escrow work?" - there is no BROKA escrow while
-    // payments are paused, and an opener asking about one invites Zeno to
-    // describe it. Zeno is told how to answer this one (safe_payment.py).
-    ('🛡️', 'How do I pay a seller safely?'),
   ];
 
   // Openers, not filters: each one is deliberately under-specified so Zeno
@@ -353,6 +367,7 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// before they start negotiating, and the way out when it doesn't fit.
   List<(String, String)> get _listingSuggestions => [
         ('💰', 'Is this a fair price?'),
+        ('🛡️', ZenoScreen.escrowOpener),
         ('⭐', 'Is this seller reliable?'),
         ('🔍', 'What should I check before buying?'),
         if (_about?.delivers != false) ('🚚', 'Can it be delivered to me?'),
@@ -454,8 +469,11 @@ class _ZenoScreenState extends State<ZenoScreen>
     });
     _scrollDown(animate: false);
     if (_isBuying && _watching) _checkWatchStillOn();
-    // A question tapped on the listing joins its conversation.
-    if (fresh || (_about != null && initial.isNotEmpty)) _send(initial);
+    // A question tapped on the listing joins its conversation - and so
+    // does one asked from elsewhere ("Let Zeno guide me" on the escrow
+    // screen), which used to be dropped: only the Buying Agent and a
+    // listing's questions were ever sent.
+    if (initial.isNotEmpty) _send(initial);
     if (widget.startInVoice && !_isBuying) _openVoice();
   }
 
@@ -603,7 +621,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       'swahili' => 'Habari$greet! Mimi ni Zeno, mshauri wako wa biashara wa BROKA. Ninaweza kukusaidia kutathmini bei, kugundua udanganyifu, au kupanga mkakati wa mazungumzo. Niulize chochote! 🤝',
       'luo'     => 'Misawa$greet! An Zeno, jakony mar ohala mar BROKA. Anyalo konyi nyiso nengo maber, neno wach miriambo, kata loso hera. Penj gimoro amora! 🤝',
       'kikuyu'  => 'Wĩmwega$greet! Nĩ niĩ Zeno, mũteithia waku wa biashara wa BROKA. Ngũkuteithia gũthagania thaara, gwĩkira mahinda ma mũrũgamo, kana gũtheria wĩhĩo. Ĩũlĩria kĩndũ kĩothe! 🤝',
-      _         => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings, plan your negotiation strategy, and analyse market trends. Ask me anything! 🤝',
+      _         => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings and plan your negotiation - and when it\'s time to pay, I\'ll walk you through paying safely with an escrow service, step by step. Ask me anything! 🤝',
     };
     _turns.add(_Turn(Message(role: 'broker', content: welcomeMsg)));
   }
@@ -672,7 +690,8 @@ class _ZenoScreenState extends State<ZenoScreen>
             ? ZenoActionRunner.label(data.action!)
             : data.reply;
         _history.add({'role': 'assistant', 'content': reply});
-        final turn = _Turn(Message(role: 'broker', content: reply), action: data.action);
+        final turn = _Turn(Message(role: 'broker', content: reply), action: data.action,
+            suggestions: data.suggestions, link: data.link);
         setState(() {
           // A reply that opens a screen is shown whole, not written out word
           // by word: it is a confirmation, and the screen is what the user
@@ -1008,11 +1027,13 @@ class _ZenoScreenState extends State<ZenoScreen>
   }
 
   @override
-  void sessionAnswered(String reply, ZenoAction? action) {
+  void sessionAnswered(String reply, ZenoAction? action,
+      {List<String> suggestions = const [], ZenoLink? link}) {
     if (!mounted) return;
     _history.add({'role': 'assistant', 'content': reply});
     setState(() {
-      final turn = _Turn(Message(role: 'broker', content: reply), action: action);
+      final turn = _Turn(Message(role: 'broker', content: reply), action: action,
+          suggestions: suggestions, link: link);
       _addArriving(turn, writing: action == null || !action.runsByItself);
       // The session does it, over whatever screen is in front; here it is
       // the record of what happened. A call or a guide stays live - they
@@ -1567,6 +1588,9 @@ class _ZenoScreenState extends State<ZenoScreen>
                 padding: const EdgeInsets.only(left: 36, bottom: 14),
                 child: _actionCard(turn),
               ),
+            if (isLast && !writing && !_typing && turn.message.isBroker &&
+                (turn.suggestions.isNotEmpty || turn.link != null))
+              _buildReplyChips(turn),
           ]);
         }
         final exact = turn.matches.where((m) => m is Map && m['match_is_exact'] == true).length;
@@ -1764,6 +1788,63 @@ class _ZenoScreenState extends State<ZenoScreen>
     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
     child: AgentEntrance(play: true, fromUser: false, child: ZenoTypingBubble()),
   );
+
+  /// Under Zeno's newest reply: the link it offers, then the replies the
+  /// user can tap - each sent exactly as if typed, so the conversation
+  /// and Zeno's context read the same either way.
+  Widget _buildReplyChips(_Turn turn) {
+    final link = turn.link;
+    return Padding(
+      padding: const EdgeInsets.only(left: 36, bottom: 14),
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        if (link != null)
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [BrokaColors.neonGreen, BrokaColors.neonCyan]),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => _openLink(link),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(link.label, style: const TextStyle(color: BrokaColors.bg,
+                        fontSize: 12.5, fontWeight: FontWeight.w800)),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.open_in_new_rounded, size: 15, color: BrokaColors.bg),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        for (final s in turn.suggestions)
+          Material(
+            color: BrokaColors.bgCard.withOpacity(0.9),
+            shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonGreen.withOpacity(0.45))),
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: () => _send(s),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                child: Text(s, style: const TextStyle(color: BrokaColors.textHigh,
+                    fontSize: 12.5, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Future<void> _openLink(ZenoLink link) async {
+    final opened = await launchUrl(link.url, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Open ${link.url.host} in your browser.')));
+    }
+  }
 
   /// Openers as chips floating over the constellation, like a Zone's
   /// subcategory rail - not a grey band across the screen. They fly in from

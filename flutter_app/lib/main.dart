@@ -11,6 +11,7 @@ import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/sell_photos_screen.dart';
 import 'screens/broker_screen.dart';
+import 'features/safe_payment/escrow_services_screen.dart';
 import 'screens/auction_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/menu_screen.dart';
@@ -565,6 +566,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/listing-insights': (_) => const ListingAnalyticsScreen(),
         '/zeno-insights':    (_) => const ZenoInsightsScreen(),
         '/how-broka-works':  (_) => const HowBrokaWorksScreen(),
+        '/escrow-services':  (_) => const EscrowServicesScreen(),
         '/receipt-history':  (_) => const ReceiptHistoryScreen(),
         '/store-explainer':  (_) => const StoreExplainerScreen(),
         '/selfie':           (_) => const SelfieCameraScreen(),

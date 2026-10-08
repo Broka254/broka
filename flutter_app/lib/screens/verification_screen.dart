@@ -30,7 +30,14 @@ class _VerificationScreenState extends State<VerificationScreen>
   final _phoneCtrl = TextEditingController();
   late  AnimationController _pulseCtrl;
 
-  // Tier data - mirrors backend VERIFY_TIERS
+  // Tier data - mirrors backend VERIFY_TIERS.
+  //
+  // Only what a badge actually does (2026-10-08). The tiers also promised
+  // priority search placement, a verified-seller filter, a featured-seller
+  // section and a fraud-protection guarantee: nothing in the ranking reads
+  // the badge, neither section exists, and BROKA holds no buyer's money to
+  // guarantee. A seller who pays for a promise that isn't kept asks for the
+  // money back - and is right to.
   static const _tiers = {
     'basic': _Tier(
       id:          'basic',
@@ -40,9 +47,8 @@ class _VerificationScreenState extends State<VerificationScreen>
       color:       Color(0xFFFFB800),
       icon:        Icons.verified_rounded,
       perks: [
-        'Gold verified badge on all listings',
-        'Higher buyer trust score',
-        'Visible in verified seller filter',
+        'Verified badge on your profile and every listing',
+        'A higher trust score - buyers see you passed an ID check',
         '12-month validity',
       ],
     ),
@@ -54,11 +60,9 @@ class _VerificationScreenState extends State<VerificationScreen>
       color:       Color(0xFFFF6B00),
       icon:        Icons.workspace_premium_rounded,
       perks: [
-        'Gold premium badge',
-        'Priority search placement',
-        'Featured seller section',
+        'Gold badge on your profile and every listing',
+        'The highest trust score a badge gives',
         '24-month validity',
-        'Fraud-protection guarantee label',
       ],
     ),
   };
@@ -240,21 +244,24 @@ class _VerificationScreenState extends State<VerificationScreen>
                   fontSize: 18, fontWeight: FontWeight.w900)),
           SizedBox(height: 6),
           Text(
-            'Verified sellers on BROKA earn significantly more buyer trust, '
-            'appear higher in search results, and close deals faster.',
+            'The badge tells buyers you passed an ID and selfie check - the first '
+            'thing a careful buyer looks for before dealing with a stranger.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.5),
             textAlign: TextAlign.center,
           ),
           SizedBox(height: 14),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            _StatPill(icon: Icons.trending_up_rounded,
-                label: '40% more trust', color: BrokaColors.neonGreen),
+            // Were "40% more trust", "Higher in search" and "Close
+            // faster": a figure nobody measured and a ranking effect that
+            // doesn't exist. These are what the badge is.
+            _StatPill(icon: Icons.badge_rounded,
+                label: 'ID checked', color: BrokaColors.neonGreen),
             SizedBox(width: 10),
-            _StatPill(icon: Icons.search_rounded,
-                label: 'Higher in search', color: BrokaColors.neonBlue),
+            _StatPill(icon: Icons.verified_rounded,
+                label: 'On every listing', color: BrokaColors.neonBlue),
             SizedBox(width: 10),
-            _StatPill(icon: Icons.handshake_rounded,
-                label: 'Close faster', color: BrokaColors.gold),
+            _StatPill(icon: Icons.shield_rounded,
+                label: 'Higher trust score', color: BrokaColors.gold),
           ]),
         ]),
       ),

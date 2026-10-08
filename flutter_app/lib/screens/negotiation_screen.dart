@@ -21,6 +21,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
+import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide;
 import '../features/calls/domain/call_record.dart' show callSummary;
 import '../services/chat_screen_memory.dart';
 import '../services/notification_service.dart';
@@ -1396,7 +1398,16 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         // Every buyer can pay from here: there is no "finalize" step before
         // it any more (auctions are paid from the auction screen).
         if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
-          _buildPaymentPanel(),
+          _buildPaymentPanel()
+        // The seller needs escrow as much: "the money is held" is what lets
+        // them hand an item to a stranger - and a screenshot is not.
+        else if (_role == 'seller' && _listing != null)
+          EscrowCallout(
+            compact: true,
+            title: 'Get paid with escrow',
+            margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            onZeno: () => openZenoEscrowGuide(context, prompt: 'How do I get paid through escrow?'),
+          ),
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
             : _buildMessages()),
@@ -1527,37 +1538,59 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Payment Panel ──────────────────────────────────────────────────────────
 
+  /// The buyer's way to pay, at the top of the chat - loud on purpose
+  /// (escrow_callout.dart). While BROKA holds no payments, Pay with escrow
+  /// opens the escrow services and Zeno's walkthrough (escrow_actions.dart
+  /// -> safe_payment.dart); with payments on, BROKA's own escrow payment.
   Widget _buildPaymentPanel() {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
       decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.86),
+        gradient: LinearGradient(colors: [
+          BrokaColors.neonGreen.withOpacity(0.24), BrokaColors.bgCard.withOpacity(0.94)]),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45))),
-      // This promised "the seller is paid only after you've received the
-      // item" - escrow, which BROKA doesn't run while payments are paused.
-      // The button opens the Paying safely sheet then (escrow_actions.dart),
-      // so it says "How to pay" rather than "Pay".
-      child: Row(children: [
-        const Icon(Icons.visibility_outlined, color: BrokaColors.neonGreen, size: 20),
-        const SizedBox(width: 10),
-        const Expanded(child: Text(
-            "BROKA doesn't hold payments for now. See the item, then pay the seller "
-            'directly - never a deposit.',
-            style: TextStyle(color: BrokaColors.neonGreen,
-                fontSize: 12, fontWeight: FontWeight.w600))),
-        GestureDetector(
-          key: const Key('pay-now'),
-          onTap: _payNow,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(color: BrokaColors.neonGreen,
-                borderRadius: BorderRadius.circular(8)),
-            child: const Text('How to pay', style: TextStyle(color: Colors.black87,
-                fontWeight: FontWeight.w800, fontSize: 12)),
+        border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.75), width: 1.3),
+        boxShadow: [BoxShadow(color: BrokaColors.neonGreen.withOpacity(0.22), blurRadius: 16)]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.shield_rounded, color: BrokaColors.neonGreen, size: 22),
+          SizedBox(width: 10),
+          Expanded(child: Text(
+              "BROKA doesn't take payments itself yet. Pay with escrow: the money is held "
+              'until you have the item - never pay a deposit.',
+              style: TextStyle(color: BrokaColors.textHigh,
+                  fontSize: 12, fontWeight: FontWeight.w600, height: 1.35))),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: GestureDetector(
+              key: const Key('pay-now'),
+              onTap: _payNow,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: BrokaColors.neonGreen,
+                    borderRadius: BorderRadius.circular(10)),
+                child: const Text('Pay with escrow', style: TextStyle(color: Colors.black87,
+                    fontWeight: FontWeight.w900, fontSize: 13)),
+              ),
+            ),
           ),
-        ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: () => openZenoEscrowGuide(context),
+            style: TextButton.styleFrom(
+              backgroundColor: BrokaColors.neonPurple,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.auto_awesome_rounded, size: 15),
+            label: const Text('Zeno, guide me', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+          ),
+        ]),
       ]),
     );
   }

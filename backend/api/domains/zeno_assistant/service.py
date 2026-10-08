@@ -1,7 +1,9 @@
 """One turn of Zeno as the user's assistant - text or voice, it is the same
 turn.
 
-    message -> FAST PATH (plain commands and how-to guides, no model)
+    message -> ESCROW WALKTHROUGH (one step at a time, no model) when the
+               message starts one or answers one (escrow_walkthrough.py)
+            -> FAST PATH (plain commands and how-to guides, no model)
             -> or MODEL (talk, and propose at most one action), given the
                user's own data for the topics the question is about
                -> if it asks for data it wasn't given (NEED_INFO): fetch it
@@ -34,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import User
 from api.domains.ai_broker.service import AIBrokerService
-from . import contacts, guides, intents, knowledge, listing_context
+from . import contacts, escrow_walkthrough, guides, intents, knowledge, listing_context
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,14 @@ _SCREEN_NAMES = {
     "store_setup": ("store setup", "kufungua duka"),
     "my_store": ("your store", "duka lako"),
     "start_selling": ("Start selling", "anza kuuza"),
+    "escrow_services": ("the escrow services", "huduma za escrow"),
 }
+
+# Under a model's reply while an escrow walkthrough is under way: the way
+# back to the steps after a question. And under any reply about escrow
+# that didn't start one.
+_RESUME = ["Done - what's next?", "Repeat this step"]
+_OFFER_WALKTHROUGH = ["Walk me through it step by step"]
 
 
 def _sw(language: str) -> bool:
@@ -129,6 +138,14 @@ async def _first_name(db: AsyncSession, user_id: str) -> str:
     return (name or "").strip()
 
 
+def _walkthrough_turn(walk: dict) -> dict:
+    out = {"reply": walk["reply"], "action": None, "source": "rules",
+           "suggestions": walk.get("suggestions", [])}
+    if walk.get("link"):
+        out["link"] = walk["link"]
+    return out
+
+
 async def _resolve(db: AsyncSession, user_id: str, action: dict) -> tuple[dict, Optional[str]]:
     """Fill in who a CALL / OPEN_CHAT is for, or build a GUIDE for this
     user. Returns the action and, when it cannot be done as asked, what
@@ -161,6 +178,15 @@ async def assistant_turn(
     listing_id: Optional[str] = None,
     image_base64: Optional[str] = None,
 ) -> dict:
+    # 0. Paying with escrow, step by step (escrow_walkthrough.py): before
+    #    the commands, because "next", "done" and "back" only mean anything
+    #    against the step the user is on - and before the judgement check,
+    #    which would send "which one should I use?" to the model.
+    if not image_base64:
+        walk = escrow_walkthrough.turn(intents.normalise(message), history)
+        if walk is not None:
+            return _walkthrough_turn(walk)
+
     # 1. A plain command needs no model. A call or chat request only
     #    short-cuts when it names someone the user actually talks to -
     #    "call it a day" is not a request to ring someone called "it".
@@ -184,6 +210,9 @@ async def assistant_turn(
     facts = await knowledge.gather(db, user_id, topics) if topics else {}
     # Opened from a listing: what it says, loaded by id (listing_context.py).
     about = await listing_context.load(db, user_id, listing_id) if listing_id else None
+    # A question in the middle of the escrow walkthrough: the model is told
+    # which step, and what the service publishes, so it answers about that.
+    walking = escrow_walkthrough.in_progress(history)
     service = AIBrokerService()
     name = await _first_name(db, user_id)
 
@@ -200,6 +229,7 @@ async def assistant_turn(
             topics=(knowledge.TOPIC_HELP if may_ask else None),
             listing=about,
             image_base64=image_base64,
+            escrow=escrow_walkthrough.knowledge(walking) if walking else None,
         )
 
     calls = 1
@@ -228,6 +258,16 @@ async def assistant_turn(
 
     used = {"facts": sorted(facts), "model_calls": calls}
     reply = (turn.get("reply") or "").strip()
+    # The escrow guide is a conversation now, not a card: the model asking
+    # for it starts the walkthrough, under whatever it said first.
+    if action["type"] == "GUIDE" and action.get("guide") == "escrow":
+        walk = escrow_walkthrough.start()
+        return {**_walkthrough_turn(walk), "source": "model", **used,
+                "reply": (reply + "\n\n" + walk["reply"]) if reply else walk["reply"]}
+    if walking:
+        used["suggestions"] = _RESUME
+    elif escrow_walkthrough.mentions_escrow(message):
+        used["suggestions"] = _OFFER_WALKTHROUGH
     if action["type"] == "NONE":
         return {"reply": reply or _offline(language), "action": None, "source": "model", **used}
 

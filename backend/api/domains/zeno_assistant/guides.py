@@ -29,7 +29,9 @@ GUIDES: dict[str, str] = {
     "open_store": "opening and running an online store on BROKA",
     "sell_faster": "selling faster - tips from the user's own listings",
     "get_verified": "getting verified",
-    "escrow": "how escrow keeps a deal safe",
+    # Not a card any more: asking for it starts Zeno's step-by-step
+    # escrow walkthrough (escrow_walkthrough.py, service.py).
+    "escrow": "walking them through paying - or getting paid - with an escrow service, step by step",
     "first_listing": "posting a first listing",
     "stay_safe": "staying safe from scams",
     "negotiate": "negotiating a good price",
@@ -155,16 +157,21 @@ def _static(guide_id: str) -> dict:
                 _step("That's it", "The badge shows on your profile and every listing."),
             ],
         },
+        # The card a guide request still gets from an older path; the
+        # model's GUIDE "escrow" starts the walkthrough instead (service.py).
         "escrow": {
-            "title": "Paying safely",
-            "intro": "BROKA doesn't handle payments right now: you pay the seller directly.",
+            "title": "Paying safely with escrow",
+            "intro": "BROKA doesn't take payments itself yet. An escrow service holds the money "
+                     "until the buyer has the item - ask me to walk you through it.",
             "steps": [
-                _step("Meet and inspect first", "Somewhere busy and public. Pay once you have the item."),
-                _step("Never pay a deposit", "Not to 'hold' an item, whatever the reason given."),
-                _step("Far away?", "Use an independent escrow service - see Paying safely for "
-                      "some.", "how_broka_works"),
-                # Not escrow: M-Pesa can't carry more than KES 250,000 a
-                # payment, and only the official search shows who owns it.
+                _step("Pick an escrow service", "E-Confirm, Escrow Kenya, Kenya Escrow, Lipasafe or "
+                      "Shikilia - independent, not run by BROKA.", "escrow_services"),
+                _step("Pay the service, never the seller", "Open it yourself - never from a link "
+                      "the other person sends."),
+                _step("Release once you have it", "Only when it's what you agreed."),
+                # Not M-Pesa escrow: an M-Pesa payment can't carry more
+                # than KES 250,000, and only the official search shows who
+                # owns it.
                 _step("Land or a car?", "Do the official search first (Ardhisasa, or NTSA for the "
                       "logbook) and pay through a bank or an advocate."),
             ],
@@ -197,8 +204,8 @@ def _static(guide_id: str) -> dict:
             "steps": [
                 _step("Pay through escrow, always", "Never send money by M-Pesa outside BROKA, whatever "
                       "the reason given.") if settings.in_app_payments_enabled else
-                _step("Pay only once you have the item", "Never send a deposit first, whatever "
-                      "the reason given."),
+                _step("Pay through escrow, or once you have it", "An escrow service holds the money "
+                      "until you have the item; never send a deposit first.", "escrow_services"),
                 _step("Check who you're dealing with", "Rating, completed deals, the verified badge."),
                 _step("Inspect before you confirm", "Meet somewhere public; confirm delivery only once "
                       "you have it."),

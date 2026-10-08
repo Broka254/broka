@@ -60,8 +60,10 @@ abstract interface class ZenoSessionChat {
   /// The user said [text] to the session.
   void sessionHeard(String text);
 
-  /// Zeno answered it.
-  void sessionAnswered(String reply, ZenoAction? action);
+  /// Zeno answered it - with, sometimes, replies to tap and a link
+  /// (the escrow walkthrough's).
+  void sessionAnswered(String reply, ZenoAction? action,
+      {List<String> suggestions = const [], ZenoLink? link});
 
   /// No answer came.
   void sessionFailed(String text);
@@ -384,7 +386,7 @@ class ZenoSession extends ChangeNotifier {
         // Recorded even when the session has ended meanwhile: the user
         // asked, and the answer belongs in the conversation.
         if (identical(_chat, chat) && chat != null) {
-          chat.sessionAnswered(reply, data.action);
+          chat.sessionAnswered(reply, data.action, suggestions: data.suggestions, link: data.link);
         } else {
           _saveToStore(user: chat == null ? text : null, reply: reply);
         }

@@ -103,7 +103,7 @@ class NotificationService {
       AndroidNotificationChannel(
     'broka_updates',
     'Deals & updates',
-    description: 'Payments, deliveries, auctions and other deal updates',
+    description: 'Payments, deliveries and other deal updates',
     importance: Importance.high,
   );
 

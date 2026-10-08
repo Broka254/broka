@@ -1978,6 +1978,12 @@ async def task_notify_auctions_ending_soon(ctx: dict) -> None:
     from api.domains.auctions import events as auction_events
     from api.domains.auctions import lifecycle
 
+    # Auctions off (auctions/paused.py): bids are refused, so "ending soon,
+    # bid now" would send bidders to a button that says no. The reminder
+    # stays owed and goes out if auctions come back before the close.
+    if not settings.auctions_enabled:
+        return
+
     async with AsyncSessionLocal() as db:
         metas = await lifecycle.due_for_ending_soon(db)
         for meta in metas:

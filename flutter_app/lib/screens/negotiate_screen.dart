@@ -31,6 +31,8 @@ import '../widgets/units_stepper.dart';
 import '../features/reviews/presentation/review_prompt.dart';
 import '../utils/price_format.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
+import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide, zenoEscrowPrompt;
 
 class NegotiateScreen extends StatefulWidget {
   const NegotiateScreen({super.key, this.animateBackground = true});
@@ -966,12 +968,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     if (_role == 'buyer') {
       // Nothing paid yet: pay straight into escrow - the payment opens the
       // deal, there is nothing to "finalize" first. While BROKA holds no
-      // payments the tap opens the Paying safely sheet instead, so the chip
-      // says "How to pay safely", not "Pay securely" - a promise of escrow.
+      // payments the tap opens the escrow sheet instead - independent
+      // escrow services and Zeno's walkthrough (safe_payment.dart).
       if (!_hasFundedDeal && _listing != null && _listing!.listingType != 'auction') {
         chips.add(_chip(
-          label: 'How to pay safely',
-          icon: Icons.payments_outlined,
+          label: 'Pay with escrow',
+          icon: Icons.shield_outlined,
           gradient: const [BrokaColors.neonGreen, BrokaColors.success],
           onTap: () => _payNow(agreedPrice: _currentOffer),
         ));
@@ -1317,6 +1319,18 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
             _buildHeader(),
             if (_listing != null) _buildInfoStrip(),
             Expanded(child: _buildChat()),
+            // Escrow, where the deal is struck: BROKA holds no payments, so
+            // this is how either side is protected - and how they learn
+            // Zeno walks them through it (escrow_callout.dart). Gone once
+            // money is held through BROKA (payments on, deal funded).
+            if (_listing != null && !_hasFundedDeal)
+              EscrowCallout(
+                compact: true,
+                title: _role == 'seller' ? 'Get paid with escrow' : 'Pay with escrow',
+                margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+                onZeno: () => openZenoEscrowGuide(context,
+                    prompt: _role == 'seller' ? 'How do I get paid through escrow?' : zenoEscrowPrompt),
+              ),
             _buildActionBar(),
             _buildActionProposal(),
             _buildInputBar(),
@@ -1349,14 +1363,15 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           const SizedBox(height: 3),
           // Was "Escrow protected": BROKA holds no payments while they
           // are paused, and a buyer who thinks it does is the one who pays
-          // a fraudster's "BROKA escrow" number. What keeps them safe now
-          // is seeing the item first.
+          // a fraudster's "BROKA escrow" number. "Pay with escrow" names
+          // the way that is real now - an independent service.
+          // escrow_callout.dart, under the chat, opens them.
           Row(children: [
             const Icon(Icons.visibility_outlined, size: 12, color: BrokaColors.neonGreen),
             const SizedBox(width: 5),
             Flexible(
               child: Text(
-                'Zeno mediating · See it before you pay',
+                'Zeno mediating · Pay with escrow',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: BrokaColors.textMid.withOpacity(0.95), fontSize: 11.5),
@@ -1551,7 +1566,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.payments_outlined, size: 15, color: BrokaColors.success),
           const SizedBox(width: 5),
-          Text('Agreed on ${formatKes(_currentOffer!)}? How to pay safely',
+          Text('Agreed on ${formatKes(_currentOffer!)}? Pay with escrow',
               style: const TextStyle(color: BrokaColors.success, fontSize: 12, fontWeight: FontWeight.w700)),
         ]),
       ),

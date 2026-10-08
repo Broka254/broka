@@ -403,6 +403,20 @@ class Settings:
         "IN_APP_PAYMENTS_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
 
+    # ── Auctions (AUCTIONS.md) ───────────────────────────────────────────────
+    # Off for launch: an auction's winner pays through BROKA's escrow, and
+    # with in-app payments paused there is no way to hold a winning bid -
+    # no outside escrow service takes a bid's money or closes an auction.
+    # Off, no auction can be created, changed or bid on (409 AUCTIONS_OFF, a
+    # message older app builds show), no feed, search, store or Auction
+    # House lists one (listings/paid.live_clause), no "ending soon" reminder
+    # goes out and the plans stop selling them. The code, tables and close
+    # sweep stay: an auction someone already has open still shows its
+    # result, and turning this on brings the whole feature back.
+    auctions_enabled: bool = field(default_factory=lambda: os.getenv(
+        "AUCTIONS_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+
     # ── Listing fees (PRICING.md) ─────────────────────────────────────────────
     # Off until the app build with the Listing fee screen is the one sellers
     # have. On, a new listing stays hidden from buyers until its fee is paid

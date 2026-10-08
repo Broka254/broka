@@ -1,20 +1,25 @@
 // BROKA — how it works
 //
-// The explainer a seller can read once and stop guessing.
+// The whole of BROKA on one screen: buying, selling, paying, Zeno, and what
+// the numbers on a seller's dashboard mean (2026-10-08 rewrite).
 //
-// Everything on the dashboard assumes the seller already knows what DCR is,
-// why rank matters, and what escrow does. None of that is obvious, and a
-// number nobody understands is a number nobody acts on — a seller who does
-// not know that off-platform deals cost them ranking has no reason to stop
-// doing them, and every metric on the dashboard is then just decoration.
+// It used to be the seller's explainer only - DCR, rank, escrow - and the
+// buyer, who is most of BROKA's users and the one deciding whether to send
+// money to a stranger, had nothing. It opens with how a deal goes for each
+// of them, then how to pay: BROKA holds no deal money for launch, so the
+// way to pay someone you can't meet is an independent escrow service, and
+// Zeno walks you through one (escrow_walkthrough.py on the server).
 //
-// Written plainly and without marketing. The claims here are mechanical —
-// this is what the code does — so they have to stay true as the code
+// Written plainly and without marketing. The claims here are mechanical -
+// this is what the code does - so they have to stay true as the code
 // changes. Nothing on this screen quotes a statistic, because the moment it
-// does, someone has to keep it honest.
+// does, someone has to keep it honest. It said there was "no featured
+// placement and no paid badge"; boosts and the Verified badge are both
+// paid for, so it says what each does instead.
 
 import 'package:flutter/material.dart';
 
+import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/safe_payment.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
@@ -28,6 +33,55 @@ class _Topic {
   final List<String> body;
   const _Topic(this.icon, this.accent, this.title, this.lede, this.body);
 }
+
+/// A deal from one side, as numbered steps.
+class _Journey {
+  final IconData icon;
+  final Color accent;
+  final String title;
+  final List<(String, String)> steps;
+  const _Journey(this.icon, this.accent, this.title, this.steps);
+}
+
+const _buying = _Journey(Icons.shopping_bag_rounded, BrokaColors.neonBlue, 'Buying on BROKA', [
+  ('Find it', 'Browse a category, search, or tell Zeno\'s Buying Agent what you want - it '
+      'searches, compares and keeps watching for you.'),
+  ('Ask Zeno', 'Is the price fair? Is the seller reliable? What should you check? Tap "Ask '
+      'Zeno" on any listing.'),
+  ('Agree the deal', 'In the deal room Zeno negotiates beside you, or chat with the seller '
+      'directly. A video call shows you the item without a trip.'),
+  ('Pay with escrow', 'An independent escrow service holds your money until you have the item. '
+      'Zeno walks you through it, step by step. Collecting in person? Check it, then pay.'),
+  ('Confirm, then review', 'Release the money once it\'s what you agreed, and tell other '
+      'buyers how the seller did.'),
+]);
+
+const _selling = _Journey(Icons.storefront_rounded, BrokaColors.gold, 'Selling on BROKA', [
+  ('List it', 'Photos first - Zeno can write the listing from them. A fair price and a clear '
+      'title get you found.'),
+  ('Answer fast', 'Buyers rarely message one seller. Whoever answers first is usually who '
+      'they buy from.'),
+  ('Agree the deal', 'Zeno brokers the price with the buyer and keeps it civil.'),
+  ('Get paid through escrow', 'Wait until the escrow service itself shows the buyer\'s money '
+      'is held - never a screenshot or an SMS - then hand it over. The service pays you when '
+      'the buyer confirms.'),
+  ('Grow', 'An online store gathers your listings behind one link; verification shows buyers '
+      'who you are.'),
+]);
+
+const _zeno = _Topic(
+  Icons.auto_awesome_rounded, BrokaColors.neonPurple,
+  'Zeno, on your side',
+  'The AI broker in every deal - and the assistant in the Zeno tab.',
+  [
+    'In a deal room, Zeno negotiates between buyer and seller and keeps both honest: it never '
+        'invents what the other side said, and never pushes a price past what the seller set.',
+    'In the Zeno tab it answers questions, opens screens, searches, finds things for you, and '
+        'walks you through paying with escrow one step at a time - which service, how to pay in, '
+        'and when it is safe to release the money. Say "walk me through escrow" to start.',
+    'It can list an item for you from its photo, and voice mode lets you just talk to it.',
+  ],
+);
 
 const List<_Topic> _topics = [
   _Topic(
@@ -120,19 +174,20 @@ const List<_Topic> _topics = [
   _Topic(
     Icons.leaderboard_rounded, BrokaColors.neonBlue,
     'Ranking, and what buyers see first',
-    'Position is earned. There is no way to pay for it.',
+    'Earned from your numbers - with one paid exception, always marked.',
     [
       'Your rank is computed from your completion rate, your response time '
       'and your credibility. That rank decides how high your listings sit '
-      'when a buyer searches your category.',
-      'There is no featured placement, no promoted listing and no paid '
-      'badge on BROKA. We removed them. If position could be bought, there '
-      'would be no reason for anyone to work on any of the numbers above, '
-      'and a buyer could no longer read the order of results as meaning '
-      'anything.',
-      'The practical consequence: the seller ahead of you got there by '
-      'closing deals here and answering quickly. So can you, and nobody can '
-      'outspend you to stop it.',
+      'when a buyer browses your category.',
+      // It said "there is no featured placement, no promoted listing and no
+      // paid badge" - while the app sold boosts and the Verified badge.
+      'The one thing you can pay for is a boost: a boosted listing is put '
+      'ahead of the others for the time you paid for, and it wears a '
+      'FEATURED badge so buyers always know. The Verified badge is paid for '
+      'too, but it is given only after an ID check, and it does not move '
+      'you up the list.',
+      'Everything else is earned: the seller ahead of you got there by '
+      'closing deals here and answering quickly. So can you.',
     ],
   ),
   _Topic(
@@ -171,21 +226,43 @@ const List<_Topic> _topics = [
 
 // While BROKA handles no deal payments (GET /pricing/safe-payment says
 // so), the escrow topic would describe a payment buyers can't make: it is
-// replaced by how to pay a seller safely.
-const _payingSafely = _Topic(
-  Icons.shield_outlined, BrokaColors.neonGreen,
-  'Paying safely',
-  "BROKA doesn't handle payments yet. The buyer pays you directly.",
+// replaced by paying through an independent escrow service, and the
+// completion rate says why it isn't moving.
+const _payWithEscrow = _Topic(
+  Icons.shield_rounded, BrokaColors.neonGreen,
+  'Pay safely with escrow',
+  "BROKA doesn't take payments itself yet. An independent escrow service does the holding.",
   [
-    'Buyers are advised to meet somewhere public and check the item before '
-    'paying, and never to send a deposit to hold something.',
-    // Land and cars apart: M-Pesa moves at most KES 250,000 a payment, so
-    // an M-Pesa escrow can't carry them, and the official search is what
-    // proves the seller owns it (the server's advice, safe_payment.py).
-    'For a deal at a distance, an independent escrow service can hold the '
-    'money until the buyer has the item; they are not run by BROKA. Land and '
-    'cars go through an official search and a bank or advocate. Tap below '
-    'for both.',
+    'With escrow, the buyer pays a neutral service, not the seller. The service holds the money '
+        'and pays the seller only once the buyer confirms they got what they paid for. If something '
+        'goes wrong, the service decides the dispute.',
+    'Kenya has several: E-Confirm, Escrow Kenya, Kenya Escrow, Lipasafe and Shikilia. They are '
+        "independent - BROKA doesn't run them and isn't paid by them - so check a service's fee "
+        'before you pay. Zeno walks you through whichever you choose.',
+    // The scam escrow invites: a "seller" who sends their own escrow link
+    // runs the fake site it opens.
+    'Open the service yourself, from BROKA\'s list. Never use an escrow link or number the other '
+        'person sends you - fake escrow sites are a common scam.',
+    // Land and cars apart: M-Pesa moves at most KES 250,000 a payment, and
+    // the official search is what proves the seller owns it (the server's
+    // advice, safe_payment.py).
+    'Collecting in person? Meet somewhere public, check the item, then pay - never a deposit. Land '
+        'and cars go through an official search (Ardhisasa, NTSA) and a bank or an advocate.',
+  ],
+);
+
+const _completionWhilePaused = _Topic(
+  Icons.verified_rounded, BrokaColors.gold,
+  'Deal completion rate',
+  'The share of your deals that actually finish on BROKA.',
+  [
+    'A deal counts as completed when its payment goes through BROKA and the buyer confirms. While '
+        'BROKA takes no payments itself, no deal can complete through it - so the rate is not '
+        'moving for anyone, and a deal paid through an escrow service or on collection is never '
+        'counted against you.',
+    'It is smoothed, and a new seller starts near the platform average rather than at zero.',
+    'Once payments run through BROKA again it becomes the heaviest single input to your rating '
+        'and ranking. Until then, reply speed is what you can move.',
   ],
 );
 
@@ -199,103 +276,197 @@ class HowBrokaWorksScreen extends StatefulWidget {
 }
 
 class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
-  List<_Topic> _shown = _topics;
+  /// Until the server says otherwise, BROKA is described as it runs for
+  /// launch - holding no payments. Showing "BROKA holds the money" while
+  /// the answer loads, or when it can't load, would be the one wrong thing
+  /// this screen could say.
+  bool _inAppPayments = false;
 
   @override
   void initState() {
     super.initState();
     (widget.repository ?? safePaymentRepository).fetch().then((info) {
-      if (!mounted || info == null || info.inAppPayments) return;
-      setState(() => _shown = [_payingSafely, ..._topics.skip(1)]);
+      if (!mounted || info == null || !info.inAppPayments) return;
+      setState(() => _inAppPayments = true);
     });
   }
 
+  List<_Topic> get _shown => _inAppPayments
+      ? _topics
+      : [_payWithEscrow, _completionWhilePaused, ..._topics.skip(2)];
+
   @override
-  Widget build(BuildContext context) => ChatAmbientBackground(
-        intensity: 0.85,
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          appBar: AppBar(
-            backgroundColor: BrokaColors.bg.withOpacity(0.55),
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            title: const Text('HOW BROKA WORKS',
-                style: TextStyle(fontSize: 13, letterSpacing: 1.5,
-                    fontWeight: FontWeight.w900, color: BrokaColors.textHigh)),
-            centerTitle: false,
-          ),
-          body: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-            itemCount: _shown.length + 1,
-            itemBuilder: (_, i) {
-              if (i == 0) {
-                return const Padding(
-                  padding: EdgeInsets.only(bottom: 18),
-                  child: Text(
-                    'Every number on your dashboard comes from something you '
-                    'control. Here is what each one means and what moves it.',
-                    style: TextStyle(color: BrokaColors.textMid,
-                        fontSize: 12.5, height: 1.45),
-                  ),
-                );
-              }
-              final t = _shown[i - 1];
-              return FadeSlideIn(
-                index: i,
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 14),
-                  padding: const EdgeInsets.all(16),
+  Widget build(BuildContext context) {
+    final shown = _shown;
+    final items = <Widget>[
+      const Padding(
+        padding: EdgeInsets.only(bottom: 16),
+        child: Text(
+          'BROKA is where you buy and sell with Zeno, an AI broker, on your side. '
+          'Here is how a deal goes, how to pay safely, and what the numbers on a '
+          "seller's dashboard mean.",
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
+        ),
+      ),
+      const _JourneyCard(_buying),
+      const _JourneyCard(_selling),
+      if (!_inAppPayments)
+        EscrowCallout(
+          margin: const EdgeInsets.only(bottom: 14),
+          onOpen: () => openEscrowServices(context, repository: widget.repository),
+        ),
+      for (final t in shown) ...[
+        _TopicCard(t, repository: widget.repository),
+        if (identical(t, shown.first)) const _TopicCard(_zeno),
+      ],
+    ];
+    return ChatAmbientBackground(
+      intensity: 0.85,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: BrokaColors.bg.withOpacity(0.55),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: const Text('HOW BROKA WORKS',
+              style: TextStyle(fontSize: 13, letterSpacing: 1.5,
+                  fontWeight: FontWeight.w900, color: BrokaColors.textHigh)),
+          centerTitle: false,
+        ),
+        body: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+          itemCount: items.length,
+          itemBuilder: (_, i) => FadeSlideIn(index: i, child: items[i]),
+        ),
+      ),
+    );
+  }
+}
+
+class _JourneyCard extends StatelessWidget {
+  const _JourneyCard(this.journey);
+  final _Journey journey;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: journey.accent.withOpacity(0.3)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(journey.icon, size: 20, color: journey.accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(journey.title, style: const TextStyle(
+                  color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w800)),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          for (final (i, (title, detail)) in journey.steps.indexed)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: 24, height: 24,
+                  alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: BrokaColors.bgCard,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: t.accent.withOpacity(0.24)),
+                    shape: BoxShape.circle,
+                    // Paying is the step people get wrong: it stands out.
+                    color: (title.contains('escrow') ? BrokaColors.neonGreen : journey.accent).withOpacity(0.18),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(children: [
-                        Container(
-                          width: 34, height: 34,
-                          decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: t.accent.withOpacity(0.14)),
-                          child: Icon(t.icon, size: 17, color: t.accent),
-                        ),
-                        const SizedBox(width: 11),
-                        Expanded(
-                          child: Text(t.title,
-                              style: const TextStyle(
-                                  color: BrokaColors.textHigh,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800)),
-                        ),
-                      ]),
-                      const SizedBox(height: 9),
-                      Text(t.lede,
-                          style: TextStyle(color: t.accent,
-                              fontSize: 12.5, height: 1.35,
-                              fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 11),
-                      for (final para in t.body) ...[
-                        Text(para,
-                            style: const TextStyle(
-                                color: BrokaColors.textMid,
-                                fontSize: 12.5, height: 1.55)),
-                        if (para != t.body.last) const SizedBox(height: 10),
-                      ],
-                      if (identical(t, _payingSafely))
-                        TextButton.icon(
-                          onPressed: () => showSafePaymentSheet(context,
-                              repository: widget.repository),
-                          icon: const Icon(Icons.open_in_new, size: 16),
-                          label: const Text('Escrow services and safety tips'),
-                        ),
-                    ],
-                  ),
+                  child: Text('${i + 1}', style: TextStyle(
+                      color: title.contains('escrow') ? BrokaColors.neonGreen : journey.accent,
+                      fontSize: 11.5, fontWeight: FontWeight.w900)),
                 ),
-              );
-            },
-          ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(title, style: TextStyle(
+                        color: title.contains('escrow') ? BrokaColors.neonGreen : BrokaColors.textHigh,
+                        fontSize: 13, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 2),
+                    Text(detail, style: const TextStyle(
+                        color: BrokaColors.textMid, fontSize: 12.5, height: 1.45)),
+                  ]),
+                ),
+              ]),
+            ),
+        ]),
+      );
+}
+
+class _TopicCard extends StatelessWidget {
+  const _TopicCard(this.t, {this.repository});
+  final _Topic t;
+  final SafePaymentRepository? repository;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: t.accent.withOpacity(identical(t, _payWithEscrow) ? 0.6 : 0.24),
+              width: identical(t, _payWithEscrow) ? 1.4 : 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Container(
+                width: 34, height: 34,
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: t.accent.withOpacity(0.14)),
+                child: Icon(t.icon, size: 17, color: t.accent),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Text(t.title,
+                    style: const TextStyle(
+                        color: BrokaColors.textHigh,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800)),
+              ),
+            ]),
+            const SizedBox(height: 9),
+            Text(t.lede,
+                style: TextStyle(color: t.accent,
+                    fontSize: 12.5, height: 1.35,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 11),
+            for (final para in t.body) ...[
+              Text(para,
+                  style: const TextStyle(
+                      color: BrokaColors.textMid,
+                      fontSize: 12.5, height: 1.55)),
+              if (para != t.body.last) const SizedBox(height: 10),
+            ],
+            if (identical(t, _payWithEscrow)) ...[
+              const SizedBox(height: 12),
+              ZenoGuideButton(onTap: () => openZenoEscrowGuide(context)),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => showSafePaymentSheet(context, repository: repository),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Escrow services and safety tips'),
+                ),
+              ),
+            ],
+            if (identical(t, _zeno)) ...[
+              const SizedBox(height: 12),
+              ZenoGuideButton(
+                label: 'Walk me through paying with escrow',
+                onTap: () => openZenoEscrowGuide(context),
+              ),
+            ],
+          ],
         ),
       );
 }

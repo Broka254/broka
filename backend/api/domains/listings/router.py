@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # 500; no existing test covered this endpoint at all.
 from api.database import get_db, DealStatus, Listing
 from api.domains.auctions.lifecycle import AuctionError
+from api.domains.auctions.paused import require_auctions
 from api.security import get_current_user
 from api.core.config import settings
 from api.database import ListingStatus, ListingType
@@ -257,6 +258,11 @@ async def create_listing(
     Redis like the money endpoints' keys, so it holds without Redis and for
     as long as the listing exists.
     """
+    # Before anything is written: an older app build still offers "Auction"
+    # in the sell wizard, and a listing saved as one would be hidden from
+    # every buyer while auctions are off (auctions/paused.py).
+    if body.listing_type == "auction":
+        require_auctions()
     svc = ListingService(db)
     try:
         return await svc.create_listing(

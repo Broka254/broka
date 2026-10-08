@@ -51,6 +51,8 @@ import '../features/discovery/domain/destination_visual.dart';
 import '../features/categories/presentation/category_navigation.dart';
 import '../features/categories/presentation/widgets/category_art_card.dart';
 import '../features/trending/presentation/trending_screen.dart';
+import '../features/auctions/domain/auctions_enabled.dart';
+import '../features/safe_payment/safe_payment.dart' show openEscrowServices;
 import '../features/auctions/presentation/auction_house_screen.dart';
 import 'zeno_screen.dart';
 import '../features/zeno_assistant/zeno_session.dart';
@@ -404,13 +406,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TrendingScreen())),
       ),
-      _RailItem(
-        emoji: DestinationVisuals.auctions.emoji,
-        label: DestinationVisuals.auctions.label,
-        colors: DestinationVisuals.auctions.gradient,
-        isDestination: true,
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AuctionHouseScreen())),
-      ),
+      // Auctions are off for launch (kAuctionsEnabled): the Auction House
+      // is still in the app, with nothing leading to it.
+      if (kAuctionsEnabled)
+        _RailItem(
+          emoji: DestinationVisuals.auctions.emoji,
+          label: DestinationVisuals.auctions.label,
+          colors: DestinationVisuals.auctions.gradient,
+          isDestination: true,
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AuctionHouseScreen())),
+        ),
       // Home-redesign brief §6: tapping Traders navigates to a dedicated
       // screen rather than filtering/replacing Home's own product grid.
       _RailItem(
@@ -1456,18 +1461,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           // A rule fading out to the right (2026-09-29 visual upgrade): the
           // feed starts here, and the rail and Zeno above it are not part of
-          // it. A hairline, not a card edge or a background band.
-          const SizedBox(width: 10),
-          Expanded(
-            child: Container(
-              height: 1,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [
-                  BrokaColors.gold.withOpacity(0.55),
-                  BrokaColors.neonBlue.withOpacity(0.18),
-                  Colors.transparent,
-                ], stops: const [0.0, 0.45, 1.0]),
+          // it. A hairline, not a card edge or a background band. Dropped
+          // on a small phone, where the escrow pill needs the room.
+          if (!_narrow(context)) ...[
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                height: 1,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [
+                    BrokaColors.gold.withOpacity(0.55),
+                    BrokaColors.neonBlue.withOpacity(0.18),
+                    Colors.transparent,
+                  ], stops: const [0.0, 0.45, 1.0]),
+                ),
               ),
+            ),
+          ],
+          // Escrow on the first screen anyone sees (2026-10-08): BROKA holds
+          // no payments, and a buyer who never hears of escrow pays a
+          // stranger and hopes. On the heading's own row, so the feed still
+          // starts in the top half (brief §2) - the full callout is on every
+          // listing and in every deal chat (escrow_callout.dart). Flexible
+          // and scaled down rather than overflowing at a large text size.
+          const SizedBox(width: 8),
+          const Flexible(
+            flex: 3,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: _EscrowPill(),
             ),
           ),
         ]),
@@ -2130,6 +2153,37 @@ class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
 // seconds) previously would have had to live on HomeScreen's own
 // AnimationController, rebuilding the header, the rail and every product card
 // along with them. Scoped here, a frame of Zeno costs one row.
+/// "Pay with escrow" beside Home's feed heading: escrow green, glowing,
+/// one tap to the escrow services and Zeno's walkthrough.
+class _EscrowPill extends StatelessWidget {
+  const _EscrowPill();
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: 'Pay with escrow',
+        child: GestureDetector(
+          key: const Key('home-escrow'),
+          onTap: () => openEscrowServices(context),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: BrokaColors.neonGreen.withOpacity(0.16),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.85)),
+              boxShadow: [BoxShadow(color: BrokaColors.neonGreen.withOpacity(0.35), blurRadius: 12)],
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.shield_rounded, size: 14, color: BrokaColors.neonGreen),
+              SizedBox(width: 4),
+              Text('Pay with escrow', style: TextStyle(
+                  color: BrokaColors.neonGreen, fontSize: 11.5, fontWeight: FontWeight.w900)),
+            ]),
+          ),
+        ),
+      );
+}
+
 class _ZenoCompactCta extends StatefulWidget {
   const _ZenoCompactCta({required this.onTap});
 

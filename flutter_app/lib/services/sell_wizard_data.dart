@@ -14,6 +14,7 @@
 // so a process killed mid-flow comes back where the seller left it.
 import 'dart:io';
 import 'dart:math';
+import '../features/auctions/domain/auctions_enabled.dart';
 import 'sell_draft_store.dart';
 import 'photo_upload_tracker.dart';
 
@@ -248,7 +249,10 @@ class SellWizardData {
       ..subcategoryName  = draft['subcategoryName']  as String?
       ..condition        = draft['condition']        as String?
       ..attributes  = _stringMap(draft['attributes'])
-      ..type        = draft['type']        as String? ?? 'direct'
+      // A draft saved as an auction before they were switched off posts
+      // as a direct sale: the server would refuse it (AUCTIONS_OFF), and the
+      // wizard no longer shows the choice to change it.
+      ..type        = kAuctionsEnabled ? (draft['type'] as String? ?? 'direct') : 'direct'
       ..showcaseImageSource = draft['showcaseImageSource'] as String?
       ..showcaseAssetId     = draft['showcaseAssetId']     as String?
       ..showcasePreviewUrl  = draft['showcasePreviewUrl']  as String?

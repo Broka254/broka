@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/safe_payment/escrow_callout.dart';
 import 'package:broka/models/listing.dart';
 import 'package:broka/screens/negotiate_screen.dart';
 import 'package:broka/screens/negotiation_screen.dart';
@@ -111,9 +112,12 @@ void main() {
       expect(find.text('Zeno is composing...'), findsNothing);
       // BROKA holds no payments while they are paused: the header no longer
       // says "Escrow protected", and the pay chip doesn't promise security.
-      expect(find.text('Zeno mediating · See it before you pay'), findsOneWidget);
+      // It names the way that is real - an independent escrow service - and
+      // the escrow callout sits above the composer, with Zeno to guide.
+      expect(find.text('Zeno mediating · Pay with escrow'), findsOneWidget);
       expect(find.textContaining('Escrow protected'), findsNothing);
-      expect(find.text('How to pay safely'), findsOneWidget);
+      expect(find.byType(EscrowCallout), findsOneWidget);
+      expect(find.text('Ask Zeno'), findsOneWidget);
       expect(find.text('Pay securely'), findsNothing);
     });
 
@@ -173,9 +177,12 @@ void main() {
       expect(find.byTooltip('Agree the deal'), findsNothing);
       expect(find.byKey(const Key('pay-now')), findsOneWidget);
       // Not "Pay securely - the seller is paid only after you've received
-      // the item": that was escrow, which BROKA doesn't run while payments
-      // are paused.
-      expect(find.textContaining("BROKA doesn't hold payments for now"), findsOneWidget);
+      // the item": that was BROKA's escrow, which it doesn't run while
+      // payments are paused. It says so, and offers an independent one.
+      expect(find.textContaining("BROKA doesn't take payments itself yet. Pay with escrow"), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('pay-now')), matching: find.text('Pay with escrow')),
+          findsOneWidget);
+      expect(find.text('Zeno, guide me'), findsOneWidget);
       expect(find.textContaining('Pay securely'), findsNothing);
       expect(find.byTooltip('Ask Zeno'), findsOneWidget);
       expect(find.byType(ChatComposerPill), findsOneWidget);

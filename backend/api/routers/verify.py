@@ -4,7 +4,8 @@ Sellers pay via M-Pesa STK Push to receive a BROKA Verified badge.
 
 Tiers:
   basic  - KES 299 / year  - "BROKA Verified" gold badge
-  gold   - KES 599 / year  - "BROKA Gold"      badge + priority listing
+  gold   - KES 599 / 2 years - "BROKA Gold"    badge (a higher trust score;
+           no ranking effect - nothing in the listing order reads the badge)
 
 ENV VARS (shared with mpesa.py):
   MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE,
@@ -74,7 +75,9 @@ VERIFY_TIERS = {
         "price":        599,
         "label":        "BROKA Gold",
         "months":       24,
-        "description":  "Gold badge + priority placement in search results for 24 months.",
+        # Said "+ priority placement in search results": nothing in the
+        # listing order reads the badge, so that was sold and not given.
+        "description":  "Gold badge on all your listings for 24 months.",
     },
 }
 

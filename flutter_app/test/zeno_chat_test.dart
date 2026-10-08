@@ -385,18 +385,21 @@ void main() {
 
   // The opener asked "How does BROKA escrow work?" - there is no BROKA
   // escrow while payments are paused, and asking invites a description of
-  // one.
-  testWidgets('the openers ask how to pay safely, not about BROKA escrow', (tester) async {
+  // one. Since 2026-10-08 the first opener starts Zeno's escrow walkthrough
+  // (an independent service, step by step), and Zeno's welcome says it
+  // helps with paying - so nobody has to guess that it does.
+  testWidgets("the first opener is Zeno's escrow walkthrough, never BROKA escrow", (tester) async {
     await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
     await _settle(tester);
+    expect(find.text(ZenoScreen.escrowOpener), findsOneWidget);
+    expect(find.textContaining('walk you through paying safely with an escrow service'), findsOneWidget);
     // The rail builds its chips as they scroll in: take it to the end.
     final rail = Offset(400, tester.getCenter(find.text('🚗')).dy);
     for (var i = 0; i < 8; i++) {
       await tester.dragFrom(rail, const Offset(-300, 0));
       await _settle(tester);
     }
-    expect(find.text('How do I pay a seller safely?'), findsOneWidget);
-    expect(find.textContaining('escrow'), findsNothing);
+    expect(find.textContaining('BROKA escrow'), findsNothing);
   });
 }
 

@@ -12,6 +12,7 @@ import { monthYearOf, placeLine, plural, yearOf } from '@/lib/format'
 import { PAYING_SAFELY } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
+import { EscrowBox } from './EscrowBox'
 import styles from './store.module.css'
 
 export function StoreDetails({ view }: { view: StoreView }) {
@@ -214,6 +215,7 @@ export function StoreDetails({ view }: { view: StoreView }) {
             </li>
           ))}
         </ul>
+        <EscrowBox />
       </section>
     </div>
   )

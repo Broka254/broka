@@ -2,8 +2,15 @@
 
 BROKA is a mobile marketplace where buyers and sellers deal through **Zeno**,
 an AI broker that negotiates, translates, privately coaches each side, and
-mediates disputes. Money moves through escrow, and BROKA takes a **3%
-commission** on each deal.
+mediates disputes.
+
+**For launch (2026-10-08) BROKA holds no deal money.** Buyers pay sellers
+through one of Kenya's independent escrow services (E-Confirm, Escrow Kenya,
+Kenya Escrow, Lipasafe, Shikilia), listed in the app and on the web store,
+and Zeno walks them through it one step at a time. No commission is charged.
+BROKA's own escrow is built and switched off (`IN_APP_PAYMENTS_ENABLED`), and
+so are auctions (`AUCTIONS_ENABLED`), whose winning bids need it. See
+`CHANGES.md`, "Paying with escrow services, and no auctions for launch".
 
 | Part | Stack |
 |---|---|
@@ -128,7 +135,15 @@ Regression tests: `backend/tests/test_cost_bounds.py`,
 
 ### Money
 
-Two escrow paths run side by side:
+**For launch, with `IN_APP_PAYMENTS_ENABLED` off:** no route that starts a
+buyer's payment answers (409 `IN_APP_PAYMENTS_OFF`), and
+`GET /pricing/safe-payment` serves the independent escrow services - how
+each takes a payment, its fees and limits as it publishes them, how a deal
+starts, releases and is disputed - with the rules that stop fake-escrow
+scams (`api/domains/pricing/safe_payment.py`). Zeno's step-by-step
+walkthrough of them is `api/domains/zeno_assistant/escrow_walkthrough.py`.
+
+With in-app payments on, two escrow paths run side by side:
 
 - **E-Confirm** holds the **full agreed price**. E-Confirm doesn't call
   BROKA back, so BROKA polls it: on every payment-status request, and every
@@ -160,6 +175,11 @@ Zeno writes a separate, private reply to each side of a conversation.
 that neither side can read the other's copy (see `PRIVACY.md`).
 
 ### Auctions
+
+**Off for launch** (`AUCTIONS_ENABLED`; `api/domains/auctions/paused.py`): none
+can be created, changed or bid on, no feed lists one, and the app shows no
+way to them (`kAuctionsEnabled`). The code below is unchanged and comes back
+with the setting.
 
 The server clock decides whether an auction is upcoming, live or ended. Bids
 and closes are single atomic updates that only succeed if the row hasn't

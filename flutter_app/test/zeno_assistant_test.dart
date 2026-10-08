@@ -265,6 +265,54 @@ void main() {
       expect(find.textContaining('route /inbox'), findsOneWidget);
     });
 
+    // Zeno walking someone through an escrow service (backend
+    // zeno_assistant/escrow_walkthrough.py): each step comes with the
+    // replies to tap, and the step that opens the service links to it.
+    testWidgets('the escrow walkthrough: tap a reply to go on, and the link opens the service', (tester) async {
+      setFakeRoute((uri) => uri.path == '/zeno/assistant/turn'
+          ? {
+              'reply': 'Step 2 of 7 · Buying with E-Confirm\n\nOpen E-Confirm yourself: go to econfirm.co.ke.',
+              'action': null,
+              'suggestions': ["Done - what's next?", 'Repeat this step', 'Back'],
+              'link': {'label': 'Open E-Confirm', 'url': 'https://econfirm.co.ke'},
+            }
+          : null);
+      await tester.pumpWidget(app());
+      await run(tester, const Duration(milliseconds: 400));
+      await type(tester, 'next');
+      await run(tester, const Duration(seconds: 3));
+      expect(find.text('Open E-Confirm'), findsOneWidget);
+      expect(find.text("Done - what's next?"), findsOneWidget);
+      expect(find.text('Repeat this step'), findsOneWidget);
+
+      await tester.tap(find.text("Done - what's next?"));
+      await run(tester, const Duration(seconds: 1));
+      final said = [for (final r in sent('/zeno/assistant/turn')) (r.json as Map)['message']];
+      expect(said, ['next', "Done - what's next?"], reason: 'a tapped reply is sent as if typed');
+    });
+
+    testWidgets('a question asked from another screen is sent the moment Zeno opens', (tester) async {
+      answer("I'll walk you through it, one step at a time.");
+      await tester.pumpWidget(app(home: const ZenoScreen(
+          animateBackground: false, initialQuery: ZenoScreen.escrowOpener)));
+      await run(tester, const Duration(seconds: 2));
+      final body = sent('/zeno/assistant/turn').single.json as Map;
+      expect(body['message'], ZenoScreen.escrowOpener);
+      expect(find.text("I'll walk you through it, one step at a time."), findsOneWidget);
+    });
+
+    test('suggestions are bounded, and a link opens only over https', () {
+      final turn = ZenoTurnResult.fromJson({
+        'reply': 'Which one?',
+        'suggestions': ['A', ' B ', '', 42, 'C', 'D', 'E', 'F', 'G', 'x' * 61],
+        'link': {'label': 'Open it', 'url': 'http://econfirm.co.ke'},
+      });
+      expect(turn.suggestions, ['A', 'B', 'C', 'D', 'E', 'F']);
+      expect(turn.link, isNull, reason: 'not https');
+      expect(ZenoLink.fromJson({'label': 'Open', 'url': 'https://lipasafe.co.ke'})!.url.host, 'lipasafe.co.ke');
+      expect(ZenoLink.fromJson({'label': 'Open', 'url': 'javascript:alert(1)'}), isNull);
+    });
+
     testWidgets('a server from before the assistant still answers, the old way', (tester) async {
       setFakeRoute((uri) {
         if (uri.path == '/zeno/assistant/turn') return const FakeResponse({'detail': 'Not Found'}, statusCode: 404);

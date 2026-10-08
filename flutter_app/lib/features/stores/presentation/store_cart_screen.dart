@@ -16,6 +16,7 @@ import '../../../utils/price_unit.dart';
 import '../../../widgets/broka_image.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../categories/domain/category_visual.dart';
+import '../../safe_payment/escrow_callout.dart';
 import '../data/store_cart.dart';
 
 /// Opens the cart for [storeId] ([storeName] in the title).
@@ -370,7 +371,9 @@ class _Summary extends StatelessWidget {
           child: Row(children: [
             Expanded(child: Text(label, style: const TextStyle(color: BrokaColors.textMid,
                 fontSize: 13.5))),
-            value,
+            // Flexible: a long value wraps instead of pushing the row off a
+            // small phone.
+            Flexible(child: value),
           ]),
         );
     return Container(
@@ -391,8 +394,9 @@ class _Summary extends StatelessWidget {
             style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600))),
         // Was "Buyer protection: Included" - escrow, which BROKA doesn't
         // offer while payments are paused. Who is paid is what the buyer
-        // needs to know: the store, not a number claiming to be BROKA.
-        row('Payment', const Text('To the store directly',
+        // needs to know: the store - through an independent escrow service,
+        // or directly - never a number claiming to be BROKA.
+        row('Payment', const Text('Escrow, or the store', textAlign: TextAlign.end,
             style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600))),
         const Divider(color: BrokaColors.border, height: 18),
         row('Subtotal', Text(formatKes(cart.subtotal), key: const Key('cart-subtotal'),
@@ -406,26 +410,37 @@ class _Summary extends StatelessWidget {
 class _PayingNote extends StatelessWidget {
   const _PayingNote();
 
+  // Escrow first (2026-10-08): a store buyer is often across town or in
+  // another county, so most can't see the item before paying - and the
+  // escrow services are independent, never BROKA's (escrow_callout.dart).
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => Column(
         key: const Key('cart-paying-note'),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: BrokaColors.success.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: BrokaColors.success.withOpacity(0.35)),
-        ),
-        child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(Icons.visibility_outlined, color: BrokaColors.success, size: 22),
-          SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              "BROKA doesn't hold payments for now: you pay the store directly, by "
-              'M-Pesa. See the item first - meet somewhere public or take delivery - '
-              'then pay. Never send a deposit to "hold" an item.',
-              style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.4)),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const EscrowCallout(),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: BrokaColors.success.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: BrokaColors.success.withOpacity(0.35)),
+            ),
+            child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.visibility_outlined, color: BrokaColors.success, size: 22),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "BROKA doesn't hold payments for now. Can't see the item before paying? Use "
+                  "an escrow service - they're independent, not run by BROKA. Collecting it? "
+                  'See the item first, then pay the store directly. Never send a deposit to '
+                  '"hold" an item.',
+                  style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.4)),
+              ),
+            ]),
           ),
-        ]),
+        ],
       );
 }
 
@@ -534,7 +549,8 @@ class _CheckoutSheetState extends State<_CheckoutSheet> {
             const SizedBox(height: 6),
             const Text(
               'Each product has its own deal room: agree it with the store there, then '
-              'pay the store directly once you have seen it.',
+              'pay through an escrow service - Zeno walks you through it - or pay the '
+              'store directly once you have seen it.',
               style: TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
             const SizedBox(height: 14),
             for (final item in widget.items)

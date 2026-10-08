@@ -48,10 +48,11 @@ class SellerInsight {
 const List<SellerInsight> kSellerInsights = [
   SellerInsight(
     'Agree it in the chat',
-    "BROKA doesn't hold payments for now, so the buyer pays you directly. "
-    'Agree the price and the handover in the BROKA chat anyway: it is the '
-    'record of what was promised if anything is disputed later. Check the '
-    'money is in your M-Pesa before you hand anything over.',
+    "BROKA doesn't hold payments for now, so the buyer pays you - best through "
+    'an escrow service, which Zeno walks you both through. Agree the price, '
+    'the handover and the service in the BROKA chat: it is the record of what '
+    'was promised if anything is disputed later. Hand nothing over until the '
+    'service shows the money is held, or it is in your M-Pesa.',
     Icons.handshake_outlined, BrokaColors.neonGreen,
   ),
   SellerInsight(

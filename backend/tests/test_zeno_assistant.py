@@ -454,8 +454,7 @@ class TestGuides:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("message,guide", [
-        ("How does BROKA escrow work?", "escrow"),
-        ("How do I pay a seller safely?", "escrow"),   # the app's opener chip
+        # Escrow questions start the walkthrough instead (test_escrow_walkthrough.py).
         ("How do I spot a fake listing?", "stay_safe"),
         ("How do I open an online store?", "open_store"),
         ("why are my listings not selling", "sell_faster"),
@@ -480,11 +479,11 @@ class TestGuides:
         me = await _user("Eli Model")
         prompts = []
         _model_seq(monkeypatch, [
-            {"reply": "Escrow keeps you safe - here's how.", "action": {"type": "GUIDE", "guide": "escrow"}},
+            {"reply": "Here's how to stay safe.", "action": {"type": "GUIDE", "guide": "stay_safe"}},
             {"reply": "Here you go.", "action": {"type": "GUIDE", "guide": "hack_the_bank"}},
         ], prompts)
-        out = await _turn(client, me, "I'm nervous about paying a stranger")
-        assert out["action"]["guide_content"]["title"] == "How escrow keeps you safe"
+        out = await _turn(client, me, "I'm nervous about meeting a stranger")
+        assert out["action"]["guide_content"]["title"] == "Staying safe on BROKA"
         out = await _turn(client, me, "and something else?")
         assert out["action"] is None
 

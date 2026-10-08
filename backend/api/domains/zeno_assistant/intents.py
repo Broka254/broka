@@ -42,10 +42,11 @@ DESTINATIONS: dict[str, str] = {
     "deal_history": "The user's deals and receipts",
     "verify": "Get verified - ID and selfie",
     "market_insights": "Zeno's market insights - prices and trends",
-    "how_broka_works": "How BROKA works - escrow, fees, safety",
+    "how_broka_works": "How BROKA works - buying, selling, paying safely with escrow, ratings and ranking",
     "store_setup": "Store setup - open an online store (asks business questions first if needed)",
     "my_store": "The user's own store - manage it",
     "start_selling": "Start selling - set up as a seller or a business seller",
+    "escrow_services": "Pay with escrow - the escrow services BROKA lists, what each costs, and how to use them",
 }
 
 # GUIDE shows one of guides.GUIDES, built for the user; NEED_INFO is the
@@ -76,7 +77,9 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
                      "orders", "my orders", "purchases", "my purchases"),
     "verify": ("verification", "verify", "get verified", "verify me", "verify my account"),
     "market_insights": ("insights", "market insights", "market prices", "price trends"),
-    "how_broka_works": ("how broka works", "how it works", "escrow explained"),
+    "how_broka_works": ("how broka works", "how it works"),
+    "escrow_services": ("escrow services", "see escrow services", "escrow providers", "escrow list",
+                        "the escrow services", "escrow companies"),
 }
 
 _OPEN = (r"(?:please\s+)?(?:open|go(?:\s+to)?|goto|take\s+me(?:\s+to)?|show(?:\s+me)?|bring\s+up|"
@@ -121,12 +124,8 @@ _GUIDE_DIRECT = (
     ("sell_faster", r"^(?:tips?|advice) (?:for|on|to) sell(?:ing)? (?:faster|quicker|more)$|"
                     r"^why (?:isn'?t|is not|aren'?t|are not) (?:my (?:\w+ )?)?(?:stuff|things|items|listings?|"
                     r"\w+) selling$|^why (?:is|are) my (?:\w+ )?(?:stuff|things|items|listings?|\w+) not selling$"),
-    # The app's opener chip became "How do I pay a seller safely?" when
-    # payments were paused; without it here that chip went to the model
-    # instead of the free, always-correct guide.
-    ("escrow", r"^(?:how does (?:broka(?:'s)? |the )?escrow work|what is (?:broka(?:'s)? )?escrow|"
-               r"what'?s escrow|explain (?:broka(?:'s)? )?escrow|escrow|"
-               r"how (?:do i|should i|to|can i) pay (?:a |the )?(?:seller|store) safely|paying safely)$"),
+    # Escrow questions are answered by the walkthrough before this is
+    # reached (escrow_walkthrough.py) - a conversation, step by step.
 )
 
 _CHAT = re.compile(

@@ -1,5 +1,14 @@
 # Auctions — how the system works, and why (2026-09-18)
 
+> **Off for launch (2026-10-08).** A winning bid is paid through BROKA's own
+> escrow, which is paused (`IN_APP_PAYMENTS_ENABLED`), and no outside escrow
+> service takes a bid's money. `AUCTIONS_ENABLED` (default off) refuses
+> creating, changing and bidding (409 `AUCTIONS_OFF`), keeps auctions out of
+> every list buyers browse and out of the plans, and stops the "ending soon"
+> reminder; the app shows no way to them (`kAuctionsEnabled`). Everything
+> below still holds and comes back with the setting - see
+> `backend/api/domains/auctions/paused.py`.
+
 The authority for every auction rule is
 `backend/api/domains/auctions/lifecycle.py`. Nothing else decides anything:
 the router validates shapes and delegates, the sweep finds work and

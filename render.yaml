@@ -98,6 +98,9 @@ services:
         value: "false"       # true: buyers pay through BROKA's escrow again, with commission.
                              # Off: buyers pay sellers directly (PRICING.md, "While BROKA
                              # handles no payments"). Only once an escrow provider works.
+      - key: AUCTIONS_ENABLED
+        value: "false"       # true: auctions are back - creating, bidding, the Auction House. Off for
+                             # launch: a winning bid needs in-app escrow (AUCTIONS.md).
       - key: FREE_LISTINGS_PER_SELLER
         value: "0"           # Each seller's first N active listings pay no listing fee.
       - key: FOUNDING_SELLER_TIERS

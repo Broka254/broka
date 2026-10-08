@@ -27,6 +27,7 @@ from api.core.rate_limit import offer_limiter
 from api.domains.auctions import events as auction_events
 from api.domains.auctions import lifecycle
 from api.domains.auctions.lifecycle import AuctionError
+from api.domains.auctions.paused import require_auctions
 
 router = APIRouter()
 
@@ -46,7 +47,7 @@ class BidOut(BaseModel):
     time_ago: str
 
 
-@router.post("/bid", status_code=201)
+@router.post("/bid", status_code=201, dependencies=[Depends(require_auctions)])
 async def place_bid(
     data: BidIn,
     current_user=Depends(get_current_user),

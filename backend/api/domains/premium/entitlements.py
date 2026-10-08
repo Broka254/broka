@@ -277,6 +277,11 @@ async def summary(db: AsyncSession, user_id: str) -> dict:
         return {"allowance": allowance, "used": spent, "left": max(0, allowance - spent)}
 
     usage = {f: entry(f) for f in Feature.COUNTED}
+    # Nobody can host an auction while they are off (auctions/paused.py),
+    # so a plan's auctions are not shown as something left to use - older
+    # app builds list every allowance over 0.
+    if not settings.auctions_enabled:
+        usage[Feature.AUCTION] = {"allowance": 0, "used": 0, "left": 0}
     from api.domains.buy_agent.service import CAPPED_STATUSES
     from api.database import BuyAgentRequest
     watching = (await db.execute(select(func.count(BuyAgentRequest.id)).where(

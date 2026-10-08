@@ -765,6 +765,7 @@ class AIBrokerService:
         topics: Optional[dict[str, str]] = None,
         listing: Optional[dict] = None,
         image_base64: Optional[str] = None,
+        escrow: Optional[str] = None,
     ) -> dict:
         """One turn of Zeno as the user's assistant: talk, and - when asked -
         name ONE thing to do (open a screen, search, hand over to the Buying
@@ -795,6 +796,10 @@ class AIBrokerService:
         [image_base64], a prepared JPEG (core/vision.py), is a photo the
         user attached to this message; only vision-capable providers are
         given it (see _call_ai_with_image).
+
+        [escrow], when set, is the step of Zeno's escrow walkthrough the
+        user is on and what that service publishes about itself
+        (zeno_assistant/escrow_walkthrough.knowledge) - BROKA's own text.
         """
         transcript = "\n".join(
             f"{'User' if h.get('role') == 'user' else 'Zeno'}: "
@@ -836,9 +841,10 @@ class AIBrokerService:
                 "seller with no figure yet is new or unmeasured, not bad.\n"
                 + ("- Never tell them to pay, meet or continue outside BROKA - escrow protects them only "
                    "inside it.\n" if settings.in_app_payments_enabled else
-                   "- BROKA doesn't handle payments right now: they pay the seller directly. Advise "
-                   "meeting to check the item before paying, or an independent escrow service for a "
-                   "deal at a distance.\n")
+                   "- BROKA doesn't handle payments right now: they pay the seller directly. For this "
+                   "listing, recommend an escrow service from the payment policy above when they can't "
+                   "see it first (delivery, or the seller is far away) and offer to walk them through it "
+                   "step by step; meeting to check it before paying when they can collect it.\n")
                 + ("" if listing.get("own") else
                    "- If it does not fit what they want (wrong spec, over budget, fixed price when they "
                    "want to haggle, no delivery when they need it, too far), say so honestly and OFFER "
@@ -861,13 +867,17 @@ class AIBrokerService:
 
         prompt = (
             "You are Zeno, the AI assistant inside BROKA, an East African marketplace where "
-            "buyers and sellers deal through escrow. You talk with the user one on one - "
+            + ("buyers and sellers deal through escrow" if settings.in_app_payments_enabled else
+               "buyers and sellers meet, negotiate with your help, and pay through independent escrow "
+               "services you walk them through")
+            + ". You talk with the user one on one - "
             "sharp, warm, honest, like a brilliant friend who knows Kenyan markets - and you "
             "can also DO things in the app for them.\n\n"
             f"User's name: {user_name or '(unknown)'}\n"
             f"Conversation so far:\n{transcript}\n\n"
             f"User's newest message: \"{_clip(message, 1000) or '(just the photo)'}\"\n\n"
             + ai_payment_policy().strip() + ("\n\n" if ai_payment_policy() else "")
+            + (f"{escrow}\n\n" if escrow else "")
             + photo +
             "THINGS YOU CAN DO (at most one per turn, and only when the user asks for it or "
             "clearly wants it):\n"

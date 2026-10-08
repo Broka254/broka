@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from api.database import Listing, ListingType
 
@@ -24,9 +24,26 @@ ENDING_SOON = timedelta(days=7)
 
 
 def live_clause(now: Optional[datetime] = None):
-    """SQL: the listing is paid for, or no fee applies to it."""
+    """SQL: the listing is paid for, or no fee applies to it - and, while
+    auctions are off (AUCTIONS_ENABLED), it is not an auction.
+
+    The auction rule rides here because this is the filter every list a
+    buyer browses shares: feeds, search, categories, stores, trending, the
+    Buying Agent. A reader that forgot a separate auctions check would put
+    a Bid button nobody can press in front of buyers. One listing read by
+    its id (is_live) is left alone on purpose: whoever already has an
+    auction open by its link still sees it and its result (auctions/
+    paused.py)."""
+    from api.core.config import settings
+
     now = now or datetime.utcnow()
-    return or_(Listing.paid_until.is_(None), Listing.paid_until > now)
+    paid = or_(Listing.paid_until.is_(None), Listing.paid_until > now)
+    if settings.auctions_enabled:
+        return paid
+    # IS NULL kept: the column is nullable, NULL != 'auction' is NULL in
+    # SQL, and a bare != would hide every listing saved without a type.
+    return and_(paid, or_(Listing.listing_type.is_(None),
+                          Listing.listing_type != ListingType.auction))
 
 
 def is_live(listing: Listing, now: Optional[datetime] = None) -> bool:

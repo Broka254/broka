@@ -2535,8 +2535,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         Text('Agree this deal in the chat', style: TextStyle(
             color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 12)),
         SizedBox(height: 3),
-        Text("BROKA doesn't hold payments for now: the buyer pays you directly. "
-             'Check the money is in your M-Pesa before you hand anything over.',
+        Text("BROKA doesn't hold payments for now. Get paid through an escrow service - "
+             'hand it over once the service itself shows the money is held, or once it is '
+             'in your M-Pesa. Never on a screenshot.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 11, height: 1.4)),
       ])),
     ]),

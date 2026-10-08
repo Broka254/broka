@@ -13,6 +13,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../core/utils/result.dart';
+import '../features/auctions/domain/auctions_enabled.dart';
 import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/models/category.dart';
 import '../services/sell_wizard_data.dart';
@@ -231,13 +232,17 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
           SellGap.section,
         ],
 
-        sellStepLabel('HOW DO YOU WANT TO SELL?'),
-        SellGap.label,
-        Row(children: [
-          _typeBtn('direct', Icons.handshake_outlined, 'Direct sale', 'Buyers deal with you'),
-          const SizedBox(width: 10),
-          _typeBtn('auction', Icons.gavel_rounded, 'Auction', 'Highest bid wins'),
-        ]),
+        // With auctions off for launch (kAuctionsEnabled) there is one way
+        // to sell, so there is no question to ask.
+        if (kAuctionsEnabled) ...[
+          sellStepLabel('HOW DO YOU WANT TO SELL?'),
+          SellGap.label,
+          Row(children: [
+            _typeBtn('direct', Icons.handshake_outlined, 'Direct sale', 'Buyers deal with you'),
+            const SizedBox(width: 10),
+            _typeBtn('auction', Icons.gavel_rounded, 'Auction', 'Highest bid wins'),
+          ]),
+        ],
       ]),
     );
   }

@@ -10,6 +10,7 @@ import { notFound, permanentRedirect, redirect } from 'next/navigation'
 
 import { AppButton } from '@/components/AppButton'
 import { CartDrawer } from '@/components/CartDrawer'
+import { EscrowBox } from '@/components/EscrowBox'
 import { Gallery } from '@/components/Gallery'
 import { Icon } from '@/components/Icon'
 import { ProductBuyBox } from '@/components/ProductBuyBox'
@@ -156,6 +157,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 <strong>{SEE_FIRST.lead}</strong> {PAY_LINE} {NO_DEPOSIT}
               </p>
             </div>
+            {view.available && <EscrowBox compact />}
 
             {listing.description?.trim() && (
               <section className={shopStyles.descr} aria-labelledby="descr-title">

@@ -21,9 +21,10 @@ import { cart, cartCount, cartItemsParam, cartTotal, useCart } from '@/lib/cart'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
 import { formatPrice, formatUnitPrice } from '@/lib/format'
 import { absoluteUrl, androidAppLink } from '@/lib/links'
-import { ESCROW_SERVICES, LAND_AND_CARS, PAY_DIRECT, SEE_FIRST } from '@/lib/safety'
+import { LAND_AND_CARS, PAY_DIRECT, SEE_FIRST } from '@/lib/safety'
 
 import { QtyStepper } from './AddToCart'
+import { EscrowBox } from './EscrowBox'
 import { Icon } from './Icon'
 import styles from './shop.module.css'
 
@@ -137,7 +138,7 @@ export function CheckoutView({
           </div>
           <div>
             <dt>Payment</dt>
-            <dd>To the store directly</dd>
+            <dd>Escrow, or the store directly</dd>
           </div>
           <div className={styles.summaryTotal}>
             <dt>Total</dt>
@@ -154,7 +155,8 @@ export function CheckoutView({
             <p>
               <strong>Deals are agreed in the BROKA app for Android.</strong>{' '}
               {ios ? 'Open this store on an Android phone' : 'Open this store on your Android phone'} to agree each
-              product with the store, then pay the store directly once you&apos;ve seen it.
+              product with the store, then pay through an escrow service - or pay the store directly
+              once you&apos;ve seen it.
             </p>
             <button type="button" className={`button ${styles.checkoutButton}`} onClick={copyLink}>
               <Icon name={copied ? 'check' : 'share'} size={18} /> {copied ? 'Store link copied' : 'Copy the store link'}
@@ -180,11 +182,12 @@ export function CheckoutView({
             </li>
           ))}
         </ol>
-        {[ESCROW_SERVICES, LAND_AND_CARS].map((a) => (
-          <p key={a.lead} className={styles.stepsNote}>
-            <strong>{a.lead}</strong> {a.text}
-          </p>
-        ))}
+        {/* Escrow, before anything else about paying: most buyers of a
+            store are not where the store is (EscrowBox.tsx). */}
+        <EscrowBox compact />
+        <p className={styles.stepsNote}>
+          <strong>{LAND_AND_CARS.lead}</strong> {LAND_AND_CARS.text}
+        </p>
       </aside>
     </div>
   )

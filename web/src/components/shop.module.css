@@ -2198,3 +2198,103 @@
 @media (prefers-reduced-motion: reduce) {
   .brandName, .heroName { animation: none; }
 }
+
+/* ── Pay with escrow (EscrowBox.tsx) ─────────────────────────────────────
+   Loud on purpose: the one way a buyer who can't see the item first is
+   protected, while BROKA holds no payments (lib/safety.ts). */
+
+.escrowBox {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1.5px solid rgb(16 185 129 / 0.75);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgb(16 185 129 / 0.16), var(--bg-card) 60%);
+  box-shadow: 0 0 22px rgb(16 185 129 / 0.18);
+}
+
+.escrowTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--green);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.escrowLead {
+  margin: 8px 0 0;
+  color: var(--text-high);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.escrowList {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.escrowList li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.escrowList a {
+  color: var(--text-high);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.escrowList a:hover strong,
+.escrowList a:focus-visible strong {
+  text-decoration: underline;
+}
+
+.escrowList a span {
+  color: var(--cyan);
+  font-size: 12.5px;
+}
+
+.escrowList small {
+  color: var(--text-low);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.escrowRule {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(239 68 68 / 0.45);
+  border-radius: 12px;
+  background: rgb(239 68 68 / 0.08);
+  color: var(--text-high);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.escrowRule svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--danger);
+}
+
+.escrowZeno {
+  margin: 10px 0 0;
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.escrowDisclaimer {
+  margin: 8px 0 0;
+  color: var(--text-low);
+  font-size: 11.5px;
+  line-height: 1.4;
+}

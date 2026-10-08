@@ -248,20 +248,20 @@ class StoreDetailsView extends StatelessWidget {
             Icon(Icons.visibility_outlined, color: BrokaColors.success),
             SizedBox(width: 12),
             Expanded(child: Text(
-              "BROKA doesn't hold payments for now: you pay the store directly, by "
-              'M-Pesa. See the item before you pay - meet somewhere public or take '
-              'delivery, and check it first. Never send a deposit to "hold" an item. '
-              'For a deal at a distance, an independent escrow service can hold the '
-              "money; BROKA doesn't run them. Land or a car: see Paying safely.",
+              "BROKA doesn't hold payments for now. Buying from a distance? Pay through an "
+              "escrow service: it holds the money until you have the item. BROKA doesn't run "
+              'them, and Zeno walks you through it. Collecting? See the item first, then pay '
+              'the store. Never send a deposit to "hold" an item. Land or a car: see Pay with escrow.',
               style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.45),
             )),
           ]),
           Align(
             alignment: Alignment.centerRight,
-            child: TextButton(
+            child: TextButton.icon(
               key: const Key('store-paying-safely'),
               onPressed: () => showSafePaymentSheet(context, openUrl: openUrl),
-              child: const Text('Paying safely'),
+              icon: const Icon(Icons.shield_rounded, size: 17),
+              label: const Text('Pay with escrow'),
             ),
           ),
         ]),
