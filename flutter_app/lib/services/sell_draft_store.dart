@@ -57,8 +57,8 @@ class SellDraftStore {
     } catch (_) {}
   }
 
-  /// Cheap existence check for the splash screen - avoids decoding the
-  /// whole draft just to decide which screen to resume into.
+  /// Cheap existence check - avoids decoding the whole draft just to know
+  /// there is one.
   static Future<bool> hasDraft() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -66,5 +66,24 @@ class SellDraftStore {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Whether a draft was saved within [window] of [now] - what the splash
+  /// screen reopens the sell wizard for (2026-10-08).
+  ///
+  /// It used to reopen it for ANY draft. A draft lives until the listing
+  /// is published or the seller taps Start over, so a seller who walked
+  /// away from one landed on the Photos step every time they opened BROKA
+  /// - for as long as the draft existed - with no Home under it to go back
+  /// to. A fresh draft means the app was killed mid-listing (the camera,
+  /// M-Pesa, a call); an older one was left on purpose, and waits behind
+  /// the Sell button instead.
+  static Future<bool> hasFreshDraft(Duration window, {DateTime? now}) async {
+    final draft = await load();
+    if (draft == null) return false;
+    final savedAt = DateTime.tryParse(draft['savedAt'] as String? ?? '');
+    if (savedAt == null) return false;
+    final age = (now ?? DateTime.now()).difference(savedAt);
+    return !age.isNegative && age < window;
   }
 }

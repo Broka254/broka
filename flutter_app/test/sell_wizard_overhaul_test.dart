@@ -343,6 +343,23 @@ void main() {
       expect(xs, hasLength(1), reason: 'one column, not a wrap of chips');
     });
 
+    testWidgets('a category opens its types on a screen of their own (2026-10-08)', (tester) async {
+      final data = await open(tester);
+      await tester.tap(find.byKey(const Key('sell-category-Electronics')));
+      await tester.pumpAndSettle();
+      // Not opened in place under the other categories: a screen of types.
+      expect(find.byKey(const Key('sell-subcategory-header')), findsOneWidget);
+      expect(find.byKey(const Key('sell-subcategory-Phones')), findsOneWidget);
+      expect(find.byKey(const Key('sell-category-Automobiles')), findsNothing);
+      expect(data.categoryId, 'elec');
+      expect(data.subcategoryId, isNull);
+
+      // Back - or Change - returns to the categories.
+      await tester.tap(find.byKey(const Key('sell-category-change')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('sell-category-Automobiles')), findsOneWidget);
+    });
+
     testWidgets('Fashion opens with Mtumba first, marked popular, and it sets used',
         (tester) async {
       final data = await open(tester);
@@ -353,11 +370,22 @@ void main() {
       expect(tester.getTopLeft(mtumba).dy, lessThan(tester.getTopLeft(men).dy));
       expect(find.text('POPULAR'), findsOneWidget);
 
+      // A type tapped is chosen, and the seller is on to Details.
       await tester.tap(mtumba);
       await tester.pumpAndSettle();
       expect(data.category, 'Fashion');
       expect(data.subcategoryId, 'mtumba');
       expect(data.condition, 'used');
+      expect(find.text('Details'), findsOneWidget);
+      expect(data.resumeStep, SellFlow.details);
+
+      // Back from Details is the type just chosen, then the categories,
+      // the choice marked there.
+      await tester.tap(find.byKey(const Key('sell-back')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('sell-subcategory-header')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('sell-back')));
+      await tester.pumpAndSettle();
       expect(find.text('FILED UNDER'), findsOneWidget);
     });
 
@@ -370,16 +398,23 @@ void main() {
       await tester.pumpAndSettle();
       expect(data.subcategoryName, 'Cereals & Grains');
       expect(data.categoryId, 'agri');
+      expect(find.text('Details'), findsOneWidget);
     });
 
-    testWidgets('Next asks for the type of item', (tester) async {
-      final data = await open(tester);
-      await tester.tap(find.byKey(const Key('sell-category-Land')));
-      await tester.pumpAndSettle();
-      data.categoryId = 'land';
+    testWidgets('Next with nothing chosen asks for a category', (tester) async {
+      await open(tester);
       await _tap(tester, find.text('NEXT'));
       await tester.pump();
-      expect(find.textContaining('Choose'), findsWidgets);
+      expect(find.text('Choose the category your item belongs in.'), findsOneWidget);
+    });
+
+    testWidgets('Next on the types asks for one', (tester) async {
+      await open(tester);
+      await tester.tap(find.byKey(const Key('sell-category-Land')));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.text('NEXT'));
+      await tester.pump();
+      expect(find.text('Choose the type of item within Land.'), findsOneWidget);
     });
   });
 

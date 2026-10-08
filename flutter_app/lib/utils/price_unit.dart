@@ -55,6 +55,13 @@ class PriceUnits {
     'Business & Industrial': ['piece', 'carton'],
   };
 
+  /// Whether items of this kind are usually priced per something - a bag,
+  /// a kg, a month - rather than as one whole item. Zeno prices the whole
+  /// item when it lists one for the seller, so for these the wizard still
+  /// opens the Price step for the seller to say what the price is for.
+  static bool usuallyPerUnit(String category, String? subcategory) =>
+      _bySubcategory.containsKey(subcategory) || _byCategory.containsKey(category);
+
   /// Unit suggestions for this category, most likely first. The wizard
   /// always offers "the whole item" before these, and a custom unit after.
   static List<String> suggestionsFor(String category, String? subcategory) =>

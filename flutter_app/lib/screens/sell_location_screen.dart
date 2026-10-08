@@ -164,10 +164,10 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
             ),
           ]),
         ),
-        const SizedBox(height: 20),
+        SellGap.section,
 
         sellStepLabel('COUNTY'),
-        const SizedBox(height: 8),
+        SellGap.label,
         _LocationTile(
           key: const Key('sell-county-picker'),
           emoji: '🗺️',
@@ -197,10 +197,10 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
                 )
               : const SizedBox(width: double.infinity),
         ),
-        const SizedBox(height: 20),
+        SellGap.section,
 
         sellStepLabel('AREA / SUBCOUNTY'),
-        const SizedBox(height: 8),
+        SellGap.label,
         if (_typingArea)
           TextFormField(
             key: const Key('sell-area-field'),
@@ -233,7 +233,7 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
             enabled: _county != null,
             onTap: _pickArea,
           ),
-        const SizedBox(height: 16),
+        SellGap.section,
 
         // What buyers will see, once there's something to see.
         AnimatedSwitcher(
@@ -261,7 +261,7 @@ class _SellLocationScreenState extends State<SellLocationScreen> {
                 )
               : const SizedBox.shrink(),
         ),
-        const SizedBox(height: 10),
+        SellGap.item,
         const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Icon(Icons.lock_outline_rounded, size: 14, color: BrokaColors.textMid),
           SizedBox(width: 6),

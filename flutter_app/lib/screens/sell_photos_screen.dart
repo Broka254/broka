@@ -16,25 +16,42 @@
 //   3. A restored draft reopens at the step the seller was on (SellFlow),
 //      with its photos kept in the app's own storage (SellPhotoStore), not
 //      in a cache directory Android may empty.
+//
+// "Let Zeno list it for you" (2026-10-08): once there is a photo, Zeno can
+// do the rest - name it, file it, describe it, price it and make a cover -
+// in a conversation (ZenoAutolistScreen). The wizard then opens at what
+// Zeno can't know (how many, where), with every step it filled in under
+// it. NEXT is still there for a seller who'd rather write it themselves.
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import '../core/utils/result.dart';
+import '../features/premium/data/premium_repository.dart';
+import '../features/premium/domain/premium.dart';
+import '../features/premium/presentation/premium_upsell.dart';
+import '../features/zeno_assistant/presentation/zeno_autolist_screen.dart';
 import '../main.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
 import '../services/sell_photo_store.dart';
 import '../services/sell_wizard_data.dart';
 import '../widgets/sell_step_scaffold.dart';
+import '../widgets/sell_zeno_boost_card.dart';
 import 'listing_camera_screen.dart';
 import 'sell_flow.dart';
 
 class SellPhotosScreen extends StatefulWidget {
-  const SellPhotosScreen({super.key, this.presetStoreId});
+  const SellPhotosScreen({super.key, this.presetStoreId, this.premium, this.openZeno});
 
   /// Set when adding a product from My Store: the listing goes into that
   /// store (the review step still lets the seller change it).
   final String? presetStoreId;
+
+  /// For tests: where the plan is read, and how Zeno's listing
+  /// conversation opens (it resolves true when the seller finished it).
+  final PremiumRepository? premium;
+  final Future<bool> Function(BuildContext context, SellWizardData data)? openZeno;
   @override
   State<SellPhotosScreen> createState() => _SellPhotosScreenState();
 }
@@ -48,10 +65,63 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
   String? _error;
   final _picker = ImagePicker();
 
+  // What the seller's plan leaves of Zeno's descriptions - the allowance a
+  // Zeno listing spends. Null until known; the card opens Zeno meanwhile
+  // and the server decides.
+  PremiumStatus? _premium;
+
   @override
   void initState() {
     super.initState();
     _initPhotos();
+    _loadPremium();
+  }
+
+  Future<void> _loadPremium() async {
+    final r = await (widget.premium ?? premiumRepository).me();
+    if (mounted && r is Success<PremiumStatus>) setState(() => _premium = r.data);
+  }
+
+  bool get _zenoLocked => !(_premium?.canUse(PremiumFeature.aiDescriptions) ?? true);
+
+  /// No plan, and the free try is still there.
+  bool get _zenoFreeTry {
+    final p = _premium;
+    return p != null && p.enabled && !p.hasPlan && p.left(PremiumFeature.aiDescriptions) > 0;
+  }
+
+  String? get _zenoLeftText {
+    final p = _premium;
+    if (p == null || !p.enabled || !p.hasPlan || !p.includes(PremiumFeature.aiDescriptions)) return null;
+    final all = p.usage[PremiumFeature.aiDescriptions]?.allowance ?? 0;
+    return '${p.left(PremiumFeature.aiDescriptions)} of $all left this month';
+  }
+
+  /// Zeno takes it from here. With no photo yet, the camera first.
+  Future<void> _listWithZeno() async {
+    final p = _premium;
+    if (_zenoLocked && p != null) {
+      final opened = await showPremiumUpsell(context,
+          message: p.hasPlan
+              ? "You've used this month's listings by Zeno on BROKA ${p.planName}. You can still "
+                  'list it yourself, free - tap NEXT.'
+              : "You've used your free listing by Zeno. You can still list it yourself, free - tap NEXT.",
+          upgradeTo: p.hasPlan ? null : 'plus',
+          feature: PremiumFeature.aiDescriptions,
+          premium: widget.premium);
+      if (opened && mounted) await _loadPremium();
+      return;
+    }
+    if (_data.verifiedPhotos.isEmpty) {
+      await _takePhotos();
+      if (!mounted || _data.verifiedPhotos.isEmpty) return;
+    }
+    setState(() => _error = null);
+    final finished = await (widget.openZeno ?? ZenoAutolistScreen.open)(context, _data);
+    if (!mounted) return;
+    setState(() {});
+    if (_premium?.enabled ?? false) unawaited(_loadPremium());
+    if (finished) SellFlow.openAfterZeno(context, _data);
   }
 
   /// Runs draft-restore and lost-data recovery in sequence, not in parallel
@@ -297,24 +367,28 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
       error: _error,
       onNext: _next,
       topBanner: _draftRestored ? Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
         decoration: BoxDecoration(
           color: BrokaColors.neonBlue.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.35)),
         ),
         child: Row(children: [
-          const Icon(Icons.restore_rounded, size: 16, color: BrokaColors.neonBlue),
-          const SizedBox(width: 8),
+          const Icon(Icons.restore_rounded, size: 18, color: BrokaColors.neonBlue),
+          const SizedBox(width: 12),
           const Expanded(child: Text(
             'Your listing was saved - pick up where you left off',
-            style: TextStyle(color: BrokaColors.neonBlue, fontSize: 11.5, fontWeight: FontWeight.w600),
+            style: TextStyle(color: BrokaColors.neonBlue, fontSize: 12.5, height: 1.4,
+                fontWeight: FontWeight.w600),
           )),
-          GestureDetector(
-            onTap: _discardDraft,
+          const SizedBox(width: 8),
+          TextButton(
+            key: const Key('sell-start-over'),
+            onPressed: _discardDraft,
             child: const Text('Start over', style: TextStyle(
-                color: BrokaColors.textMid, fontSize: 11.5,
-                fontWeight: FontWeight.w700, decoration: TextDecoration.underline)),
+                color: BrokaColors.textHigh, fontSize: 12.5,
+                fontWeight: FontWeight.w700, decoration: TextDecoration.underline,
+                decorationColor: BrokaColors.textHigh)),
           ),
         ]),
       ) : null,
@@ -345,17 +419,17 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
             )),
           ]),
         ),
-        const SizedBox(height: 18),
+        SellGap.section,
         Row(children: [
           sellStepLabel('YOUR PHOTOS'),
           const Spacer(),
           Text('${photos.length} / ${SellWizardData.maxPhotos}', style: const TextStyle(
               color: BrokaColors.textMid, fontSize: 11.5, fontWeight: FontWeight.w700)),
         ]),
-        const SizedBox(height: 10),
+        SellGap.label,
         LayoutBuilder(builder: (_, box) {
-          final tile = (box.maxWidth - 16) / 3;
-          return Wrap(spacing: 8, runSpacing: 8, children: [
+          final tile = (box.maxWidth - 20) / 3;
+          return Wrap(spacing: 10, runSpacing: 10, children: [
             for (var i = 0; i < photos.length; i++)
               TweenAnimationBuilder<double>(
                 key: ValueKey(photos[i].path),
@@ -420,11 +494,36 @@ class _SellPhotosScreenState extends State<SellPhotosScreen> {
               _AddPhotoTile(size: tile, first: photos.isEmpty, onTap: _takePhotos),
           ]);
         }),
-        const SizedBox(height: 16),
+        SellGap.item,
         const Text(
           'Tip: the first photo is the one buyers see first. Shoot in daylight, '
           'fill the frame, and show any wear honestly - it prevents disputes later.',
-          style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.45),
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.5),
+        ),
+        SellGap.section,
+        SellZenoBoostCard(
+          key: const Key('sell-zeno-autolist'),
+          icon: Icons.auto_awesome_rounded,
+          title: 'Let Zeno list it for you',
+          benefit: photos.isEmpty
+              ? 'Snap the item - Zeno does the rest while you answer a few questions.'
+              : 'Zeno does the rest from your photo while you answer a few questions.',
+          badge: 'PREMIUM',
+          locked: _zenoLocked,
+          ribbon: _zenoFreeTry ? 'FIRST ONE FREE' : null,
+          footnote: _zenoLeftText,
+          points: const [
+            'Names it and finds its category',
+            'Writes the description buyers look for',
+            'Suggests a fair price, and makes a cover',
+          ],
+          cta: _zenoLocked ? 'Unlock Zeno listings' : (photos.isEmpty ? 'Take a photo for Zeno' : 'List it with Zeno'),
+          onTap: _listWithZeno,
+        ),
+        const SizedBox(height: 14),
+        const Center(
+          child: Text('Or tap NEXT to fill it in yourself - free.',
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
         ),
       ]),
     );

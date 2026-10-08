@@ -11,6 +11,7 @@ import '../services/sell_draft_store.dart';
 import '../services/sound_preference_service.dart';
 import '../widgets/splash_painters.dart';
 import 'home_screen.dart';
+import 'sell_flow.dart';
 import 'sell_photos_screen.dart';
 
 /// BROKA splash screen — the Zeno "AI boot sequence".
@@ -165,10 +166,20 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // See CHANGES.md "Sell flow — photo capture kicking you back to Home"
     // and the v6.1 entry's "always proceeds to Home (or a saved sell draft)
     // regardless of login state" — this restores that literally.
-    final hasDraft = await SellDraftStore.hasDraft();
+    //
+    // Only a draft saved moments ago, and always with Home under it
+    // (2026-10-08). Any draft used to replace this screen with the Photos
+    // step - the app's only screen, so Back did nothing - on every launch
+    // for as long as the draft existed: a seller who left a listing half
+    // done was stuck in the wizard with no way home. A draft left for
+    // longer than SellFlow.resumeWindow was put down on purpose; it waits
+    // behind the Sell button, which restores it.
+    final freshDraft = await SellDraftStore.hasFreshDraft(SellFlow.resumeWindow);
     if (!mounted) return;
-    if (hasDraft) {
-      Navigator.of(context).pushReplacement(_smoothRoute(const SellPhotosScreen()));
+    if (freshDraft) {
+      final nav = Navigator.of(context);
+      nav.pushReplacement(_smoothRoute(const HomeScreen()));
+      nav.push(_smoothRoute(const SellPhotosScreen()));
       // A store link that opened the app goes on top; Back returns here.
       DeepLinkService.instance.appReady();
       return;

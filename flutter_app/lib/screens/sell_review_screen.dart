@@ -83,7 +83,7 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (data.hasShowcase) ...[
           sellStepLabel(data.showcaseImageSource == 'ai' ? '✨ AI COVER' : 'COVER'),
-          const SizedBox(height: 8),
+          SellGap.label,
           ClipRRect(
             borderRadius: BorderRadius.circular(14),
             child: AspectRatio(
@@ -94,17 +94,17 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
                   : BrokaImage(data.showcasePreviewUrl, fit: BoxFit.cover),
             ),
           ),
-          const SizedBox(height: 16),
+          SellGap.section,
         ],
         sellStepLabel('PHOTOS'),
-        const SizedBox(height: 8),
+        SellGap.label,
         SizedBox(
           height: 80,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             itemCount: data.verifiedPhotos.length,
             itemBuilder: (_, i) => Container(
-              margin: const EdgeInsets.only(right: 8),
+              margin: const EdgeInsets.only(right: 10),
               width: 80, height: 80,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
@@ -116,13 +116,13 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 20),
+        SellGap.section,
 
         if (_myStore != null) ...[
           sellStepLabel('LIST UNDER'),
-          const SizedBox(height: 8),
+          SellGap.label,
           _storeToggle(data),
-          const SizedBox(height: 20),
+          SellGap.section,
         ],
 
         SellCard(child: Column(children: [
@@ -209,16 +209,17 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
   }
 
   Widget _row(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
+    padding: const EdgeInsets.symmetric(vertical: 8),
     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       SizedBox(
-        width: 100,
+        width: 104,
         child: Text(label, style: const TextStyle(
-            color: BrokaColors.textMid, fontSize: 11, fontWeight: FontWeight.w700)),
+            color: BrokaColors.textMid, fontSize: 11.5, fontWeight: FontWeight.w700)),
       ),
+      const SizedBox(width: 8),
       Expanded(
         child: Text(value, style: const TextStyle(
-            color: BrokaColors.textHigh, fontSize: 12.5, height: 1.35)),
+            color: BrokaColors.textHigh, fontSize: 13, height: 1.45)),
       ),
     ]),
   );

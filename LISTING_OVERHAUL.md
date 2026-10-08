@@ -243,5 +243,91 @@ low-memory Android before release.**
    `PATCH /listings/{id}` plus a toggle in the seller dashboard).
 3. **Real photos for the cover looks** would be richer than the painted
    scenes once the design team produces them (the tiles take any widget).
-4. The splash screen still opens the sell flow for **any** saved draft, however
-   old (unchanged behaviour); consider expiring drafts after a few weeks.
+4. ~~The splash screen still opens the sell flow for **any** saved draft,
+   however old.~~ Fixed 2026-10-08 (section 9): it was why a seller was stuck
+   on the Photos step with no way back to Home.
+
+---
+
+## 9. Follow-up, 2026-10-08
+
+### "I've been stuck on this screen for over an hour"
+
+Two faults together. The splash screen reopened the sell wizard for **any**
+saved draft - and a draft lives until the listing is published or the seller
+taps Start over - so every launch landed on Photos. And it did so with
+`pushReplacement`, making Photos the app's **only** screen: its Back button
+called `Navigator.maybePop`, which does nothing on the last route, and
+Android's Back closed the app, which reopened on Photos again.
+
+- The splash screen reopens the wizard only for a draft saved within
+  `SellFlow.resumeWindow` (30 minutes: the app killed mid-listing), and
+  always with **Home underneath** (`SellDraftStore.hasFreshDraft`). An older
+  draft waits behind Sell, which restores it with "Start over".
+- `SellStepScaffold`: on a step that is the first route, Back - the button
+  and Android's - goes Home (`/home`) instead of nowhere.
+- Tests: `sell_listing_with_zeno_test.dart` ("Back always leads
+  somewhere"); the two root-route tests fail on the old scaffold.
+
+### Category, then the type of item, on two screens
+
+Tapping a category used to open its types in place, inside the long list.
+Now the category opens a screen of its own (`SellSubcategoryScreen`, still
+step 2 of 10): the category as a header with **Change**, then its types as
+large rows. Tapping a type picks it and moves on to Details; Back returns to
+the types, then the categories. Search still finds a type directly, and
+"Other" (no types) moves on when tapped.
+
+### Spacing
+
+One rhythm for every step (`SellGap`: 28 between sections, 12 between a
+label and its field or between list items), more room around the subtitle
+and banners, larger tap targets, and a "Start over" that is a real button.
+
+### Making the case for Zeno's paid help
+
+Sellers saw a one-line pitch and moved on. Now:
+
+| Where | What changed |
+|---|---|
+| Description | An example of Zeno's lines beside the usual "Phone for sale, call me" (per kind of item, labelled as an example), three ticks, a button that says what happens ("Write it for me"), "FIRST ONE FREE" for a seller without a plan |
+| Price | What Pro shows, with the numbers hidden (a locked range), three ticks, "Unlock with Pro" |
+| Cover | What a cover does, in three ticks: your own photo, ready in about a minute, buyers still see the real photos |
+| Go live (texts) | The text Zeno would send them (the wording of `nudge_templates.py`), why it matters - the seller who answers first is the one buyers deal with - and the plans' case instead of a bare link |
+| The plans sheet (every refusal) | A headline and three concrete lines per feature, and the suggested plan's own price from `GET /pricing/plans`, by the day ("BROKA Plus · KES 199 a month - about KES 7 a day") |
+
+No figures are invented: the examples are labelled as examples and the
+prices come from the server.
+
+### "Let Zeno list it for you"
+
+The seller takes the photos; Zeno does the rest, as a conversation
+(`ZenoAutolistScreen`, backend `zeno_assistant/autolist.py`):
+
+1. `POST /zeno/listing-draft/autolist` - Zeno looks at the first photo and
+   fills in the title, category and type (only BROKA's own - checked on the
+   server), condition, the category's details (only under its own field
+   names, in their shape: "128 GB" is the `128GB` option) and the
+   description, and asks what the photo can't show.
+2. `POST /zeno/listing-draft/autolist/turn` - the seller answers or
+   corrects ("it's the 256 GB one"); the whole listing changes with it.
+3. `POST /zeno/listing-draft/autolist/price` - a fair range and one number:
+   on similar live BROKA listings for a plan with price checks (one spent),
+   otherwise Zeno's estimate, which it says is one, with Pro offered for the
+   real check. Then fixed or open to offers.
+4. A cover from the photo in the look sellers of the category pick (the
+   existing AI cover, counted the same way) - keep it or skip.
+
+Then the wizard opens at the first step Zeno can't fill (`SellFlow.
+stepAfterZeno`: usually Stock & delivery, Price for what sells per bag or
+kg, Category if nothing fitted), with every step before it underneath, so
+the seller sees and can change all of it before Go live. A question the
+seller skipped is left out rather than published as an empty "Label:" line.
+
+**Paid like Zeno's descriptions** (PRICING.md section 4): the look spends one
+AI description; the conversation after it is free. **One is free without a
+plan** (`plans.FREE_TRIAL`), so a seller sees it work on their own item
+before paying.
+
+Tests: `backend/tests/test_zeno_autolist.py` (19), and
+`flutter_app/test/sell_listing_with_zeno_test.dart` (12).

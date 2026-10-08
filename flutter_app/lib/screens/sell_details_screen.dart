@@ -135,7 +135,7 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
       onNext: _next,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         sellStepLabel('NAME'),
-        const SizedBox(height: 8),
+        SellGap.label,
         TextFormField(
           key: const Key('sell-name-field'),
           controller: _nameCtrl,
@@ -150,11 +150,11 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
             _scheduleSave();
           },
         ),
-        const SizedBox(height: 12),
+        SellGap.item,
 
         if (_data.isLand) ...[
           _landSize(),
-          const SizedBox(height: 20),
+          SellGap.section,
         ],
 
         if (_loadingFields)
@@ -164,10 +164,10 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
           )
         else if (_fields.isNotEmpty) ...[
           sellStepLabel('${(_data.subcategoryName ?? _data.category).toUpperCase()} DETAILS'),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           const Text('Optional, but they help buyers find exactly what they want.',
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-          const SizedBox(height: 12),
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4)),
+          SellGap.label,
           ..._fields.map((field) => DynamicAttributeField(
                 field: field,
                 value: _data.attributes[field.fieldName],
@@ -185,9 +185,9 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
         ],
 
         if (_asksCondition) ...[
-          const SizedBox(height: 4),
+          SellGap.item,
           sellStepLabel('CONDITION'),
-          const SizedBox(height: 10),
+          SellGap.label,
           Row(children: _conditions.map((c) {
             final selected = _data.condition == c;
             return Expanded(
@@ -215,11 +215,11 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
               ),
             );
           }).toList()),
-          const SizedBox(height: 20),
+          SellGap.section,
         ],
 
         sellStepLabel('HOW DO YOU WANT TO SELL?'),
-        const SizedBox(height: 10),
+        SellGap.label,
         Row(children: [
           _typeBtn('direct', Icons.handshake_outlined, 'Direct sale', 'Buyers deal with you'),
           const SizedBox(width: 10),

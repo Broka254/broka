@@ -369,6 +369,7 @@ class _NoPlan extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final covers = status.trial[PremiumFeature.aiCovers] ?? 0;
+    final listings = status.trial[PremiumFeature.aiDescriptions] ?? 0;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -388,6 +389,14 @@ class _NoPlan extends StatelessWidget {
           Text(covers == 1 ? 'You have 1 free AI cover try left.' : 'You have $covers free AI cover tries left.',
               key: const Key('premium-trial'),
               style: const TextStyle(color: BrokaColors.gold, fontSize: 12.5, fontWeight: FontWeight.w700)),
+        ],
+        // One listing written by Zeno from its photo, free (plans.FREE_TRIAL):
+        // the way to see what a plan does before paying for one.
+        if (listings > 0) ...[
+          const SizedBox(height: 6),
+          const Text('Your first listing written by Zeno is free - tap Sell, take a photo, and let Zeno list it.',
+              key: Key('premium-trial-zeno'),
+              style: TextStyle(color: BrokaColors.gold, fontSize: 12.5, fontWeight: FontWeight.w700, height: 1.4)),
         ],
       ]),
     );

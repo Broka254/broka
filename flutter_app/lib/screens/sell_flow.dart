@@ -15,6 +15,7 @@ import '../services/sell_wizard_data.dart';
 import '../utils/handover.dart';
 import '../utils/land_size.dart';
 import '../utils/price_format.dart';
+import '../utils/price_unit.dart';
 import 'sell_category_screen.dart';
 import 'sell_description_screen.dart';
 import 'sell_details_screen.dart';
@@ -93,6 +94,10 @@ class SellFlow {
     return Navigator.of(context).push(_route(screenFor(to, data)));
   }
 
+  /// A screen inside a step (the Category step's types of item), with the
+  /// wizard's own transition.
+  static Route<void> stepRoute(Widget page) => _route(page);
+
   static Route<void> _route(Widget page, {bool instant = false}) => PageRouteBuilder<void>(
         transitionDuration: instant ? Duration.zero : const Duration(milliseconds: 380),
         reverseTransitionDuration: instant ? Duration.zero : const Duration(milliseconds: 300),
@@ -151,9 +156,44 @@ class SellFlow {
   static void resume(BuildContext context, SellWizardData data) {
     final target = resumableStep(data);
     data.resumeStep = target;
+    _stackTo(context, data, target, animateLast: false);
+  }
+
+  /// The step the wizard opens at once Zeno has filled a listing in
+  /// (ZenoAutolistScreen): the first one that still needs the seller -
+  /// how many, where - or Review when nothing does. Never past Price for
+  /// what is usually sold per bag, kg or month: Zeno priced the whole
+  /// item, and only the seller knows what one unit is.
+  static int stepAfterZeno(SellWizardData data) {
+    var target = review;
+    for (var step = category; step < review; step++) {
+      if (!isComplete(step, data)) {
+        target = step;
+        break;
+      }
+    }
+    if (target > price && !data.isAuction &&
+        PriceUnits.usuallyPerUnit(data.category, data.subcategoryName)) {
+      target = price;
+    }
+    return target;
+  }
+
+  /// Opens the wizard at [stepAfterZeno], with every step before it under
+  /// it so Back walks through what Zeno wrote - the seller sees and can
+  /// change all of it before Go live.
+  static void openAfterZeno(BuildContext context, SellWizardData data) {
+    final target = stepAfterZeno(data);
+    data.resumeStep = target;
+    data.persist();
+    _stackTo(context, data, target, animateLast: true);
+  }
+
+  static void _stackTo(BuildContext context, SellWizardData data, int target,
+      {required bool animateLast}) {
     final navigator = Navigator.of(context);
     for (var step = category; step <= target; step++) {
-      navigator.push(_route(screenFor(step, data), instant: true));
+      navigator.push(_route(screenFor(step, data), instant: !(animateLast && step == target)));
     }
   }
 }

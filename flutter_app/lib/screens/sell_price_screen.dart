@@ -114,7 +114,9 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
       final opened = await showPremiumUpsell(context,
           message: 'Pricing with Zeno is part of BROKA Pro. A listing priced right from the start '
               'sells faster - Zeno suggests your price and checks it against similar listings on BROKA.',
-          upgradeTo: 'pro');
+          upgradeTo: 'pro',
+          feature: PremiumFeature.priceChecks,
+          premium: widget.premium);
       if (opened && mounted) await _loadPremium();
       return;
     }
@@ -317,7 +319,7 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
         : PriceUnits.priceLabel(formatKes(amount), _data.priceUnit);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       sellStepLabel('THE PRICE IS FOR'),
-      const SizedBox(height: 10),
+      SellGap.label,
       Wrap(spacing: 8, runSpacing: 8, children: [
         _unitChip('The whole item', !_customUnit && _data.priceUnit == null,
             () => _setUnit(null), key: const Key('sell-unit-whole')),
@@ -363,7 +365,7 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
 
   Widget _negotiableSection() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         sellStepLabel('IS THE PRICE NEGOTIABLE?'),
-        const SizedBox(height: 10),
+        SellGap.label,
         SellChoiceCard(
           key: const Key('sell-negotiable-yes'),
           emoji: '🤝',
@@ -379,7 +381,7 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
             _scheduleSave();
           },
         ),
-        const SizedBox(height: 10),
+        SellGap.item,
         SellChoiceCard(
           key: const Key('sell-negotiable-no'),
           emoji: '🔒',
@@ -418,11 +420,20 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
           badge: 'PRO',
           locked: _pricingLocked,
           footnote: _checksLeftText,
+          points: const [
+            'What similar items on BROKA ask right now',
+            'One clear number to ask - and why',
+            "Know if you're overpriced before buyers do",
+          ],
+          // What Pro shows, with the numbers hidden: the seller sees what
+          // they'd get rather than reading about it.
+          preview: _pricingLocked ? const ZenoLockedRange() : null,
+          cta: _pricingLocked ? 'Unlock with Pro' : 'Price it with Zeno',
           onTap: _priceWithZeno,
         ),
-        const SizedBox(height: 18),
+        SellGap.section,
         sellStepLabel(isAuction ? 'STARTING PRICE (KES)' : 'ASKING PRICE (KES)'),
-        const SizedBox(height: 8),
+        SellGap.label,
         TextFormField(
           key: const Key('sell-price-field'),
           controller: _priceCtrl,
@@ -437,9 +448,9 @@ class _SellPriceScreenState extends State<SellPriceScreen> {
         ),
 
         if (!isAuction) ...[
-          const SizedBox(height: 20),
+          SellGap.section,
           _priceUnitSection(),
-          const SizedBox(height: 22),
+          SellGap.section,
           _negotiableSection(),
         ],
 

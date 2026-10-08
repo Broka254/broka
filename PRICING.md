@@ -26,7 +26,7 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 | **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
 | **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
-| **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus 2 AI cover tries |
+| **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus one AI cover try and one listing written by Zeno from its photo |
 | **Store** | Any size the owner picks (`GET /pricing/store-plan`). Shops: KES 599 for up to 30 listings, then 16 a listing to 100, 14 to 250, 12 to 1,000 (40 listings 759, 100 listings 1,719, 500 listings 6,819). Car yards and agents: KES 2,999 for 10, then by the listing. KES 299 to open (waived on 6+ months); store listings pay no listing fee. Billing is not built yet |
 
 ---
@@ -503,7 +503,10 @@ to **159 / 479 / 1,199 a month**.
 
 **Free tries.** Someone without a plan gets **1 AI cover try, once** -
 about KES 5, an acquisition cost, and the only way a seller learns what a
-cover does to a listing before paying for more. Nothing else is on trial.
+cover does to a listing before paying for more - and, since 2026-10-08,
+**one description by Zeno, once** (KES 0.07): enough for "Let Zeno list it
+for you" to fill in one whole listing from its photo, which is the case for
+Plus made on the seller's own item. Nothing else is on trial.
 While `PREMIUM_ENABLED` is off, AI covers are off too (the other premium
 features are free then): with no plans sold, every cover would be paid for
 by BROKA alone.
@@ -518,6 +521,13 @@ Buying Agent's search, which is a database query, plus one model call) from
 Pro up - "pro sellers" are
 who they are for. Both are cents a use, so the allowances are sized for a
 busy seller rather than for the margin, and neither moved a price.
+
+**Zeno listing it for you** (2026-10-08, `zeno_assistant/autolist.py`) is
+the same allowances, not a new one: its look at the photo spends one AI
+description, the conversation after it is free, and its price is grounded
+on BROKA's listings (one price check) only on a plan that has checks - on
+any other it is Zeno's general estimate, said to be one, with Pro offered
+for the real check.
 
 Voice requests are the next most expensive (KES 0.71 each, a third of it the
 text-to-speech reserve). If the free voice keeps working, they can go up
@@ -569,7 +579,7 @@ builds show it as it is. Background work has nobody to show a 402 to:
 | Feature | Refused in the app | Refused in the background |
 |---|---|---|
 | AI cover | The cover step says how many tries are left and, with none, offers the plans; the gallery stays free | - |
-| Description by Zeno | The Description step's card offers the plans instead of asking; writing your own stays free. Answering Zeno's questions about the photo is free once a plan has it: only the look at the photo is counted | - |
+| Description by Zeno (and Zeno listing it for you) | The Description step's card, and the Photos step's "Let Zeno list it", offer the plans instead of asking; writing your own stays free. Answering Zeno's questions about the photo is free once a plan has it: only the look at the photo is counted | - |
 | Pricing with Zeno | The Price step's card offers Pro; the conversation itself is free once a plan has it, and only the BROKA check is counted | - |
 | Voice mode | Zeno says why, stops listening, offers the plans; typing still works | - |
 | Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |

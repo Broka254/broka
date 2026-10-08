@@ -5,7 +5,9 @@ the turn and intents.py for what Zeno may do.
 
 And Zeno helping a seller write a listing (selling.py):
 POST /zeno/listing-draft/describe, POST /zeno/listing-draft/describe/turn
-and POST /zeno/listing-draft/price/turn.
+and POST /zeno/listing-draft/price/turn - and listing it for them from the
+photo, as a conversation (autolist.py): POST /zeno/listing-draft/autolist,
+/autolist/turn and /autolist/price.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from api.core.rate_limit import zeno_chat_limiter
 from api.core.vision import ImageRejected, prepare_for_model
 from api.database import get_db
 from api.security import get_current_user
-from . import selling, service
+from . import autolist, selling, service
 
 router = APIRouter()
 
@@ -280,3 +282,94 @@ async def price_listing_draft(
         db, current_user["id"], body.draft.model_dump(), message, body.history,
         body.language, research=body.research,
     )
+
+
+# ── Zeno listing an item from its photo (autolist.py) ────────────────────────
+
+class AutolistIn(BaseModel):
+    # Whatever the seller had already entered: Zeno keeps it.
+    draft: ListingDraftIn = Field(default_factory=ListingDraftIn)
+    # The first listing photo, by its upload id - or inline from a build
+    # whose upload hasn't finished.
+    photo_id: Optional[str] = Field(default=None, max_length=64)
+    image_base64: Optional[str] = Field(default=None, max_length=_IMAGE_MAX_B64_CHARS)
+    language: str = Field(default="english", max_length=20)
+
+
+@router.post("/listing-draft/autolist")
+async def autolist_listing_draft(
+    body: AutolistIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Zeno fills a listing in from its first photo: {"reply", "listing":
+    {"name", "category", "category_id", "subcategory", "subcategory_id",
+    "condition", "attributes", "description"}, "questions"}. The category
+    is one of BROKA's or null. Spends one of the plan's AI descriptions
+    (a 402 without one); nothing here touches a listing.
+
+    Rate-limited on Zeno's per-user bucket: it is a model call."""
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+    return await autolist.look(
+        db, current_user["id"], body.draft.model_dump(), body.language,
+        photo_id=body.photo_id, image_base64=body.image_base64,
+    )
+
+
+class AutolistTurnIn(BaseModel):
+    # The listing and what Zeno asked last, as the previous turn returned
+    # them (category and condition are checked again here).
+    listing: ListingDraftIn
+    questions: list[DescribeQuestionIn] = Field(default_factory=list, max_length=10)
+    message: str = Field(max_length=1000)
+    history: list[dict] = Field(default_factory=list)
+    language: str = Field(default="english", max_length=20)
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _recent_history_only(cls, v):
+        return _recent_history(v)
+
+    @model_validator(mode="after")
+    def _something_to_answer(self):
+        if not self.message.strip():
+            raise ValueError("Answer Zeno, or carry on with the listing as it is.")
+        return self
+
+
+@router.post("/listing-draft/autolist/turn")
+async def autolist_listing_draft_turn(
+    body: AutolistTurnIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller answers or corrects Zeno: the whole listing back, as
+    above, with their words in it. Free once the plan has descriptions.
+
+    Rate-limited on Zeno's per-user bucket: it is a model call."""
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+    return await autolist.turn(
+        db, current_user["id"], body.listing.model_dump(),
+        [q.model_dump() for q in body.questions], body.message.strip(), body.history, body.language,
+    )
+
+
+class AutolistPriceIn(BaseModel):
+    draft: ListingDraftIn
+    language: str = Field(default="english", max_length=20)
+
+
+@router.post("/listing-draft/autolist/price")
+async def autolist_listing_draft_price(
+    body: AutolistPriceIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The fair range and the one number to ask: {"reply", "low", "high",
+    "suggested_price", "basis": "broka" | "estimate", "comparables",
+    "can_check_broka"}. Grounded on similar live BROKA listings on a plan
+    with price checks (spending one), Zeno's estimate on any other.
+
+    Rate-limited on Zeno's per-user bucket: it is a model call."""
+    await zeno_chat_limiter.check_and_record(current_user["id"])
+    return await autolist.price(db, current_user["id"], body.draft.model_dump(), body.language)

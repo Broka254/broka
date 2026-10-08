@@ -11,6 +11,14 @@
 // bolted onto it. It stands still when the phone asks for reduced motion
 // (MediaQuery.disableAnimations) - an ambient loop is decoration, and
 // some people get motion-sick from exactly that.
+//
+// 2026-10-08:
+//   * Back always leads somewhere. A step that is the app's only screen
+//     (as Photos was when the splash screen reopened a saved draft) had
+//     nothing under it, so Back - the button and Android's - did nothing,
+//     and a seller could only go forward. There it now goes Home.
+//   * One spacing rhythm for every step (SellGap), and more air around the
+//     subtitle and banners: sellers found the steps cramped.
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/sell_wizard_data.dart';
@@ -38,6 +46,11 @@ class SellStepScaffold extends StatelessWidget {
   /// Replaces the NEXT button (the final step draws its own).
   final Widget? bottom;
 
+  /// The step a restored draft reopens at after Back leaves this screen:
+  /// the one before it, unless a step has two screens (Category, then the
+  /// type of item) and Back stays within it.
+  final int? resumeOnBack;
+
   const SellStepScaffold({
     super.key,
     required this.step,
@@ -52,17 +65,39 @@ class SellStepScaffold extends StatelessWidget {
     this.subtitle,
     this.data,
     this.bottom,
+    this.resumeOnBack,
   });
+
+  /// Nothing under this step: Back goes Home instead of nowhere.
+  static void _home(BuildContext context) =>
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
+
+  void _back(BuildContext context) {
+    if (loading) return;
+    final route = ModalRoute.of(context);
+    if (route != null && route.isFirst) {
+      _home(context);
+      return;
+    }
+    Navigator.maybePop(context);
+  }
 
   @override
   Widget build(BuildContext context) {
     final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final isFirst = ModalRoute.of(context)?.isFirst ?? false;
     return PopScope(
-      canPop: !loading,
+      // The app's only screen must not close the app on Android's Back:
+      // it goes Home (onPopInvokedWithResult) like the button does.
+      canPop: !loading && !isFirst,
       onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          if (isFirst && !loading) _home(context);
+          return;
+        }
         final draft = data;
-        if (!didPop || draft == null || step <= 1) return;
-        draft.resumeStep = step - 1;
+        if (draft == null || step <= 1) return;
+        draft.resumeStep = resumeOnBack ?? step - 1;
         draft.persist();
       },
       child: Scaffold(
@@ -71,15 +106,16 @@ class SellStepScaffold extends StatelessWidget {
           animate: !still,
           child: SafeArea(child: Column(children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
               child: Row(children: [
                 Semantics(
                   button: true,
-                  label: 'Back',
+                  label: isFirst ? 'Back to Home' : 'Back',
                   child: GestureDetector(
-                    onTap: loading ? null : () => Navigator.maybePop(context),
+                    key: const Key('sell-back'),
+                    onTap: loading ? null : () => _back(context),
                     child: Container(
-                      width: 38, height: 38,
+                      width: 42, height: 42,
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(12),
                         color: BrokaColors.bgCard.withOpacity(0.7),
@@ -115,28 +151,28 @@ class SellStepScaffold extends StatelessWidget {
 
             if (subtitle != null)
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(subtitle!, style: const TextStyle(
-                      color: BrokaColors.textMid, fontSize: 12.5, height: 1.4)),
+                      color: BrokaColors.textMid, fontSize: 13, height: 1.5)),
                 ),
               ),
 
             if (topBanner != null)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
                 child: topBanner,
               ),
 
             Expanded(child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 32),
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               child: child,
             )),
 
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 if (error != null)
                   Container(
@@ -233,13 +269,28 @@ class _GlowProgress extends StatelessWidget {
 Widget sellStepLabel(String text) => Text(text,
     style: const TextStyle(
         color: BrokaColors.textMid,
-        fontSize: 10.5,
+        fontSize: 11,
         fontWeight: FontWeight.w800,
-        letterSpacing: 1.2));
+        letterSpacing: 1.3));
+
+/// The sell wizard's vertical rhythm (2026-10-08): the same gaps on every
+/// step, so a section reads as a section and a label stays with its field.
+class SellGap {
+  SellGap._();
+
+  /// Between sections of a step: a card and the next label, two questions.
+  static const section = SizedBox(height: 28);
+
+  /// Between a section's label and what it labels.
+  static const label = SizedBox(height: 12);
+
+  /// Between items of one list, or a field and its hint.
+  static const item = SizedBox(height: 12);
+}
 
 /// A frosted card for grouping a step's fields over the constellation.
 class SellCard extends StatelessWidget {
-  const SellCard({super.key, required this.child, this.padding = const EdgeInsets.all(14),
+  const SellCard({super.key, required this.child, this.padding = const EdgeInsets.all(16),
       this.highlight = false});
   final Widget child;
   final EdgeInsets padding;
@@ -290,7 +341,7 @@ class SellChoiceCard extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             gradient: selected

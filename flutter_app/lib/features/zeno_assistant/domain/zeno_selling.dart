@@ -157,3 +157,146 @@ class ZenoDescribeTurn {
         ],
       );
 }
+
+// ── Zeno listing an item from its photo (2026-10-08) ─────────────────────────
+// The app's side of backend/api/domains/zeno_assistant/autolist.py: the
+// seller takes the photos, Zeno fills the listing in and asks what the
+// photo can't show, then prices it.
+
+String? _str(Object? v) {
+  final s = v is String ? v.trim() : null;
+  return s == null || s.isEmpty ? null : s;
+}
+
+/// The listing Zeno has filled in so far. The category is one of BROKA's,
+/// checked on the server, or null when nothing fits.
+class ZenoAutoListing {
+  const ZenoAutoListing({
+    this.name = '',
+    this.category,
+    this.categoryId,
+    this.subcategory,
+    this.subcategoryId,
+    this.condition,
+    this.attributes = const {},
+    this.description = '',
+  });
+
+  final String name;
+  final String? category;
+  final String? categoryId;
+  final String? subcategory;
+  final String? subcategoryId;
+
+  /// "new" | "used" | "refurbished", or null (land, services - or unknown).
+  final String? condition;
+
+  /// Only under the category's own field names, in their shape.
+  final Map<String, String> attributes;
+
+  /// "Label: value" lines - what buyers will read.
+  final String description;
+
+  /// "Electronics › Phones" - or just the category, or nothing.
+  String get filedUnder => [category, subcategory].whereType<String>().join(' › ');
+
+  factory ZenoAutoListing.fromJson(Object? json) {
+    final j = json is Map ? json.cast<String, dynamic>() : const <String, dynamic>{};
+    final attrs = j['attributes'];
+    return ZenoAutoListing(
+      name: _str(j['name']) ?? '',
+      category: _str(j['category']),
+      categoryId: _str(j['category_id']),
+      subcategory: _str(j['subcategory']),
+      subcategoryId: _str(j['subcategory_id']),
+      condition: _str(j['condition']),
+      attributes: {
+        if (attrs is Map)
+          for (final e in attrs.entries)
+            if (e.value != null && '${e.value}'.trim().isNotEmpty) '${e.key}': '${e.value}'.trim(),
+      },
+      description: _str(j['description']) ?? '',
+    );
+  }
+
+  /// As the server takes it back on the next turn (ListingDraftIn).
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'category': category ?? '',
+        if (subcategory != null) 'subcategory': subcategory,
+        if (condition != null) 'condition': condition,
+        'attributes': attributes,
+        'description': description,
+      };
+}
+
+/// One turn of Zeno listing the item: what it says, the listing as it
+/// stands, and what it still needs from the seller.
+class ZenoAutoTurn {
+  const ZenoAutoTurn({required this.listing, this.reply = '', this.questions = const []});
+
+  final ZenoAutoListing listing;
+  final String reply;
+  final List<ZenoDescribeQuestion> questions;
+
+  /// The description with a blank "Label: " line for each question still
+  /// open - for the seller to fill in the Description step.
+  String get descriptionWithBlanks =>
+      ZenoDescribeTurn(description: listing.description, questions: questions).withBlanks;
+
+  factory ZenoAutoTurn.fromJson(Map<String, dynamic> json) => ZenoAutoTurn(
+        listing: ZenoAutoListing.fromJson(json['listing']),
+        reply: (json['reply'] as String? ?? '').trim(),
+        questions: ZenoDescribeTurn.fromJson({'questions': json['questions']}).questions,
+      );
+}
+
+/// The price Zeno recommends for the listing it wrote: a range buyers will
+/// find fair and the one number to ask.
+class ZenoPriceRange {
+  const ZenoPriceRange({
+    required this.reply,
+    required this.low,
+    required this.high,
+    required this.suggested,
+    this.fromBroka = false,
+    this.canCheckBroka = false,
+    this.comparables,
+  });
+
+  final String reply;
+  final int low;
+  final int high;
+  final int suggested;
+
+  /// True: the range stands on similar live BROKA listings. False: Zeno's
+  /// general estimate.
+  final bool fromBroka;
+
+  /// The plan checks prices against BROKA at all - without it, the app
+  /// offers Pro for that.
+  final bool canCheckBroka;
+  final ZenoComparables? comparables;
+
+  static ZenoPriceRange? fromJson(Object? json) {
+    if (json is! Map) return null;
+    int? whole(Object? v) {
+      final n = _num(v);
+      return n != null && n > 0 && n <= maxListingPriceKes ? n.round() : null;
+    }
+
+    final low = whole(json['low']);
+    final high = whole(json['high']);
+    final suggested = whole(json['suggested_price']);
+    if (low == null || high == null || suggested == null) return null;
+    return ZenoPriceRange(
+      reply: (json['reply'] as String? ?? '').trim(),
+      low: low,
+      high: high,
+      suggested: suggested,
+      fromBroka: json['basis'] == 'broka',
+      canCheckBroka: json['can_check_broka'] == true,
+      comparables: ZenoComparables.fromJson(json['comparables']),
+    );
+  }
+}

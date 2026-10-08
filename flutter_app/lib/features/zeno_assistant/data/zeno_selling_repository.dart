@@ -77,6 +77,63 @@ class ZenoSellingRepository {
     if (res is! Map) throw const ApiException(502, 'Zeno sent back nothing usable.');
     return ZenoPriceTurn.fromJson(res.cast<String, dynamic>());
   }
+
+  /// Zeno lists the item in the first photo ([photoId], its upload id) for
+  /// the seller: the listing filled in, and what to ask about it. One of
+  /// the plan's AI descriptions. [draft] is whatever the seller entered
+  /// already.
+  Future<ZenoAutoTurn> autolist({
+    required String photoId,
+    required String language,
+    Map<String, dynamic> draft = const {},
+  }) async {
+    final res = await _client.post('/zeno/listing-draft/autolist', {
+      'draft': draft,
+      'photo_id': photoId,
+      'language': language,
+    }, timeout: const Duration(seconds: 75));
+    final turn = res is Map ? ZenoAutoTurn.fromJson(res.cast<String, dynamic>()) : null;
+    if (turn == null || turn.listing.name.isEmpty) {
+      throw const ApiException(502, "Zeno couldn't make out the item. Please try again.");
+    }
+    return turn;
+  }
+
+  /// The seller's answer or correction ([message]) to the listing Zeno is
+  /// writing. Free once the plan has descriptions.
+  Future<ZenoAutoTurn> autolistTurn({
+    required ZenoAutoListing listing,
+    required List<ZenoDescribeQuestion> questions,
+    required String message,
+    required List<Map<String, String>> history,
+    required String language,
+  }) async {
+    final res = await _client.post('/zeno/listing-draft/autolist/turn', {
+      'listing': listing.toJson(),
+      'questions': [for (final q in questions) q.toJson()],
+      'message': message,
+      'history': history,
+      'language': language,
+    });
+    if (res is! Map) throw const ApiException(502, 'Zeno sent back nothing usable.');
+    return ZenoAutoTurn.fromJson(res.cast<String, dynamic>());
+  }
+
+  /// The fair range and the one number to ask for [draft]: on BROKA's own
+  /// listings when the plan checks prices (one check spent), Zeno's
+  /// estimate otherwise.
+  Future<ZenoPriceRange> autolistPrice({
+    required Map<String, dynamic> draft,
+    required String language,
+  }) async {
+    final res = await _client.post('/zeno/listing-draft/autolist/price', {
+      'draft': draft,
+      'language': language,
+    });
+    final range = ZenoPriceRange.fromJson(res);
+    if (range == null) throw const ApiException(502, "Zeno couldn't price it right now.");
+    return range;
+  }
 }
 
 final zenoSellingRepository = ZenoSellingRepository();

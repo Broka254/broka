@@ -105,7 +105,7 @@ class _SellStockScreenState extends State<SellStockScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (!_data.isAuction) ...[
           sellStepLabel('HOW MANY ${unitWord.toUpperCase()} DO YOU HAVE?'),
-          const SizedBox(height: 10),
+          SellGap.label,
           SellCard(
             highlight: true,
             child: Row(children: [
@@ -133,7 +133,7 @@ class _SellStockScreenState extends State<SellStockScreen> {
               _StepperButton(icon: Icons.add_rounded, onTap: () => _setQty(_qty + 1)),
             ]),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Center(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
@@ -146,19 +146,19 @@ class _SellStockScreenState extends State<SellStockScreen> {
             ),
           ),
           if (unit == null && _qty > 1) ...[
-            const SizedBox(height: 6),
+            SellGap.item,
             const Text(
               'Selling several? If your price is for one of them, set "The price is for" on '
               'the Price step - so buyers see "KES 3,500 / bag", not one price for the lot.',
               style: TextStyle(color: BrokaColors.warning, fontSize: 11.5, height: 1.4),
             ),
           ],
-          const SizedBox(height: 24),
+          SellGap.section,
         ],
 
         if (!_deliverable) ...[
           sellStepLabel('HOW THE BUYER GETS IT'),
-          const SizedBox(height: 10),
+          SellGap.label,
           const SellCard(
             key: Key('sell-delivery-in-place'),
             child: Row(children: [
@@ -174,7 +174,7 @@ class _SellStockScreenState extends State<SellStockScreen> {
           ),
         ] else ...[
         sellStepLabel('CAN YOU ARRANGE DELIVERY IF A BUYER NEEDS IT?'),
-        const SizedBox(height: 10),
+        SellGap.label,
         SellChoiceCard(
           key: const Key('sell-delivery-yes'),
           emoji: '🚚',
@@ -184,7 +184,7 @@ class _SellStockScreenState extends State<SellStockScreen> {
           accent: BrokaColors.neonGreen,
           onTap: () => _setDelivery(true),
         ),
-        const SizedBox(height: 10),
+        SellGap.item,
         SellChoiceCard(
           key: const Key('sell-delivery-no'),
           emoji: '📍',
@@ -199,10 +199,10 @@ class _SellStockScreenState extends State<SellStockScreen> {
           curve: Curves.easeOutCubic,
           child: _data.deliveryAvailable == true
               ? Padding(
-                  padding: const EdgeInsets.only(top: 16),
+                  padding: const EdgeInsets.only(top: 24),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     sellStepLabel('WHERE CAN YOU DELIVER?  (OPTIONAL)'),
-                    const SizedBox(height: 8),
+                    SellGap.label,
                     TextField(
                       key: const Key('sell-delivery-note'),
                       controller: _noteCtrl,

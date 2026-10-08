@@ -18,6 +18,10 @@
 // "RAM: 4 GB", not "It has a RAM of 4 GB", and when the photo can't show
 // what a buyer needs to know it asks the seller (zeno_describe_screen.dart)
 // before the description lands here.
+//
+// 2026-10-08: the card makes its case - an example of Zeno's lines beside
+// the usual "phone for sale, call me", what it does in three ticks, and,
+// for a seller without a plan, that the first one is free (plans.FREE_TRIAL).
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/network/api_client.dart';
@@ -89,8 +93,17 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
     return '${p.left(PremiumFeature.aiDescriptions)} of $all left this month';
   }
 
+  /// No plan, and the free try is still there: the seller can see Zeno
+  /// work on their own item before paying anything.
+  bool get _freeTry {
+    final p = _premium;
+    return p != null && p.enabled && !p.hasPlan && p.left(PremiumFeature.aiDescriptions) > 0;
+  }
+
   Future<void> _offerPlans(String message, {String? upgradeTo}) async {
-    final opened = await showPremiumUpsell(context, message: message, upgradeTo: upgradeTo);
+    final opened = await showPremiumUpsell(context,
+        message: message, upgradeTo: upgradeTo, feature: PremiumFeature.aiDescriptions,
+        premium: widget.premium);
     if (opened && mounted) await _loadPremium();
   }
 
@@ -258,9 +271,21 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
           locked: _zenoLocked,
           busy: _writing,
           footnote: _zenoLeftText,
+          ribbon: _freeTry ? 'FIRST ONE FREE' : null,
+          points: const [
+            'Reads your photo: brand, model, condition',
+            "Asks you only what the photo can't show",
+            'You check and change every word',
+          ],
+          // An example only while the box is empty: once the seller has
+          // words of their own, the card shouldn't push them down.
+          preview: _descCtrl.text.trim().isEmpty && !_writing
+              ? ZenoBeforeAfter(category: _data.category, subcategory: _data.subcategoryName)
+              : null,
+          cta: _zenoLocked ? 'Unlock descriptions by Zeno' : 'Write it for me',
           onTap: _zenoWrite,
         ),
-        const SizedBox(height: 18),
+        SellGap.section,
         Row(children: [
           Expanded(child: sellStepLabel('DESCRIPTION  (REQUIRED)')),
           AnimatedSwitcher(
@@ -288,7 +313,7 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        SellGap.label,
         TextFormField(
           key: const Key('sell-description-field'),
           controller: _descCtrl,
@@ -302,9 +327,9 @@ class _SellDescriptionScreenState extends State<SellDescriptionScreen> {
           // Into the draft as typed - see SellDetailsScreen's name field.
           onChanged: _onChanged,
         ),
-        const SizedBox(height: 6),
+        SellGap.item,
         sellStepLabel('TAP TO ADD'),
-        const SizedBox(height: 8),
+        SellGap.label,
         Wrap(spacing: 8, runSpacing: 8, children: [
           for (final p in _prompts)
             ActionChip(

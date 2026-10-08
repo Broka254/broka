@@ -132,7 +132,8 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
 
   /// The plans, when the tries are gone - in the words the server would use.
   Future<void> _offerPlans(String message, {String? upgradeTo}) async {
-    final opened = await showPremiumUpsell(context, message: message, upgradeTo: upgradeTo);
+    final opened = await showPremiumUpsell(context,
+        message: message, upgradeTo: upgradeTo, feature: PremiumFeature.aiCovers, premium: widget.premium);
     if (opened && mounted) {
       setState(() => _error = null);
       await _loadPremium();
@@ -305,16 +306,16 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
                 style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5)))
             : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 _hero(),
-                const SizedBox(height: 14),
+                SellGap.item,
                 if (_result != null) _resultActions() else ...[
                   if (_data.hasShowcase) _coverActions(),
-                  const SizedBox(height: 8),
+                  SellGap.item,
                   _themePicker(),
-                  const SizedBox(height: 14),
+                  SellGap.item,
                   _noteField(),
-                  const SizedBox(height: 14),
+                  SellGap.item,
                   const _SellsFasterNote(),
-                  const SizedBox(height: 12),
+                  SellGap.section,
                   _MagicButton(
                     key: const Key('showcase-generate'),
                     label: _coversLocked ? '🔒  Get more AI covers' : '✨  Create my ${_themeInfo.name} cover',
@@ -331,7 +332,7 @@ class _SellShowcaseScreenState extends State<SellShowcaseScreen> with TickerProv
                                 fontWeight: FontWeight.w600)),
                       ),
                     ),
-                  const SizedBox(height: 18),
+                  SellGap.section,
                   Row(children: [
                     Expanded(child: Divider(color: BrokaColors.border.withOpacity(0.9))),
                     const Padding(
@@ -1078,25 +1079,45 @@ class _Tag extends StatelessWidget {
 class _SellsFasterNote extends StatelessWidget {
   const _SellsFasterNote();
 
+  static const _points = [
+    'Made from your own photo - your item stays exactly as it is',
+    'Studio, outdoor or premium looks, ready in about a minute',
+    'Buyers still see your real camera photos on the listing',
+  ];
+
   @override
   Widget build(BuildContext context) => Container(
         key: const Key('showcase-sells-faster'),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
         decoration: BoxDecoration(
           color: BrokaColors.neonGreen.withOpacity(0.10),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.45)),
         ),
-        child: const Row(children: [
-          Icon(Icons.trending_up_rounded, color: BrokaColors.neonGreen, size: 20),
-          SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Listings with a striking cover get noticed first on Home - more taps, '
-              'more offers, a faster sale. Zeno keeps your item exactly as it is.',
-              style: TextStyle(color: BrokaColors.textHigh, fontSize: 12, height: 1.4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.trending_up_rounded, color: BrokaColors.neonGreen, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Listings with a striking cover get noticed first on Home - more taps, '
+                'more offers, a faster sale.',
+                style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.45,
+                    fontWeight: FontWeight.w600),
+              ),
             ),
-          ),
+          ]),
+          const SizedBox(height: 10),
+          for (final point in _points)
+            Padding(
+              padding: const EdgeInsets.only(left: 30, bottom: 6),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.check_rounded, size: 15, color: BrokaColors.neonGreen),
+                const SizedBox(width: 8),
+                Expanded(child: Text(point,
+                    style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12, height: 1.4))),
+              ]),
+            ),
         ]),
       );
 }

@@ -164,10 +164,14 @@ PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
 )
 PREMIUM_BY_ID: dict[str, PremiumPlan] = {p.id: p for p in PREMIUM_PLANS}
 
-# What someone without a plan may try before being asked to subscribe: one
-# AI cover, once. About KES 5 - an acquisition cost, and the only way a
-# seller learns what a cover does to a listing before paying for more.
-FREE_TRIAL: dict[str, int] = {"ai_covers": 1}
+# What someone without a plan may try before being asked to subscribe, once:
+#   * one AI cover - about KES 5, an acquisition cost, and the only way a
+#     seller learns what a cover does to a listing before paying for more;
+#   * one listing written by Zeno from its photo (2026-10-08) - KES 0.07.
+#     Sellers were asked to pay for Zeno's selling help without ever seeing
+#     it work; "Zeno lists it for me" (zeno_assistant/autolist.py) shows the
+#     whole of it on their own item, which is the case for a plan.
+FREE_TRIAL: dict[str, int] = {"ai_covers": 1, "ai_descriptions": 1}
 
 
 # ── Stores ───────────────────────────────────────────────────────────────────

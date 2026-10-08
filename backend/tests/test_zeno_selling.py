@@ -139,14 +139,21 @@ class TestPlans:
 
 
 class TestDescribe:
-    async def test_without_a_plan_it_says_why_it_is_worth_it(self, client, premium_on, monkeypatch):
-        _model(monkeypatch, raw="should not be called", fail=True)
+    async def test_without_a_plan_the_first_is_free_then_it_says_why_to_pay(
+            self, client, premium_on, monkeypatch):
+        """One free description (plans.FREE_TRIAL, 2026-10-08): a seller
+        sees Zeno work on their own item before being asked to pay."""
+        _model(monkeypatch, raw=json.dumps({"description": "Brand: Samsung", "questions": []}))
         _, headers = await _user()
+        r = await client.post("/zeno/listing-draft/describe", headers=headers,
+                              json={"draft": DRAFT, "image_base64": _photo_b64()})
+        assert r.status_code == 200, r.text
+        _model(monkeypatch, raw="should not be called", fail=True)
         r = await client.post("/zeno/listing-draft/describe", headers=headers,
                               json={"draft": DRAFT, "image_base64": _photo_b64()})
         assert r.status_code == 402
         detail = r.json()["detail"]
-        assert detail["code"] == "PREMIUM_REQUIRED" and detail["upgrade_to"] == "plus"
+        assert detail["code"] == "ALLOWANCE_USED" and detail["upgrade_to"] == "plus"
         assert "sell faster" in detail["message"]
 
     async def test_a_plan_gets_a_description_from_the_photo(self, client, premium_on, monkeypatch):
@@ -317,8 +324,9 @@ class TestDescribeTurn:
         r = await client.post("/zeno/listing-draft/describe/turn", headers=headers, json=TURN)
         assert r.status_code == 200, r.text
 
-    async def test_without_a_plan_it_is_refused(self, client, premium_on, monkeypatch):
+    async def test_without_a_plan_or_trial_it_is_refused(self, client, premium_on, monkeypatch):
         _model(monkeypatch, raw="should not be called", fail=True)
+        monkeypatch.setattr("api.domains.premium.entitlements.FREE_TRIAL", {"ai_covers": 1})
         _, headers = await _user()
         r = await client.post("/zeno/listing-draft/describe/turn", headers=headers, json=TURN)
         assert r.status_code == 402

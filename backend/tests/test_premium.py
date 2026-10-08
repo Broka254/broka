@@ -290,7 +290,7 @@ class TestAllowances:
     async def test_me_without_a_plan_shows_the_free_tries(self, client, premium_on):
         _, h = await _user()
         me = (await client.get("/premium/me", headers=h)).json()
-        assert me["plan"] is None and me["trial"] == {"ai_covers": 1}
+        assert me["plan"] is None and me["trial"] == {"ai_covers": 1, "ai_descriptions": 1}
         assert me["usage"]["voice_requests"]["allowance"] == 0
 
 

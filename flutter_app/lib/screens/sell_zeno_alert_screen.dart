@@ -24,6 +24,12 @@
 // a seller whose plan has no texts left is told before answering that the
 // alert will come as a notification in BROKA instead - the sweep skips the
 // SMS for them - and where the plans are.
+//
+// 2026-10-08: and why a text is worth paying for. Under the question, a
+// seller without texts sees the text Zeno would send them (the wording of
+// api/core/nudge_templates.py) and that the seller who answers first is the
+// one a buyer deals with; "See plans" opens the plans' case for texts
+// (premium_upsell.dart) rather than dropping them on the plans screen.
 import 'dart:async';
 import 'dart:math';
 
@@ -37,6 +43,7 @@ import '../features/listing_fee/domain/listing_fee.dart';
 import '../features/listing_fee/presentation/listing_fee_screen.dart';
 import '../features/premium/data/premium_repository.dart';
 import '../features/premium/domain/premium.dart';
+import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/listing_publisher.dart';
@@ -171,8 +178,12 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
   }
 
   Future<void> _seePlans() async {
-    await Navigator.of(context).pushNamed('/premium', arguments: 'plus');
-    if (mounted) _loadPlan();
+    final opened = await showPremiumUpsell(context,
+        message: 'Texts from Zeno come with BROKA Plus and up.',
+        upgradeTo: 'plus',
+        feature: PremiumFeature.sms,
+        premium: widget.premiumRepository);
+    if (opened && mounted) _loadPlan();
   }
 
   /// Opens the Listing fee screen for the listing just created, and
@@ -337,14 +348,15 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
               emoji: '📲',
               title: 'Yes, SMS me',
               subtitle: _smsNeedsPlan
-                  ? 'Texts come with a BROKA plan. Without one, Zeno tells you in BROKA instead.'
+                  ? 'Texts come with a BROKA plan - they reach you even with the app closed and no '
+                      'data. Without one, Zeno tells you in BROKA instead.'
                   : 'One text per buyer, only if you haven\'t replied - never at night.',
               selected: _data.smsAlerts == true,
               accent: BrokaColors.neonGreen,
               onTap: () => _choose(true),
             ),
           ),
-          const SizedBox(height: 10),
+          SellGap.item,
           _AfterQuestion(
             visible: _questionDone,
             index: 2,
@@ -362,15 +374,16 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
             _AfterQuestion(
               visible: _questionDone,
               index: 3,
-              child: TextButton.icon(
-                key: const Key('sell-sms-plans'),
-                onPressed: _seePlans,
-                icon: const Icon(Icons.workspace_premium_rounded, color: BrokaColors.gold, size: 16),
-                label: const Text('See plans with texts', style: TextStyle(
-                    color: BrokaColors.gold, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: _SmsPitch(
+                  listingName: _data.name,
+                  firstName: (ApiService.currentUserName ?? '').trim().split(' ').first,
+                  onPlans: _seePlans,
+                ),
               ),
             ),
-          const SizedBox(height: 16),
+          SellGap.section,
           _summary(),
           if (_unpaidListingId != null) _savedUnpaid()
           else if (_fee != null) _feeTeaser(_fee!),
@@ -769,4 +782,74 @@ class _ConfettiPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ConfettiPainter oldDelegate) => oldDelegate.t != t;
+}
+
+
+/// What a text from Zeno looks like, and why a seller wants one: shown to a
+/// seller whose plan has no texts, under the question.
+class _SmsPitch extends StatelessWidget {
+  const _SmsPitch({required this.listingName, required this.firstName, required this.onPlans});
+  final String listingName;
+  final String firstName;
+  final VoidCallback onPlans;
+
+  @override
+  Widget build(BuildContext context) {
+    final who = firstName.isEmpty ? '' : ' $firstName';
+    final what = listingName.trim().isEmpty ? 'item' : listingName.trim();
+    return SellCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('WHAT ZENO WOULD TEXT YOU', style: TextStyle(
+            color: BrokaColors.neonGreen, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
+        const SizedBox(height: 10),
+        // An SMS bubble, as the phone's own messages app shows one.
+        Container(
+          key: const Key('sell-sms-preview'),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2F3A),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(4), topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(16), bottomRight: Radius.circular(16)),
+            border: Border.all(color: BrokaColors.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [
+              Icon(Icons.sms_rounded, size: 14, color: BrokaColors.neonGreen),
+              SizedBox(width: 6),
+              Text('BROKA', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+              Spacer(),
+              Text('now', style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+            ]),
+            const SizedBox(height: 6),
+            Text('Hi$who. Zeno from BROKA: a buyer wants your $what. Still available at the same '
+                'price? Reply in the BROKA app to continue.',
+                style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.45)),
+          ]),
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          'Buyers ask several sellers at once. The one who answers first is the one they deal with - '
+          'a text reaches you even with the app closed and no data.',
+          style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.45),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            key: const Key('sell-sms-plans'),
+            onPressed: onPlans,
+            icon: const Icon(Icons.workspace_premium_rounded, color: BrokaColors.gold, size: 18),
+            label: const Text('Get texts from Zeno', style: TextStyle(
+                color: BrokaColors.gold, fontSize: 13.5, fontWeight: FontWeight.w800)),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(46),
+              side: BorderSide(color: BrokaColors.gold.withOpacity(0.6)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
 }
