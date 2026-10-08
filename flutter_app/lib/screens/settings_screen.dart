@@ -92,6 +92,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Whether BROKA can reach this phone while it is closed, in words. Calls
+  /// that rang only with the app open (2026-10) came from an APK built
+  /// without Firebase, and nothing on the phone could show that.
+  String _notificationsSubtitle() {
+    final poller = GlobalPollerService.instance;
+    if (!poller.firebaseReady) {
+      return 'Only while BROKA is open - this version was built without push notifications';
+    }
+    if (!poller.pushReady) {
+      return 'Only while BROKA is open until push notifications connect';
+    }
+    return "Messages, offers and calls, even with BROKA closed - managed in your phone's settings";
+  }
+
   void _snack(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(text),
@@ -227,7 +241,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           MenuTile(
             icon: Icons.notifications_outlined,
             title: 'Notifications',
-            subtitle: "Messages, offers and calls - managed in your phone's settings",
+            subtitle: _notificationsSubtitle(),
             trailing: const Icon(Icons.open_in_new_rounded, color: BrokaColors.textMid, size: 18),
             onTap: () async {
               if (!await openAppSettings() && mounted) {

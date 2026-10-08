@@ -47,12 +47,19 @@ class RingtoneService {
 
   final AudioPlayer _player = AudioPlayer(playerId: 'broka_ringtone');
   bool _playing = false;
-  bool _usingSystemRingtone = false;
   bool _contextConfigured = false;
   Timer? _autoStopTimer;
   void Function()? _onTimeout;
+  // The call this ring is for, when the caller said. One ringer serves
+  // every call, so without an owner any call's teardown stopped whatever
+  // was ringing - a cancelled earlier call silenced the one ringing now,
+  // and the screen ringing for it lost its only teardown (see [stopFor]).
+  String? _roomId;
 
   bool get isPlaying => _playing;
+
+  /// The call the current ring belongs to, if it was started for one.
+  String? get roomId => _playing ? _roomId : null;
 
   Future<void> _ensureAudioContext() async {
     if (_contextConfigured) return;
@@ -93,7 +100,11 @@ class RingtoneService {
   /// vibrated, or is deliberately on silent). Callers use that to decide
   /// whether a notification still needs to make its own sound - see
   /// NotificationService.showIncomingCall.
-  Future<bool> play({Duration? autoStopAfter, void Function()? onTimeout}) async {
+  Future<bool> play({
+    Duration? autoStopAfter,
+    void Function()? onTimeout,
+    String? roomId,
+  }) async {
     // Keep a previously-registered onTimeout when this call passes none.
     //
     // Two things start the same ring for one call: showIncomingCall (no
@@ -104,6 +115,7 @@ class RingtoneService {
     // the screen's teardown, leaving a dead incoming-call dialog behind
     // after the ring stopped.
     if (onTimeout != null) _onTimeout = onTimeout;
+    if (roomId != null) _roomId = roomId;
     _autoStopTimer?.cancel();
     _autoStopTimer = null;
     if (autoStopAfter != null) {
@@ -113,16 +125,18 @@ class RingtoneService {
         cb?.call();
       });
     }
-    if (_playing) return _usingSystemRingtone;
+    // Already ringing: the device is handling the alert, whichever of the
+    // two paths is doing it. This used to answer whether the SYSTEM ringtone
+    // was the one playing, which is false on the bundled-tone fallback (always, on iOS) - so the caller
+    // posted its notification with sound and an insistent flag on top of a
+    // tone that was already looping.
+    if (_playing) return true;
     _playing = true;
 
     if (!kIsWeb && Platform.isAndroid) {
       try {
         final handled = await _channel.invokeMethod<bool>('play') ?? false;
-        if (handled) {
-          _usingSystemRingtone = true;
-          return true;
-        }
+        if (handled) return true;
       } catch (e) {
         // Channel missing (e.g. a background isolate, where MainActivity's
         // engine - and therefore this channel - does not exist) or the
@@ -131,7 +145,6 @@ class RingtoneService {
       }
     }
 
-    _usingSystemRingtone = false;
     await _ensureAudioContext();
     try {
       await _player.setReleaseMode(ReleaseMode.loop);
@@ -143,10 +156,18 @@ class RingtoneService {
     }
   }
 
+  /// Stop the ring if it is for [roomId] - or for no particular call. A
+  /// ring that belongs to another call keeps ringing.
+  Future<void> stopFor(String roomId) async {
+    if (_roomId != null && _roomId != roomId) return;
+    await stop();
+  }
+
   Future<void> stop() async {
     _autoStopTimer?.cancel();
     _autoStopTimer = null;
     _onTimeout = null;
+    _roomId = null;
     if (!_playing) return;
     _playing = false;
 
@@ -159,7 +180,6 @@ class RingtoneService {
         await _channel.invokeMethod('stop');
       } catch (_) {}
     }
-    _usingSystemRingtone = false;
     try {
       await _player.stop();
     } catch (_) {}

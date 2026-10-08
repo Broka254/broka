@@ -39,6 +39,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'api_service.dart';
 import 'local_chat_store.dart';
+import 'active_call.dart';
 import 'notification_service.dart';
 import 'callkit_service.dart';
 
@@ -60,6 +61,11 @@ class GlobalPollerService {
   /// calls and messages reach it with the app closed, so the background
   /// sweep is redundant.
   bool pushReady = false;
+
+  /// Firebase started (main.dart). False for an APK built without
+  /// google-services.json, which can never be reached while closed -
+  /// Settings says so, since nothing else on the phone would.
+  bool firebaseReady = false;
 
   // Whether GET /calls/incoming exists on the server; until it answers 404
   // the per-thread /calls/pending fallback is not used.
@@ -134,10 +140,6 @@ class GlobalPollerService {
   void markScreenInactive(String listingId, {String? buyerId}) {
     _activelyViewedThreads.remove(threadKeyFor(listingId, buyerId));
   }
-
-  // True only for the very first sweep this install ever performs, i.e.
-  // before any thread has a stored signature. See _checkThreadForNewMessage.
-  bool _primed = false;
 
   void start() {
     _running = true;
@@ -244,6 +246,9 @@ class GlobalPollerService {
       // GET /calls/pending per thread on every sweep - forty requests every
       // seven seconds for someone with forty conversations.
       final byListing = _incomingEndpoint ? await _checkIncomingCall(threads) : false;
+      // The first sweep this install ever makes records what every thread
+      // holds without announcing any of it - see _checkThreadForNewMessage.
+      final announce = prefs.getBool(_primedKey) ?? false;
       for (final thread in threads) {
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
@@ -279,7 +284,8 @@ class GlobalPollerService {
           ));
         }
 
-        await _checkThreadForNewMessage(thread, prefs);
+        await _checkThreadForNewMessage(thread, prefs, announce: announce);
+        await _checkWhatTheLastMessageHides(thread, prefs, announce: announce);
         // BUG FIX (calling audit, 2026-09-14): this used to be gated on
         // `my_role == 'seller'`. GET /calls/pending/{listing_id} already
         // scopes its answer to the authenticated caller as CALLEE, whatever
@@ -294,6 +300,7 @@ class GlobalPollerService {
         // reason in the V2 pass; this copy was missed.
         if (!byListing) await _checkThreadForIncomingCall(thread);
       }
+      if (!announce) await prefs.setBool(_primedKey, true);
     } catch (_) {
       // Network hiccup or not logged in - just try again next tick.
     } finally {
@@ -306,10 +313,6 @@ class GlobalPollerService {
     final buyerId   = thread['buyer_id'] ?? '';
     return 'global_poll_seen_${listingId}_$buyerId';
   }
-
-  String _seenIdKeyFor(Map<String, dynamic> thread) =>
-      NotificationService.seenMessageKey(
-          thread['listing_id'] as String, thread['buyer_id'] as String?);
 
   static String _textSignature(Map<String, dynamic> thread) =>
       '${thread['last_role'] ?? ''}|${thread['last_msg_type'] ?? 'text'}|'
@@ -328,8 +331,9 @@ class GlobalPollerService {
   bool _alreadyHandled(Map<String, dynamic> thread, SharedPreferences prefs) {
     final id = thread['last_message_id'] as String?;
     if (id != null && id.isNotEmpty) {
-      final seenId = prefs.getString(_seenIdKeyFor(thread));
-      if (seenId != null) return seenId == id;
+      final ids = NotificationService.announcedIds(
+          prefs, thread['listing_id'] as String, thread['buyer_id'] as String?);
+      if (ids.isNotEmpty) return ids.contains(id);
     }
     return prefs.getString(_seenKeyFor(thread)) == _textSignature(thread);
   }
@@ -340,7 +344,8 @@ class GlobalPollerService {
     await prefs.setString(_seenKeyFor(thread), _textSignature(thread));
     final id = thread['last_message_id'] as String?;
     if (id != null && id.isNotEmpty) {
-      await prefs.setString(_seenIdKeyFor(thread), id);
+      await NotificationService.markAnnounced(prefs,
+          thread['listing_id'] as String, thread['buyer_id'] as String?, id);
     }
   }
 
@@ -356,6 +361,8 @@ class GlobalPollerService {
     final lastMessage = thread['last_message'] as String? ?? '';
     if (lastMessage.isEmpty) return;
     await _recordHandled(thread, prefs);
+    // And what the last message hides, or closing the screen announces it.
+    await _checkWhatTheLastMessageHides(thread, prefs, announce: false);
   }
 
   /// Key recording that this install has completed at least one sweep.
@@ -363,8 +370,9 @@ class GlobalPollerService {
   static const _primedKey = 'global_poll_primed_v1';
 
   Future<void> _checkThreadForNewMessage(
-    Map<String, dynamic> thread, SharedPreferences prefs,
-  ) async {
+    Map<String, dynamic> thread, SharedPreferences prefs, {
+    required bool announce,
+  }) async {
     final lastMessage = thread['last_message'] as String? ?? '';
     final lastRole     = thread['last_role'] as String? ?? '';
     final myRole       = thread['my_role'] as String? ?? 'buyer';
@@ -398,16 +406,11 @@ class GlobalPollerService {
     // What the old check was actually protecting against is narrower: the
     // very first sweep this install performs, when every thread is
     // simultaneously "new" and firing one notification each would mean a
-    // wall of them. So that is what is suppressed now - one flag, set once,
-    // and after it every genuinely new thread notifies normally.
-    if (!_primed) {
-      _primed = prefs.getBool(_primedKey) ?? false;
-      if (!_primed) {
-        await prefs.setBool(_primedKey, true);
-        _primed = true;
-        return;
-      }
-    }
+    // wall of them. So that is what is suppressed now - one flag, set once
+    // that sweep is over, and after it every genuinely new thread notifies
+    // normally. (It was set by the first thread with news, so the first
+    // sweep silenced one thread and announced all the others.)
+    if (!announce) return;
 
     final fromName = lastRole == 'broker'
         ? 'Zeno'
@@ -428,35 +431,94 @@ class GlobalPollerService {
       // "completed" is a call that happened and both parties know about.
       // "declined" was the user's own deliberate act. Neither is news.
       if (outcome != 'missed' && outcome != 'cancelled') return;
-      // Under the same tag as the server's missed-call push
-      // (NotificationService.missedCallTag), so the two are one.
-      await NotificationService.instance.showMissedCall(
-        listingId:   thread['listing_id'] as String,
-        buyerId:     thread['buyer_id'] as String?,
-        myRole:      myRole,
-        callerName:  fromName,
-        isVideo:     (thread['last_call_type'] as String?) == 'video',
-        listingName: thread['listing_name'] as String?,
-      );
+      await _announceMissedCall(thread, fromName,
+          isVideo: (thread['last_call_type'] as String?) == 'video');
       return;
     }
 
-    await NotificationService.instance.showNewMessage(
-      fromName: fromName,
-      preview: _previewFor(msgType, lastMessage),
-      listingId: thread['listing_id'] as String,
-      buyerId: thread['buyer_id'] as String?,
-      payload: {
-        'type':      'new_message',
-        'listingId': thread['listing_id'],
-        'buyerId':   thread['buyer_id'],
-        'myRole':    myRole,
-        // Zeno wrote it, so it is in Zeno's room: a tap there, not on the
-        // direct chat, where it isn't shown.
-        if (lastRole == 'broker') 'screen': 'zeno',
-      },
-    );
+    await _announceMessage(thread, fromName, _previewFor(msgType, lastMessage),
+        zeno: lastRole == 'broker');
   }
+
+  /// A thread can hold two pieces of news and the inbox describes it by its
+  /// last row: a text followed by a missed call announced only the missed
+  /// call - reported from phones (2026-10-07), "only missed call was
+  /// displayed despite there being an unread text message" - and a missed
+  /// call followed by a text, only the text. The server names the unread
+  /// one the last row hides (negotiate.py's _unread_by_kind); it is
+  /// announced here, once, by its id.
+  Future<void> _checkWhatTheLastMessageHides(
+    Map<String, dynamic> thread, SharedPreferences prefs, {
+    required bool announce,
+  }) async {
+    final listingId = thread['listing_id'] as String?;
+    if (listingId == null) return;
+    final buyerId = thread['buyer_id'] as String?;
+    final lastId = thread['last_message_id'] as String?;
+    final fromName = thread['counterpart_name'] as String? ?? 'Someone';
+
+    Future<bool> fresh(Object? item) async {
+      if (item is! Map) return false;
+      final id = item['id'] as String?;
+      if (id == null || id.isEmpty || id == lastId) return false;
+      if (NotificationService.wasAnnounced(prefs, listingId, buyerId, id)) {
+        return false;
+      }
+      try {
+        await prefs.reload(); // a push may have announced it meanwhile
+      } catch (_) {}
+      if (NotificationService.wasAnnounced(prefs, listingId, buyerId, id)) {
+        return false;
+      }
+      await NotificationService.markAnnounced(prefs, listingId, buyerId, id);
+      return announce;
+    }
+
+    final call = thread['unread_missed_call'];
+    if (await fresh(call)) {
+      await _announceMissedCall(thread, fromName,
+          isVideo: (call as Map)['call_type'] == 'video');
+    }
+    final message = thread['unread_message'];
+    if (await fresh(message)) {
+      final m = message as Map;
+      await _announceMessage(thread, fromName,
+          _previewFor(m['msg_type'] as String? ?? 'text',
+              m['content'] as String? ?? ''));
+    }
+  }
+
+  /// Under the same tag as the server's missed-call push
+  /// (NotificationService.missedCallTag), so the two are one.
+  Future<void> _announceMissedCall(
+    Map<String, dynamic> thread, String fromName, {required bool isVideo}) =>
+      NotificationService.instance.showMissedCall(
+        listingId:   thread['listing_id'] as String,
+        buyerId:     thread['buyer_id'] as String?,
+        myRole:      thread['my_role'] as String? ?? 'buyer',
+        callerName:  fromName,
+        isVideo:     isVideo,
+        listingName: thread['listing_name'] as String?,
+      );
+
+  Future<void> _announceMessage(
+    Map<String, dynamic> thread, String fromName, String preview,
+    {bool zeno = false}) =>
+      NotificationService.instance.showNewMessage(
+        fromName: fromName,
+        preview: preview,
+        listingId: thread['listing_id'] as String,
+        buyerId: thread['buyer_id'] as String?,
+        payload: {
+          'type':      'new_message',
+          'listingId': thread['listing_id'],
+          'buyerId':   thread['buyer_id'],
+          'myRole':    thread['my_role'] as String? ?? 'buyer',
+          // Zeno wrote it, so it is in Zeno's room: a tap there, not on the
+          // direct chat, where it isn't shown.
+          if (zeno) 'screen': 'zeno',
+        },
+      );
 
   /// Non-text rows carry a placeholder or a URL as their content, neither of
   /// which belongs in a notification body.
@@ -481,7 +543,7 @@ class GlobalPollerService {
         // "Incoming call" sitting in the tray that does nothing when tapped.
         final stale = _shownCallNotifications.remove(listingId);
         if (stale != null) {
-          await NotificationService.instance.cancelIncomingCall(stale);
+          await NotificationService.instance.callEnded(stale);
         }
         return;
       }
@@ -496,6 +558,9 @@ class GlobalPollerService {
           ? (callInfo['caller_id'] as String? ?? '')
           : (thread['buyer_id'] as String? ?? '');
       if (roomId == null) return;
+      // On a call, or done with this one: no ring, no "Ringing" for the
+      // caller (see ActiveCall.shouldRing).
+      if (!ActiveCall.instance.shouldRing(roomId)) return;
       _shownCallNotifications[listingId] = roomId;
       _acknowledge(roomId, callInfo['call_token'] as String?);
       await NotificationService.instance.showIncomingCall(
@@ -522,6 +587,8 @@ class GlobalPollerService {
       _incomingEndpoint = false;
       return false;
     }
+    // Couldn't ask: leave everything as it is until a sweep can.
+    if (!res.known) return true;
     final call = res.call;
     final roomId = call?['room_id'] as String?;
     final listingId = call?['listing_id'] as String?;
@@ -530,10 +597,21 @@ class GlobalPollerService {
     for (final entry in _shownCallNotifications.entries.toList()) {
       if (entry.value != roomId) {
         _shownCallNotifications.remove(entry.key);
-        await NotificationService.instance.cancelIncomingCall(entry.value);
+        await NotificationService.instance.callEnded(entry.value);
       }
     }
+    // So does a call screen still ringing for a call the server no longer
+    // reports - whichever path opened it (a push, a tap), this sweep may
+    // never have shown it, and nothing else would tell that screen.
+    final active = ActiveCall.instance;
+    final activeRoom = active.roomId;
+    if (activeRoom != null && !active.answered && activeRoom != roomId) {
+      await NotificationService.instance.callEnded(activeRoom);
+    }
     if (call == null || roomId == null || listingId == null) return true;
+    // On a call, or done with this one: no ring, and no "Ringing" for the
+    // caller (see ActiveCall.shouldRing).
+    if (!ActiveCall.instance.shouldRing(roomId)) return true;
 
     // The server names the thread's buyer: a buyer can call a seller they
     // have never messaged, so there may be no thread here to read it from.

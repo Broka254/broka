@@ -1550,6 +1550,66 @@ class TestSweepReliability:
         assert meta.winner_id == bidder.id
 
     @pytest.mark.asyncio
+    async def test_a_retry_during_the_closers_deal_creation_adopts_its_deal(
+        self, monkeypatch,
+    ):
+        """The interleaving behind the test above failing ~1 run in 12 on
+        SQLite: the closer has committed the close and is inside
+        finalize_deal, past its "no active deal yet" check, when a second
+        sweep reads the auction - closed, no deal_id - and retries the
+        deal. With no row lock both inserted, and the winner owed twice."""
+        from sqlalchemy import func, select
+        from api.domains.escrow.repository import DealRepository
+
+        seller = await _user("Seller slow deal")
+        bidder = await _user("Bidder slow deal")
+        listing, _ = await _auction(seller, starting_price=20000)
+        await _bid(listing.id, bidder, 30000)
+        async with AsyncSessionLocal() as db:
+            meta = await lifecycle._locked_meta(db, listing.id)
+            meta.ends_at = datetime.utcnow() - timedelta(seconds=1)
+            await db.commit()
+
+        real_check = DealRepository.get_active_by_listing_buyer
+        first_checked = asyncio.Event()
+        second_checked = asyncio.Event()
+
+        async def _slow_check(self, listing_id, buyer_id):
+            found = await real_check(self, listing_id, buyer_id)
+            if not first_checked.is_set():
+                # The closer: hold here, between the check and the insert,
+                # until the retry has made its own check - or, when the
+                # retry is (correctly) kept waiting, a moment has passed.
+                first_checked.set()
+                try:
+                    await asyncio.wait_for(second_checked.wait(), 0.5)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                second_checked.set()
+            return found
+
+        monkeypatch.setattr(DealRepository, "get_active_by_listing_buyer", _slow_check)
+
+        async def _close():
+            async with AsyncSessionLocal() as db:
+                return await lifecycle.close_auction(db, listing.id)
+
+        closer = asyncio.create_task(_close())
+        await asyncio.wait_for(first_checked.wait(), 5)
+        retry = await _close()
+        first = await closer
+
+        async with AsyncSessionLocal() as db:
+            deals = (await db.execute(
+                select(func.count(Deal.id)).where(Deal.listing_id == listing.id)
+            )).scalar_one()
+        assert deals == 1
+        assert not first.already_closed
+        assert retry.already_closed
+        assert (await _meta(listing.id)).deal_id == first.deal_id
+
+    @pytest.mark.asyncio
     async def test_an_expired_auction_is_never_reported_as_live(self):
         """Even before any sweep runs. The status a client is shown is
         derived from the clock, so a sweep that is late cannot leave an

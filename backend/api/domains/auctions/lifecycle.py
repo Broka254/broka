@@ -71,6 +71,7 @@ claim goes on to create the Deal.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -86,6 +87,28 @@ from api.core.money import add_money, money
 from api.database import AuctionMeta, Bid, Listing, ListingStatus, ListingType, User
 
 logger = logging.getLogger(__name__)
+
+# Creating a winner's Deal is the one step here that is NOT a single
+# compare-and-swap: finalize_deal checks for an active deal, then inserts
+# one. On PostgreSQL its listing row lock makes the second caller wait and
+# then find the first's deal. SQLite drops FOR UPDATE, so two sweeps in one
+# process - the closer and a retry that saw the closed auction before its
+# deal existed - both passed the check and the winner got two deals (CI on
+# main, test_concurrent_sweeps_close_each_auction_exactly_once, ~1 run in
+# 12). Serialised in-process here; across processes the row lock does it.
+_deal_lock: Optional[asyncio.Lock] = None
+_deal_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _deal_creation_guard() -> asyncio.Lock:
+    """The lock above, rebuilt for a new event loop - an asyncio.Lock used
+    on one loop raises on another (each test runs on its own)."""
+    global _deal_lock, _deal_lock_loop
+    loop = asyncio.get_running_loop()
+    if _deal_lock is None or _deal_lock_loop is not loop:
+        _deal_lock = asyncio.Lock()
+        _deal_lock_loop = loop
+    return _deal_lock
 
 # Lifecycle states. Lower-case strings rather than an Enum column because
 # auction_meta.status already shipped as a String and the Flutter client
@@ -774,31 +797,34 @@ async def _create_winner_deal(
     """
     from api.domains.escrow.service import EscrowService
 
-    try:
-        result = await EscrowService(db).finalize_deal(
-            listing_id=listing.id,
-            buyer_id=winner_id,
-            agreed_price=float(winning_amount),
-            current_user_id=winner_id,
-            deal_id=deal_id,
-        )
-        return result.get("deal_id")
-    except Exception as exc:
-        # A failed deal does not un-win the auction. It is logged loudly and
-        # the close stands; close_auction can be re-run and will pick up
-        # from the already-closed branch, and finalize_deal's own duplicate
-        # guard makes that retry safe.
-        logger.error(
-            "[auction] DEAL_CREATION_FAILED listing=%s winner=%s: %s",
-            listing.id, winner_id, exc,
-        )
-        # Leave the session usable for the caller's own follow-up writes -
-        # a failed finalize_deal may have left it mid-transaction.
+    # Held until finalize_deal has committed, so the next caller's
+    # duplicate check sees this deal (see _deal_lock).
+    async with _deal_creation_guard():
         try:
-            await db.rollback()
-        except Exception:
-            pass
-        return None
+            result = await EscrowService(db).finalize_deal(
+                listing_id=listing.id,
+                buyer_id=winner_id,
+                agreed_price=float(winning_amount),
+                current_user_id=winner_id,
+                deal_id=deal_id,
+            )
+            return result.get("deal_id")
+        except Exception as exc:
+            # A failed deal does not un-win the auction. It is logged loudly and
+            # the close stands; close_auction can be re-run and will pick up
+            # from the already-closed branch, and finalize_deal's own duplicate
+            # guard makes that retry safe.
+            logger.error(
+                "[auction] DEAL_CREATION_FAILED listing=%s winner=%s: %s",
+                listing.id, winner_id, exc,
+            )
+            # Leave the session usable for the caller's own follow-up writes -
+            # a failed finalize_deal may have left it mid-transaction.
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            return None
 
 
 async def due_for_close(db: AsyncSession, limit: int = 100) -> list[str]:

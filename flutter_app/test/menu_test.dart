@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:broka/screens/menu_screen.dart';
 import 'package:broka/screens/profile_screen.dart';
 import 'package:broka/screens/settings_screen.dart';
+import 'package:broka/services/global_poller_service.dart';
 import 'package:broka/widgets/constellation_background.dart';
 
 import 'support/fake_api.dart';
@@ -305,6 +306,29 @@ void main() {
       final toggle = tester.widget<Switch>(find.byKey(const Key('settings-location-switch')));
       expect(toggle.value, isFalse);
       expect(find.textContaining("Couldn't change your location setting"), findsOneWidget);
+    });
+
+    testWidgets('says whether calls can reach this phone while BROKA is closed',
+        (tester) async {
+      final poller = GlobalPollerService.instance;
+      addTearDown(() {
+        poller.firebaseReady = false;
+        poller.pushReady = false;
+      });
+      setFakeRoute(_account());
+      // An APK built without google-services.json: what users had installed.
+      poller.firebaseReady = false;
+      await tester.pumpWidget(app(const SettingsScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.textContaining('built without push notifications'), findsOneWidget);
+
+      poller
+        ..firebaseReady = true
+        ..pushReady = true;
+      await tester.pumpWidget(app(const SettingsScreen(
+          key: ValueKey('again'), animateBackground: false)));
+      await _settle(tester);
+      expect(find.textContaining('even with BROKA closed'), findsOneWidget);
     });
 
     testWidgets('sign-out-everywhere that fails leaves you signed in and says so',

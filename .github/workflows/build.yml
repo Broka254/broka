@@ -384,6 +384,7 @@ jobs:
           echo "Signing with the release key."
 
       - name: Firebase config (push notifications)
+        id: firebase
         # Without android/app/google-services.json the APK is built with no
         # Firebase at all: main.dart's Firebase.initializeApp() throws, the
         # app falls back to polling while it is open, and no phone can be
@@ -397,6 +398,7 @@ jobs:
         run: |
           if [ -z "$GOOGLE_SERVICES_JSON" ]; then
             echo "::warning title=No push notifications in this APK::Set the GOOGLE_SERVICES_JSON repository secret (android/app/google-services.json from the Firebase console). Without it, calls and messages reach a phone only while BROKA is open."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           python3 - flutter_app/android/app/google-services.json <<'PY'
@@ -413,6 +415,7 @@ jobs:
               f.write(raw)
           print("Firebase project:", data["project_info"]["project_id"])
           PY
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         # flutter build apk's own post-build .apk existence check can return
@@ -445,12 +448,24 @@ jobs:
         run: gh release delete latest-release --yes --repo ${{ github.repository }} 2>/dev/null || true; git push --delete origin latest-release 2>/dev/null || true
 
       - name: Create GitHub Release
+        # The release page says when the APK has no Firebase. A build
+        # warning is easy to miss, and such an APK installs and runs
+        # normally - it just never rings while closed. That is what was
+        # shipped for weeks: the secret was set on another fork of the
+        # repository, not on the one building the APK people installed.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIREBASE_CONFIGURED: ${{ steps.firebase.outputs.configured }}
         run: |
+          NOTES="Auto-built from commit ${{ github.sha }}"
+          if [ "$FIREBASE_CONFIGURED" != "true" ]; then
+            NOTES="**WARNING: this APK has no push notifications.** The GOOGLE_SERVICES_JSON secret is not set in ${{ github.repository }}, so calls ring and messages arrive only while BROKA is open. See NOTIFICATIONS.md.
+
+          $NOTES"
+          fi
           gh release create latest-release \
             "${{ steps.find_apk.outputs.apk_path }}#broka-release.apk" \
             --repo ${{ github.repository }} \
             --title "Broka Latest Release" \
-            --notes "Auto-built from commit ${{ github.sha }}" \
+            --notes "$NOTES" \
             --latest

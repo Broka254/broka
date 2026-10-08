@@ -231,7 +231,10 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
     if newest is None:
         return None
 
-    direct_unread, _ = await _thread_unread_and_seen(db, listing_id, buyer_id, role, None)
+    # Call cards left out: "2 new messages" for one text and one missed
+    # call announced a message that does not exist (the call has its own).
+    direct_unread, _ = await _thread_unread_and_seen(
+        db, listing_id, buyer_id, role, None, messages_only=True)
     zeno_unread = await _zeno_unread(db, listing_id, buyer_id, role)
     count = int(direct_unread or 0) + int(zeno_unread or 0)
     if count <= 0:

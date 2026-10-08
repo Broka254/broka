@@ -1,3 +1,36 @@
+# One call at a time, and every missed call and message announced (2026-10-08)
+
+Reported after the push work: calls still rang only with BROKA open, a
+second call rang over a call in progress, and "only missed call was
+displayed despite there being an unread text message".
+
+**No push yet: a configuration problem, not code.** The APK being used
+was built by `Xxavier-ml/broka`, which has no `GOOGLE_SERVICES_JSON`
+secret; it was set on `Broka254/broka`. No phone ever registered, so the
+API (Railway, from `Broka254/broka`) had nowhere to push. The release
+notes now open with a warning when an APK has no Firebase, and Settings →
+Notifications says whether this phone can be reached while BROKA is
+closed. NOTIFICATIONS.md §6.
+
+**One call at a time** (CALLING.md). `/calls/initiate` answers 409 when
+either person is on a call; a redial replaces the caller's ringing call
+instead of adding one; two people calling each other get one call; Accept
+moves the call out of "ringing" at once (`POST /calls/{room}/answer`). The
+app never rings over a call under way, never rings again for the call it
+is on, and shows the server's reason when a call cannot be placed.
+
+**A missed call and the message before it are both announced.** The
+inbox names the unread message and missed call the last row can hide; the
+app announces each once. The message push stops counting call cards, and
+an install's first sweep no longer announces every thread but one.
+
+**Main's CI.** `test_concurrent_sweeps_close_each_auction_exactly_once`
+failed about one run in twelve: on SQLite, which has no row locks, a sweep
+retrying an auction's deal while the closing sweep was still creating it
+made a second deal. Winner deals are now created one at a time in each
+process (`auctions/lifecycle.py`); across processes PostgreSQL's row lock
+already did it.
+
 # Calls and messages with the app closed (2026-10-07)
 
 Raised by the owner: a call rang only while the app was open, the caller

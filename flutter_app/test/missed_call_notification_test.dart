@@ -34,6 +34,8 @@ Map<String, dynamic> _thread({
   int unread = 0,
   String listingId = 'listing-1',
   String buyerId = 'buyer-1',
+  Map<String, dynamic>? unreadMessage,
+  Map<String, dynamic>? unreadMissedCall,
 }) =>
     {
       'listing_id': listingId,
@@ -47,6 +49,8 @@ Map<String, dynamic> _thread({
       'last_role': lastRole,
       'last_message_id': lastId,
       'unread': unread,
+      'unread_message': unreadMessage,
+      'unread_missed_call': unreadMissedCall,
     };
 
 void main() {
@@ -188,6 +192,68 @@ void main() {
     expect(cancelled, isNotEmpty, reason: "the call's ringing notification comes down");
     expect(shown.single['title'], 'Missed video call from Ann');
     expect(tagOf(shown.single), 'missed_listing-1_buyer-1');
+  });
+
+  // Reported from phones (2026-10-07): "only missed call was displayed
+  // despite there being an unread text message". The sweep announced each
+  // thread's last row, and the call card hid the text before it.
+  test('a missed call and the message before it are both announced', () async {
+    inbox = [_thread(
+      lastId: 'call-1', lastMessage: 'missed', unread: 2,
+      unreadMessage: {'id': 'm1', 'content': 'Still available?', 'msg_type': 'text'},
+      unreadMissedCall: {'id': 'call-1', 'call_type': 'voice'},
+    )];
+    await sweep();
+    expect(shown.map((s) => s['title']), contains('Missed call from Ann'));
+    expect(shown.map((s) => s['body']), contains('Still available?'));
+    expect(shown, hasLength(2));
+    await sweep();
+    expect(shown, hasLength(2), reason: 'each announced once');
+  });
+
+  test('a message and the missed call before it are both announced', () async {
+    inbox = [_thread(
+      lastId: 'm2', lastMessage: 'Call me back', lastType: 'text', unread: 2,
+      unreadMessage: {'id': 'm2', 'content': 'Call me back', 'msg_type': 'text'},
+      unreadMissedCall: {'id': 'call-3', 'call_type': 'video'},
+    )];
+    await sweep();
+    expect(shown.map((s) => s['body']), contains('Call me back'));
+    expect(shown.map((s) => s['title']), contains('Missed video call from Ann'));
+    expect(shown, hasLength(2));
+    await sweep();
+    expect(shown, hasLength(2));
+  });
+
+  test('what a push already announced is not announced again', () async {
+    // Drawn by Android from the server's pushes while the app was away.
+    await NotificationService.recordMessageAnnounced(
+        {'listingId': 'listing-1', 'buyerId': 'buyer-1', 'messageId': 'm1'});
+    await NotificationService.recordMessageAnnounced(
+        {'listingId': 'listing-1', 'buyerId': 'buyer-1', 'messageId': 'call-1'});
+    inbox = [_thread(
+      lastId: 'call-1', lastMessage: 'missed', unread: 2,
+      unreadMessage: {'id': 'm1', 'content': 'Still available?', 'msg_type': 'text'},
+      unreadMissedCall: {'id': 'call-1', 'call_type': 'voice'},
+    )];
+    await sweep();
+    expect(shown, isEmpty);
+  });
+
+  test("the first sweep of an install announces no thread's history", () async {
+    SharedPreferences.setMockInitialValues({});
+    inbox = [
+      _thread(lastId: 'h1', lastMessage: 'old', lastType: 'text'),
+      _thread(lastId: 'h2', lastMessage: 'older', lastType: 'text',
+          listingId: 'listing-2', buyerId: 'buyer-2',
+          unreadMissedCall: {'id': 'h3', 'call_type': 'voice'}),
+    ];
+    await sweep();
+    expect(shown, isEmpty,
+        reason: 'it silenced the first thread and announced the rest');
+    inbox = [_thread(lastId: 'n1', lastMessage: 'new', lastType: 'text')];
+    await sweep();
+    expect(shown.map((s) => s['body']), ['new']);
   });
 
   testWidgets('tapping a missed call opens the chat with the buyer', (tester) async {

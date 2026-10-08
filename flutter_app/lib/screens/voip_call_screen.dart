@@ -26,6 +26,7 @@ import '../services/ringtone_service.dart';
 import '../services/notification_service.dart';
 import '../services/call_foreground_service.dart';
 import '../services/callkit_service.dart';
+import '../services/active_call.dart';
 
 class VoipCallScreen extends StatefulWidget {
   const VoipCallScreen({super.key, this.animateBackground = true});
@@ -68,6 +69,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // Caller: nobody answered within [noAnswerAfter], and we hung up.
   bool _noAnswer = false;
   Timer? _noAnswerTimer;
+  // Callee: this call stopped ringing elsewhere, or Accept was pressed on
+  // its notification (NotificationService.ringEnded / answerRequests).
+  StreamSubscription<String>? _ringEndedSub;
+  StreamSubscription<String>? _answerSub;
+  String _callToken = '';
   String _listingName = '';
   bool   _isCaller    = true;
   bool   _argsLoaded  = false;
@@ -144,7 +150,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _callerRole  = args['callerRole']  as String? ?? 'buyer';
     _callType    = args['callType']    as String? ?? 'audio';
     final autoAccept = args['autoAccept'] as bool? ?? false;
+    _callToken = callToken;
     unawaited(_resolvePeer());
+    // This phone is on this call now: nothing else rings over it, and a
+    // second screen for it never opens (ActiveCall).
+    ActiveCall.instance.begin(roomId, answered: _isCaller || autoAccept);
 
     // Whichever path got us here, the ringing notification (if any) has
     // done its job - take it down before anything else so it can't keep
@@ -159,7 +169,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _svc.onStateChange = (s) {
       // Whatever just happened, any still-ringing tone is no longer needed -
       // this is a defensive catch-all on top of the explicit stops below.
-      RingtoneService.instance.stop();
+      // This call's tone only: a call that ended must not silence another
+      // one ringing now.
+      RingtoneService.instance.stopFor(roomId);
       if (!mounted) return;
       setState(() => _callState = s);
       if (s == CallState.connected) {
@@ -266,10 +278,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
         _svc.hangup(); // logged as "cancelled": the callee sees a missed call
       });
     } else if (autoAccept) {
-      // The user already answered (notification tap, or Answer in the
-      // in-chat incoming-call dialog) - don't make them decide again.
+      // The user already answered (Accept on the notification, or in
+      // CallKit) - don't make them decide again.
       _accepted = true;
-      RingtoneService.instance.stop();
+      RingtoneService.instance.stopFor(roomId);
+      unawaited(ApiService.answerCall(roomId, callToken));
       CallKitService.instance.reportOutgoingCall(
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
       _svc.start();
@@ -278,6 +291,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // RingtoneService for why this is centralised rather than duplicated.
       RingtoneService.instance.play(
         autoStopAfter: const Duration(seconds: 45),
+        roomId: roomId,
         onTimeout: () {
           if (!mounted) return;
           if (!_accepted && !_endingCall) {
@@ -286,7 +300,45 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           }
         },
       );
+      // The call can stop ringing without this screen hearing it: the
+      // caller hangs up before we ever join their room, another phone
+      // answers or declines, nobody answers. Before, the only teardown was
+      // the 45-second ring timer - and any other call's teardown stopped
+      // that timer with the ring - so a dead "Incoming call" screen could
+      // stay up indefinitely.
+      _ringEndedSub = NotificationService.instance.ringEnded.listen((ended) {
+        if (ended != roomId || !mounted || _accepted || _endingCall) return;
+        _endingCall = true;
+        // Whoever ended it has recorded the outcome.
+        _resultLogged = true;
+        _svc.hangup();
+      });
+      _answerSub = NotificationService.instance.answerRequests.listen((r) {
+        if (r == roomId) _acceptIncoming();
+      });
     }
+  }
+
+  /// The callee answers.
+  void _acceptIncoming() {
+    // WebRtcService.start() has no internal guard of its own against being
+    // invoked twice, so this check is what actually prevents a rapid
+    // double-tap from requesting the camera/mic and opening the
+    // WebSocket/peer connection twice for the same call.
+    if (_accepted || _endingCall || !mounted) return;
+    final roomId = _svc.roomId;
+    RingtoneService.instance.stopFor(roomId);
+    setState(() => _accepted = true);
+    ActiveCall.instance.markAnswered(roomId);
+    // Tell the server now rather than when our connection to the call
+    // comes up, seconds later (media, a permission prompt, TURN): until
+    // then it still reported the call as ringing, so this phone's own sweep
+    // rang it again and posted a fresh Accept/Decline, and the callee's
+    // other phones went on ringing.
+    unawaited(ApiService.answerCall(roomId, _callToken));
+    CallKitService.instance.reportOutgoingCall(
+        roomId: roomId, peerName: _peerName, isVideo: _isVideo);
+    _svc.start();
   }
 
   /// Logs the call's outcome once the call truly ends. "completed" if the
@@ -349,11 +401,22 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   @override
   void dispose() {
     _noAnswerTimer?.cancel();
-    RingtoneService.instance.stop();
-    CallForegroundService.stop();
-    CallKitService.instance.onEndedByNative = null;
-    CallKitService.instance.onMuteChanged = null;
-    CallKitService.instance.endCall(_svc.roomId);
+    _ringEndedSub?.cancel();
+    _answerSub?.cancel();
+    final roomId = _svc.roomId;
+    // The foreground service, the CallKit hooks and the ring are shared by
+    // the whole app. A screen for a call that is no longer the phone's call
+    // (a ring the same caller's redial replaced) must not take them from
+    // the call that is.
+    final ownsCall = ActiveCall.instance.roomId == roomId;
+    RingtoneService.instance.stopFor(roomId);
+    if (ownsCall) {
+      CallForegroundService.stop();
+      CallKitService.instance.onEndedByNative = null;
+      CallKitService.instance.onMuteChanged = null;
+    }
+    CallKitService.instance.endCall(roomId);
+    ActiveCall.instance.end(roomId);
     _logCallResultOnce();
     _ringCtrl.dispose();
     _fadeCtrl.dispose();
@@ -1033,7 +1096,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
             onTap: () {
               if (_endingCall) return;
               _endingCall = true;
-              RingtoneService.instance.stop();
+              RingtoneService.instance.stopFor(_svc.roomId);
+              ActiveCall.instance.settle(_svc.roomId);
               _declinedByMe = true;
               _svc.hangup();
             },
@@ -1069,19 +1133,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
               label:  'Accept',
               filled: true,
               large:  true,
-              onTap: () {
-                // WebRtcService.start() has no internal guard of its own
-                // against being invoked twice, so this check is what
-                // actually prevents a rapid double-tap from requesting
-                // the camera/mic and opening the WebSocket/peer
-                // connection twice for the same call.
-                if (_accepted) return;
-                RingtoneService.instance.stop();
-                setState(() => _accepted = true);
-                CallKitService.instance.reportOutgoingCall(
-                    roomId: _svc.roomId, peerName: _peerName, isVideo: _isVideo);
-                _svc.start();
-              },
+              onTap: _acceptIncoming,
             ),
           )),
         ],

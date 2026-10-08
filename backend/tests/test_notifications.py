@@ -18,6 +18,7 @@ What was wrong on the server:
 import asyncio
 import time
 import uuid
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -89,8 +90,8 @@ class _Sock:
         self.sent.append(payload)
 
 
-@pytest.fixture
-def fcm():
+@pytest_asyncio.fixture
+async def fcm():
     """FCM as configured, with every send captured instead of made."""
     async def _send(**kwargs):
         _send.sent.append(kwargs)
@@ -101,6 +102,12 @@ def fcm():
          patch.object(calls, "_send_fcm", new=_send), \
          patch.object(message_push, "PUSH_DEBOUNCE_SECONDS", 0):
         yield _send
+        # Pushes started in the background (a message's, a ring stopped
+        # on other phones) finish inside the test that started them: one
+        # cut off when its event loop closes holds SQLite's lock, and the
+        # next test's writes fail with "database is locked".
+        await message_push.drain()
+        await asyncio.gather(*list(calls._background), return_exceptions=True)
     message_push._last_pushed.clear()
 
 
@@ -310,6 +317,9 @@ async def test_an_unanswered_unreported_call_becomes_a_missed_call(client, fcm):
             NegotiationMessage.msg_type == "call",
         ))).scalars().all()
     assert [(c.content, c.buyer_id) for c in cards] == [("missed", buyer)]
+    # The card's id, so the app's inbox sweep knows this missed call was
+    # announced already.
+    assert missed[0]["data"]["messageId"] == cards[0].id
     assert (await call_state.get_session(room_id)).state == call_state.CallState.missed
 
 
@@ -473,6 +483,115 @@ async def test_a_photo_is_announced_as_a_photo(client, fcm):
     [push] = _message_pushes(fcm)
     assert push["body"] == "\U0001F4F7 Photo"
     assert push["data"]["myRole"] == "buyer"
+
+
+# ── A missed call and a message, both news ────────────────────────────────────
+
+async def _card(listing_id, sender, role, buyer_id, outcome, at):
+    async with AsyncSessionLocal() as db:
+        card = NegotiationMessage(
+            listing_id=listing_id, sender_id=sender, role=role, recipient_role=None,
+            content=outcome, buyer_id=buyer_id, via_ai=False, msg_type="call",
+            call_type="voice", created_at=at)
+        db.add(card)
+        await db.commit()
+        return card.id
+
+
+async def _text(listing_id, sender, role, buyer_id, content, at):
+    async with AsyncSessionLocal() as db:
+        msg = NegotiationMessage(
+            listing_id=listing_id, sender_id=sender, role=role, recipient_role=None,
+            content=content, buyer_id=buyer_id, via_ai=False, msg_type="text",
+            created_at=at)
+        db.add(msg)
+        await db.commit()
+        return msg.id
+
+
+async def _inbox_thread(client, user_id, listing_id):
+    r = await client.get(f"/negotiate/inbox/{user_id}", headers=_auth(user_id))
+    assert r.status_code == 200, r.text
+    [thread] = [t for t in r.json() if t["listing_id"] == listing_id]
+    return thread
+
+
+@pytest.mark.asyncio
+async def test_the_inbox_names_the_message_a_missed_call_hides(client):
+    """Reported from phones: "only missed call was displayed despite there
+    being an unread text message". The inbox described the thread by its
+    last row - the call card - so the text before it was never announced."""
+    listing_id, seller, [buyer] = await _people()
+    now = datetime.utcnow()
+    text_id = await _text(listing_id, buyer, "buyer", buyer, "Still available?",
+                          now - timedelta(seconds=20))
+    card_id = await _card(listing_id, buyer, "buyer", buyer, "missed",
+                          now - timedelta(seconds=10))
+
+    thread = await _inbox_thread(client, seller, listing_id)
+    assert thread["last_message_id"] == card_id
+    assert thread["unread_message"] == {
+        "id": text_id, "content": "Still available?", "msg_type": "text"}
+    assert thread["unread_missed_call"] == {"id": card_id, "call_type": "voice"}
+
+
+@pytest.mark.asyncio
+async def test_the_inbox_names_the_missed_call_a_message_hides(client):
+    listing_id, seller, [buyer] = await _people()
+    now = datetime.utcnow()
+    # Hung up before it was answered: a missed call to the seller all the same.
+    card_id = await _card(listing_id, buyer, "buyer", buyer, "cancelled",
+                          now - timedelta(seconds=20))
+    text_id = await _text(listing_id, buyer, "buyer", buyer, "Call me back",
+                          now - timedelta(seconds=10))
+
+    thread = await _inbox_thread(client, seller, listing_id)
+    assert thread["last_message_id"] == text_id
+    assert thread["unread_missed_call"]["id"] == card_id
+    assert thread["unread_message"]["id"] == text_id
+
+
+@pytest.mark.asyncio
+async def test_the_inbox_names_nothing_once_the_thread_is_read(client):
+    listing_id, seller, [buyer] = await _people()
+    now = datetime.utcnow()
+    await _text(listing_id, buyer, "buyer", buyer, "hi", now - timedelta(seconds=20))
+    await _card(listing_id, buyer, "buyer", buyer, "missed", now - timedelta(seconds=10))
+    r = await client.post(f"/negotiate/{listing_id}/mark-read", headers=_auth(seller),
+                          json={"buyer_id": buyer})
+    assert r.status_code == 200, r.text
+
+    thread = await _inbox_thread(client, seller, listing_id)
+    assert thread["unread_message"] is None
+    assert thread["unread_missed_call"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_happened_is_not_a_missed_call(client):
+    listing_id, seller, [buyer] = await _people()
+    now = datetime.utcnow()
+    await _card(listing_id, buyer, "buyer", buyer, "completed", now - timedelta(seconds=10))
+    # And a missed call the seller made is news for the buyer, not for them.
+    await _card(listing_id, seller, "seller", buyer, "missed", now - timedelta(seconds=5))
+
+    thread = await _inbox_thread(client, seller, listing_id)
+    assert thread["unread_missed_call"] is None
+    assert thread["unread_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_missed_call_is_not_counted_as_a_new_message(client, fcm):
+    listing_id, seller, [buyer] = await _people()
+    await _register(client, seller, "count-phone")
+    await _direct(client, buyer, "buyer", listing_id, "Hello")
+    await message_push.drain()
+    await _card(listing_id, buyer, "buyer", buyer, "missed", datetime.utcnow())
+    await _direct(client, buyer, "buyer", listing_id, "Call me back")
+    await message_push.drain()
+
+    last = _message_pushes(fcm)[-1]
+    assert last["body"] == "2 new messages · Call me back"
+    assert last["data"]["count"] == 2
 
 
 def test_who_a_message_is_for_follows_the_history_rules():

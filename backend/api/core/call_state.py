@@ -133,6 +133,13 @@ _ALLOWED_TRANSITIONS: dict = {
 for _s in _TERMINAL:
     _ALLOWED_TRANSITIONS[_s] = set()
 
+# Nobody has answered yet. The caller's socket heartbeat renews the session
+# (renew_session), and used to stretch these to the 4-hour connected TTL:
+# a call nobody answered stayed "ringing" on the server for hours if the
+# no-answer watchdog missed it (a restart), and would now also hold both
+# people "busy". A ringing call keeps its establishment TTL.
+_UNANSWERED: set = {CallState.initiating, CallState.ringing}
+
 
 def is_valid_transition(current: CallState, new: CallState) -> bool:
     """ended→connected, declined→connected, expired→accepted, failed→
@@ -313,7 +320,7 @@ class _RedisCallStore:
 
     async def renew(self, room_id: str) -> Optional[CallSession]:
         session = await self.get(room_id)
-        if session is None or is_terminal(session.state):
+        if session is None or is_terminal(session.state) or session.state in _UNANSWERED:
             return session
         session.expires_at = time.time() + CONNECTED_SESSION_TTL_SECONDS
         await self._write(session, ttl_seconds=CONNECTED_SESSION_TTL_SECONDS)
@@ -452,7 +459,7 @@ class _InMemoryCallStore:
     async def renew(self, room_id: str) -> Optional[CallSession]:
         async with self._lock:
             session = self._store.get(room_id)
-            if session is None or is_terminal(session.state):
+            if session is None or is_terminal(session.state) or session.state in _UNANSWERED:
                 return session
             session.expires_at = time.time() + CONNECTED_SESSION_TTL_SECONDS
             return session
@@ -567,11 +574,33 @@ async def create_session(
     # someone with 40 conversations made 40 requests to learn they had no
     # call. A person takes one call at a time, so the latest is the one.
     await _store.set_pending(_ANY_LISTING, callee_id, room_id, ttl_seconds=ttl_seconds)
+    # And the caller's newest outgoing call, so /calls/initiate can tell a
+    # redial (or a call placed while an earlier one still rings) from a
+    # first call - see calls.py _call_in_progress.
+    await _store.set_pending(_OUTGOING, caller_id, room_id, ttl_seconds=ttl_seconds)
     return session
 
 
-# The listing slot of the per-callee index above. Not a real listing id.
+# The listing slots of the per-user indexes above. Not real listing ids.
 _ANY_LISTING = "*"
+_OUTGOING = ">"
+
+
+async def _pointed_session(slot: str, user_id: str) -> Optional[CallSession]:
+    room_id = await _store.get_pending(slot, user_id)
+    if not room_id:
+        return None
+    return await _store.get(room_id)
+
+
+async def latest_incoming(user_id: str) -> Optional[CallSession]:
+    """The newest call placed TO this user, in whatever state it is now."""
+    return await _pointed_session(_ANY_LISTING, user_id)
+
+
+async def latest_outgoing(user_id: str) -> Optional[CallSession]:
+    """The newest call placed BY this user, in whatever state it is now."""
+    return await _pointed_session(_OUTGOING, user_id)
 
 
 async def get_incoming_call(callee_id: str) -> Optional[CallSession]:

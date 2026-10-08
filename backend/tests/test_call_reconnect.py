@@ -99,6 +99,8 @@ class TestSessionRenewal:
     async def test_renew_extends_a_live_session(self):
         session = await create_session("rn-1", "u1", "u2", "l1", "audio", "A")
         await update_state("rn-1", CallState.ringing)
+        await update_state("rn-1", CallState.accepted)
+        await update_state("rn-1", CallState.connecting)
         # Simulate a session close to expiry.
         session = await get_session("rn-1")
         session.expires_at = time.time() + 5
@@ -107,6 +109,18 @@ class TestSessionRenewal:
         assert renewed is not None
         assert renewed.expires_at > time.time() + (CONNECTED_SESSION_TTL_SECONDS / 2)
         await end_session("rn-1")
+
+    async def test_renew_does_not_stretch_a_call_nobody_answered(self):
+        """The caller's socket heartbeat renews its call. A ringing call
+        renewed to the four-hour connected TTL stayed "ringing" for hours
+        whenever the no-answer watchdog missed it - and would now keep both
+        people "busy" (calls.py _call_in_progress)."""
+        await create_session("rn-3", "u1", "u2", "l3", "audio", "A")
+        await update_state("rn-3", CallState.ringing)
+        before = (await get_session("rn-3")).expires_at
+        await renew_session("rn-3")
+        assert (await get_session("rn-3")).expires_at == before
+        await end_session("rn-3")
 
     async def test_renew_is_a_noop_on_a_terminal_session(self):
         await create_session("rn-2", "u1", "u2", "l2", "audio", "A")

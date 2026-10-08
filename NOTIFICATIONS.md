@@ -180,11 +180,14 @@ None of this reaches a phone until these are in place:
 
 1. **Firebase project.** In the Firebase console, add an Android app with
    package `com.broka.app` and download `google-services.json`.
-2. **GitHub secret `GOOGLE_SERVICES_JSON`.** Store the file's contents, or
-   base64 of it (`base64 -w0 google-services.json`). The `Firebase config`
-   step in `.github/workflows/build.yml` writes it into the APK build and
-   checks that it is for `com.broka.app`. Without it the step prints a
-   warning and the APK still has no push.
+2. **GitHub secret `GOOGLE_SERVICES_JSON`**, in the repository whose
+   release you install: the secret is per repository, and a fork does not
+   have it. Store the file's contents, or base64 of it
+   (`base64 -w0 google-services.json`). The `Firebase config` step in
+   `.github/workflows/build.yml` writes it into the APK build and checks
+   that it is for `com.broka.app`. Without it the step prints a warning,
+   the release notes open with "this APK has no push notifications", and
+   the APK still has no push.
 3. **Backend `FIREBASE_SERVICE_ACCOUNT_JSON`** on the API host. Get it from
    Project settings → Service accounts → Generate new private key, from the
    same project. This is the server's credential, not the app's file.
@@ -197,6 +200,11 @@ None of this reaches a phone until these are in place:
 never run in CI, because the file never existed there. If that first build
 fails, the plugin (4.4.2, `android/settings.gradle`) is the first thing to
 check.
+
+**Checking a phone.** Settings → Notifications says which case the
+installed build is in: "built without push notifications" (no Firebase in
+the APK), "until push notifications connect" (Firebase started, the server
+has not accepted the phone's token yet), or "even with BROKA closed".
 
 ## 4. Verification
 
@@ -241,3 +249,42 @@ check.
   carries the `callToken` the native side would need.
 - **Native calling.** Android's Telecom/ConnectionService (system call UI,
   Bluetooth headset answer) is still not integrated (CALLING.md).
+
+
+## 6. Second pass (2026-10-08)
+
+Reported after the first pass: calls still rang only with BROKA open;
+calls arrived over a call in progress; missed calls and unread messages
+showed only once the app was opened again, and "only missed call was
+displayed despite there being an unread text message".
+
+**Still no push: the installed APK had no Firebase.** Neither repository's
+release APK contained Firebase's config (`google_app_id`). The secret was
+set on `Broka254/broka`, but the APK in use was built by
+`Xxavier-ml/broka`, which has no `GOOGLE_SERVICES_JSON`; and the API
+(Railway, deployed from `Broka254/broka`) logged `CALL_NO_PUSH_ROUTE` on
+every call and `MESSAGE_PUSHED phones=0`, with no phone ever registered.
+`Broka254/broka`'s own build had not run since the sync, because the
+synced head commit was "Update graphify.md [skip ci]", which skips the
+whole workflow. The server side (`FIREBASE_SERVICE_ACCOUNT_JSON`) was fine.
+Without push, the app's own sweep is the only path, and it runs only while
+the app does - which is why everything arrived when BROKA was next opened.
+The release notes and Settings now say when a build has no Firebase.
+
+**A text and a missed call are both announced.** The inbox describes a
+thread by its last row, and the sweep announced that row: a missed call
+after a text hid the text, a text after a missed call hid the call. The
+inbox now also names the other side's newest unread message and newest
+unread missed call (`unread_message`, `unread_missed_call`, from
+`_unread_by_kind`, queried only for threads with something unread), and
+the sweep announces each once. A thread's announced ids are kept as a
+short list (they were one slot, so announcing the call erased the text's
+record). The missed-call push carries its call card's id, so the sweep
+does not announce it again. The message push no longer counts call cards
+("2 new messages" for one text and one missed call).
+
+**The first sweep announced history.** "Announce nothing on an install's
+first sweep" was set by the first thread with news, so that sweep silenced
+one thread and announced every other. It is set once the sweep is over.
+
+**One call at a time** is in CALLING.md.

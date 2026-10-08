@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../../screens/listing_search_screen.dart';
 import '../../screens/zeno_screen.dart';
 import '../../services/api_service.dart';
+import '../../services/notification_service.dart';
 import 'domain/zeno_action.dart';
 
 class ZenoActionRunner {
@@ -174,6 +175,11 @@ class ZenoActionRunner {
     if (!nav.mounted) return false;
     if (info == null) {
       messenger?.showSnackBar(const SnackBar(content: Text("Couldn't start the call right now.")));
+      return false;
+    }
+    final refused = info['refused'];
+    if (refused is Map<String, dynamic>) {
+      await NotificationService.instance.handleCallRefused(messenger, refused);
       return false;
     }
     unawaited(nav.pushNamed('/voip-call', arguments: {

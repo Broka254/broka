@@ -3597,11 +3597,14 @@ async def _resolve_role_and_buyer(
 
 async def _thread_unread_and_seen(
     db: AsyncSession, listing_id: str, buyer_id: str, my_role: str, last_msg,
+    *, messages_only: bool = False,
 ):
     """
     Returns (unread_count, was_my_last_message_seen).
     unread_count: messages from the counterpart, sent after my own
       last-read watermark (or all of them, if I've never read this thread).
+      Call cards count, as the inbox badge always has; `messages_only`
+      leaves them out, for a notification that says "N new messages".
     was_my_last_message_seen: only meaningful when I sent the thread's most
       recent message - whether the counterpart's watermark has caught up to it.
     """
@@ -3635,6 +3638,9 @@ async def _thread_unread_and_seen(
         or_(NegotiationMessage.via_ai.is_(False),
             NegotiationMessage.via_ai.is_(None)),
     )
+    if messages_only:
+        unread_q = unread_q.where(or_(NegotiationMessage.msg_type.is_(None),
+                                      NegotiationMessage.msg_type != "call"))
     if my_last_read:
         unread_q = unread_q.where(NegotiationMessage.created_at > my_last_read)
     unread = (await db.execute(unread_q)).scalar() or 0
@@ -3645,6 +3651,65 @@ async def _thread_unread_and_seen(
         and counterpart_last_read >= last_msg.created_at
     )
     return unread, seen
+
+
+async def _unread_by_kind(
+    db: AsyncSession, listing_id: str, buyer_id: str, my_role: str,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """The other side's newest unread message, and their newest unread
+    missed call, in one thread - each None when there is none.
+
+    The inbox describes a thread by its last row, and the app's sweep
+    announces that row. So a text followed by a missed call announced only
+    the missed call - reported from phones (2026-10-07): "only missed call
+    was displayed despite there being an unread text message" - and a
+    missed call followed by a text, only the text. These are the two a last
+    row can hide; the app announces whichever it has not yet.
+
+    Unread by the same watermark as `unread`, so a thread read on another
+    phone has nothing here. "cancelled" is a missed call too: the caller
+    hung up before it was answered.
+    """
+    counterpart_role = "seller" if my_role == "buyer" else "buyer"
+    my_last_read = (await db.execute(select(ThreadReadState.last_read_at).where(
+        ThreadReadState.listing_id == listing_id,
+        ThreadReadState.buyer_id   == buyer_id,
+        ThreadReadState.role       == my_role,
+    ))).scalar_one_or_none()
+    conds = [
+        NegotiationMessage.listing_id == listing_id,
+        NegotiationMessage.buyer_id   == buyer_id,
+        NegotiationMessage.role       == counterpart_role,
+        or_(NegotiationMessage.via_ai.is_(False),
+            NegotiationMessage.via_ai.is_(None)),
+        or_(NegotiationMessage.recipient_role.is_(None),
+            NegotiationMessage.recipient_role == my_role),
+    ]
+    if my_last_read:
+        conds.append(NegotiationMessage.created_at > my_last_read)
+
+    async def _newest(*extra):
+        # visibility-ok: conds above - the other side's direct messages, via_ai and others' recipient_role excluded
+        return (await db.execute(
+            select(NegotiationMessage).where(*conds, *extra)
+            .order_by(NegotiationMessage.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+
+    msg = await _newest(or_(NegotiationMessage.msg_type.is_(None),
+                            NegotiationMessage.msg_type != "call"))
+    call = await _newest(NegotiationMessage.msg_type == "call",
+                         NegotiationMessage.content.in_(("missed", "cancelled")))
+    return (
+        {
+            "id":       msg.id,
+            "content":  (msg.content or "[media]")[:80],
+            "msg_type": msg.msg_type or "text",
+        } if msg else None,
+        {
+            "id":        call.id,
+            "call_type": call.call_type,
+        } if call else None,
+    )
 
 
 def _zeno_read_role(role: str) -> str:
@@ -3958,6 +4023,9 @@ async def get_inbox(
         unread, last_seen_flag = await _thread_unread_and_seen(
             db, lid, user_id, "buyer", last_msg)
         zeno_unread = await _zeno_unread(db, lid, user_id, "buyer")
+        unread_message, unread_missed_call = (
+            await _unread_by_kind(db, lid, user_id, "buyer")
+            if unread else (None, None))
         threads.append({
             "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
             "listing_id":        listing.id,
@@ -4007,6 +4075,9 @@ async def get_inbox(
             # inbox opens whichever of the two screens the user last used
             # for the thread, unless only the other one has news.
             "zeno_unread":       zeno_unread,
+            # What the last message can hide - see _unread_by_kind.
+            "unread_message":     unread_message,
+            "unread_missed_call": unread_missed_call,
             "last_message_seen": last_seen_flag,
             "time_ago":          _time_ago(last_msg.created_at),
             "my_role":           "buyer",
@@ -4091,6 +4162,9 @@ async def get_inbox(
             unread, last_seen_flag = await _thread_unread_and_seen(
                 db, lid, bid, "seller", last_msg)
             zeno_unread = await _zeno_unread(db, lid, bid, "seller")
+            unread_message, unread_missed_call = (
+                await _unread_by_kind(db, lid, bid, "seller")
+                if unread else (None, None))
 
             threads.append({
                 "_sort_ts":          last_msg.created_at.timestamp() if last_msg.created_at else 0.0,
@@ -4134,6 +4208,8 @@ async def get_inbox(
                 "unread_count":      unread,
                 "unread":            unread,
                 "zeno_unread":       zeno_unread,
+                "unread_message":     unread_message,
+                "unread_missed_call": unread_missed_call,
                 "last_message_seen": last_seen_flag,
                 "time_ago":          _time_ago(last_msg.created_at),
                 "my_role":           "seller",

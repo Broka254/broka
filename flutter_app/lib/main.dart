@@ -131,6 +131,7 @@ void main() async {
   // crashing on startup for every user until then.
   try {
     await Firebase.initializeApp();
+    GlobalPollerService.instance.firebaseReady = true;
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
     // Foreground: FCM never auto-displays anything while the app is

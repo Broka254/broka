@@ -608,16 +608,25 @@ async def initiate_call(
         raise HTTPException(status_code=400, detail="You can't call yourself")
 
     room_id = secrets.token_urlsafe(16)  # unguessable - see call_state.py; matches create_refresh_token()'s sizing
-    await call_state.create_session(
-        room_id=room_id, caller_id=current["id"], callee_id=callee.id,
-        listing_id=payload.listing_id, call_type=payload.call_type,
-        caller_name=payload.caller_name,
-    )
-    await call_state.update_state(room_id, CallState.ringing)
+    # One call at a time, decided and claimed under one lock so a double tap,
+    # or two people calling each other at the same moment, cannot both get
+    # through the check before either has created its call.
+    async with _initiate_guard():
+        replaced = await _admit_call(db, me=current["id"], callee=callee)
+        await call_state.create_session(
+            room_id=room_id, caller_id=current["id"], callee_id=callee.id,
+            listing_id=payload.listing_id, call_type=payload.call_type,
+            caller_name=payload.caller_name,
+        )
+        await call_state.update_state(room_id, CallState.ringing)
     # The no-answer watchdog looks at it again once nobody could still be
     # waiting for it (see ring_watchdog_tick).
     await call_state.add_ringing(room_id, _time_now() + CALL_RING_TIMEOUT_SECONDS)
     call_token = create_call_token(current["id"], room_id)
+    # The calls this one replaces stop ringing BEFORE it starts: the
+    # callee's phone takes the old ring down, then rings once for this one.
+    for old in replaced:
+        await _finish_replaced(db, old, me=current["id"], new_callee_id=callee.id)
 
     logger.info(
         "[calls] CALL_INITIATED room=%s caller=%s callee=%s type=%s",
@@ -644,6 +653,9 @@ async def initiate_call(
         "listingId":   payload.listing_id,
         "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
         "callType":    payload.call_type,
+        # A redial: the call it replaces, whose ring the phone takes down
+        # if the call_over for it hasn't arrived yet.
+        "replacesRoomId": next((o.room_id for o in replaced if o.callee_id == callee.id), ""),
         # The callee's own token for this one room: the phone acknowledges
         # the ring with it (POST /calls/{room_id}/alerted) even from a closed
         # app whose access token has long expired.
@@ -751,6 +763,208 @@ def _spawn(coro) -> None:
     task = asyncio.create_task(coro, context=contextvars.Context())
     _background.add(task)
     task.add_done_callback(_background.discard)
+
+
+@router.post("/{room_id}/answer")
+async def call_answered(room_id: str, payload: CallAlertedRequest):
+    """The callee pressed Accept.
+
+    Sent the moment they do, not when their connection to the call comes up
+    seconds later (media, a permission prompt, TURN). Until then the call
+    was still "ringing" here: the callee's own phone found it ringing on its
+    next sweep and rang again, posting a fresh Accept/Decline over the call
+    being answered, and their other phones went on ringing. Idempotent;
+    authorized by the callee's call token like /alerted.
+    """
+    claims = decode_call_token(payload.call_token)
+    if not claims or claims.get("room_id") != room_id:
+        raise HTTPException(status_code=401, detail="Invalid call token")
+    session = await call_state.get_session(room_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Call not found or no longer active")
+    if claims.get("sub") != session.callee_id:
+        raise HTTPException(status_code=403, detail="Only the person called can answer")
+    if session.state in (CallState.initiating, CallState.ringing):
+        await call_state.update_state(room_id, CallState.accepted)
+        logger.info("[calls] CALL_ANSWERED room=%s", room_id)
+        _spawn(_push_ring_over(session))
+        return {"status": "answered"}
+    if call_state.is_terminal(session.state):
+        raise HTTPException(status_code=410, detail="This call has already ended")
+    return {"status": "answered"}
+
+
+# ── One call at a time ────────────────────────────────────────────────────────
+# Reported from phones (2026-10-07): "multiple calls arriving at the same time
+# even when another call is going on / ringing". Nothing here ever refused a
+# call: a second caller rang a phone already on a call, a caller tapping
+# Call again (or calling again after the first try seemed to fail) left the
+# first call ringing beside the second, and two people calling each other
+# both rang and both waited. /initiate now admits a call only when both
+# people are free, replaces the caller's own unanswered call, and turns a
+# crossed call into an answer.
+
+_initiate_lock: Optional[asyncio.Lock] = None
+_initiate_lock_loop = None
+
+
+def _initiate_guard() -> asyncio.Lock:
+    """The lock /initiate decides and creates under. Rebuilt when the event
+    loop changes (each test gets a fresh loop; production has one), since
+    an asyncio.Lock that has had waiters belongs to the loop it was used on."""
+    global _initiate_lock, _initiate_lock_loop
+    loop = asyncio.get_running_loop()
+    if _initiate_lock is None or _initiate_lock_loop is not loop:
+        _initiate_lock = asyncio.Lock()
+        _initiate_lock_loop = loop
+    return _initiate_lock
+
+
+_UNANSWERED_STATES = (CallState.initiating, CallState.ringing)
+
+
+async def _call_in_progress(user_id: str):
+    """The call this user is on, or ringing for, right now - or None.
+
+    "On a call" is a socket of theirs in a call's signaling room: that is
+    the one signal that cannot outlive the call. Session state can - a
+    connected call whose phones vanished stays "connected" until its TTL,
+    and judging busy by state would refuse calls to that person for up to
+    four hours. A socket is closed within ~75s of going silent (heartbeat)
+    and every room empties on a restart. A call not yet joined counts while
+    it is ringing or just answered: those states end within the ring window
+    (no-answer watchdog) or the 120-second establishment TTL.
+    """
+    for room_id, room in list(_rooms.items()):
+        if user_id in room:
+            session = await call_state.get_session(room_id)
+            if session is not None and not call_state.is_terminal(session.state):
+                return session
+    for session in (await call_state.latest_incoming(user_id),
+                    await call_state.latest_outgoing(user_id)):
+        if session is not None and not session.is_expired and session.state in (
+            CallState.initiating, CallState.ringing, CallState.accepted,
+        ):
+            return session
+    return None
+
+
+def _busy(code: str, message: str, **extra) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": code, "message": message, **extra})
+
+
+async def _admit_call(db: AsyncSession, *, me: str, callee) -> list:
+    """Decide whether `me` may call `callee` now. Raises 409 when not;
+    otherwise returns the calls this one replaces, already marked over.
+
+      * CALL_CROSSED - they are ringing me right now. Answering their call
+        is what both of us want; the app does that with the call attached.
+      * CALLER_BUSY  - I'm on a call (or answering one).
+      * CALLEE_BUSY  - they're on a call, or someone else's call is ringing
+        them.
+      * replaced     - my own call that is still ringing (a redial, a second
+        tap, or calling someone else instead): it stops ringing.
+    A call ringing ME from a third person does not stop me calling out; it
+    goes unanswered like any call to a busy phone.
+    """
+    mine = await _call_in_progress(me)
+    theirs = await _call_in_progress(callee.id)
+
+    if (theirs is not None and theirs.caller_id == callee.id
+            and theirs.callee_id == me and theirs.state in _UNANSWERED_STATES):
+        view = await _incoming_view(db, theirs, me)
+        raise _busy("CALL_CROSSED", f"{theirs.caller_name or 'They'} is calling you", call=view)
+
+    replaced = {}
+    if mine is not None:
+        if mine.caller_id == me and mine.state in _UNANSWERED_STATES:
+            replaced[mine.room_id] = mine
+        elif not (mine.callee_id == me and mine.state in _UNANSWERED_STATES):
+            raise _busy("CALLER_BUSY", "You're already on a call.")
+    if theirs is not None and theirs.room_id not in replaced:
+        if theirs.caller_id == me and theirs.state in _UNANSWERED_STATES:
+            replaced[theirs.room_id] = theirs
+        else:
+            name = (getattr(callee, "name", None) or "They").split()[0]
+            raise _busy("CALLEE_BUSY", f"{name} is on another call. Try again in a moment.")
+
+    for old in replaced.values():
+        await call_state.update_state(old.room_id, CallState.missed)
+    return list(replaced.values())
+
+
+async def _finish_replaced(db: AsyncSession, old, *, me: str, new_callee_id: str) -> None:
+    """The rest of replacing `old`, after the lock: its caller's screen is
+    told, and the person it was ringing stops ringing.
+
+    Calling the same person again: their phone simply moves to the new call
+    - one ring, one card, no "missed call" for an attempt they are about to
+    see ring again. Calling someone else instead: the first person missed
+    a call, and gets the card and notification any unanswered call leaves.
+    """
+    room = _rooms.get(old.room_id) or {}
+    caller_ws = room.get(old.caller_id)
+    if caller_ws is not None:
+        try:
+            await caller_ws.send_json({"type": "hangup", "reason": "superseded"})
+        except Exception:
+            pass
+    owned = await call_state.mark_result_logged(old.room_id)
+    logger.info("[calls] CALL_SUPERSEDED room=%s by=%s", old.room_id, me)
+    if old.callee_id == new_callee_id or not owned:
+        await _push_ring_over(old, every_phone=True)
+        return
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == old.listing_id)
+    )).scalar_one_or_none()
+    if listing is None:
+        await _push_ring_over(old, every_phone=True)
+        return
+    await _record_outcome(db, old, listing, "cancelled", logged_by=me)
+
+
+async def _incoming_view(db: AsyncSession, session, user_id: str) -> dict:
+    """A ringing call as its callee's app needs it - GET /calls/incoming's
+    shape, and what CALL_CROSSED carries so the app can answer it."""
+    listing = (await db.execute(
+        select(Listing.seller_id, Listing.name).where(Listing.id == session.listing_id)
+    )).one_or_none()
+    seller_id = listing.seller_id if listing else None
+    return {
+        "has_call":    True,
+        "room_id":     session.room_id,
+        "listing_id":  session.listing_id,
+        "listing_name": listing.name if listing else "",
+        # The thread the call belongs to. A buyer can call a seller they
+        # have never messaged, so the app may have no thread to read it from.
+        "buyer_id":    session.callee_id if session.caller_id == seller_id else session.caller_id,
+        "caller_name": session.caller_name,
+        "caller_id":   session.caller_id,
+        "call_type":   session.call_type,
+        "call_token":  create_call_token(user_id, session.room_id),
+    }
+
+
+async def _settle_unanswered(session, *, by: str) -> None:
+    """The caller hung up, or their app vanished, while the call was still
+    ringing: record it now as "cancelled" - the card, and the missed call
+    that takes the ring down on the callee's phones. It used to be marked
+    ended and nothing else, so (unless the caller's app also reported it)
+    the callee's phone rang on for its full 45 seconds and the call left no
+    trace; the no-answer watchdog skips calls that are already over."""
+    try:
+        if not await call_state.mark_result_logged(session.room_id):
+            return
+        async with AsyncSessionLocal() as db:
+            listing = (await db.execute(
+                select(Listing).where(Listing.id == session.listing_id)
+            )).scalar_one_or_none()
+            if listing is None:
+                await call_state.update_state(session.room_id, CallState.missed)
+                return
+            await _record_outcome(db, session, listing, "cancelled", logged_by=by)
+    except Exception as exc:
+        logger.warning("[calls] could not settle unanswered room=%s: %s", session.room_id, exc)
 
 
 async def _tell_caller_ringing(room_id: str, caller_id: str) -> None:
@@ -919,7 +1133,7 @@ async def _record_outcome(
         # Both are a call the callee never picked up - "cancelled" only says
         # the caller gave up first. Never a reason to fail the request.
         try:
-            await _push_missed_call(db, session, listing, buyer_id)
+            await _push_missed_call(db, session, listing, buyer_id, call_msg.id)
         except Exception as exc:
             logger.warning("[calls] missed-call push failed room=%s: %s", session.room_id, exc)
     elif outcome == "declined":
@@ -927,14 +1141,18 @@ async def _record_outcome(
         await _push_ring_over(session)
 
 
-async def _push_ring_over(session) -> None:
+async def _push_ring_over(session, *, every_phone: bool = False) -> None:
     """Stop the ring on the callee's other phones once one of them has
     answered or declined. Only worth a push when there IS another phone -
-    the one that acted has already taken its own notification down."""
+    the one that acted has already taken its own notification down. With
+    `every_phone` (the caller replaced the call), no phone acted, so every
+    one of them is told."""
+    if _get_fcm() is None:
+        return  # nothing could be sent; don't look phones up for it
     try:
         async with AsyncSessionLocal() as own:
             tokens = await push_devices.tokens_for(own, session.callee_id)
-        if len(tokens) < 2:
+        if not tokens or (len(tokens) < 2 and not every_phone):
             return
         await push_devices.push_user(
             session.callee_id, title="", body="",
@@ -950,7 +1168,9 @@ async def _push_ring_over(session) -> None:
 MISSED_CALL_PUSH_TTL_SECONDS = 24 * 3600
 
 
-async def _push_missed_call(db: AsyncSession, session, listing, buyer_id: str) -> None:
+async def _push_missed_call(
+    db: AsyncSession, session, listing, buyer_id: str, card_id: Optional[str] = None,
+) -> None:
     """Tell the callee, by push, that they missed a call.
 
     There was no such push. The only missed-call notice was the app's own
@@ -978,6 +1198,9 @@ async def _push_missed_call(db: AsyncSession, session, listing, buyer_id: str) -
             "callType":  session.call_type,
             "callerName": who,
             "listingName": listing.name,
+            # The call card in the chat: the app records it as announced,
+            # so its inbox sweep does not announce the same missed call.
+            **({"messageId": card_id} if card_id else {}),
         },
         ttl_seconds=MISSED_CALL_PUSH_TTL_SECONDS,
         # One notification per thread's missed calls, shared with the app's
@@ -1327,7 +1550,12 @@ async def call_signaling(
                 # caller hanging up and the last socket closing would get a
                 # freshly-ringing call for a call that's already over.
                 current = await call_state.get_session(room_id)
-                if current and not call_state.is_terminal(current.state):
+                if (current and current.state in _UNANSWERED_STATES
+                        and uid == current.caller_id):
+                    # Hung up before anyone answered: the callee's phones
+                    # are still ringing and must hear about it.
+                    await _settle_unanswered(current, by=uid)
+                elif current and not call_state.is_terminal(current.state):
                     await call_state.update_state(room_id, CallState.ended)
                 break
 
@@ -1365,7 +1593,11 @@ async def call_signaling(
         if not room and _owns_room(room_id, room):
             _rooms.pop(room_id, None)
             current_session = await call_state.get_session(room_id)
-            if current_session and not call_state.is_terminal(current_session.state):
+            if (current_session and current_session.state in _UNANSWERED_STATES
+                    and uid == current_session.caller_id):
+                # The caller's app went away while the call still rang.
+                await _settle_unanswered(current_session, by=uid)
+            elif current_session and not call_state.is_terminal(current_session.state):
                 await call_state.update_state(room_id, CallState.ended)
             logger.info("[calls] CALL_ENDED room=%s", room_id)
             # Deliberately NOT calling end_session() (immediate delete)
@@ -1433,23 +1665,7 @@ async def get_incoming_call(
     session = await call_state.get_incoming_call(current["id"])
     if session is None or session.caller_id == current["id"]:
         return {"has_call": False}
-    listing = (await db.execute(
-        select(Listing.seller_id, Listing.name).where(Listing.id == session.listing_id)
-    )).one_or_none()
-    seller_id = listing.seller_id if listing else None
-    return {
-        "has_call":    True,
-        "room_id":     session.room_id,
-        "listing_id":  session.listing_id,
-        "listing_name": listing.name if listing else "",
-        # The thread the call belongs to. A buyer can call a seller they
-        # have never messaged, so the app may have no thread to read it from.
-        "buyer_id":    session.callee_id if session.caller_id == seller_id else session.caller_id,
-        "caller_name": session.caller_name,
-        "caller_id":   session.caller_id,
-        "call_type":   session.call_type,
-        "call_token":  create_call_token(current["id"], session.room_id),
-    }
+    return await _incoming_view(db, session, current["id"])
 
 
 async def ring_watchdog_tick(now: Optional[float] = None) -> int:

@@ -1591,10 +1591,31 @@ class ApiService {
     return CallAlertResult.unknown;
   }
 
+  /// Tell the server the callee answered [roomId] - the moment Accept is
+  /// pressed, not when the call's connection comes up seconds later. The
+  /// server stops reporting the call as ringing (so this phone does not
+  /// ring for it again while it connects) and stops the callee's other
+  /// phones ringing. Best effort: joining the call says the same, later.
+  static Future<void> answerCall(String roomId, String callToken) async {
+    if (roomId.isEmpty || callToken.isEmpty) return;
+    try {
+      await http
+          .post(
+            Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/answer'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'call_token': callToken}),
+          )
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {}
+  }
+
   /// The call ringing for me right now, on any listing: one request instead
   /// of one per chat thread. `supported` is false against a server without
   /// GET /calls/incoming, so the caller can fall back to asking per listing.
-  static Future<({bool supported, Map<String, dynamic>? call})>
+  /// `known` is false when the server could not be asked (no signal, a
+  /// timeout): "no call" then means "don't know", and nothing that is
+  /// ringing may be taken down on the strength of it.
+  static Future<({bool supported, bool known, Map<String, dynamic>? call})>
       checkAnyIncomingCall() async {
     Future<http.Response> send() => http
         .get(Uri.parse('$baseUrl/calls/incoming'), headers: _headers)
@@ -1605,16 +1626,17 @@ class ApiService {
         response = await send();
       }
       if (response.statusCode == 404 || response.statusCode == 405) {
-        return (supported: false, call: null);
+        return (supported: false, known: false, call: null);
       }
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data is Map && data['has_call'] == true) {
-          return (supported: true, call: Map<String, dynamic>.from(data));
+          return (supported: true, known: true, call: Map<String, dynamic>.from(data));
         }
+        return (supported: true, known: true, call: null);
       }
     } catch (_) {}
-    return (supported: true, call: null);
+    return (supported: true, known: false, call: null);
   }
 
   /// Notify the seller (via FCM) that a call is incoming, and get back the
@@ -1653,6 +1675,15 @@ class ApiService {
       }
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      // One call at a time (calls.py _admit_call): the server would not
+      // place it, and says why - {code, message, call?}. Returned as
+      // {'refused': ...}; NotificationService.handleCallRefused acts on it.
+      if (response.statusCode == 409) {
+        final detail = (jsonDecode(response.body) as Map)['detail'];
+        if (detail is Map) {
+          return {'refused': Map<String, dynamic>.from(detail)};
+        }
       }
     } catch (_) {}
     return null;

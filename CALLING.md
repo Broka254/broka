@@ -645,3 +645,52 @@ The full review is in NOTIFICATIONS.md. For calls:
 Tests: `backend/tests/test_notifications.py`,
 `flutter_app/test/push_delivery_test.dart`. Not device-verified.
 
+
+
+# One call at a time (2026-10-08)
+
+Reported from phones: "multiple calls arriving at the same time even when
+another call is going on / ringing". Neither side had any notion of a call
+in progress.
+
+**Server** (`api/routers/calls.py` `_admit_call`, under one lock so two
+simultaneous `/initiate` calls are decided in turn):
+
+- **`CALLEE_BUSY`** (409): they are on a call - a socket in the room, or a
+  call ringing them from someone else. The message names them: "Ann is on
+  another call. Try again in a moment."
+- **`CALLER_BUSY`** (409): I am on a call.
+- **`CALL_CROSSED`** (409, with the call attached): they are calling me
+  right now. The app answers their call instead of placing a second one.
+- **A redial replaces my own call that is still ringing**: the old one
+  gets a `superseded` hangup, `call_over` to the callee's phones before the
+  new ring, and the new push names it (`replacesRoomId`) so the phone takes
+  the old ring down first. Calling someone else instead leaves the first
+  person a missed call.
+- **`POST /calls/{room_id}/answer`** (call token, callee only) moves the
+  call to `accepted` the moment Accept is pressed, before the socket joins,
+  and stops the ring on the callee's other phones. Before it, the call read
+  as ringing until the socket connected, so the inbox sweep rang it again.
+- A caller who hangs up, or whose app vanishes, while the call is ringing
+  settles it as cancelled at once. `renew` no longer stretches an
+  unanswered session for hours, which kept people "busy".
+
+**App** (`flutter_app/lib/services/active_call.dart`): the call screen
+registers its room; `NotificationService.showIncomingCall`, which every
+ringing path goes through, asks `ActiveCall.shouldRing` first - never over
+a call under way, never again for the call on screen or one this phone is
+done with. The room is saved to preferences for the FCM background
+isolate. The ringer belongs to a room (`RingtoneService.stopFor`), so one
+call's teardown no longer silences another's. A notification tap for the
+call already on screen answers it there instead of opening it twice. The
+chat screen's own incoming-call dialog is gone (the global sweep and push
+cover it). A 409 from `/initiate` shows the server's reason, or for
+`CALL_CROSSED` opens their call already answered.
+
+Tests: `backend/tests/test_one_call_at_a_time.py`,
+`flutter_app/test/one_call_at_a_time_test.dart`. Not device-verified.
+
+**Still open.** iOS: CallKit's Answer does not call `/answer` yet
+(`AppDelegate` passes only the room id), so an iPhone keeps the old
+behaviour there. The busy check is per process, like the call relay
+(see "Multi-instance limitation").

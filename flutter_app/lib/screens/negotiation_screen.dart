@@ -31,8 +31,6 @@ import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/units_stepper.dart';
 import '../widgets/zeno_avatar.dart';
-import '../services/ringtone_service.dart';
-import 'voip_call_screen.dart';
 import '../models/models.dart';
 import '../models/listing.dart';
 import '../services/last_screen_tracker.dart';
@@ -209,7 +207,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // Polling fallback (used when WS not available)
   Timer? _pollTimer;
   Timer? _heartbeatTimer;
-  bool   _incomingCallShown = false;
 
   // Read receipts: when the counterpart last read this thread - a message
   // I sent is "seen" once this is at/after that message's createdAt.
@@ -323,10 +320,15 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _refreshZenoUnreadCount();
       _syncReadState();
     });
-    // Polling fallback for calls + WS failover
+    // WS failover. Incoming calls are not polled here any more: this chat
+    // ran its own 4-second check with its own dialog and its own ring, on
+    // top of the app-wide one (GlobalPollerService) - so a call showed as a
+    // dialog AND a notification, and the dialog came up over a call the
+    // user had already answered, its Decline hanging that call up. Calls
+    // now ring through NotificationService.showIncomingCall alone, which
+    // knows when the phone is already on one (ActiveCall).
     _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (_listing == null || !mounted) return;
-      _pollIncomingCall();
       if (!_wsConnected) {
         _pollNewMessages();
         // Receipts too: without the socket, nothing else brings them.
@@ -896,129 +898,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } catch (_) {}
   }
 
-  Future<void> _pollIncomingCall() async {
-    try {
-      final callInfo = await ApiService.checkIncomingCall(_listing!.id);
-      if (!mounted) return;
-      // FIX (V2 hardening, 2026-09-03): this used to also require
-      // _role == 'seller' - but /calls/pending/{listingId} already scopes
-      // its result to the current authenticated user as callee, whichever
-      // role they are, so gating on role here just meant a BUYER polling
-      // for an incoming call from the seller would get a real callInfo
-      // back and then silently do nothing with it. The backend's
-      // authorization is the actual gate; this client-side role check was
-      // redundant and wrong.
-      if (callInfo != null && !_incomingCallShown) {
-        final roomId    = callInfo['room_id'] as String?;
-        // The caller's app sends its user's name, or "Buyer" when it has
-        // none; the caller is the person this chat is with, whose name the
-        // chat already has.
-        final sentName = callInfo['caller_name'] as String? ?? '';
-        final callerName = VoipCallScreen.isPlaceholderName(sentName)
-            ? _counterpartyName : sentName;
-        final callerId   = callInfo['caller_id'] as String? ?? '';
-        final callToken  = callInfo['call_token'] as String? ?? '';
-        final callType   = callInfo['call_type'] as String? ?? 'audio';
-        final isVideo    = callType == 'video';
-        // Whoever is polling here is NOT the caller (call_state.py never
-        // returns your own outgoing call as pending) - so the caller is
-        // whichever side I'm not. If I'm the seller, the caller is the
-        // buyer (callerId IS the buyer). If I'm the buyer, the caller is
-        // the seller, and I am the buyer myself.
-        final iAmSeller = _role == 'seller';
-        final buyerIdForThread   = iAmSeller ? callerId : (ApiService.currentUserId ?? _buyerId ?? '');
-        final callerRoleForThread = iAmSeller ? 'buyer' : 'seller';
-        if (roomId != null) {
-          _incomingCallShown = true;
-          NotificationService.instance.showIncomingCall(
-            roomId: roomId,
-            callerName: callerName,
-            listingName: _listing?.name ?? 'your listing',
-            isVideo: isVideo,
-            payload: {
-              'type':      'incoming_call',
-              'roomId':    roomId,
-              'listingId': _listing!.id,
-              'buyerId':   buyerIdForThread,
-            },
-          );
-          // Ring until Answer/Decline - or this safety timeout, in case the
-          // caller cancels before we ever notice (we haven't joined the call
-          // room yet at this point, so there's no signal that could tell us).
-          RingtoneService.instance.play(
-            autoStopAfter: const Duration(seconds: 45),
-            onTimeout: () {
-              if (!mounted || !_incomingCallShown) return;
-              _incomingCallShown = false;
-              NotificationService.instance.cancelIncomingCall(roomId);
-              Navigator.pop(context);
-            },
-          );
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) => AlertDialog(
-              backgroundColor: BrokaColors.bgMid,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: Row(children: [
-                Icon(isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-                    color: BrokaColors.neonGreen),
-                const SizedBox(width: 10),
-                Text(isVideo ? 'Incoming Video Call' : 'Incoming Call',
-                    style: const TextStyle(color: BrokaColors.textHigh)),
-              ]),
-              content: Text(
-                  '$callerName is ${isVideo ? 'video calling' : 'calling'} about ${_listing?.name ?? 'your listing'}',
-                  style: const TextStyle(color: BrokaColors.textMid)),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    RingtoneService.instance.stop();
-                    Navigator.pop(context);
-                    _incomingCallShown = false;
-                    NotificationService.instance.cancelIncomingCall(roomId);
-                    if (buyerIdForThread.isNotEmpty && _listing?.id != null) {
-                      unawaited(ApiService.logCallResult(
-                        roomId: roomId, listingId: _listing!.id, buyerId: buyerIdForThread,
-                        outcome: 'declined', callerRole: callerRoleForThread,
-                        callType: callType,
-                      ));
-                    }
-                  },
-                  child: const Text('Decline', style: TextStyle(color: BrokaColors.danger)),
-                ),
-                ElevatedButton.icon(
-                  icon: Icon(isVideo ? Icons.videocam_rounded : Icons.call_rounded, size: 16),
-                  label: const Text('Answer'),
-                  style: ElevatedButton.styleFrom(backgroundColor: BrokaColors.neonGreen),
-                  onPressed: () {
-                    RingtoneService.instance.stop();
-                    Navigator.pop(context);
-                    NotificationService.instance.cancelIncomingCall(roomId);
-                    Navigator.pushNamed(context, '/voip-call', arguments: {
-                      'roomId': roomId, 'userId': ApiService.currentUserId ?? '',
-                      'callToken': callToken,
-                      'isCaller': false, 'peerName': callerName,
-                      'peerId': callerId,
-                      'peerPhoto': _counterpartyPhoto,
-                      'listingName': _listing?.name ?? '', 'listingId': _listing?.id ?? '',
-                      'buyerId': buyerIdForThread, 'callerRole': callerRoleForThread,
-                      'callType': callType,
-                      // Tapping Answer here IS answering - don't make the
-                      // user tap Accept again on the call screen (which by
-                      // then is silent, because the ringtone has stopped).
-                      'autoAccept': true,
-                    }).then((_) => _incomingCallShown = false);
-                  },
-                ),
-              ],
-            ),
-          );
-        }
-      }
-    } catch (_) {}
-  }
-
   // ── Sending ────────────────────────────────────────────────────────────────
 
   static final Random _random = Random();
@@ -1398,6 +1277,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         return;
       }
       if (!mounted) return;
+      final refused = initResult['refused'];
+      if (refused is Map<String, dynamic>) {
+        await NotificationService.instance
+            .handleCallRefused(ScaffoldMessenger.maybeOf(context), refused);
+        return;
+      }
       Navigator.pushNamed(context, '/voip-call', arguments: {
         'roomId': initResult['room_id'], 'userId': ApiService.currentUserId ?? 'anon',
         'callToken': initResult['call_token'],
@@ -1472,7 +1357,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    RingtoneService.instance.stop();
     if (_listing != null) {
       GlobalPollerService.instance.markScreenInactive(_listing!.id, buyerId: _buyerId);
     }

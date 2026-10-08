@@ -18,6 +18,7 @@ import '../widgets/constellation_background.dart';
 import '../services/api_service.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/global_poller_service.dart';
+import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
 import '../models/models.dart';
 import '../services/last_screen_tracker.dart';
@@ -1577,6 +1578,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     if (info == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text("Couldn't start the call right now.")));
+      return;
+    }
+    final refused = info['refused'];
+    if (refused is Map<String, dynamic>) {
+      await NotificationService.instance
+          .handleCallRefused(ScaffoldMessenger.maybeOf(context), refused);
       return;
     }
     Navigator.pushNamed(context, '/voip-call', arguments: {

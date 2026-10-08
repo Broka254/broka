@@ -27,6 +27,7 @@
 // FCM messages, and the pollers all ultimately go through
 // navigateFromPayload/showIncomingCall below.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -36,6 +37,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'active_call.dart';
 import 'api_service.dart';
 import 'ringtone_service.dart';
 
@@ -158,10 +160,25 @@ class NotificationService {
   static const String callActionsPortName = 'broka_call_actions';
   ReceivePort? _actionsPort;
 
-  // Rooms declined from this device. The poller re-posts a ringing call on
-  // every tick until the server has recorded the decline, so a tick landing
-  // between the tap and that request would put the call straight back up.
-  final Set<String> _declinedRooms = {};
+  // Rooms declined, answered or ended on this device live in ActiveCall
+  // (its settled set), with the call on screen: the poller re-posts a
+  // ringing call on every tick until the server stops reporting it, so
+  // without that record a tick landing between a tap and the server
+  // catching up put the call straight back up.
+
+  // A call stopped ringing because it is over (the caller gave up, it was
+  // answered or declined on another phone, nobody answered). The callee's
+  // call screen, if it is open and still ringing, listens and closes -
+  // before, nothing could tell it, and a dead "Incoming call" screen stayed
+  // up with Accept and Decline until the user dismissed it.
+  final StreamController<String> _ringEnded = StreamController<String>.broadcast();
+  Stream<String> get ringEnded => _ringEnded.stream;
+
+  // Accept pressed on the notification of a call whose screen is already
+  // open (still ringing): that screen answers, instead of a second one
+  // opening on top of it.
+  final StreamController<String> _answerRequests = StreamController<String>.broadcast();
+  Stream<String> get answerRequests => _answerRequests.stream;
 
   // Android's FLAG_INSISTENT: the notification's sound repeats until the
   // notification is cancelled or opened. Used only when no in-app ringer
@@ -325,8 +342,7 @@ class NotificationService {
     final roomId = data['roomId'] as String?;
     final listingId = data['listingId'] as String?;
     if (roomId == null || roomId.isEmpty) return;
-    _declinedRooms.add(roomId);
-    await cancelIncomingCall(roomId);
+    await callEnded(roomId);
     if (listingId == null) return;
     final buyerId = data['buyerId'] as String? ?? '';
     final iAmBuyer = ApiService.currentUserId != null &&
@@ -359,7 +375,7 @@ class NotificationService {
     }
     if (data['type'] == 'call_over') {
       final roomId = data['roomId'] as String?;
-      if (roomId != null && roomId.isNotEmpty) await cancelIncomingCall(roomId);
+      if (roomId != null && roomId.isNotEmpty) await callEnded(roomId);
       return;
     }
     if (data['type'] == 'new_message') {
@@ -369,6 +385,10 @@ class NotificationService {
     if (data['type'] != 'incoming_call') return;
     final roomId = data['roomId'] as String?;
     if (roomId == null) return;
+    await _endReplacedCall(data);
+    // On a call, or done with this one: nothing rings, and the server is
+    // not told this phone is ringing.
+    if (!ActiveCall.instance.shouldRing(roomId)) return;
 
     // FIX (calling audit, 2026-09-18): verify the call is STILL RINGING
     // before making the phone ring.
@@ -394,7 +414,7 @@ class NotificationService {
         final live = await ApiService.checkIncomingCall(listingId);
         if (live == null) {
           debugPrint('[Notifications] stale incoming-call push for $roomId - not ringing');
-          await cancelIncomingCall(roomId);
+          await callEnded(roomId);
           return;
         }
       } catch (e) {
@@ -412,6 +432,17 @@ class NotificationService {
     await acknowledgeIncomingCall(roomId, data['callToken'] as String?);
   }
 
+  /// The caller dialled again while their first call was still ringing:
+  /// the server ends that one (calls.py _finish_replaced) and names it in
+  /// the new call's push. Its ring is taken down here, before the new one
+  /// starts - the server's call_over push for it can arrive after this
+  /// one, or not at all, and two rings for one caller is what users saw.
+  Future<void> _endReplacedCall(Map<String, dynamic> data) async {
+    final replaced = data['replacesRoomId'] as String?;
+    if (replaced == null || replaced.isEmpty || replaced == data['roomId']) return;
+    await callEnded(replaced);
+  }
+
   /// Tell the server this phone is ringing (the caller's "Ringing"), and
   /// stop at once if it answers that the call is already over - a push
   /// that arrived late, or a call answered on another phone.
@@ -420,7 +451,7 @@ class NotificationService {
     final result = await ApiService.reportCallAlerted(roomId, callToken);
     if (result == CallAlertResult.over) {
       debugPrint('[Notifications] call $roomId is over - not ringing');
-      await cancelIncomingCall(roomId);
+      await callEnded(roomId);
     }
   }
 
@@ -439,11 +470,12 @@ class NotificationService {
         // Either way the call's ringing notification, posted from the
         // incoming-call push, may still be up and ringing - and nothing
         // else can tell a closed app that the call stopped.
+        if (type == 'missed_call') await recordMessageAnnounced(data);
         final roomId = data['roomId'] as String?;
         if (roomId == null || roomId.isEmpty) return;
         await svc.initialize(
             navKey: GlobalKey<NavigatorState>(), requestPermission: false);
-        await svc.cancelIncomingCall(roomId);
+        await svc.callEnded(roomId);
         return;
       case 'incoming_call':
         // A fresh, throwaway navigator key - nothing in this isolate ever
@@ -453,6 +485,11 @@ class NotificationService {
         final roomId = data['roomId'] as String? ?? '';
         await svc.initialize(
             navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+        await svc._endReplacedCall(data);
+        // The app's call screen may be open (the app is only in the
+        // background): never ring over a call under way, or for the call
+        // already on screen. The main isolate saves which call that is.
+        if (!await ActiveCall.savedAllowsRinging(roomId)) return;
         // Ring first: the acknowledgement is a network round trip, and a
         // call must never wait on one to start ringing.
         await svc.showIncomingCall(
@@ -476,20 +513,55 @@ class NotificationService {
     }
   }
 
-  /// The key GlobalPollerService keeps a thread's last announced message
-  /// id under. Shared, so a message announced by a push is not announced
+  /// The key GlobalPollerService keeps a thread's announced message ids
+  /// under. Shared, so a message announced by a push is not announced
   /// again by the sweep, and the reverse.
   static String seenMessageKey(String listingId, String? buyerId) =>
       'global_poll_seen_id_${listingId}_${buyerId ?? ''}';
 
+  /// How many of a thread's announced ids are kept. More than one, because
+  /// a thread can have two things to announce at once - a missed call and
+  /// the message before it - and with one slot each announcement erased
+  /// the other, which was then announced again on the next sweep.
+  static const int _seenIdsKept = 8;
+
+  /// The ids announced for a thread, newest last. Stored comma-separated:
+  /// a value written by an older build (one id, no comma) reads as a list
+  /// of one.
+  static List<String> announcedIds(
+          SharedPreferences prefs, String listingId, String? buyerId) =>
+      (prefs.getString(seenMessageKey(listingId, buyerId)) ?? '')
+          .split(',')
+          .where((id) => id.isNotEmpty)
+          .toList();
+
+  static bool wasAnnounced(SharedPreferences prefs, String listingId,
+          String? buyerId, String id) =>
+      announcedIds(prefs, listingId, buyerId).contains(id);
+
+  static Future<void> markAnnounced(SharedPreferences prefs, String listingId,
+      String? buyerId, String id) async {
+    if (id.isEmpty) return;
+    final ids = announcedIds(prefs, listingId, buyerId)..remove(id);
+    ids.add(id);
+    final kept = ids.length > _seenIdsKept
+        ? ids.sublist(ids.length - _seenIdsKept)
+        : ids;
+    await prefs.setString(seenMessageKey(listingId, buyerId), kept.join(','));
+  }
+
+  /// A message or missed call a push announced - the phone drew it - is
+  /// not announced again by the app's sweep.
   static Future<void> recordMessageAnnounced(Map<String, dynamic> data) async {
     final listingId = data['listingId'] as String?;
     final messageId = data['messageId'] as String?;
     if (listingId == null || messageId == null || messageId.isEmpty) return;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-          seenMessageKey(listingId, data['buyerId'] as String?), messageId);
+      // The other isolate may have written since this copy was loaded.
+      await prefs.reload();
+      await markAnnounced(
+          prefs, listingId, data['buyerId'] as String?, messageId);
     } catch (_) {}
   }
 
@@ -501,12 +573,15 @@ class NotificationService {
     final buyerId = data['buyerId'] as String?;
     final messageId = data['messageId'] as String?;
     final prefs = await SharedPreferences.getInstance();
-    final key = seenMessageKey(listingId, buyerId);
     final onScreen = isThreadOnScreen?.call(listingId, buyerId) ?? false;
-    if (!onScreen && messageId != null && prefs.getString(key) == messageId) {
+    if (!onScreen &&
+        messageId != null &&
+        wasAnnounced(prefs, listingId, buyerId, messageId)) {
       return; // the sweep got there first
     }
-    if (messageId != null) await prefs.setString(key, messageId);
+    if (messageId != null) {
+      await markAnnounced(prefs, listingId, buyerId, messageId);
+    }
     if (onScreen) return;
 
     final sender = data['senderName'] as String? ?? 'New message';
@@ -530,6 +605,33 @@ class NotificationService {
     );
   }
 
+  /// POST /calls/initiate refused a call (ApiService.initiateCall's
+  /// {'refused': ...}): the person is on another call, or this user is.
+  /// The server's reason is shown - it used to be "Couldn't start the
+  /// call", or worse, a second call rang over the first. CALL_CROSSED is
+  /// the person being called calling this user at the same moment: their
+  /// call is answered instead, since both of them want to talk.
+  Future<void> handleCallRefused(
+    ScaffoldMessengerState? messenger, Map<String, dynamic> refused,
+  ) async {
+    final call = refused['call'];
+    if (refused['code'] == 'CALL_CROSSED' && call is Map) {
+      await navigateFromPayload({
+        'type': 'incoming_call',
+        'roomId': call['room_id'],
+        'listingId': call['listing_id'],
+        'buyerId': call['buyer_id'],
+        'listingName': call['listing_name'],
+        'answer': true,
+      });
+      return;
+    }
+    messenger?.showSnackBar(SnackBar(
+      content: Text(refused['message'] as String? ??
+          "They're on another call. Try again in a moment."),
+    ));
+  }
+
   /// Shared navigation logic for local-notification taps AND real FCM
   /// message taps (onMessageOpenedApp / getInitialMessage in main.dart) -
   /// same payload shape, same destinations, one call-routing mechanism.
@@ -546,6 +648,22 @@ class NotificationService {
       final iAmBuyer = ApiService.currentUserId != null &&
           ApiService.currentUserId == buyerId;
       if (listingId == null) return;
+      final tappedRoom = data['roomId'] as String?;
+      final active = ActiveCall.instance;
+      if (tappedRoom != null && active.roomId == tappedRoom) {
+        // That call's screen is already open. It used to open a second
+        // time on top of itself - two call screens, two connections to one
+        // call, each replacing the other's on the server. Accept on the
+        // notification answers it on the screen that is there.
+        await _cancelCallNotification(tappedRoom);
+        if (data['answer'] == true) _answerRequests.add(tappedRoom);
+        return;
+      }
+      if (active.onCall && active.answered) {
+        // On another call: this one is not opened over it.
+        if (tappedRoom != null) await _cancelCallNotification(tappedRoom);
+        return;
+      }
       // This may be tapped long after it was posted (app backgrounded or
       // fully killed in between), so the payload itself only carries
       // enough to identify *which listing* - re-check the call's live
@@ -697,7 +815,7 @@ class NotificationService {
   }) async {
     // A call that is over: its ringing notification, if one is still up
     // (an app that was closed has no other way to learn it stopped), goes.
-    if (roomId != null && roomId.isNotEmpty) await cancelIncomingCall(roomId);
+    if (roomId != null && roomId.isNotEmpty) await callEnded(roomId);
     if (!_ready) return;
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
@@ -738,6 +856,8 @@ class NotificationService {
   Future<void> showMissedCallFromPush(Map<String, dynamic> data) async {
     final listingId = data['listingId'] as String?;
     if (listingId == null || listingId.isEmpty) return;
+    // Its call card, so the inbox sweep does not announce it again.
+    await recordMessageAnnounced(data);
     await showMissedCall(
       listingId: listingId,
       buyerId: data['buyerId'] as String?,
@@ -785,12 +905,15 @@ class NotificationService {
     bool ringInApp = true,
   }) async {
     if (!_ready) return;
-    if (_declinedRooms.contains(roomId)) return;
+    // On a call, or done with this one (see ActiveCall.shouldRing). Every
+    // path that rings comes through here.
+    if (!ActiveCall.instance.shouldRing(roomId)) return;
 
     bool ringing = false;
     if (ringInApp) {
       try {
-        ringing = await RingtoneService.instance.play(autoStopAfter: ringFor);
+        ringing = await RingtoneService.instance
+            .play(autoStopAfter: ringFor, roomId: roomId);
       } catch (e) {
         debugPrint('[Notifications] ringtone start failed: $e');
       }
@@ -919,15 +1042,32 @@ class NotificationService {
     // when the plugin never initialised. A ringtone left playing because
     // the notification plugin was not ready is the worst outcome available
     // here.
+    //
+    // Only this call's ring, though: one ringer serves every call, and a
+    // teardown for a call that ended used to silence the call ringing now.
     try {
-      await RingtoneService.instance.stop();
+      await RingtoneService.instance.stopFor(roomId);
     } catch (_) {}
+    await _cancelCallNotification(roomId);
+  }
+
+  Future<void> _cancelCallNotification(String roomId) async {
     if (!_ready) return;
     try {
       await _plugin.cancel(_idFor('call_$roomId'));
     } catch (e) {
       debugPrint('[Notifications] cancelIncomingCall failed: $e');
     }
+  }
+
+  /// [roomId] has stopped ringing for good - over, declined, or answered
+  /// elsewhere. Its notification and ring go, it never rings again on this
+  /// phone, and a call screen still ringing for it closes (see [ringEnded]).
+  Future<void> callEnded(String roomId) async {
+    if (roomId.isEmpty) return;
+    ActiveCall.instance.settle(roomId);
+    await cancelIncomingCall(roomId);
+    _ringEnded.add(roomId);
   }
 
   static const String _backgroundAskKey = 'asked_background_delivery_v1';
