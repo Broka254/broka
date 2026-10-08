@@ -6,7 +6,9 @@
 // from whatever /categories/{subcategoryId}/filters returns
 // (DynamicAttributeField), except a Land listing's size: that is required
 // - the server refuses land without one - so it gets its own control at
-// the top rather than looking like one more optional box.
+// the top rather than looking like one more optional box. The type's brand
+// (or make) comes first among them, as one tap per brand (2026-10-08): it is
+// what the type's own screen filters by.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart';
@@ -75,7 +77,14 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
     if (!mounted) return;
     result.fold(
       onSuccess: (fields) => setState(() {
-        _fields = fields.where((f) => !LandSize.fieldNames.contains(f.fieldName)).toList();
+        final shown = fields.where((f) => !LandSize.fieldNames.contains(f.fieldName)).toList();
+        // The brand (or make) leads: it is what buyers filter this type of
+        // item by first (SubcategoryScreen), so it is the one detail worth
+        // the seller's attention before the rest.
+        _fields = [
+          ...shown.where(DynamicAttributeField.suggests),
+          ...shown.where((f) => !DynamicAttributeField.suggests(f)),
+        ];
         _loadingFields = false;
       }),
       onFailure: (_, __) => setState(() => _loadingFields = false),
@@ -171,6 +180,10 @@ class _SellDetailsScreenState extends State<SellDetailsScreen> {
           ..._fields.map((field) => DynamicAttributeField(
                 field: field,
                 value: _data.attributes[field.fieldName],
+                hint: DynamicAttributeField.suggests(field)
+                    ? 'Buyers browse ${_data.subcategoryName ?? _data.category} by '
+                        '${field.fieldName.replaceAll('_', ' ')}. Pick one, or tap Other to type it.'
+                    : null,
                 onChanged: (v) {
                   setState(() {
                     if (v.trim().isEmpty) {

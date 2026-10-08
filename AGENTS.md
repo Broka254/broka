@@ -150,6 +150,7 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Collecting BROKA's own charges (ZetuPay: fees, plans, boosts, badges) | `backend/api/domains/payments/`, `backend/api/core/zetupay.py`, `ZETUPAY.md` |
 | Auctions | `backend/api/domains/auctions/`, `AUCTIONS.md` |
 | Stores and the web storefront | `backend/api/domains/stores/`, `web/`, `STORES_PLAN.md` |
+| Browsing by category, type of item and brand (Home's category cards, Zones, type screens, card artwork) | `flutter_app/lib/features/categories/` (`category_visual.dart`, `subcategory_visual.dart`, `presentation/subcategory_screen.dart`), `backend/api/domains/categories/seed.py` (`BRAND_SUGGESTIONS`) |
 | Images | `backend/api/domains/media/`, `backend/api/core/image_processing.py` |
 | Zeno (the AI broker) | `backend/api/routers/negotiate.py`, `backend/api/domains/ai_broker/`, `ZENO_ACTIONS.md` |
 | Zeno as the assistant (the Zeno tab, voice mode, the pill across screens, guides) | `backend/api/domains/zeno_assistant/`, `flutter_app/lib/features/zeno_assistant/` (`zeno_session.dart`), `ZENO_ACTIONS.md` |

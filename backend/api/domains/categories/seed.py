@@ -9,7 +9,9 @@ called from api.database.init_db() for exactly that reason.
 Every insert below is skip-if-exists, keyed on name (top-level) or
 (parent, name) (subcategories/filters), so re-running is always safe:
 - Existing rows are never duplicated.
-- Existing rows are never modified or deleted.
+- Existing rows are never modified or deleted, except where a table below
+  says so (RENAMED_*, MOVED_SUBCATEGORIES, RETIRED_SUBCATEGORY_FILTERS, and
+  the brand suggestions in BRAND_SUGGESTIONS).
 - Existing category IDs/relationships are preserved.
 
 migrate_categories_from_freetext.py imports CANONICAL_CATEGORIES /
@@ -814,6 +816,217 @@ SUBCATEGORY_FILTERS: dict[tuple[str, str], list[tuple[str, str, list[str] | None
     ("Services", "Photography & Videography"): [("service_type", "text", None)],
 }
 
+# The brands a subcategory's buyers filter by (its vehicles' makes, for
+# Automobiles), the ones Kenyan sellers list most first. Each subcategory
+# screen in the app leads with them as one-tap filters ("Phones": Samsung,
+# Apple, Tecno...), and the sell form offers them as one tap too.
+#
+# They are the `options` of the subcategory's existing free-text "brand" or
+# "make" field (SUGGESTION_FIELDS), not a "select": a seller with a brand
+# that isn't here can still type it, and app builds from before this ignore
+# options on a text field and keep showing the text box they always did.
+# A free box alone is why brand filtering never worked: "samsung galaxy
+# a54", "Samsung phone" and "SAMSUNG" are three brands to a filter. The
+# listing service now files a typed brand under its spelling here
+# (listings/validation.py canonical_suggestion), with BRAND_ALIASES for the
+# names people use instead ("iPhone" is Apple).
+#
+# Unlike the rest of this file these are kept in line on every start
+# (seed_categories Pass 4b): adding a brand here reaches a database that
+# was seeded before it.
+SUGGESTION_FIELDS = ("make", "brand")
+
+_CAR_MAKES = [
+    "Toyota", "Nissan", "Subaru", "Mazda", "Honda", "Suzuki", "Mitsubishi", "Isuzu",
+    "Mercedes-Benz", "BMW", "Volkswagen", "Hyundai", "Kia", "Ford", "Land Rover",
+    "Lexus", "Peugeot", "Volvo", "Audi", "Jeep",
+]
+_STYLE_BRANDS = ["Nike", "Adidas", "Puma", "H&M", "Zara", "Levi's", "Tommy Hilfiger", "Louis Vuitton"]
+_POWER_TOOL_BRANDS = ["Bosch", "Makita", "DeWalt", "Stanley", "Black+Decker", "Total", "Ingco"]
+
+BRAND_SUGGESTIONS: dict[tuple[str, str], list[str]] = {
+    ("Automobiles", "Cars"): _CAR_MAKES,
+    ("Automobiles", "Motorcycles & Boda Bodas"): [
+        "Bajaj", "TVS", "Honda", "Yamaha", "Suzuki", "Haojue", "Kibo",
+    ],
+    ("Automobiles", "Pickups"): ["Toyota", "Isuzu", "Ford", "Nissan", "Mitsubishi", "Mazda", "Volkswagen"],
+    ("Automobiles", "Buses & Matatus"): [
+        "Isuzu", "Toyota", "Nissan", "Mercedes-Benz", "Scania", "Volvo", "Hino", "Ashok Leyland",
+    ],
+    ("Automobiles", "Trucks"): [
+        "Isuzu", "Hino", "Mitsubishi Fuso", "Mercedes-Benz", "Volvo", "Scania", "MAN",
+        "UD Trucks", "Tata", "Sinotruk",
+    ],
+    ("Automobiles", "Vans"): [
+        "Toyota", "Nissan", "Mercedes-Benz", "Volkswagen", "Ford", "Hyundai", "Kia", "Renault",
+    ],
+    ("Automobiles", "Tuk-Tuks & Three-Wheelers"): ["Bajaj", "TVS", "Piaggio", "Dayun"],
+    ("Automobiles", "Agricultural Vehicles"): [
+        "Massey Ferguson", "New Holland", "John Deere", "Kubota", "Mahindra", "Case IH", "Deutz-Fahr",
+    ],
+    ("Automobiles", "Tyres & Rims"): [
+        "Bridgestone", "Michelin", "Dunlop", "Yokohama", "Goodyear", "Continental",
+        "Pirelli", "Hankook", "Firestone", "Toyo",
+    ],
+
+    ("Electronics", "Phones"): [
+        "Samsung", "Apple", "Tecno", "Infinix", "Itel", "Oppo", "Xiaomi", "Vivo", "Realme",
+        "Nokia", "Huawei", "Honor", "OnePlus", "Google", "Sony", "Motorola", "Nothing",
+        "ZTE", "HMD",
+    ],
+    ("Electronics", "Laptops & Computers"): [
+        "HP", "Lenovo", "Dell", "Apple", "Asus", "Acer", "Microsoft", "Huawei", "MSI",
+        "Samsung", "Toshiba", "Razer",
+    ],
+    ("Electronics", "Tablets"): [
+        "Apple", "Samsung", "Lenovo", "Huawei", "Xiaomi", "Microsoft", "Amazon", "Nokia",
+        "Tecno", "Infinix",
+    ],
+    ("Electronics", "TVs"): [
+        "Samsung", "LG", "Hisense", "TCL", "Sony", "Skyworth", "Vitron", "Vision Plus",
+        "Bruhm", "Haier", "Philips",
+    ],
+    ("Electronics", "Audio"): [
+        "JBL", "Sony", "Samsung", "LG", "Bose", "Harman Kardon", "Oraimo", "Anker",
+        "Marshall", "Philips",
+    ],
+    ("Electronics", "Smartwatches & Wearables"): [
+        "Apple", "Samsung", "Xiaomi", "Huawei", "Garmin", "Fitbit", "Amazfit", "Haylou", "Oraimo",
+    ],
+    ("Electronics", "Cameras"): [
+        "Canon", "Nikon", "Sony", "Fujifilm", "Panasonic", "GoPro", "DJI", "Insta360",
+    ],
+    ("Electronics", "Solar & Power Backup"): [
+        "Deye", "Victron", "Felicity Solar", "Must", "Growatt", "Sako", "SolarMax",
+    ],
+    ("Electronics", "Printers & Scanners"): [
+        "HP", "Canon", "Epson", "Brother", "Ricoh", "Kyocera", "Xerox", "Pantum",
+    ],
+    ("Electronics", "Computer Components"): [
+        "Intel", "AMD", "NVIDIA", "Asus", "Gigabyte", "MSI", "Corsair", "Kingston",
+        "Crucial", "Samsung", "Western Digital", "Seagate",
+    ],
+    ("Electronics", "Networking"): [
+        "TP-Link", "Tenda", "Huawei", "ZTE", "D-Link", "MikroTik", "Cisco", "Ubiquiti",
+    ],
+    ("Electronics", "Gaming"): [
+        "Sony", "Microsoft", "Nintendo", "Valve", "Meta", "Razer", "Logitech", "Thrustmaster",
+    ],
+    ("Electronics", "Accessories"): [
+        "Apple", "Samsung", "Anker", "Oraimo", "Baseus", "UGREEN", "Xiaomi", "JBL",
+        "Logitech", "Belkin",
+    ],
+
+    ("Gaming", "Consoles"): ["Sony", "Microsoft", "Nintendo", "Valve"],
+    ("Gaming", "Controllers"): ["Sony", "Microsoft", "Nintendo", "Logitech", "Razer", "Thrustmaster"],
+    ("Gaming", "PC Gaming"): ["Asus", "MSI", "Lenovo", "HP", "Dell", "Acer", "Razer", "Logitech"],
+    ("Gaming", "Accessories"): ["Sony", "Microsoft", "Nintendo", "Razer", "Logitech", "Thrustmaster"],
+
+    ("Home & Furniture", "Living Room"): ["Ashley", "IKEA", "Midas", "Rochester", "Kifaru"],
+    ("Home & Furniture", "Beds & Mattresses"): [
+        "Slumberland", "Dr. Mattress", "Silentnight", "Midas", "Sealy",
+    ],
+    ("Home & Furniture", "Appliances"): [
+        "Ramtons", "Von Hotpoint", "Bruhm", "LG", "Samsung", "Hisense", "Hotpoint", "Bosch",
+        "Philips", "Kenwood", "Mika",
+    ],
+    ("Home & Furniture", "Office Furniture"): ["IKEA", "Rochester", "Duraco", "Kifaru"],
+    ("Home & Furniture", "Outdoor & Garden"): ["IKEA", "Keter", "Midas"],
+
+    ("Fashion", "Men's Clothing"): _STYLE_BRANDS,
+    ("Fashion", "Women's Clothing"): _STYLE_BRANDS,
+    ("Fashion", "Kids' Clothing"): ["Nike", "Adidas", "Puma", "H&M", "Carter's", "Mothercare"],
+    ("Fashion", "Shoes"): [
+        "Nike", "Adidas", "Puma", "New Balance", "Skechers", "Timberland", "Clarks", "Bata",
+    ],
+    ("Fashion", "Bags & Accessories"): ["Michael Kors", "Coach", "Nike", "Adidas", "Puma", "Louis Vuitton"],
+
+    ("Agriculture", "Farm Equipment"): [
+        "John Deere", "Massey Ferguson", "New Holland", "Kubota", "Mahindra", "Honda", "Stihl",
+    ],
+    ("Agriculture", "Farm Tools"): _POWER_TOOL_BRANDS,
+    ("Agriculture", "Fertilizers & Agrochemicals"): [
+        "Yara", "MEA Fertilizers", "Amiran", "Osho Chemical", "Syngenta", "Bayer",
+    ],
+
+    ("Beauty & Personal Care", "Skincare"): [
+        "Nivea", "Neutrogena", "CeraVe", "Vaseline", "Garnier", "The Ordinary", "Dove",
+    ],
+    ("Beauty & Personal Care", "Haircare"): [
+        "Dove", "L'Oreal", "Pantene", "Tresemme", "Cantu", "Dark & Lovely", "Motions",
+    ],
+    ("Beauty & Personal Care", "Makeup"): [
+        "Maybelline", "L'Oreal", "MAC", "Revlon", "NYX", "Fenty Beauty", "Huda Beauty",
+    ],
+    ("Beauty & Personal Care", "Fragrances"): [
+        "Hugo Boss", "Calvin Klein", "Davidoff", "Lattafa", "Armaf", "Jovan", "Chanel",
+    ],
+    ("Beauty & Personal Care", "Men's Grooming"): [
+        "Gillette", "Nivea Men", "Dove Men+Care", "Old Spice", "Beard Gang", "Philips",
+    ],
+
+    ("Construction", "Hand & Power Tools"): _POWER_TOOL_BRANDS,
+    ("Construction", "Heavy Machinery"): ["Caterpillar", "JCB", "Komatsu", "Volvo", "Hitachi"],
+    ("Construction", "Plumbing & Electrical"): [
+        "Schneider Electric", "ABB", "Legrand", "MK", "Davis & Shirtliff",
+    ],
+    ("Construction", "Paint & Hardware"): ["Crown Paints", "Bralo", "Basco", "Sadolin", "Dulux", "Plascon"],
+
+    ("Sports & Fitness", "Fitness Equipment"): ["Adidas", "Nike", "Reebok", "Decathlon", "York", "Everlast"],
+    ("Sports & Fitness", "Cycling"): ["Giant", "Trek", "Scott", "Specialized", "Cannondale", "Bianchi"],
+    ("Sports & Fitness", "Sportswear"): ["Nike", "Adidas", "Puma", "Under Armour", "Reebok", "New Balance"],
+    ("Sports & Fitness", "Outdoor & Camping"): [
+        "Coleman", "Quechua", "The North Face", "Decathlon", "Kilimanjaro",
+    ],
+
+    ("Music & Instruments", "Guitars"): ["Yamaha", "Fender", "Gibson", "Ibanez", "Epiphone", "Cort"],
+    ("Music & Instruments", "Keyboards & Pianos"): ["Yamaha", "Casio", "Roland", "Korg", "Kawai"],
+    ("Music & Instruments", "Drums & Percussion"): ["Yamaha", "Pearl", "Tama", "Ludwig", "Mapex"],
+    ("Music & Instruments", "DJ & Studio Equipment"): [
+        "Pioneer DJ", "Behringer", "Numark", "Focusrite", "M-Audio", "Shure",
+    ],
+    ("Music & Instruments", "Accessories"): ["Yamaha", "Fender", "Gibson", "Roland", "Shure", "Behringer"],
+
+    ("Pets & Animals", "Pet Food"): ["Royal Canin", "Purina", "Pedigree", "Whiskas", "Hills", "Drools"],
+    ("Pets & Animals", "Pet Supplies & Accessories"): ["Royal Canin", "Kong", "Trixie", "Whiskas", "Pedigree"],
+
+    ("Books & Education", "Stationery & Supplies"): [
+        "Pilot", "Bic", "Staedtler", "Faber-Castell", "Kasuku", "Paper Mate",
+    ],
+}
+
+# What people call a brand instead of its name, lower-case: a phone is an
+# "iPhone", not an Apple. Only ever applied where the brand it names is one
+# of the field's own suggestions, so "mi" means Xiaomi among phone brands
+# and nothing at all anywhere Xiaomi isn't one.
+BRAND_ALIASES: dict[str, str] = {
+    "iphone": "Apple", "ipad": "Apple", "macbook": "Apple", "imac": "Apple",
+    "airpods": "Apple", "apple watch": "Apple",
+    "galaxy": "Samsung",
+    "redmi": "Xiaomi", "poco": "Xiaomi", "mi": "Xiaomi",
+    "pixel": "Google", "surface": "Microsoft",
+    "playstation": "Sony", "ps4": "Sony", "ps5": "Sony", "xbox": "Microsoft",
+    "mercedes": "Mercedes-Benz", "benz": "Mercedes-Benz", "vw": "Volkswagen",
+    "range rover": "Land Rover", "fuso": "Mitsubishi Fuso", "ud": "UD Trucks",
+    "massey": "Massey Ferguson", "cat": "Caterpillar",
+}
+
+
+def suggestion_field(top_name: str, sub_name: str) -> str | None:
+    """The field [BRAND_SUGGESTIONS] fill for a subcategory: its form's
+    "make" if it has one (a vehicle), else its "brand"."""
+    names = {name for name, _kind, _opts in SUBCATEGORY_FILTERS.get((top_name, sub_name), [])}
+    return next((f for f in SUGGESTION_FIELDS if f in names), None)
+
+
+def _field_options(top_name: str, sub_name: str, field_name: str, options):
+    """A subcategory field's options as seeded: its brand suggestions, when
+    it is the field they fill."""
+    brands = BRAND_SUGGESTIONS.get((top_name, sub_name))
+    if brands and field_name == suggestion_field(top_name, sub_name):
+        return brands
+    return options
+
 
 async def seed_categories() -> dict:
     """Idempotently ensure the canonical taxonomy + filter metadata exist.
@@ -830,6 +1043,8 @@ async def seed_categories() -> dict:
     follows), and the free-text category name stored on listings, stores
     and buy-agent requests is brought in line with it - on every start, so
     a start that died between the two steps is finished by the next one.
+    A brand/make field's suggestions follow BRAND_SUGGESTIONS the same way
+    (Pass 4b).
     """
     counts = {
         "categories_created": 0,
@@ -839,6 +1054,7 @@ async def seed_categories() -> dict:
         "categories_renamed": 0,
         "subcategories_moved": 0,
         "filters_retired": 0,
+        "suggestions_updated": 0,
     }
 
     async with AsyncSessionLocal() as db:
@@ -970,6 +1186,7 @@ async def seed_categories() -> dict:
             for field_name, field_type, options in fields:
                 if field_name in existing_fields:
                     continue
+                options = _field_options(top_name, sub_name, field_name, options)
                 db.add(CategoryFilter(
                     id=str(uuid.uuid4()), category_id=sub_cat.id,
                     field_name=field_name, field_type=field_type,
@@ -989,6 +1206,34 @@ async def seed_categories() -> dict:
                 )
             )
             counts["filters_retired"] += result.rowcount or 0
+        await db.commit()
+
+        # ── Pass 4b: brand suggestions follow BRAND_SUGGESTIONS ─────────
+        # The one place rows that already exist are brought up to date
+        # rather than left alone: a database seeded before a brand list
+        # existed (or before a brand was added to one) would otherwise
+        # never show it. Text fields only - a "select" is a closed list a
+        # listing's value was checked against, and changing one under
+        # listings that already hold a value is a different decision.
+        for (top_name, sub_name), brands in BRAND_SUGGESTIONS.items():
+            top_cat = by_name.get(top_name)
+            sub_cat = by_parent_and_name.get((top_cat.id, sub_name)) if top_cat else None
+            field_name = suggestion_field(top_name, sub_name)
+            if sub_cat is None or field_name is None:
+                continue
+            row = (await db.execute(select(CategoryFilter).where(
+                CategoryFilter.category_id == sub_cat.id,
+                CategoryFilter.field_name == field_name,
+            ))).scalars().first()
+            if row is None or row.field_type != "text":
+                continue
+            try:
+                current = json.loads(row.options) if row.options else None
+            except (TypeError, ValueError):
+                current = None
+            if current != brands:
+                row.options = json.dumps(brands)
+                counts["suggestions_updated"] += 1
         await db.commit()
 
         # ── Pass 5: stored category names follow their category ─────────

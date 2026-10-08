@@ -8,7 +8,7 @@
 // Phase 3 (broka_mockup_actualization_spec.md §7) closed the gap that
 // used to be documented here: price, sort, and every category-specific
 // field selection now actually narrow GET /listings server-side (see
-// ListingService.list_listings and CategoryZoneScreen._categoryAttributes,
+// ListingService.list_listings and category_zone_screen.dart filterAttributes,
 // which does the RangeValues -> {min,max} conversion this sheet's
 // "number_range" values need before they're JSON-safe). This widget's own
 // code didn't need to change for that — it already just collected values
@@ -177,7 +177,13 @@ class _FilterBottomSheetState extends State<FilterBottomSheet> {
       );
 
   Widget _buildFieldInput(CategoryFilterField field) {
-    switch (field.fieldType) {
+    // A brand with suggestions (2026-10-08) filters like a closed list: the
+    // server files typed brands under the same spellings, so a chip finds
+    // them, and a typed filter value would match only an exact spelling.
+    final kind = field.fieldType == 'text' && (field.options ?? const []).isNotEmpty
+        ? 'select'
+        : field.fieldType;
+    switch (kind) {
       case 'select':
         return Padding(
           padding: const EdgeInsets.only(top: 12),

@@ -10,7 +10,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, case, or_
 
-from api.database import Listing, ListingStatus, ListingType, User, Interest, Deal, DealStatus, Category, SellerMetrics
+from api.database import (
+    Listing, ListingStatus, ListingType, User, Interest, Deal, DealStatus, Category,
+    CategoryFilter, SellerMetrics,
+)
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
@@ -295,6 +298,8 @@ class ListingService:
                 attributes = rules.clean_land_details(attributes)
             except PydanticCustomError as exc:
                 raise HTTPException(status_code=400, detail=exc.message())
+        if subcategory is not None and attributes:
+            attributes = await self._file_brands(subcategory.id, attributes)
 
         # Store association (optional - spec §5/§11: "[No Store] / [My
         # Store]" at creation time). Ownership is checked server-side
@@ -560,6 +565,32 @@ class ListingService:
             d["seller_avg_deal_time_minutes"] = timed["avg_deal_time_minutes"]
             d["seller_timed_deals"] = timed["timed_deals"]
         return d
+
+    async def _file_brands(self, subcategory_id: str, attributes: dict) -> dict:
+        """The listing's brand (or make) in its subcategory's own spelling,
+        so the subcategory screen's brand filter finds it - whatever the
+        seller typed, an old app build sent, or Zeno read off the photo
+        (validation.canonical_suggestion). The suggestions come from the
+        subcategory's filter rows, the same list the app offers."""
+        from api.domains.categories.seed import BRAND_ALIASES
+
+        rows = (await self.db.execute(select(CategoryFilter).where(
+            CategoryFilter.category_id == subcategory_id,
+            CategoryFilter.field_type == "text",
+            CategoryFilter.options.is_not(None),
+        ))).scalars().all()
+        filed = dict(attributes)
+        for row in rows:
+            if row.field_name not in filed:
+                continue
+            try:
+                options = json.loads(row.options)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(options, list):
+                filed[row.field_name] = rules.canonical_suggestion(
+                    filed[row.field_name], [str(o) for o in options], BRAND_ALIASES)
+        return filed
 
     async def _availability(self, listing: Listing) -> dict:
         """Whether a buyer can still buy it, for the single-listing read.

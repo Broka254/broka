@@ -252,6 +252,44 @@ def clean_attributes(value: Optional[dict]) -> Optional[dict]:
     return cleaned or None
 
 
+def _plain(text: str) -> str:
+    """Letters and digits only: "Mercedes Benz" and "Mercedes-Benz", "TP Link"
+    and "TP-Link" are one brand."""
+    return re.sub(r"[^0-9a-z]+", "", text.lower())
+
+
+def canonical_suggestion(value: Any, options: list[str], aliases: dict[str, str]) -> Any:
+    """A typed brand (or make) filed under the field's own spelling of it.
+
+    The subcategory screens filter by brand with an exact match, so a brand
+    typed into the free box - "samsung", "Samsung Galaxy A54", "iPhone 13" -
+    has to arrive as the "Samsung" or "Apple" the filter asks for, or the
+    listing is in no brand at all. In order: the brand itself in any case or
+    punctuation; a brand followed by a model, longest brand first ("Mitsubishi
+    Fuso Canter" is Mitsubishi Fuso, not Mitsubishi); then what people call a
+    brand ([aliases], its first one or two words) when that brand is one of
+    [options]. Anything else - a brand BROKA doesn't list - is kept as typed.
+    """
+    if not isinstance(value, str) or not options:
+        return value
+    text = " ".join(value.split())
+    if not text:
+        return value
+    by_plain = {_plain(o): o for o in options}
+    if _plain(text) in by_plain:
+        return by_plain[_plain(text)]
+    lowered = text.lower()
+    for option in sorted(options, key=len, reverse=True):
+        if lowered.startswith(option.lower() + " "):
+            return option
+    words = lowered.split(" ")
+    for n in (2, 1):
+        alias = aliases.get(" ".join(words[:n]))
+        if alias is not None and _plain(alias) in by_plain:
+            return by_plain[_plain(alias)]
+    return text
+
+
 def load_attributes(raw: Optional[str]) -> Optional[dict]:
     """Listing.attributes as a dict, for a response or a filter.
 

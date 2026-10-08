@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:broka/features/categories/domain/category_visual.dart';
 import 'package:broka/features/categories/presentation/category_zone_screen.dart';
+import 'package:broka/features/categories/presentation/widgets/feed_sort_row.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:broka/widgets/product_card.dart';
 
@@ -62,8 +63,9 @@ void main() {
         // Search placeholder names the category the user is actually in.
         expect(find.text('Search in $name...'), findsOneWidget,
             reason: '$name placeholder');
-        // Subcategories come from the backend, not a hardcoded list.
-        expect(find.text('All'), findsOneWidget, reason: '$name All chip');
+        // Its types of item come from the backend, not a hardcoded list, as
+        // cards that each open a screen of their own.
+        expect(find.text('Shop $name by type'), findsOneWidget, reason: '$name types');
         expect(find.text('Sub One'), findsOneWidget, reason: '$name subcats');
         // Real listings.
         expect(find.byType(ProductCard), findsWidgets, reason: '$name grid');
@@ -176,7 +178,7 @@ void main() {
           reason: 'cards must not bleed through the collapsing zone header');
     });
 
-    testWidgets('one content edge: header, search, rail and grid all at 16',
+    testWidgets('one content edge: header, search, types and grid all at 16',
         (tester) async {
       tester.view.physicalSize = const Size(390 * 3, 844 * 3);
       tester.view.devicePixelRatio = 3.0;
@@ -193,9 +195,8 @@ void main() {
           .first;
       expect(tester.getTopLeft(searchField).dx, 16);
       expect(tester.getTopLeft(find.byType(ProductCard).first).dx, 16);
-      // First subcategory chip: 12 of ListView padding + 4 of chip margin.
-      expect(tester.getTopLeft(find.text('All')).dx, greaterThanOrEqualTo(16));
-      expect(tester.getTopLeft(find.text('All')).dx, lessThan(36));
+      // The first type-of-item card sits on the same edge.
+      expect(tester.getTopLeft(find.byKey(const Key('zone-type-Sub One'))).dx, 16);
     });
   });
 
@@ -237,19 +238,25 @@ void main() {
       await tester.pumpWidget(zone('Services'));
       await _settle(tester);
 
-      final viewport = tester.getSize(find.byType(CustomScrollView));
+      final viewport = tester.getRect(find.byType(CustomScrollView));
       final message = tester.getRect(find.text('No Services listings yet'));
-      final centre = message.center.dy / viewport.height;
+      final sortRow = tester.getRect(find.byType(FeedSortRow));
       // Brief §11: comfortably below the sort row and centred in what's left,
-      // rather than pushed toward the bottom edge.
-      expect(centre, greaterThan(0.25));
-      expect(centre, lessThan(0.75),
+      // rather than pushed toward the bottom edge. Measured against the space
+      // under the sort row since the Zone began with its types of item
+      // (2026-10-08), which take the top half of an empty Zone by design.
+      final left = viewport.bottom - sortRow.bottom;
+      final inSpace = (message.center.dy - sortRow.bottom) / left;
+      expect(message.top, greaterThan(sortRow.bottom));
+      expect(inSpace, inInclusiveRange(0.3, 0.7),
+          reason: 'not centred in the space below the sort row');
+      expect((message.center.dy - viewport.top) / viewport.height, lessThan(0.8),
           reason: 'the empty state drifted to the bottom of the screen');
     });
   });
 
   group('functionality survives the restyle', () {
-    testWidgets('sort, filters and subcategory selection still work',
+    testWidgets('sort, filters and types of item still work',
         (tester) async {
       final requested = <Uri>[];
       setFakeRoute((uri) {
@@ -261,11 +268,18 @@ void main() {
       await _settle(tester);
       expect(requested.first.queryParameters['sort'], 'newest');
       expect(requested.first.queryParameters['category_id'], 'Electronics');
+      // The Zone's own grid is the whole category.
+      expect(requested.first.queryParameters.containsKey('subcategory_id'), isFalse);
 
-      // Subcategory: a real backend id, sent as subcategory_id.
+      // A type of item opens its own screen, whose feed is that type: a
+      // real backend id, sent as subcategory_id.
       await tester.tap(find.text('Sub One'));
-      await _settle(tester);
+      await _settleRoute(tester);
+      expect(find.text('SUB ONE'), findsOneWidget, reason: 'the type screen\'s title');
       expect(requested.last.queryParameters['subcategory_id'], 'sub-Sub One');
+      await tester.tap(find.byIcon(Icons.arrow_back_ios_new_rounded));
+      await _settleRoute(tester);
+      expect(find.text('ELECTRONICS ZONE'), findsOneWidget);
 
       // Sort.
       await tester.tap(find.byIcon(Icons.expand_more_rounded));

@@ -48,7 +48,8 @@ import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/models/category.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../features/discovery/domain/destination_visual.dart';
-import '../features/categories/presentation/category_zone_screen.dart';
+import '../features/categories/presentation/category_navigation.dart';
+import '../features/categories/presentation/widgets/category_art_card.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/presentation/auction_house_screen.dart';
 import 'zeno_screen.dart';
@@ -283,9 +284,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final max = c.position.maxScrollExtent;
     if (max <= 0) return; // every category already fits
     HomeScreen._railHintShown = true;
-    // A pill is its circle plus 22px of label width plus 8px of margins.
-    final pill = (_narrow(context) ? 48.0 : 52.0) + 30;
-    final reveal = math.min(max, pill * 2.5);
+    // A card and the gap after it.
+    final pill = _railCardWidth(context) + 10;
+    final reveal = math.min(max, pill * 1.6);
     // animateTo's future completes when a drag interrupts it, too.
     await c.animateTo(reveal,
         duration: const Duration(milliseconds: 1100), curve: Curves.easeInOutCubic);
@@ -332,85 +333,68 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  void _openCategoryZone(Category category) {
-    // Zero-duration transition is Chapter 3's explicit, deliberate
-    // requirement (re-confirmed in Ch.17 of the source spec) - not a
-    // missing animation. A plain PageRouteBuilder with
-    // transitionDuration: Duration.zero is the correct way to express
-    // that, not a very-short AnimationController.
-    Navigator.push(context, PageRouteBuilder(
-      transitionDuration: Duration.zero,
-      reverseTransitionDuration: Duration.zero,
-      pageBuilder: (_, __, ___) =>
-          CategoryZoneScreen(categoryId: category.id, categoryName: category.name),
-    ));
-  }
+  // Zero-duration transition is Chapter 3's explicit, deliberate
+  // requirement (re-confirmed in Ch.17 of the source spec) - not a missing
+  // animation; category_navigation.dart owns it now that the Zone's types of
+  // item and the directories open category screens too.
+  void _openCategoryZone(Category category) => openCategoryZone(context, category);
 
   // Home-redesign brief §3-§6 (2026-08-16): categories, Trending, Auctions,
   // and Traders used to be visually split into three separate rows/areas
   // (a category-circle strip, a "Quick Access" chip row, and a Goods/
   // Traders mode toggle that swapped Home's entire body). All four were
-  // unified into one horizontally-scrolling rail, same pill shape for
-  // every item, so nothing read as more "special" than anything else.
+  // unified into one horizontally-scrolling rail, one shape for every
+  // item, with one thin divider between the last category and Trending
+  // onward (final polish pass, 2026-08-19 - see isDestination on _RailItem).
   //
-  // Final HomeScreen polish pass (2026-08-19, product review): still one
-  // rail, still one pill shape - categories and Trending/Auctions/Traders
-  // are NOT split into separate rows or given different card sizes. But
-  // fully identical treatment made two conceptually different kinds of
-  // item (ways to browse goods, vs. standalone destinations) hard to tell
-  // apart at a glance, so a single thin divider now sits between the last
-  // category and Trending onward - see isDestination on _RailItem and
-  // _railDivider() below. The old post-load auto-scroll nudge
-  // (_nudgeDiscoveryRail(), 0→56px→0) was replaced by a static right-edge
-  // fade - and on 2026-09-26 by a once-per-launch glide and a chevron,
-  // because the fade alone left people unaware the rail scrolled at all
-  // (see _playRailHint).
+  // Photo cards (2026-10-08): the rail's circles of emoji became the
+  // website's category cards - the category's picture, its name over it -
+  // under a "Shop by category" line with "See all", which opens every
+  // category as a grid (category_directory_screen.dart). Each category now
+  // leads to its types of item, each type to a screen of its own with its
+  // brands to filter by, so the first thing a buyer sees of a category is
+  // what is in it. The destinations stay at the end of the same row, drawn
+  // from their gradient and emoji in the same card frame.
   //
-  // Collapsing-scroll pass (2026-09-18): the rail is unchanged in structure -
-  // still one horizontal strip, still one pill shape - but its height is
-  // computed from its own contents now instead of a hardcoded 80. It was
-  // overflowing by 10px on any two-line label ("Beauty & Personal Care",
-  // "Business & Industrial" - i.e. most of the real taxonomy), which the new
-  // Home widget test caught on the very first pump. Deriving the height from
-  // the circle size, the label's own line height and the text scale means it
-  // cannot silently go wrong again on a smaller phone or at a larger
-  // accessibility text size (brief §14/§28).
+  // Still one row, so the feed keeps the top half of the screen
+  // (home_collapsing_scroll_test.dart guards it): the cards are landscape
+  // and compact, and the heading is one small line. The 2026-09-26 glide and
+  // chevron are unchanged - a half-visible last card says "more" too, but a
+  // first-time user still needs to see the row move once (see _playRailHint).
+  //
+  // Heights are derived from the text scale (brief §14/§28): the row used to
+  // overflow on two-line labels at large text sizes when it was hardcoded.
+  static double _railCardWidth(BuildContext context) =>
+      _narrow(context) ? 112.0 : 122.0;
+
   Widget _buildDiscoveryRail() {
     final narrow = _narrow(context);
     final textScale = MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.3);
-    final circle = narrow ? 48.0 : 52.0;
-    // Polish pass (2026-09-18, brief §3): 9.5/9 -> 10.5/10 and w600. At 9.5px
-    // the labels under the circles were decorative rather than readable, and
-    // the rail's job is to be read. The extra ~2px per line is paid for out of
-    // the strip's vertical padding (12 -> 8), so the rail gets MORE legible
-    // and slightly SHORTER at the same time - it should read as a lightweight
-    // strip, not a section.
-    final labelSize = narrow ? 10.0 : 10.5;
-    const labelLines = 2;
-    const labelHeight = 1.12;
-    final railHeight = circle +
-        4 + // gap under the circle
-        (labelSize * labelHeight * labelLines * textScale) +
-        8 + // the ListView's own vertical padding
-        2; // slack, so a font metric rounding up never costs a pixel
+    final cardWidth = _railCardWidth(context);
+    // Two lines of name at the user's text size, above a picture that still
+    // shows: 24px badge + two lines + padding, with room to spare at 1.0.
+    final cardHeight = (narrow ? 84.0 : 88.0) + 24 * (textScale - 1);
+    final labelSize = narrow ? 11.5 : 12.0;
+    const railPadding = 8.0; // the ListView's own vertical padding, top + bottom
 
     if (_topCategories.isEmpty && !_categoriesLoaded) {
-      return SizedBox(height: railHeight);
+      return SizedBox(height: cardHeight + railPadding + _railHeadingHeight(textScale.toDouble()));
     }
     final items = <_RailItem>[
       // Straight from categoriesRepository.getTopLevel() - however many the
       // backend returns is however many render. No count, no slots, no index
-      // -> visual mapping: each pill asks the resolver for its own name.
+      // -> visual mapping: each card asks the resolver for its own name.
       ..._topCategories.map((c) {
         final visual = CategoryVisuals.resolve(c.name);
         return _RailItem(
           emoji: visual.emoji, label: c.name,
           colors: visual.gradient,
+          assetPath: visual.assetPath,
           onTap: () => _openCategoryZone(c),
         );
       }),
       // The four fixed destinations, from the same registry the screens they
-      // open read their own title, icon and gradient from - so the pill and
+      // open read their own title, icon and gradient from - so the card and
       // its destination cannot drift apart (they had: a pink 🔥 pill opened a
       // plain white-on-black AppBar with no trace of either).
       _RailItem(
@@ -428,11 +412,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AuctionHouseScreen())),
       ),
       // Home-redesign brief §6: tapping Traders navigates to a dedicated
-      // screen rather than filtering/replacing Home's own product grid -
-      // TraderListScreen() with no `embedded` flag gives the full
-      // standalone screen (its own back button etc.), same widget the old
-      // Goods/Traders toggle used in embedded mode, just reached by
-      // pushing a route instead of swapping Home's body via MarketplaceState.
+      // screen rather than filtering/replacing Home's own product grid.
       _RailItem(
         emoji: DestinationVisuals.traders.emoji,
         label: DestinationVisuals.traders.label,
@@ -440,11 +420,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         isDestination: true,
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TraderListScreen())),
       ),
-      // Store feature, Phase 4 (spec §12/§21): same rail, same pill shape -
-      // explicitly NOT a new Home section or grid. This is the entire
-      // "minimum Store entry point" the spec asks for on Home; the fuller
-      // entry point is a listing's own store badge (ProductCard) or
-      // the Menu's Online store section once you own a store.
+      // Store feature, Phase 4 (spec §12/§21): same row, same card -
+      // explicitly NOT a new Home section or grid.
       _RailItem(
         emoji: DestinationVisuals.stores.emoji,
         label: DestinationVisuals.stores.label,
@@ -455,147 +432,149 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ];
     // Right-edge fade is a ShaderMask over the ListView's own viewport
     // (BlendMode.dstIn fading source alpha near the right edge) rather
-    // than a painted overlay in a guessed background color - stays
-    // correct against the header's gradient (BrokaColors.headerGradColors)
-    // without hardcoding a fade-to color that could drift from it.
-    return SizedBox(
-      height: railHeight,
-      child: Stack(children: [
-        // A finger on the rail ends the "there's more" glide at once.
-        Listener(
-          onPointerDown: (_) {
-            _railTouched = true;
-            _railHintTimer?.cancel();
-          },
-          child: ShaderMask(
-            blendMode: BlendMode.dstIn,
-            shaderCallback: (bounds) => const LinearGradient(
-              begin: Alignment.centerRight,
-              end: Alignment.centerLeft,
-              colors: [Colors.transparent, Colors.white],
-              stops: [0.0, 0.07],
-            ).createShader(bounds),
-            child: ListView.builder(
-              key: const Key('home-category-rail'),
-              controller: _railScrollController,
-              scrollDirection: Axis.horizontal,
-              // 12 here + each pill's own 4px margin puts the first circle's
-              // edge at 16 - the same content edge as the search bar, the
-              // Zeno CTA, the Fresh heading and the grid (brief §16).
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              itemCount: items.length,
-              itemBuilder: (_, i) {
-                // Divider sits only at the one category→destination boundary,
-                // never between two categories or between two destinations.
-                final showDivider = i > 0 && items[i].isDestination && !items[i - 1].isDestination;
-                final pill = _railPill(items[i], circle: circle, labelSize: labelSize);
-                if (!showDivider) return pill;
-                return Row(mainAxisSize: MainAxisSize.min, children: [
-                  _railDivider(circle),
-                  pill,
-                ]);
-              },
+    // than a painted overlay in a guessed background color.
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      _railHeading(textScale.toDouble()),
+      SizedBox(
+        height: cardHeight + railPadding,
+        child: Stack(children: [
+          // A finger on the rail ends the "there's more" glide at once.
+          Listener(
+            onPointerDown: (_) {
+              _railTouched = true;
+              _railHintTimer?.cancel();
+            },
+            child: ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (bounds) => const LinearGradient(
+                begin: Alignment.centerRight,
+                end: Alignment.centerLeft,
+                colors: [Colors.transparent, Colors.white],
+                stops: [0.0, 0.06],
+              ).createShader(bounds),
+              child: ListView.builder(
+                key: const Key('home-category-rail'),
+                controller: _railScrollController,
+                scrollDirection: Axis.horizontal,
+                // 16 puts the first card's edge on the same content edge as
+                // the search bar, the Zeno CTA, the Fresh heading and the
+                // grid (brief §16); each card carries a 10px gap after it.
+                padding: const EdgeInsets.fromLTRB(16, railPadding / 2, 6, railPadding / 2),
+                itemCount: items.length,
+                itemBuilder: (_, i) {
+                  // Divider sits only at the one category→destination boundary,
+                  // never between two categories or between two destinations.
+                  final showDivider = i > 0 && items[i].isDestination && !items[i - 1].isDestination;
+                  final card = Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: CategoryArtCard(
+                      key: Key('home-rail-card-${items[i].label}'),
+                      label: items[i].label,
+                      emoji: items[i].emoji,
+                      gradient: items[i].colors,
+                      assetPath: items[i].assetPath,
+                      width: cardWidth,
+                      height: cardHeight,
+                      labelSize: labelSize,
+                      onTap: items[i].onTap,
+                    ),
+                  );
+                  if (!showDivider) return card;
+                  return Row(mainAxisSize: MainAxisSize.min, children: [
+                    _railDivider(cardHeight),
+                    card,
+                  ]);
+                },
+              ),
             ),
           ),
-        ),
-        // "More this way", level with the circles, until the end of the
-        // rail has been seen.
-        Positioned(
-          right: 6,
-          top: 4 + circle / 2 - 14,
-          child: IgnorePointer(
-            ignoring: _railAtEnd,
-            child: AnimatedOpacity(
-              opacity: _railAtEnd ? 0 : 1,
-              duration: const Duration(milliseconds: 220),
-              child: Semantics(
-                button: true,
-                label: 'More categories',
-                child: GestureDetector(
-                  key: const Key('home-rail-more'),
-                  onTap: _railForward,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: BrokaColors.bgCard.withOpacity(0.92),
-                      border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.5)),
-                      boxShadow: [
-                        BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.25), blurRadius: 8),
-                      ],
+          // "More this way", level with the cards, until the end of the
+          // rail has been seen.
+          Positioned(
+            right: 6,
+            top: railPadding / 2 + cardHeight / 2 - 14,
+            child: IgnorePointer(
+              ignoring: _railAtEnd,
+              child: AnimatedOpacity(
+                opacity: _railAtEnd ? 0 : 1,
+                duration: const Duration(milliseconds: 220),
+                child: Semantics(
+                  button: true,
+                  label: 'More categories',
+                  child: GestureDetector(
+                    key: const Key('home-rail-more'),
+                    onTap: _railForward,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: BrokaColors.bgCard.withOpacity(0.92),
+                        border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.5)),
+                        boxShadow: [
+                          BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.25), blurRadius: 8),
+                        ],
+                      ),
+                      child: const Icon(Icons.chevron_right_rounded,
+                          size: 20, color: BrokaColors.textHigh),
                     ),
-                    child: const Icon(Icons.chevron_right_rounded,
-                        size: 20, color: BrokaColors.textHigh),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ]),
-    );
+        ]),
+      ),
+    ]);
   }
+
+  static double _railHeadingHeight(double textScale) => 13 * 1.2 * textScale + 6;
+
+  /// "Shop by category" and the way to every category at once.
+  Widget _railHeading(double textScale) => SizedBox(
+        height: _railHeadingHeight(textScale),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+          child: Row(children: [
+            const Expanded(
+              child: Text('Shop by category',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: BrokaColors.textHigh,
+                      fontSize: 13,
+                      height: 1.2,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.1)),
+            ),
+            if (_topCategories.isNotEmpty)
+              GestureDetector(
+                key: const Key('home-categories-see-all'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () => openAllCategories(context, _topCategories),
+                child: const Padding(
+                  padding: EdgeInsets.only(left: 12),
+                  child: Text('See all ›',
+                      style: TextStyle(
+                          color: BrokaColors.gold,
+                          fontSize: 12.5,
+                          height: 1.2,
+                          fontWeight: FontWeight.w800)),
+                ),
+              ),
+          ]),
+        ),
+      );
 
   // Final HomeScreen polish pass (2026-08-19): the one visual cue that
   // categories and Trending/Auctions/Traders aren't quite the same kind of
   // thing - a plain hairline, not a card border, a label, or a new row.
-  Widget _railDivider(double circle) => Container(
+  Widget _railDivider(double cardHeight) => Container(
         width: 1,
-        height: circle * 0.85,
-        margin: const EdgeInsets.symmetric(horizontal: 6),
+        height: cardHeight * 0.7,
+        margin: const EdgeInsets.only(right: 10),
         color: BrokaColors.textLow,
-      );
-
-  // Home-redesign brief round 3 (2026-08-18, reported: "Beauty & P...",
-  // "Books & Ed..." truncate unreadably at 1 line/68px) - widened the pill
-  // slightly and allowed a second line instead of forcing everything onto
-  // one truncated line. Long names still ellipsize as a last resort (a
-  // 3-word category name could still overflow 2 lines on a 320px-wide
-  // device), but most of the real category names in categories/seed.py
-  // now fit without cutting off mid-word.
-  Widget _railPill(_RailItem item,
-          {required double circle, required double labelSize}) =>
-      GestureDetector(
-        onTap: item.onTap,
-        child: Container(
-          width: circle + 22,
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: circle,
-              height: circle,
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: item.colors),
-                shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: item.colors.first.withOpacity(0.30), blurRadius: 8)],
-              ),
-              child: Container(
-                decoration: const BoxDecoration(color: BrokaColors.bgCard, shape: BoxShape.circle),
-                child: Center(
-                    child: Text(item.emoji,
-                        style: TextStyle(fontSize: circle * 0.38))),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Flexible(
-              child: Text(
-                item.label,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: BrokaColors.textMid,
-                    fontSize: labelSize,
-                    height: 1.12,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.05),
-              ),
-            ),
-          ]),
-        ),
       );
 
   // Category-alignment pass (2026-09-18): _categoryEmojiMap and the
@@ -1748,24 +1727,27 @@ class _LocationFilterDialogState extends State<_LocationFilterDialog> {
 }
 
 // Home-redesign brief §5 (2026-08-16): one shared shape for every item in
-// the unified discovery rail (real categories + Trending/Auctions/Traders),
-// so all of them render with identical pill treatment - nothing reads as a
-// bigger or differently-styled card than a category circle. isDestination
-// (final polish pass, 2026-08-19) does NOT change that shape - it only
-// flags the three non-category entries so _buildDiscoveryRail() can draw
-// one thin divider ahead of them. The pill itself is identical either way.
+// the unified discovery rail (real categories + Trending/Auctions/Traders/
+// Stores) - a CategoryArtCard since 2026-10-08. isDestination (final polish
+// pass, 2026-08-19) does NOT change that shape - it only flags the
+// non-category entries so _buildDiscoveryRail() can draw one thin divider
+// ahead of them.
 class _RailItem {
   final String emoji;
   final String label;
   final List<Color> colors;
   final VoidCallback onTap;
   final bool isDestination;
+  /// The card's picture; null (the destinations, "Other") draws it from
+  /// [colors] and [emoji].
+  final String? assetPath;
   const _RailItem({
     required this.emoji,
     required this.label,
     required this.colors,
     required this.onTap,
     this.isDestination = false,
+    this.assetPath,
   });
 }
 

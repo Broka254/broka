@@ -652,7 +652,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-99 files in `backend/tests/`.
+100 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -664,6 +664,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_auth.py` — BROKA - Auth Endpoint Tests Run: pytest backend/tests/test_auth.py -v
 - `test_auth_hardening.py` — Auth hardening: what a token may be used for, who may claim admin, how OTP attempts are counted, and what the console providers do in produ…
 - `test_body_limit.py` — The request body ceiling (api/core/body_limit.py).
+- `test_brand_filters.py` — Browsing a subcategory by brand (2026-10-08): the app's subcategory screens ("Phones") lead with brand filters - Samsung, Apple, Tecno...
 - `test_buy_agent.py` — BROKA - Buy-Agent Tests Run: pytest backend/tests/test_buy_agent.py -v
 - `test_buy_agent_conversation.py` — BROKA - Conversational Buying Agent tests Run: pytest backend/tests/test_buy_agent_conversation.py -v
 - `test_buyer_protection.py` — Partial payments, buyer release, the delivery claim's automatic release, and refund requests (ESCROW_AUDIT.md, "Partial payments" and "Rele…
@@ -840,8 +841,14 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/category_search.dart` — Finding a listing's category by what the seller calls the item.
 - `domain/category_visual.dart` — lib/features/categories/domain/category_visual.dart
 - `domain/models/category.dart` — lib/features/categories/domain/models/category.dart
-- `presentation/category_zone_screen.dart` — lib/features/categories/presentation/category_zone_screen.dart Category Zone: subcategory rail + filter button + dense grid scoped to one c…
+- `domain/subcategory_visual.dart` — lib/features/categories/domain/subcategory_visual.dart
+- `presentation/category_directory_screen.dart` — lib/features/categories/presentation/category_directory_screen.dart
+- `presentation/category_navigation.dart` — lib/features/categories/presentation/category_navigation.dart
+- `presentation/category_zone_screen.dart` — lib/features/categories/presentation/category_zone_screen.dart Category Zone: the category's types of item + filter button + dense grid sco…
 - `presentation/filter_bottom_sheet.dart` — lib/features/categories/presentation/filter_bottom_sheet.dart Universal (price, condition) + category-specific filter controls (Design Jour…
+- `presentation/subcategory_screen.dart` — lib/features/categories/presentation/subcategory_screen.dart
+- `presentation/widgets/category_art_card.dart` — lib/features/categories/presentation/widgets/category_art_card.dart
+- `presentation/widgets/feed_sort_row.dart` — lib/features/categories/presentation/widgets/feed_sort_row.dart
 
 ### `flutter_app/lib/features/discovery/`
 
@@ -1012,6 +1019,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/widgets/`
 
+- `artwork_hero_header.dart` — lib/widgets/artwork_hero_header.dart
 - `axis_line_chart.dart` — BROKA — line chart with axes
 - `broka_image.dart` — One widget for every image the backend sends, whatever shape it is in.
 - `broka_search_field.dart` — The search box inside a screen: the Category Zones ("Electronics Zone"), Traders and Stores.
@@ -1109,6 +1117,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
+- `subcategory_screen_test.dart` — Types of item on screens of their own (2026-10-08): a category's types are photo cards, each opening a SubcategoryScreen that leads with th…
 - `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
 - `voip_call_permissions_test.dart` — The app closed the moment a call was placed or answered.
 - `voip_call_screen_test.dart` — The call screen, upgraded (2026-10-02).
@@ -1200,7 +1209,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — One call at a time, and every missed call and message announced (2026-10-08)
+- `CHANGES.md` — Shop by category, by type of item, and by brand (2026-10-08)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)

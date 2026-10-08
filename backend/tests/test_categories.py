@@ -188,6 +188,7 @@ class TestSeedCategories:
             "categories_renamed": 0,
             "subcategories_moved": 0,
             "filters_retired": 0,
+            "suggestions_updated": 0,
         }
         assert before == after
 

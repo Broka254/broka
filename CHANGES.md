@@ -1,3 +1,50 @@
+# Shop by category, by type of item, and by brand (2026-10-08)
+
+Raised by the owner: a type of item had nowhere of its own. Phones were one
+chip among thirteen in the Electronics Zone, so there was no way to look at
+phones by brand, and a phone seller competed with every laptop and charger.
+The website's category pages (`broka-website`) were the reference: photo
+cards for categories and types, a page per type, its brands to filter by.
+
+**Home's category rail is photo cards** (`home_screen.dart`,
+`features/categories/presentation/widgets/category_art_card.dart`): the
+website's own pictures, bundled as 640px WebP under
+`flutter_app/assets/category_art/` (about 5 MB, every category and all 177
+types). "Shop by category · See all" opens every category as a grid.
+Trending, Auctions, Traders and Stores stay at the end of the same row. The
+feed still starts in the top half of the screen.
+
+**A category's types of item are cards, and each type is a screen of its
+own** (`subcategory_screen.dart`). The Zone leads with the category's
+picture and its types ("See all" lays them out), with the whole category's
+listings under them. A type's screen leads with its brands as one-tap
+filters (makes, for vehicles; a type without brands leads with its first
+list of choices, like a title deed), and its filter sheet holds that type's
+own details. Which picture belongs to which type is in
+`subcategory_visual.dart`, keyed by parent and name ("Accessories" is in
+three categories). `category_visual_test.dart` reads `seed.py` and fails if
+a type has no picture or a picture isn't bundled.
+
+**Brands are a list, not a box** (backend `categories/seed.py`
+`BRAND_SUGGESTIONS`). Every brand or make field a type's sellers fill in now
+carries the brands Kenyans list most, served as that field's `options`. It
+stays a text field, so older app builds keep the box they had. The seed
+brings a database seeded before the lists up to date on every start. That is
+the one place it changes rows that already exist, and it never touches a
+closed `select` list. In the sell wizard the brand comes first in Details,
+one tap per brand, with Other for one that isn't listed.
+
+**A typed brand is filed under its listed spelling** (`listings/
+validation.py` `canonical_suggestion`, applied in `create_listing`).
+"samsung", "Samsung Galaxy A54" and "iPhone 13" were three brands to an
+exact-match filter, so the Samsung and Apple filters missed them. Now
+they're "Samsung", "Samsung" and "Apple", whoever sends them (an old build, a
+seller's Other, Zeno). The longest brand wins ("Mitsubishi Fuso Canter" is
+Mitsubishi Fuso), and an alias only applies where its brand is offered ("mi"
+is Xiaomi among phones and nothing among cars). A brand BROKA doesn't list
+is kept as typed. Listings created before today keep the brand they were
+saved with.
+
 # One call at a time, and every missed call and message announced (2026-10-08)
 
 Reported after the push work: calls still rang only with BROKA open, a

@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:broka/features/categories/domain/category_visual.dart';
+import 'package:broka/features/categories/domain/subcategory_visual.dart';
 
 void main() {
   group('backend parity', () {
@@ -149,9 +150,67 @@ void main() {
       }
     });
 
+    test('every category but "Other" has bundled artwork', () {
+      final declared = _declaredAssetDirs();
+      for (final v in CategoryVisuals.canonical) {
+        if (v.categoryName == 'Other') {
+          expect(v.assetPath, isNull,
+              reason: 'Other is drawn from its gradient - see the registry');
+          continue;
+        }
+        expect(v.assetPath, isNotNull, reason: '${v.categoryName} has no card art');
+        expect(declared, contains(_dirOf(v.assetPath!)),
+            reason: '${v.assetPath} is not under an asset folder pubspec.yaml '
+                'declares, so it would not be in the APK');
+      }
+    });
+
     test('semanticLabel is the category name', () {
       expect(CategoryVisuals.resolve('Pets & Animals').semanticLabel,
           'Pets & Animals');
+    });
+  });
+
+  group('subcategory artwork', () {
+    final seed = File('../backend/api/domains/categories/seed.py');
+    late Map<String, List<String>> subcategories;
+
+    setUpAll(() => subcategories = _seededSubcategories(seed.readAsStringSync()));
+
+    test('the seed parses into the whole taxonomy', () {
+      expect(subcategories['Electronics'], contains('Phones'));
+      expect(subcategories['Fashion']!.first, startsWith('Mtumba'));
+      expect(subcategories.values.expand((s) => s).length, greaterThan(150));
+    });
+
+    test('every seeded subcategory has a picture of its own, in the bundle', () {
+      final declared = _declaredAssetDirs();
+      for (final entry in subcategories.entries) {
+        for (final sub in entry.value) {
+          expect(SubcategoryVisuals.hasOwnArtwork(entry.key, sub), isTrue,
+              reason: '${entry.key} > $sub has no artwork in subcategory_visual.dart');
+          final path = SubcategoryVisuals.resolve(entry.key, sub).assetPath!;
+          expect(File('./$path').existsSync(), isTrue,
+              reason: '${entry.key} > $sub points at a missing file ($path)');
+          expect(declared, contains(_dirOf(path)),
+              reason: '$path is not under a folder pubspec.yaml declares');
+        }
+      }
+    });
+
+    test('the same name under two parents is two pictures', () {
+      // "Accessories" is in Electronics, Gaming and Music & Instruments.
+      final phone = SubcategoryVisuals.resolve('Electronics', 'Accessories');
+      final music = SubcategoryVisuals.resolve('Music & Instruments', 'Accessories');
+      expect(phone.assetPath, isNot(music.assetPath));
+      expect(phone.gradient, CategoryVisuals.gradientFor('Electronics'));
+      expect(music.emoji, CategoryVisuals.emojiFor('Music & Instruments'));
+    });
+
+    test('an unknown subcategory falls back to its parent', () {
+      final unknown = SubcategoryVisuals.resolve('Electronics', 'Hoverboards');
+      expect(unknown.assetPath, CategoryVisuals.resolve('Electronics').assetPath);
+      expect(SubcategoryVisuals.hasOwnArtwork('Electronics', 'Hoverboards'), isFalse);
     });
   });
 
@@ -164,4 +223,29 @@ void main() {
       }
     });
   });
+}
+
+/// The folders pubspec.yaml bundles (Flutter takes each one level deep).
+Set<String> _declaredAssetDirs() => RegExp(r'^\s*-\s*(assets/\S*/)\s*$', multiLine: true)
+    .allMatches(File('pubspec.yaml').readAsStringSync())
+    .map((m) => m.group(1)!)
+    .toSet();
+
+String _dirOf(String path) => path.substring(0, path.lastIndexOf('/') + 1);
+
+/// seed.py's SUBCATEGORIES, parsed: parent -> its subcategories in order.
+/// Names are double-quoted strings, except MTUMBA, a constant of its own.
+Map<String, List<String>> _seededSubcategories(String src) {
+  final mtumba = RegExp(r'^MTUMBA = "([^"]+)"', multiLine: true).firstMatch(src)!.group(1)!;
+  final block = RegExp(r'^SUBCATEGORIES: [^=]+= \{(.*?)^\}', multiLine: true, dotAll: true)
+      .firstMatch(src)!
+      .group(1)!;
+  final out = <String, List<String>>{};
+  for (final m in RegExp(r'"([^"]+)": \[(.*?)\]', dotAll: true).allMatches(block)) {
+    out[m.group(1)!] = [
+      for (final n in RegExp(r'"([^"]+)"|\bMTUMBA\b').allMatches(m.group(2)!))
+        n.group(1) ?? mtumba,
+    ];
+  }
+  return out;
 }

@@ -102,7 +102,9 @@ void main() {
     await run(tester, const Duration(milliseconds: 600));
     expect(rail(tester).pixels, greaterThan(200));
 
-    for (var i = 0; i < 6; i++) {
+    // A card row is longer than the old circles were; every tap still moves
+    // it on by most of a screen, so a handful of taps reach the end.
+    for (var i = 0; i < 16 && rail(tester).pixels < rail(tester).maxScrollExtent; i++) {
       await tester.tap(find.byKey(const Key('home-rail-more')), warnIfMissed: false);
       await run(tester, const Duration(milliseconds: 600));
     }

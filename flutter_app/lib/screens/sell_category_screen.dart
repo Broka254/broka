@@ -15,6 +15,11 @@
 // the same long list, hard to read. Tapping a type moves on to Details;
 // Back from the types returns to the categories. A search still finds a
 // type directly, and "Other", which has no types, moves on as it is tapped.
+//
+// Each category and type carries the picture buyers browse it by
+// (2026-10-08): Home's category cards and the types' own screens use the
+// same artwork, so "where would a buyer look for it?" is answered by the
+// picture the buyer will actually see.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart';
@@ -23,6 +28,8 @@ import '../features/categories/data/repositories/categories_repository.dart';
 import '../features/categories/domain/category_search.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../features/categories/domain/models/category.dart';
+import '../features/categories/domain/subcategory_visual.dart';
+import '../features/categories/presentation/widgets/category_art_card.dart' show artDecodeWidth;
 import '../services/sell_wizard_data.dart';
 import '../utils/land_size.dart';
 import '../widgets/sell_step_scaffold.dart';
@@ -253,7 +260,11 @@ class _SellCategoryScreenState extends State<SellCategoryScreen> {
           _pickAndGo(m.node, m.subcategory);
         },
         child: Row(children: [
-          _EmojiOrb(emoji: visual.emoji, colors: visual.gradient, size: 38),
+          _ArtThumb(
+              assetPath: m.subcategory == null
+                  ? visual.assetPath
+                  : SubcategoryVisuals.resolve(m.node.category.name, m.subcategory!.name).assetPath,
+              emoji: visual.emoji, colors: visual.gradient, size: 38),
           const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(m.subcategory?.name ?? m.node.category.name, style: const TextStyle(
@@ -299,7 +310,7 @@ class _SellCategoryScreenState extends State<SellCategoryScreen> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               child: Row(children: [
-                _EmojiOrb(emoji: visual.emoji, colors: visual.gradient, size: 46),
+                _ArtThumb(assetPath: visual.assetPath, emoji: visual.emoji, colors: visual.gradient, size: 46),
                 const SizedBox(width: 14),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(node.category.name, style: const TextStyle(
@@ -453,7 +464,7 @@ class _SellSubcategoryScreenState extends State<SellSubcategoryScreen> {
         onTap: () => _pick(sub),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             color: selected ? null : BrokaColors.bgCard.withOpacity(0.75),
@@ -468,10 +479,13 @@ class _SellSubcategoryScreenState extends State<SellSubcategoryScreen> {
                 width: selected ? 1.5 : 1),
           ),
           child: Row(children: [
-            if (highlight != null) ...[
-              Text(highlight.emoji, style: const TextStyle(fontSize: 18)),
-              const SizedBox(width: 10),
-            ],
+            _ArtThumb(
+              assetPath: SubcategoryVisuals.resolve(_node.category.name, sub.name).assetPath,
+              emoji: highlight?.emoji ?? visual.emoji,
+              colors: visual.gradient,
+              size: 44,
+            ),
+            const SizedBox(width: 12),
             Expanded(child: Text(sub.name, style: TextStyle(
                 color: selected ? Colors.white : BrokaColors.textHigh,
                 fontSize: 14.5,
@@ -534,6 +548,43 @@ class _PickedBanner extends StatelessWidget {
         ])),
         const Icon(Icons.check_circle_rounded, color: Colors.white),
       ]),
+    );
+  }
+}
+
+/// A category's or type's picture, small and rounded, in a row - or its
+/// emoji orb when it has none ("Other").
+class _ArtThumb extends StatelessWidget {
+  const _ArtThumb({required this.assetPath, required this.emoji, required this.colors,
+      required this.size});
+  final String? assetPath;
+  final String emoji;
+  final List<Color> colors;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final orb = _EmojiOrb(emoji: emoji, colors: colors, size: size);
+    if (assetPath == null) return orb;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.first.withOpacity(0.6)),
+        boxShadow: [BoxShadow(color: colors.first.withOpacity(0.25), blurRadius: 10)],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(11),
+        child: Image.asset(
+          assetPath!,
+          fit: BoxFit.cover,
+          // The pictures' subject sits right of centre.
+          alignment: const Alignment(0.45, 0),
+          cacheWidth: artDecodeWidth(context, size, size),
+          errorBuilder: (_, __, ___) => orb,
+        ),
+      ),
     );
   }
 }

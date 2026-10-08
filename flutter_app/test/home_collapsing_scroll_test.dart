@@ -457,9 +457,8 @@ void main() {
       // Sections that sit flush against the 16px page gutter.
       expect(tester.getTopLeft(find.text('🔥 ')).dx, 16);
       expect(tester.getTopLeft(find.byType(ProductCard).first).dx, 16);
-      // The rail's first circle: 12px of ListView padding + each pill's own
-      // 4px margin.
-      expect(tester.getTopLeft(find.text(_firstCategory)).dx, 16);
+      // The rail's first card: 16px of ListView padding.
+      expect(tester.getTopLeft(find.byKey(Key('home-rail-card-$_firstCategory'))).dx, 16);
 
       // The search field and the Zeno CTA are boxes rather than bare text, so
       // measure the box, not its contents - their own padding and 1px border

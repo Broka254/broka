@@ -64,6 +64,32 @@ flutter:
     - assets/images/zeno_icon.png
     - assets/audio/ringtone.mp3
     - assets/audio/zeno_boot.wav
+    # Category and subcategory card artwork, the same pictures the website's
+    # category pages use (lib/features/categories/domain/category_visual.dart
+    # and subcategory_visual.dart say which is which). 640px WebP: sharp on a
+    # card at 3x, and about 5 MB for all of them. Flutter lists directories
+    # one level deep, so each category's folder is its own entry.
+    - assets/category_art/
+    - assets/category_art/agriculture/
+    - assets/category_art/arts-and-crafts/
+    - assets/category_art/automobiles/
+    - assets/category_art/baby-and-kids/
+    - assets/category_art/beauty-and-personal-care/
+    - assets/category_art/books-and-education/
+    - assets/category_art/business-and-industrial/
+    - assets/category_art/construction/
+    - assets/category_art/electronics/
+    - assets/category_art/fashion/
+    - assets/category_art/food-and-beverages/
+    - assets/category_art/gaming/
+    - assets/category_art/health-and-medical/
+    - assets/category_art/home-and-furniture/
+    - assets/category_art/land/
+    - assets/category_art/music-and-instruments/
+    - assets/category_art/pets-and-animals/
+    - assets/category_art/property/
+    - assets/category_art/services/
+    - assets/category_art/sports-and-fitness/
 
 # geolocator_android 4.6.x+ requires Flutter 3.29+ (migrated its build.gradle
 # off the imperative Gradle API onto the new declarative Flutter Gradle

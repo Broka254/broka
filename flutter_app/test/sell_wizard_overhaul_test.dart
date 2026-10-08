@@ -450,6 +450,76 @@ void main() {
       expect(data.attributes, {'land_size': '0.125', 'land_size_unit': 'acres'});
       expect(find.text('⅛ acre'), findsOneWidget);
     });
+
+    // 2026-10-08: the type's own screen filters by brand, so the brand is one
+    // tap from a list - "samsung galaxy a54" typed into a box was a brand of
+    // its own to that filter.
+    const phoneBrands = ['Samsung', 'Apple', 'Tecno', 'Infinix', 'Itel', 'Oppo', 'Xiaomi',
+        'Vivo', 'Realme', 'Nokia', 'Huawei'];
+    Future<SellWizardData> phones(WidgetTester tester, {Map<String, String>? attributes}) async {
+      final data = SellWizardData()
+        ..category = 'Electronics'
+        ..categoryId = 'electronics'
+        ..subcategoryId = 'phones'
+        ..subcategoryName = 'Phones'
+        ..attributes = {...?attributes};
+      await _open(tester, SellDetailsScreen(
+        data: data,
+        loadFields: (_) async => Success([
+          CategoryFilterField(fieldName: 'model', fieldType: 'text'),
+          CategoryFilterField(fieldName: 'storage', fieldType: 'select', options: const ['64GB', '128GB']),
+          CategoryFilterField(fieldName: 'brand', fieldType: 'text', options: phoneBrands),
+        ]),
+      ));
+      return data;
+    }
+
+    testWidgets('the brand comes first, one tap per brand', (tester) async {
+      final data = await phones(tester);
+      expect(find.text('BRAND'), findsOneWidget);
+      expect(find.textContaining('Buyers browse Phones by brand'), findsOneWidget);
+      // Ahead of the type's other details, whatever order the server sent.
+      expect(tester.getTopLeft(find.text('BRAND')).dy,
+          lessThan(tester.getTopLeft(find.text('MODEL')).dy));
+
+      await _tap(tester, find.byKey(const Key('attr-brand-Samsung')));
+      await tester.pump();
+      expect(data.attributes['brand'], 'Samsung');
+      // Tapped again, cleared: the field stays optional.
+      await _tap(tester, find.byKey(const Key('attr-brand-Samsung')));
+      await tester.pump();
+      expect(data.attributes.containsKey('brand'), isFalse);
+
+      // The rest of the brands are a tap away.
+      expect(find.byKey(const Key('attr-brand-Huawei')), findsNothing);
+      await _tap(tester, find.byKey(const Key('attr-brand-more')));
+      await tester.pumpAndSettle();
+      await _tap(tester, find.byKey(const Key('attr-brand-Huawei')));
+      await tester.pump();
+      expect(data.attributes['brand'], 'Huawei');
+    });
+
+    testWidgets('a brand that is not listed can still be typed', (tester) async {
+      final data = await phones(tester);
+      await _tap(tester, find.byKey(const Key('attr-brand-other')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('attr-brand-typed')), 'Oukitel');
+      await tester.pump();
+      expect(data.attributes['brand'], 'Oukitel');
+    });
+
+    testWidgets('a restored draft shows the brand it had', (tester) async {
+      await phones(tester, attributes: {'brand': 'samsung'});
+      final chip = find.byKey(const Key('attr-brand-Samsung'));
+      expect(tester.widget<Text>(find.descendant(of: chip, matching: find.byType(Text))).style!.fontWeight,
+          FontWeight.w700, reason: 'Samsung shows as chosen');
+
+      await tester.pumpWidget(const SizedBox());
+      await phones(tester, attributes: {'brand': 'Oukitel'});
+      expect(find.byKey(const Key('attr-brand-typed')), findsOneWidget,
+          reason: 'a typed brand reopens on its box');
+      expect(find.text('Oukitel'), findsOneWidget);
+    });
   });
 
   group('Description step', () {
