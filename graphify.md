@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-211 endpoints served by `backend/main.py`. **Auth** is read from each
+214 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 59, token 4, user 126.
+Counts: admin 20, optional 2, public 59, token 4, user 129.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -268,10 +268,13 @@ Counts: admin 20, optional 2, public 59, token 4, user 126.
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:121) |
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:379) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:115) |
-| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:83) |
-| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:178) |
-| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:227) |
-| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:268) |
+| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:85) |
+| POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:300) |
+| POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:363) |
+| POST | `/zeno/listing-draft/autolist/turn` | user | `autolist_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:341) |
+| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:180) |
+| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:229) |
+| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:270) |
 
 ## Backend modules
 
@@ -423,6 +426,7 @@ Counts: admin 20, optional 2, public 59, token 4, user 126.
 
 ### `backend/api/domains/zeno_assistant/`
 
+- `autolist.py` — Zeno listing an item from its photo (2026-10-08).
 - `contacts.py` — Who "Jane" is, when the user tells Zeno to call Jane.
 - `guides.py` — Zeno's guides: "how do I open a store?", "how do I sell faster?" answered with steps built from the user's own situation, and a button on e…
 - `intents.py` — What Zeno, the assistant, may do - and the commands it understands without asking a model.
@@ -608,7 +612,7 @@ of a change.
 - **trust** — domains: listings; core: config; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
-- **zeno_assistant** — domains: ai_broker, buy_agent, listings, media, premium, trust; core: config, image_processing, rate_limit, vision; database, security
+- **zeno_assistant** — domains: ai_broker, buy_agent, categories, listings, media, premium, trust; core: config, image_processing, rate_limit, vision; database, security
 
 ## Background jobs
 
@@ -648,7 +652,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-98 files in `backend/tests/`.
+99 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -744,6 +748,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_user_privacy.py` — BROKA - What one user can see of another Run: pytest backend/tests/test_user_privacy.py -v
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
 - `test_zeno_assistant.py` — BROKA - Zeno as the user's assistant (POST /zeno/assistant/turn) Run: pytest backend/tests/test_zeno_assistant.py -v
+- `test_zeno_autolist.py` — BROKA - Zeno listing an item from its photo (zeno_assistant/autolist.py) Run: pytest backend/tests/test_zeno_autolist.py -v
 - `test_zeno_draft_sms.py` — Zeno texting the other side of a negotiation (POST /negotiate/zeno-action/draft-sms).
 - `test_zeno_selling.py` — BROKA - Zeno helping a seller write a listing (zeno_assistant/selling.py) Run: pytest backend/tests/test_zeno_selling.py -v
 - `test_zeno_vision.py` — Zeno looking at photos (2026-10-02).
@@ -935,6 +940,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/zeno_action.dart` — What Zeno, the assistant, can do in the app - the app's side of the closed vocabulary in backend/api/domains/zeno_assistant/intents.py.
 - `domain/zeno_selling.dart` — Zeno helping a seller while they write a listing (2026-10-05) - the app's side of backend/api/domains/zeno_assistant/selling.py.
 - `presentation/zeno_action_card.dart` — What Zeno is doing, or asking to do, under its reply - in the typed conversation and, larger, in voice mode.
+- `presentation/zeno_autolist_screen.dart` — Zeno listing an item from its photo (2026-10-08) - "I only take the photo; Zeno does the rest." The app's side of backend api/domains/zeno_…
 - `presentation/zeno_describe_screen.dart` — Zeno writing a listing's description with the seller (2026-10-06) opened from the sell wizard's Description step when Zeno's look at the ph…
 - `presentation/zeno_guide_card.dart` — A guide from Zeno - "how do I open a store?", "tips to sell faster" - as steps to follow rather than a paragraph to remember.
 - `presentation/zeno_live_overlay.dart` — Voice mode - talking to Zeno the way one talks to Siri.
@@ -1090,6 +1096,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `receipts_and_charts_test.dart` — The Seller Dashboard's graphs and its Payment Receipts screen.
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `safe_payment_test.dart` — Paying safely while BROKA handles no deal payments (backend: GET /pricing/safe-payment).
+- `sell_listing_with_zeno_test.dart` — Listing with Zeno, and the sell wizard's way out (2026-10-08).
 - `sell_wizard_overhaul_test.dart` — The sell wizard after the 2026-09-25 listing overhaul (LISTING_OVERHAUL.md).
 - `sell_zeno_premium_test.dart` — Zeno's premium help in the sell wizard (2026-10-05), and the case the wizard makes for a plan while a seller is posting.
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
