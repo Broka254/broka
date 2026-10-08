@@ -11,6 +11,7 @@ import 'package:broka/screens/voip_call_screen.dart';
 import 'package:broka/models/listing.dart';
 import 'package:broka/services/active_call.dart';
 import 'package:broka/services/api_service.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -166,6 +167,44 @@ void main() {
       'listingName': 'Samsung Galaxy A54 with a very long listing title indeed',
     });
     expect(tester.takeException(), isNull);
+    await close(tester);
+  });
+
+  // Answered from the notification (2026-10-08): the call screen opens at
+  // once, before anyone has asked the server whether the call is still on.
+  // When it isn't - the caller gave up first - the server refuses the
+  // answer, and the screen says so and ends the call (and closes, as any
+  // ended call does). It used to sit on "Connecting" to a call nobody was
+  // on, and the phone, "on a call", didn't ring when the caller tried again.
+  testWidgets('a call that ended before Accept reached the server says so', (tester) async {
+    setFakeRoute((uri) => uri.path == '/calls/room-1/answer'
+        ? const FakeResponse({'detail': 'This call has already ended'}, statusCode: 410)
+        : null);
+    await open(tester, {
+      'peerName': 'Ann Buyer',
+      'isCaller': false,
+      'autoAccept': true,
+      'callerRole': 'buyer',
+    });
+    expect(fakeRequests.where((r) => r.method == 'POST' && r.uri.path == '/calls/room-1/answer'),
+        hasLength(1));
+    expect(find.text('Call ended'), findsOneWidget);
+    expect(find.text('The call ended before you answered'), findsOneWidget);
+    await close(tester);
+  });
+
+  // A photo arriving as a URL - what the push carries - shows the face;
+  // only base64 used to.
+  testWidgets('a photo URL is shown, not only an inline selfie', (tester) async {
+    await open(tester, {
+      'peerName': 'Ann Buyer',
+      'peerPhoto': 'https://img.broka.test/img/ann/thumb.webp',
+      'isCaller': false,
+      'callerRole': 'buyer',
+    });
+    expect(find.byWidgetPredicate(
+        (w) => w is BrokaImage && w.source == 'https://img.broka.test/img/ann/thumb.webp'),
+        findsOneWidget);
     await close(tester);
   });
 

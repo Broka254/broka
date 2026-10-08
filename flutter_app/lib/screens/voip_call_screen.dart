@@ -13,11 +13,11 @@
 // is a placeholder ("Buyer", "Seller"...) the screen looks the person up.
 
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../main.dart';
+import '../widgets/broka_image.dart';
 import '../widgets/chat_parts.dart' show kChatGradient;
 import '../widgets/constellation_background.dart';
 import '../services/webrtc_service.dart';
@@ -45,6 +45,12 @@ class VoipCallScreen extends StatefulWidget {
   /// How long the caller waits for an answer: as long as the callee's
   /// phone rings (NotificationService.showIncomingCall's ringFor).
   static const Duration noAnswerAfter = Duration(seconds: 45);
+
+  /// How long the caller waits, once the callee has pressed Accept, for
+  /// their phone to join the call. A phone answering from a closed app
+  /// starts BROKA first, then opens the microphone - and may ask for it.
+  /// Shorter than the server's 120 seconds for an answered call to start.
+  static const Duration answeredJoinWindow = Duration(seconds: 60);
   @override
   State<VoipCallScreen> createState() => _VoipCallScreenState();
 }
@@ -54,7 +60,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
 
   late WebRtcService _svc;
   String _peerName    = '';
-  String? _peerPhoto;          // inline base64; falls back to initials
+  String? _peerPhoto;          // a photo URL or inline base64; else initials
   // Who the other person is, so a placeholder name can be replaced with
   // theirs (_resolvePeer). Empty from call sites that don't know.
   String _peerId      = '';
@@ -69,6 +75,14 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // Caller: nobody answered within [noAnswerAfter], and we hung up.
   bool _noAnswer = false;
   Timer? _noAnswerTimer;
+  // Caller: the callee pressed Accept (the server's callee_answered), and
+  // their phone is on its way into the call - however long that takes,
+  // within [VoipCallScreen.answeredJoinWindow].
+  bool _calleeAnswered = false;
+  // Caller: they answered, but their phone never joined the call.
+  bool _joinTimedOut = false;
+  // Callee: the call ended before this phone could answer it.
+  bool _overBeforeAnswer = false;
   // Callee: this call stopped ringing elsewhere, or Accept was pressed on
   // its notification (NotificationService.ringEnded / answerRequests).
   StreamSubscription<String>? _ringEndedSub;
@@ -202,6 +216,21 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _svc.onPeerRinging = () {
       if (mounted) setState(() => _calleeAlerted = true);
     };
+    _svc.onPeerAnswered = () {
+      if (!mounted || _everConnected || _endingCall) return;
+      setState(() => _calleeAnswered = true);
+      // No longer a question of whether they pick up: they have. The
+      // no-answer window used to run on regardless and hang up on a callee
+      // whose app was still opening from the notification - the call
+      // ended just as it appeared on their screen.
+      _noAnswerTimer?.cancel();
+      _noAnswerTimer = Timer(VoipCallScreen.answeredJoinWindow, () {
+        if (!mounted || _everConnected || _endingCall || _svc.peerJoined) return;
+        _endingCall = true;
+        setState(() => _joinTimedOut = true);
+        _svc.hangup();
+      });
+    };
     _svc.onLocalMediaReady = () {
       if (!mounted) return;
       // The mic (and camera, if granted) is open, so the permissions are
@@ -266,7 +295,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // ended every unanswered call after 30 seconds as a failure.
       _noAnswerTimer = Timer(VoipCallScreen.noAnswerAfter, () {
         // Answered and still connecting: the connect timeout owns that.
-        if (!mounted || _everConnected || _endingCall || _svc.peerJoined) return;
+        if (!mounted || _everConnected || _endingCall || _svc.peerJoined ||
+            _calleeAnswered) {
+          return;
+        }
         if (_callState != CallState.calling &&
             _callState != CallState.connecting) {
           return;
@@ -280,7 +312,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // CallKit) - don't make them decide again.
       _accepted = true;
       RingtoneService.instance.stopFor(roomId);
-      unawaited(ApiService.answerCall(roomId, callToken));
+      _answer(roomId);
       CallKitService.instance.reportOutgoingCall(
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
       _svc.start();
@@ -333,10 +365,29 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     // then it still reported the call as ringing, so this phone's own sweep
     // rang it again and posted a fresh Accept/Decline, and the callee's
     // other phones went on ringing.
-    unawaited(ApiService.answerCall(roomId, _callToken));
+    _answer(roomId);
     CallKitService.instance.reportOutgoingCall(
         roomId: roomId, peerName: _peerName, isVideo: _isVideo);
     _svc.start();
+  }
+
+  /// Tell the server this phone answered (which tells the caller), and
+  /// close if the call turns out to be over: the caller gave up, or it was
+  /// settled as missed, before Accept reached the server. A call opened
+  /// straight from the notification's Accept learns that only here.
+  /// Without it the screen sat on "Connecting" to a call nobody was on,
+  /// and the phone - "on a call" - did not ring when the caller tried
+  /// again.
+  void _answer(String roomId) {
+    unawaited(ApiService.answerCall(roomId, _callToken).then((result) {
+      if (result != CallAnswerResult.over) return;
+      if (!mounted || _everConnected || _endingCall) return;
+      _endingCall = true;
+      // Whoever ended it has recorded the outcome.
+      _resultLogged = true;
+      setState(() => _overBeforeAnswer = true);
+      _svc.hangup();
+    }));
   }
 
   /// Logs the call's outcome once the call truly ends. "completed" if the
@@ -481,33 +532,13 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     }
     final photo = _peerPhoto;
     if (photo != null && photo.isNotEmpty) {
-      // base64, NOT a URL.
-      //
-      // This shipped as Image.network and therefore never once displayed a
-      // face - it failed on every call and fell silently through
-      // errorBuilder to the initials, which is exactly what it looked like
-      // from outside: "you said you'd replace XB with the selfie and it's
-      // still XB".
-      //
-      // profile_photo is an inline base64 payload everywhere in this
-      // codebase - profile_screen, user_profile_screen, home_screen,
-      // trader_list_screen and negotiate_screen's own chat avatars all
-      // decode it with base64Decode. Image.network was simply the wrong
-      // widget, and its errorBuilder turned the mistake into a silent
-      // no-op instead of a visible failure.
-      try {
-        return Image.memory(
-          base64Decode(photo),
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          errorBuilder: (_, __, ___) => _initialsAvatar(),
-        );
-      } catch (_) {
-        // Malformed base64 - decode throws rather than routing through
-        // errorBuilder, so it needs catching here or it takes the screen
-        // down mid-call.
-        return _initialsAvatar();
-      }
+      // Either shape a profile photo comes in. It shipped as Image.network,
+      // which never once showed a face - profile_photo was inline base64
+      // then - and was changed to decode base64 only. A call answered from
+      // its notification now passes the photo URL the push carries (the
+      // caller's image asset), which base64 can't read; BrokaImage reads
+      // both, and anything malformed falls back to the initials.
+      return BrokaImage(photo, fit: BoxFit.cover, placeholder: _initialsAvatar());
     }
     return _initialsAvatar();
   }
@@ -548,7 +579,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // Gold until their phone has the call: the ring colour is the signal
       // that the far end was alerted.
       case CallState.calling:
-        return _calleeAlerted ? BrokaColors.neonBlue : BrokaColors.gold;
+        return (_calleeAlerted || _calleeAnswered)
+            ? BrokaColors.neonBlue : BrokaColors.gold;
       default:                   return BrokaColors.gold;
     }
   }
@@ -572,6 +604,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// blue once the other end is actually alerted.
   String get _stateLabel {
     if (_callState == CallState.connected) return _durationLabel;
+    // Whatever else went wrong on the way, the call was over before this
+    // phone answered it - that is the news.
+    if (_overBeforeAnswer && _isOver) return 'Call ended';
     // Callee, either state: this is an inbound call awaiting their decision.
     if (!_isCaller && !_accepted &&
         (_callState == CallState.ringing ||
@@ -581,6 +616,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     switch (_callState) {
       case CallState.connecting:  return 'Connecting…';
       case CallState.calling:
+        // They pressed Accept; their phone is joining.
+        if (_calleeAnswered) return 'Connecting…';
         // WhatsApp's two words, on the same evidence: "Calling" while the
         // call has reached only the server, "Ringing" once a phone of
         // theirs acknowledged it (_calleeAlerted). It used to guess from
@@ -591,6 +628,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       case CallState.recovering:  return 'Reconnecting…';
       case CallState.ended:
         if (_everConnected) return 'Call ended · $_durationLabel';
+        if (_joinTimedOut) return "Couldn't connect";
         if (_svc.remoteEndReason == 'declined') return 'Call declined';
         if (_noAnswer || _svc.remoteEndReason == 'no_answer') return 'No answer';
         return 'Call ended';
@@ -615,9 +653,16 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       return 'The connection dropped - hold on';
     }
     if (_callState == CallState.calling && _isCaller) {
+      if (_calleeAnswered) return 'They answered - connecting the call';
       return _calleeAlerted
           ? 'Their phone is ringing'
           : "Reaching their phone - they'll see you called if they can't answer";
+    }
+    if (_callState == CallState.ended && _isCaller && _joinTimedOut) {
+      return "They answered, but their phone couldn't join. Try calling again.";
+    }
+    if (_overBeforeAnswer && _isOver) {
+      return 'The call ended before you answered';
     }
     if (_callState == CallState.ended && _isCaller && !_everConnected &&
         (_noAnswer || _svc.remoteEndReason == 'no_answer')) {

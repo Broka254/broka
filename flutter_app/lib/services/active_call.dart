@@ -31,6 +31,13 @@ class ActiveCall {
 
   static const String _prefsKey = 'active_call_v1';
 
+  /// The rooms this phone is done with, for the FCM background isolate:
+  /// a push for one of them that arrives late (FCM holds a call's push for
+  /// up to a minute) must not ring a call already answered or declined
+  /// here. The newest [_settledKept].
+  static const String _settledPrefsKey = 'settled_calls_v1';
+  static const int _settledKept = 20;
+
   /// How long the saved call counts as current without being refreshed.
   /// The screen refreshes it every [_keepAliveEvery]; a call screen that
   /// died with the process stops refreshing, and after this the background
@@ -76,7 +83,7 @@ class ActiveCall {
     if (roomId.isEmpty) return;
     _roomId = roomId;
     _answered = answered;
-    if (answered) _settled.add(roomId);
+    if (answered) settle(roomId);
     _keepAlive?.cancel();
     _keepAlive = Timer.periodic(_keepAliveEvery, (_) => unawaited(_persist()));
     unawaited(_persist());
@@ -84,7 +91,7 @@ class ActiveCall {
 
   /// The callee accepted the call on screen.
   void markAnswered(String roomId) {
-    _settled.add(roomId);
+    settle(roomId);
     if (_roomId != roomId) return;
     _answered = true;
     unawaited(_persist());
@@ -93,12 +100,13 @@ class ActiveCall {
   /// This phone is done with [roomId] (declined it, or it ended) without it
   /// necessarily having had a screen.
   void settle(String roomId) {
-    if (roomId.isNotEmpty) _settled.add(roomId);
+    if (roomId.isEmpty || !_settled.add(roomId)) return;
+    unawaited(_persistSettled(roomId));
   }
 
   /// The call screen for [roomId] closed.
   void end(String roomId) {
-    _settled.add(roomId);
+    settle(roomId);
     if (_roomId != roomId) return;
     _roomId = null;
     _answered = false;
@@ -114,6 +122,17 @@ class ActiveCall {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefsKey,
           '$room|${DateTime.now().millisecondsSinceEpoch}|${_answered ? 1 : 0}');
+    } catch (_) {}
+  }
+
+  Future<void> _persistSettled(String roomId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rooms = (prefs.getStringList(_settledPrefsKey) ?? <String>[])
+        ..remove(roomId)
+        ..add(roomId);
+      await prefs.setStringList(_settledPrefsKey,
+          rooms.length > _settledKept ? rooms.sublist(rooms.length - _settledKept) : rooms);
     } catch (_) {}
   }
 
@@ -146,6 +165,13 @@ class ActiveCall {
   /// the background isolate's version of [shouldRing].
   static Future<bool> savedAllowsRinging(String roomId) async {
     final current = await saved();
+    try {
+      // saved() has just reloaded the preferences from disk.
+      final settled = (await SharedPreferences.getInstance())
+              .getStringList(_settledPrefsKey) ??
+          const <String>[];
+      if (settled.contains(roomId)) return false;
+    } catch (_) {}
     if (current == null) return true;
     if (current.roomId == roomId) return false;
     return !current.answered;

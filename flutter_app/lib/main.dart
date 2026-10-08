@@ -73,8 +73,14 @@ Map<String, dynamic>? pendingColdStartCallData;
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   // Calls ring, rings stop, messages are recorded as announced - see
-  // NotificationService.handleBackgroundMessage.
-  await NotificationService.handleBackgroundMessage(message.data);
+  // NotificationService.handleBackgroundMessage. A message push's own
+  // wording comes along: the sender's face is drawn onto the notification
+  // Android drew from it, which means drawing it again, words and all.
+  await NotificationService.handleBackgroundMessage({
+    ...message.data,
+    if (message.notification?.title != null) 'title': message.notification!.title,
+    if (message.notification?.body != null) 'body': message.notification!.body,
+  });
 }
 
 /// The session ended (ApiService.onSessionEnded): show sign-in, saying why.
@@ -118,6 +124,13 @@ void main() async {
   // notification - SplashScreen routes it, as it does an FCM cold start.
   pendingColdStartCallData =
       await NotificationService.instance.launchCallPayload();
+  final launch = pendingColdStartCallData;
+  if (launch != null && launch['type'] == 'incoming_call' && launch['answer'] == true) {
+    // Accept started the app: the call is answered now, before the app is
+    // even drawn - the caller stops waiting, and nothing here rings for it
+    // again (see answerFromNotification).
+    await NotificationService.instance.answerFromNotification(launch);
+  }
   // broka.co.ke/store links: held until the splash screen is done. Not
   // awaited - startup never waits on it.
   unawaited(DeepLinkService.instance.init(navigatorKey));

@@ -138,6 +138,15 @@ class WebRtcService {
   /// "Ringing".
   VoidCallback?            onPeerRinging;
 
+  /// Caller only: the callee pressed Accept (the server's
+  /// `callee_answered`). Their phone may need many seconds more to join -
+  /// a closed app has to start first - so from here a slow start is the
+  /// call connecting, not going unanswered.
+  VoidCallback?            onPeerAnswered;
+
+  /// See [onPeerAnswered].
+  bool calleeAnswered = false;
+
   /// Why the other side ended the call, when the server said: "declined",
   /// or "no_answer" when nobody picked up. Set before the `ended` state
   /// change it explains.
@@ -623,6 +632,14 @@ class WebRtcService {
           if (isCaller && !_remoteDescriptionSet &&
               _state != CallState.ended && _state != CallState.failed) {
             onPeerRinging?.call();
+          }
+          break;
+        case 'callee_answered':
+          // Server-authored, never relayed, like callee_ringing.
+          if (isCaller && !calleeAnswered &&
+              _state != CallState.ended && _state != CallState.failed) {
+            calleeAnswered = true;
+            onPeerAnswered?.call();
           }
           break;
         case 'hangup':

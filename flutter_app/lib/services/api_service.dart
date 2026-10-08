@@ -1596,17 +1596,26 @@ class ApiService {
   /// server stops reporting the call as ringing (so this phone does not
   /// ring for it again while it connects) and stops the callee's other
   /// phones ringing. Best effort: joining the call says the same, later.
-  static Future<void> answerCall(String roomId, String callToken) async {
-    if (roomId.isEmpty || callToken.isEmpty) return;
+  ///
+  /// [CallAnswerResult.over] means the call ended before it was answered
+  /// (the caller gave up, or it was settled as missed): the call screen
+  /// closes rather than connecting to nothing.
+  static Future<CallAnswerResult> answerCall(String roomId, String callToken) async {
+    if (roomId.isEmpty || callToken.isEmpty) return CallAnswerResult.unknown;
     try {
-      await http
+      final res = await http
           .post(
             Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/answer'),
             headers: const {'Content-Type': 'application/json'},
             body: jsonEncode({'call_token': callToken}),
           )
           .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) return CallAnswerResult.answered;
+      if (res.statusCode == 404 || res.statusCode == 410) {
+        return CallAnswerResult.over;
+      }
     } catch (_) {}
+    return CallAnswerResult.unknown;
   }
 
   /// The call ringing for me right now, on any listing: one request instead
@@ -2038,6 +2047,18 @@ class ApiService {
 
 }
 
+
+/// What the server said to Accept (ApiService.answerCall).
+enum CallAnswerResult {
+  /// The call is this phone's; the caller has been told.
+  answered,
+
+  /// The call ended before it was answered.
+  over,
+
+  /// No answer from the server - carry on connecting.
+  unknown,
+}
 
 /// What the server said when this phone reported an incoming call ringing.
 enum CallAlertResult {

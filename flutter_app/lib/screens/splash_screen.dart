@@ -83,6 +83,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _breatheScale = Tween<double>(begin: 0.98, end: 1.02)
         .animate(CurvedAnimation(parent: _breathe, curve: Curves.easeInOut));
 
+    // Opened from a notification - Accept on an incoming call, above all:
+    // straight there, without the boot sequence or its chime. The call
+    // screen used to wait out all ten seconds of it, after Android had
+    // already spent seconds starting the app, and the caller had hung up
+    // by the time the call appeared.
+    if (pendingColdStartCallData != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _decideNextScreen());
+      return;
+    }
+
     _initSound();
     _scheduleBootMessages();
 

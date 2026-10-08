@@ -241,6 +241,7 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
         return None  # read already - the chat was open, or they were quick
 
     from_zeno = newest.role == "broker"
+    sender_photo = None
     if from_zeno:
         sender_name = "Zeno"
     else:
@@ -248,6 +249,15 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
         sender_name = (await db.execute(
             select(User.name).where(User.id == other_id)
         )).scalar_one_or_none() or ("Seller" if role == "buyer" else "Buyer")
+        # Their face on the notification, which the app draws in when the
+        # push arrives (NotificationService). A URL: the picture itself
+        # would not fit in a push.
+        from api.domains.media.service import avatar_url
+        try:
+            sender_photo = await avatar_url(db, other_id)
+        except Exception as exc:
+            # Cosmetic: the message is pushed without a face.
+            logger.warning("[message_push] no photo for user=%s: %s", other_id, exc)
     listing_name = (listing.name or "").strip()
     short_listing = listing_name if len(listing_name) <= 40 else listing_name[:37] + "..."
     title = f"{sender_name} · {short_listing}" if short_listing else sender_name
@@ -271,6 +281,7 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
             "listingName": listing_name,
             "count":       count,
             "preview":     preview,
+            **({"senderPhoto": sender_photo} if sender_photo else {}),
         },
     }
 

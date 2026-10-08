@@ -80,6 +80,8 @@ Messages on `/calls/ws/{room_id}`:
 | `busy` | server → client | A genuinely different second participant holds the room. |
 | `peer_state` | server → client | The other side's *signaling socket* went away (`disconnected`) or came back (`reconnected`). **Not** a hangup. |
 | `state` | client → server | Client-observed WebRTC peer-connection state (`connected`/`disconnected`/`failed`) — the one thing only the client can see. |
+| `callee_ringing` | server → caller | A phone of the callee's is ringing (`POST /calls/{room_id}/alerted`): "Calling…" becomes "Ringing…". |
+| `callee_answered` | server → caller | The callee pressed Accept (`POST /calls/{room_id}/answer`); their phone is on its way into the call. Re-sent to a caller socket that joins while the call is answered. |
 
 Only `offer`, `answer`, `ice` and `hangup` are ever relayed between peers.
 Everything else is server-authored, so a participant can't forge a
@@ -694,3 +696,90 @@ Tests: `backend/tests/test_one_call_at_a_time.py`,
 (`AppDelegate` passes only the room id), so an iPhone keeps the old
 behaviour there. The busy check is per process, like the call relay
 (see "Multi-instance limitation").
+
+
+# Answering from a closed app, and faces on notifications (2026-10-08)
+
+Reported from phones: with BROKA closed, pressing Accept on an incoming
+call "takes time opening, and once it opens the call gets disconnected";
+"sometimes after I accept an incoming call there is a notification of
+another incoming call from the same person"; and asked for: calls and
+messages showing the face of the person calling or writing.
+
+**Why the answered call dropped.** Accept on a closed app started BROKA,
+then sat behind the splash screen's boot sequence - a fixed **10.3
+seconds** - then asked `GET /calls/pending` whether the call was still
+ringing, and only then opened the call screen, which was the first thing to
+tell the server (`/answer`). Nothing told the caller at all: the caller's
+screen hangs up after 45 seconds of ringing unless the callee's socket has
+joined. Answer after 20-odd seconds of ringing, add a cold start and those
+ten seconds, and the caller's screen gave up just as the call appeared on
+the callee's - "No answer" for them, a dead call screen for the callee.
+
+**Why it rang again.** The app's first inbox sweep on starting asked
+`/calls/incoming`, which still reported the call ringing (the server had not
+heard of the answer yet), and nothing on the phone knew the call had been
+accepted: `ActiveCall` learns of a call only when its screen opens. So the
+sweep posted a fresh "Incoming call" with Accept and Decline over the call
+being answered. The same happened when the app was only in the background:
+resuming runs a catch-up sweep while Accept is still opening the call. And
+when the caller's screen had given up (above) and they dialled again, the
+callee's phone - sitting on the dead call screen, "on a call" - did not ring
+for the redial until that screen failed, and then the sweep rang it.
+
+What changed:
+
+- **Accept answers at once** (`NotificationService.answerFromNotification`),
+  before anything is drawn - in `main()` when the press started the app:
+  `POST /calls/{room_id}/answer` with the call token the push carries, the
+  call settled in `ActiveCall` (so no sweep, push or tap rings it again;
+  settled rooms are also saved for the FCM background isolate), and its
+  ringing notification taken down.
+- **The caller is told**: `/answer` sends the server-authored
+  `callee_answered` to the caller's socket (and to a caller socket joining
+  an answered call). The caller's screen cancels its 45-second no-answer
+  window, shows "Connecting… / They answered - connecting the call", and
+  gives the callee's phone 60 seconds (`answeredJoinWindow`, inside the
+  server's 120-second establishment TTL) to join, ending as "Couldn't
+  connect" if it never does.
+- **The call screen opens immediately.** Accept on a notification that
+  carries the call token (the push's, and now the sweep's) opens
+  `/voip-call` answered straight from the payload, with no `/pending` round
+  trip first - which would in any case answer "no call" once the answer has
+  reached the server. The splash screen skips its boot sequence and chime
+  when the app was opened from a notification. If the call turns out to be
+  over (`/answer` answers 404/410), the call screen says "The call ended
+  before you answered" and closes.
+- `showIncomingCall` asks `ActiveCall.shouldRing` again after its awaits
+  (the ringer starting, the caller's photo), so a call answered in that
+  moment is not posted. The slow ringing open (a locked phone's full-screen
+  launch) does nothing if Accept opened the call meanwhile.
+
+**Faces.** The incoming-call push carries `callerPhoto`, the missed-call
+push `callerPhoto`, the message push `senderPhoto`, and `/calls/incoming`
+and `/calls/pending` `caller_photo`: the URL of the person's profile photo
+as an image asset (`media.service.avatar_url`, the 480px thumb). Never the
+image itself - FCM carries 4KB - and nothing for a base64 selfie the media
+backfill has not converted yet (an empty string in push data, whose values
+are strings). The app (`notification_avatar.dart`) downloads it, crops it
+round at 192px and caches it on disk, so the same person's next call or
+message costs nothing; the inbox sweep's notifications use the inbox's
+photo, URL or inline. An incoming call waits at most 1.5 seconds for a
+first download before it is posted without a face (`callFaceWait`). Android
+draws a message or missed-call push itself while the app is not in front,
+and cannot fetch a picture: the background handler draws the same
+notification again over it, silently, with the face - only while Android's
+is still showing and still says what this push said. The call screen shows
+a photo URL as well as an inline selfie (`BrokaImage`).
+
+Tests: `backend/tests/test_call_answer_and_faces.py`;
+`flutter_app/test/answer_from_notification_test.dart`,
+`flutter_app/test/notification_faces_test.dart`, and two in
+`voip_call_screen_test.dart`. Not device-verified.
+
+**Still open.** iOS: CallKit's Answer still goes through the old path (no
+call token from `AppDelegate`), and pushes Android draws have no face on
+iOS (that needs a Notification Service Extension). A caller who hangs up in
+the seconds between the callee's Accept and their phone joining leaves the
+callee's screen retrying its socket (the server closes it with 4004, which
+the app does not yet treat as final) until its reconnect budget runs out.

@@ -535,6 +535,7 @@ class GlobalPollerService {
         callerName:  fromName,
         isVideo:     isVideo,
         listingName: thread['listing_name'] as String?,
+        callerPhoto: thread['counterpart_photo'] as String?,
       );
 
   Future<void> _announceMessage(
@@ -545,6 +546,8 @@ class GlobalPollerService {
         preview: preview,
         listingId: thread['listing_id'] as String,
         buyerId: thread['buyer_id'] as String?,
+        // Their face; Zeno's messages carry none.
+        photo: zeno ? null : thread['counterpart_photo'] as String?,
         payload: {
           'type':      'new_message',
           'listingId': thread['listing_id'],
@@ -608,12 +611,10 @@ class GlobalPollerService {
         callerName: callerName,
         listingName: thread['listing_name'] as String? ?? 'your listing',
         isVideo: isVideo,
-        payload: {
-          'type':      'incoming_call',
-          'roomId':    roomId,
-          'listingId': listingId,
-          'buyerId':   buyerId,
-        },
+        callerPhoto: callInfo['caller_photo'] as String?,
+        payload: _callPayload(callInfo,
+            roomId: roomId, listingId: listingId, buyerId: buyerId,
+            listingName: thread['listing_name'] as String?),
       );
     } catch (_) {}
   }
@@ -672,16 +673,37 @@ class GlobalPollerService {
       callerName: call['caller_name'] as String? ?? 'Someone',
       listingName: (listingName == null || listingName.isEmpty) ? 'your listing' : listingName,
       isVideo: call['call_type'] == 'video',
-      payload: {
-        'type':      'incoming_call',
-        'roomId':    roomId,
-        'listingId': listingId,
-        'buyerId':   buyerId,
-        'callType':  call['call_type'],
-      },
+      callerPhoto: call['caller_photo'] as String?,
+      payload: _callPayload(call,
+          roomId: roomId, listingId: listingId, buyerId: buyerId,
+          listingName: listingName),
     );
     return true;
   }
+
+  /// What a ringing notification from this sweep carries - the same as
+  /// the server's push, call token included, so Accept on it opens the
+  /// call at once (NotificationService.navigateFromPayload) the way Accept
+  /// on a pushed one does.
+  static Map<String, dynamic> _callPayload(
+    Map<String, dynamic> call, {
+    required String roomId,
+    required String listingId,
+    required String buyerId,
+    String? listingName,
+  }) =>
+      {
+        'type':        'incoming_call',
+        'roomId':      roomId,
+        'listingId':   listingId,
+        'buyerId':     buyerId,
+        if (call['call_type'] != null) 'callType': call['call_type'],
+        if (call['call_token'] != null) 'callToken': call['call_token'],
+        if (call['caller_name'] != null) 'callerName': call['caller_name'],
+        if (call['caller_id'] != null) 'callerId': call['caller_id'],
+        if (call['caller_photo'] != null) 'callerPhoto': call['caller_photo'],
+        if (listingName != null && listingName.isNotEmpty) 'listingName': listingName,
+      };
 
   /// Tell the server this phone is ringing (the caller's "Ringing"), once
   /// per call.

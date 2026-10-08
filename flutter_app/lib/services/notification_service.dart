@@ -39,6 +39,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'active_call.dart';
 import 'api_service.dart';
+import 'notification_avatar.dart';
 import 'ringtone_service.dart';
 
 /// Runs when Decline is pressed on an incoming-call notification.
@@ -180,6 +181,12 @@ class NotificationService {
   final StreamController<String> _answerRequests = StreamController<String>.broadcast();
   Stream<String> get answerRequests => _answerRequests.stream;
 
+  /// How long an incoming call waits for its caller's photo before it is
+  /// posted without one. From a closed app the notification IS the ring,
+  /// so this is time the phone is silent: short. A photo seen before is
+  /// cached and costs nothing.
+  static const Duration callFaceWait = Duration(milliseconds: 1500);
+
   // Android's FLAG_INSISTENT: the notification's sound repeats until the
   // notification is cancelled or opened. Used only when no in-app ringer
   // is running (see showIncomingCall).
@@ -299,10 +306,37 @@ class NotificationService {
       await declineFromPayload(data);
       return;
     }
-    await navigateFromPayload({
-      ...data,
-      'answer': actionId == callAcceptActionId,
-    });
+    final answer = actionId == callAcceptActionId;
+    if (answer && data['type'] == 'incoming_call') {
+      await answerFromNotification(data);
+    }
+    await navigateFromPayload({...data, 'answer': answer});
+  }
+
+  /// Accept was pressed on an incoming call's notification. Done before
+  /// the call screen exists - from main() when the press started the app -
+  /// because the seconds until it does are where the call was lost:
+  ///
+  ///  * the server is told now (POST /calls/{room}/answer, with the call
+  ///    token the push carried), which tells the caller. The caller's
+  ///    screen gave up after 45 seconds unless this phone had joined the
+  ///    call, so a phone starting BROKA from cold to answer lost the call
+  ///    as it opened;
+  ///  * nothing on this phone rings for it again. The app's first sweep
+  ///    on starting found the call still ringing - the server learned of
+  ///    the answer only from the call screen - and posted a fresh
+  ///    "Incoming call" from the same person over the call being answered.
+  ///
+  /// The network request is not awaited: the call screen opening is.
+  Future<void> answerFromNotification(Map<String, dynamic> data) async {
+    final roomId = data['roomId'] as String?;
+    if (roomId == null || roomId.isEmpty) return;
+    ActiveCall.instance.settle(roomId);
+    final token = data['callToken'] as String?;
+    if (token != null && token.isNotEmpty) {
+      unawaited(ApiService.answerCall(roomId, token));
+    }
+    await cancelIncomingCall(roomId);
   }
 
   /// The app was started by the user acting on one of our notifications
@@ -430,6 +464,7 @@ class NotificationService {
       listingName: data['listingName'] as String? ?? 'your listing',
       isVideo: data['callType'] == 'video',
       payload: data,
+      callerPhoto: _nonEmpty(data['callerPhoto']),
     );
     await acknowledgeIncomingCall(roomId, data['callToken'] as String?);
   }
@@ -478,6 +513,7 @@ class NotificationService {
         await svc.initialize(
             navKey: GlobalKey<NavigatorState>(), requestPermission: false);
         await svc.callEnded(roomId);
+        if (type == 'missed_call') await svc.addFaceToPushed(data);
         return;
       case 'incoming_call':
         // A fresh, throwaway navigator key - nothing in this isolate ever
@@ -503,6 +539,7 @@ class NotificationService {
           // Nothing outside this isolate could stop a ringer started here -
           // see showIncomingCall's ringInApp.
           ringInApp: false,
+          callerPhoto: _nonEmpty(data['callerPhoto']),
         );
         await svc.acknowledgeIncomingCall(roomId, data['callToken'] as String?);
         return;
@@ -511,8 +548,103 @@ class NotificationService {
         // so the app's own sweep doesn't announce it a second time when
         // the app next runs.
         await recordMessageAnnounced(data);
+        await svc.initialize(
+            navKey: GlobalKey<NavigatorState>(), requestPermission: false);
+        await svc.addFaceToPushed(data);
         return;
     }
+  }
+
+  /// Android draws a message or missed-call push by itself while the app is
+  /// not in front, from the push's title and body - and with no face: it
+  /// cannot fetch a picture. Once the sender's photo is here, the same
+  /// notification is drawn again over it, silently (same tag, id 0, so it
+  /// replaces rather than adds, and does not buzz twice).
+  ///
+  /// Only while Android's is still showing, and still says what this push
+  /// said: one the user already opened or swiped away must not come back,
+  /// and a newer message's notification (the next push, drawn while this
+  /// photo downloaded) must not be put back to this older one. Without the
+  /// photo, or if anything fails, Android's stays as it is.
+  Future<void> addFaceToPushed(Map<String, dynamic> data) async {
+    if (!_ready || defaultTargetPlatform != TargetPlatform.android) return;
+    final type = data['type'];
+    final photo = _nonEmpty(type == 'missed_call' ? data['callerPhoto'] : data['senderPhoto']);
+    final listingId = data['listingId'] as String?;
+    if (photo == null || listingId == null || listingId.isEmpty) return;
+    final buyerId = data['buyerId'] as String?;
+    final tag = type == 'missed_call'
+        ? missedCallTag(listingId, buyerId)
+        : threadTag(listingId, buyerId);
+    final face = await NotificationAvatar.load(photo, timeout: const Duration(seconds: 8));
+    if (face == null) return;
+    // What Android drew from this push (main.dart passes the push's own
+    // title and body along with its data).
+    final drawnTitle = data['title'] as String?;
+    final drawnBody = data['body'] as String?;
+    try {
+      final showing = await _plugin.getActiveNotifications();
+      if (!showing.any((n) =>
+          n.id == 0 && n.tag == tag &&
+          (drawnTitle == null || n.title == drawnTitle) &&
+          (drawnBody == null || n.body == drawnBody))) {
+        return;
+      }
+    } catch (_) {
+      return;
+    }
+    if (type == 'missed_call') {
+      await showMissedCall(
+        listingId: listingId,
+        buyerId: buyerId,
+        myRole: data['myRole'] as String? ?? 'buyer',
+        callerName: data['callerName'] as String? ?? 'Someone',
+        isVideo: data['callType'] == 'video',
+        listingName: data['listingName'] as String?,
+        face: face,
+        silent: true,
+      );
+      return;
+    }
+    final m = _messageNotification(data);
+    await showNewMessage(
+      fromName: m.title,
+      preview: m.body,
+      listingId: listingId,
+      buyerId: buyerId,
+      payload: m.payload,
+      face: face,
+      silent: true,
+    );
+  }
+
+  static String? _nonEmpty(Object? value) {
+    if (value is! String) return null;
+    final s = value.trim();
+    return s.isEmpty || s == 'None' ? null : s;
+  }
+
+  /// A message push as the app draws it: the push's own title and body
+  /// when it has them, else built from its data as the server builds them.
+  static ({String title, String body, Map<String, dynamic> payload})
+      _messageNotification(Map<String, dynamic> data) {
+    final sender = data['senderName'] as String? ?? 'New message';
+    final listingName = (data['listingName'] as String? ?? '').trim();
+    final count = int.tryParse('${data['count'] ?? ''}') ?? 1;
+    final preview = data['preview'] as String? ?? '';
+    return (
+      title: data['title'] as String? ??
+          (listingName.isEmpty ? sender : '$sender · $listingName'),
+      body: data['body'] as String? ??
+          (count > 1 ? '$count new messages · $preview' : preview),
+      payload: {
+        'type': 'new_message',
+        'listingId': data['listingId'],
+        'buyerId': data['buyerId'],
+        'myRole': data['myRole'],
+        if (data['screen'] == 'zeno') 'screen': 'zeno',
+      },
+    );
   }
 
   /// The key GlobalPollerService keeps a thread's announced message ids
@@ -586,24 +718,14 @@ class NotificationService {
     }
     if (onScreen) return;
 
-    final sender = data['senderName'] as String? ?? 'New message';
-    final listingName = (data['listingName'] as String? ?? '').trim();
-    final count = int.tryParse('${data['count'] ?? ''}') ?? 1;
-    final preview = data['preview'] as String? ?? '';
+    final m = _messageNotification(data);
     await showNewMessage(
-      fromName: data['title'] as String? ??
-          (listingName.isEmpty ? sender : '$sender · $listingName'),
-      preview: data['body'] as String? ??
-          (count > 1 ? '$count new messages · $preview' : preview),
+      fromName: m.title,
+      preview: m.body,
       listingId: listingId,
       buyerId: buyerId,
-      payload: {
-        'type': 'new_message',
-        'listingId': listingId,
-        'buyerId': buyerId,
-        'myRole': data['myRole'],
-        if (data['screen'] == 'zeno') 'screen': 'zeno',
-      },
+      payload: m.payload,
+      photo: _nonEmpty(data['senderPhoto']),
     );
   }
 
@@ -666,6 +788,35 @@ class NotificationService {
         if (tappedRoom != null) await _cancelCallNotification(tappedRoom);
         return;
       }
+      final pushedToken = data['callToken'] as String?;
+      if (data['answer'] == true && tappedRoom != null && tappedRoom.isNotEmpty &&
+          pushedToken != null && pushedToken.isNotEmpty) {
+        // Accept on a notification that carries the call's own token (the
+        // push's, or the sweep's): the call screen opens now, answered.
+        // It used to ask the server first whether the call was still
+        // ringing - a round trip before anything appeared, and one that
+        // answers "no call" once Accept has told the server (see
+        // answerFromNotification). The call screen finds out instead: the
+        // server refuses the answer for a call that is over, and the
+        // screen closes.
+        await cancelIncomingCall(tappedRoom);
+        nav.pushNamed('/voip-call', arguments: {
+          'roomId':      tappedRoom,
+          'userId':      ApiService.currentUserId ?? '',
+          'callToken':   pushedToken,
+          'isCaller':    false,
+          'peerName':    data['callerName'] as String? ?? 'Someone',
+          'peerId':      data['callerId'] as String?,
+          'peerPhoto':   _nonEmpty(data['callerPhoto']),
+          'listingName': data['listingName'] as String? ?? 'your listing',
+          'listingId':   listingId,
+          'buyerId':     buyerId,
+          'callerRole':  iAmBuyer ? 'seller' : 'buyer',
+          'callType':    data['callType'] as String? ?? 'audio',
+          'autoAccept':  true,
+        });
+        return;
+      }
       // This may be tapped long after it was posted (app backgrounded or
       // fully killed in between), so the payload itself only carries
       // enough to identify *which listing* - re-check the call's live
@@ -676,6 +827,16 @@ class NotificationService {
       // another device, missed, or cancelled by the time this is tapped),
       // land on the conversation instead of a dead call screen.
       final callInfo = await ApiService.checkIncomingCall(listingId);
+      // While that was asked, Accept on the notification may have opened
+      // this call already (a locked phone's full-screen launch is opened
+      // this way, ringing, and Accept is right there) - or another call
+      // is now under way. Opening anything now would stack a second call
+      // screen, or the chat, over it.
+      final now = ActiveCall.instance;
+      if ((tappedRoom != null && now.roomId == tappedRoom) ||
+          (now.onCall && now.answered)) {
+        return;
+      }
       final roomId = callInfo?['room_id'] as String?;
       // Whatever happens next, this notification has served its purpose -
       // take it down so it can't be tapped again after the call is gone.
@@ -696,6 +857,8 @@ class NotificationService {
         'isCaller':    false,
         'peerName':    callInfo['caller_name'] as String? ?? 'Someone',
         'peerId':      callInfo['caller_id'] as String?,
+        'peerPhoto':   _nonEmpty(callInfo['caller_photo']) ??
+            _nonEmpty(data['callerPhoto']),
         'listingName': data['listingName'] as String? ?? 'your listing',
         'listingId':   listingId,
         'buyerId':     buyerId,
@@ -745,14 +908,23 @@ class NotificationService {
       'thread_${listingId}_${buyerId ?? ''}';
 
   /// Show a notification for a newly received message in a thread.
+  ///
+  /// [photo] is the sender's profile photo (a URL, or the inbox's inline
+  /// selfie), drawn as the notification's large icon; [face] is one
+  /// already loaded. [silent] redraws without a sound - see
+  /// addFaceToPushed.
   Future<void> showNewMessage({
     required String fromName,
     required String preview,
     required String listingId,
     String? buyerId,
     Map<String, dynamic>? payload,
+    String? photo,
+    Uint8List? face,
+    bool silent = false,
   }) async {
     if (!_ready) return;
+    face ??= await NotificationAvatar.load(photo);
     final tag = threadTag(listingId, buyerId);
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
@@ -765,6 +937,8 @@ class NotificationService {
         tag: tag,
         icon: smallIcon,
         color: _accent,
+        largeIcon: face != null ? ByteArrayAndroidBitmap(face) : null,
+        silent: silent,
         styleInformation: BigTextStyleInformation(preview),
       ),
       iOS: DarwinNotificationDetails(threadIdentifier: tag),
@@ -814,11 +988,15 @@ class NotificationService {
     bool isVideo = false,
     String? listingName,
     String? roomId,
+    String? callerPhoto,
+    Uint8List? face,
+    bool silent = false,
   }) async {
     // A call that is over: its ringing notification, if one is still up
     // (an app that was closed has no other way to learn it stopped), goes.
     if (roomId != null && roomId.isNotEmpty) await callEnded(roomId);
     if (!_ready) return;
+    face ??= await NotificationAvatar.load(callerPhoto);
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         _messageChannel.id,
@@ -830,6 +1008,8 @@ class NotificationService {
         tag: missedCallTag(listingId, buyerId),
         icon: smallIcon,
         color: _accent,
+        largeIcon: face != null ? ByteArrayAndroidBitmap(face) : null,
+        silent: silent,
       ),
       iOS: const DarwinNotificationDetails(),
     );
@@ -868,6 +1048,7 @@ class NotificationService {
       isVideo: data['callType'] == 'video',
       listingName: data['listingName'] as String?,
       roomId: data['roomId'] as String?,
+      callerPhoto: _nonEmpty(data['callerPhoto']),
     );
   }
 
@@ -905,6 +1086,9 @@ class NotificationService {
     // - over the call itself when the user answered. Without it the
     // notification rings instead, insistently, and stops when cancelled.
     bool ringInApp = true,
+    // The caller's profile photo (a URL, or an inline selfie): their face
+    // on the notification.
+    String? callerPhoto,
   }) async {
     if (!_ready) return;
     // On a call, or done with this one (see ActiveCall.shouldRing). Every
@@ -921,6 +1105,23 @@ class NotificationService {
       }
     }
 
+    // Their face, within a short wait: a cached photo is immediate, and a
+    // first download gets this long before the call is posted without
+    // one. In the app the ring above has already started.
+    final face = await NotificationAvatar.load(callerPhoto, timeout: callFaceWait);
+
+    // Asked again: the awaits above leave room for the call to be
+    // answered, declined or opened meanwhile - Accept on the notification
+    // a moment ago, its screen opening. Posting now put an "Incoming call"
+    // with Accept and Decline back up over a call already being answered.
+    if (!ActiveCall.instance.shouldRing(roomId)) {
+      // Its screen, if open, owns the ring from here.
+      if (ActiveCall.instance.roomId != roomId) {
+        await RingtoneService.instance.stopFor(roomId);
+      }
+      return;
+    }
+
     // Everything Decline needs travels in the payload, because Decline can
     // run in an isolate that has only this to go on. The poller's payload
     // lacks the call type; declining an audio/video call records the
@@ -932,7 +1133,7 @@ class NotificationService {
       if (payload?['callType'] == null) 'callType': isVideo ? 'video' : 'audio',
     };
 
-    final details = incomingCallDetails(ringing: ringing, ringFor: ringFor);
+    final details = incomingCallDetails(ringing: ringing, ringFor: ringFor, face: face);
     try {
       await _plugin.show(
         // Room-scoped, not a fixed constant - two different incoming calls
@@ -961,6 +1162,7 @@ class NotificationService {
   static NotificationDetails incomingCallDetails({
     required bool ringing,
     required Duration ringFor,
+    Uint8List? face,
   }) {
     return NotificationDetails(
       android: AndroidNotificationDetails(
@@ -997,6 +1199,8 @@ class NotificationService {
         timeoutAfter: ringFor.inMilliseconds + 5000,
         icon: smallIcon,
         color: _accent,
+        // Who is calling, by face.
+        largeIcon: face != null ? ByteArrayAndroidBitmap(face) : null,
         // A channel sound plays once. When it is the only sound (no in-app
         // ringer), make it repeat like a ringtone until the notification
         // is answered, declined or cancelled.

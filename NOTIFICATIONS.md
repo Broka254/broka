@@ -288,3 +288,16 @@ first sweep" was set by the first thread with news, so that sweep silenced
 one thread and announced every other. It is set once the sweep is over.
 
 **One call at a time** is in CALLING.md.
+
+
+## 7. Faces, and answering from the notification (2026-10-08)
+
+Calls, missed calls and messages show the photo of the person calling or
+writing, and Accept on an incoming call opens the call at once. Both are
+described in CALLING.md ("Answering from a closed app, and faces on
+notifications"). For this document: the pushes now carry the photo's URL
+(`callerPhoto`, `senderPhoto`; never the image), the app turns it into the
+notification's large icon, and a message or missed-call push that Android
+drew by itself is drawn again with the face by the background handler,
+which now also receives the push's title and body.
+

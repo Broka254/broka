@@ -5,6 +5,7 @@ BROKA - Calls Router
   • Initiate call    : POST /calls/initiate   (pushes every phone of the callee's, issues room_id + call_token)
   • Call token       : GET  /calls/{room_id}/token   (exchange for callee, e.g. after an FCM tap)
   • Alerted          : POST /calls/{room_id}/alerted   (a callee's phone is ringing -> caller sees "Ringing")
+  • Answer           : POST /calls/{room_id}/answer   (Accept pressed -> caller stops waiting for an answer)
   • Pending call     : GET  /calls/pending/{listing_id}   (callee poll fallback)
   • Incoming call    : GET  /calls/incoming   (the same, on any listing, in one request)
   • TURN credentials : GET  /calls/turn-credentials  (Cloudflare Realtime TURN)
@@ -40,6 +41,7 @@ from api.security import get_current_user, create_call_token, decode_call_token
 import httpx
 
 from api.core.client_ip import client_ip as resolve_client_ip
+from api.domains.media.service import avatar_url
 from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
 from api.core import cloudflare_turn_client, call_state, push_devices
@@ -649,6 +651,10 @@ async def initiate_call(
         "roomId":      room_id,
         "callerName":  payload.caller_name,
         "callerId":    current["id"],
+        # The caller's face on the ringing notification. A URL, never the
+        # image: FCM carries 4KB. "" when they have no photo as an asset
+        # (data values are strings - None would arrive as "None").
+        "callerPhoto": await _photo_of(db, current["id"]) or "",
         "listingName": payload.listing_name or listing.name,
         "listingId":   payload.listing_id,
         "buyerId":     buyer_id_for_thread,  # explicit, not assumed - see fix note above
@@ -787,6 +793,12 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
     if session.state in (CallState.initiating, CallState.ringing):
         await call_state.update_state(room_id, CallState.accepted)
         logger.info("[calls] CALL_ANSWERED room=%s", room_id)
+        # The caller stops waiting for an answer now. Their screen hung up
+        # after 45 seconds unless the callee's socket had joined - and a
+        # callee answering from a closed app needs that long and more to
+        # start BROKA and open the call, so the call they had just accepted
+        # ended as it appeared on their screen.
+        await _tell_caller(room_id, session.caller_id, {"type": "callee_answered"})
         _spawn(_push_ring_over(session))
         return {"status": "answered"}
     if call_state.is_terminal(session.state):
@@ -940,6 +952,7 @@ async def _incoming_view(db: AsyncSession, session, user_id: str) -> dict:
         "buyer_id":    session.callee_id if session.caller_id == seller_id else session.caller_id,
         "caller_name": session.caller_name,
         "caller_id":   session.caller_id,
+        "caller_photo": await _photo_of(db, session.caller_id),
         "call_type":   session.call_type,
         "call_token":  create_call_token(user_id, session.room_id),
     }
@@ -967,14 +980,33 @@ async def _settle_unanswered(session, *, by: str) -> None:
         logger.warning("[calls] could not settle unanswered room=%s: %s", session.room_id, exc)
 
 
+async def _photo_of(db: Optional[AsyncSession], user_id: str) -> Optional[str]:
+    """Their profile photo's URL for a notification (avatar_url), or None.
+    A face is cosmetic: a failure here must never cost a call its ring.
+    Without `db`, a short session of its own - asked only once there is a
+    call to show."""
+    try:
+        if db is not None:
+            return await avatar_url(db, user_id)
+        async with AsyncSessionLocal() as own:
+            return await avatar_url(own, user_id)
+    except Exception as exc:
+        logger.warning("[calls] no photo for user=%s: %s", user_id, exc)
+        return None
+
+
 async def _tell_caller_ringing(room_id: str, caller_id: str) -> None:
+    await _tell_caller(room_id, caller_id, {"type": "callee_ringing"})
+
+
+async def _tell_caller(room_id: str, caller_id: str, message: dict) -> None:
     """Server-authored, never relayed: a participant cannot forge it."""
     room = _rooms.get(room_id)
     ws = room.get(caller_id) if room else None
     if ws is None:
         return
     try:
-        await ws.send_json({"type": "callee_ringing"})
+        await ws.send_json(message)
     except Exception:
         pass
 
@@ -1197,6 +1229,7 @@ async def _push_missed_call(
             "myRole":    callee_role,
             "callType":  session.call_type,
             "callerName": who,
+            "callerPhoto": await _photo_of(db, session.caller_id) or "",
             "listingName": listing.name,
             # The call card in the chat: the app records it as announced,
             # so its inbox sweep does not announce the same missed call.
@@ -1406,6 +1439,14 @@ async def call_signaling(
         if latest is not None and latest.callee_alerted:
             try:
                 await websocket.send_json({"type": "callee_ringing"})
+            except Exception:
+                pass
+        # Answered while this socket was away (a reconnect between Accept
+        # and the callee joining): the answer would otherwise reach no one,
+        # and the caller's screen would give up on a call being picked up.
+        if latest is not None and latest.state == CallState.accepted:
+            try:
+                await websocket.send_json({"type": "callee_answered"})
             except Exception:
                 pass
     elif session.state in (CallState.initiating, CallState.ringing):
@@ -1762,6 +1803,7 @@ async def get_pending_call(
         "room_id":     session.room_id,
         "caller_name": session.caller_name,
         "caller_id":   session.caller_id,  # explicit, replaces parsing buyer_id out of room_id client-side
+        "caller_photo": await _photo_of(None, session.caller_id),
         "call_type":   session.call_type,
         "call_token":  create_call_token(current["id"], session.room_id),
     }

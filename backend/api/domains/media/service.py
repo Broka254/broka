@@ -115,6 +115,35 @@ async def load_assets(db: AsyncSession, ids: Iterable[str]) -> dict[str, MediaAs
     return {a.id: a for a in rows}
 
 
+async def avatar_url(db: AsyncSession, user_id: Optional[str]) -> Optional[str]:
+    """The small URL of `user_id`'s profile photo, for a push notification
+    to show their face - or None when there is no photo stored as an image
+    asset yet. A base64 selfie the backfill hasn't converted can't travel:
+    FCM carries 4KB, the selfie is often a megabyte or more.
+
+    The legacy column is read only as far as one of BROKA's own URLs could
+    reach (an older app build saves the URL it was shown), never the whole
+    base64 payload - this runs for every message pushed."""
+    if not user_id:
+        return None
+    from sqlalchemy import func
+
+    from api.database import User
+    row = (await db.execute(
+        select(User.profile_photo_id, func.substr(User.profile_photo, 1, 512))
+        .where(User.id == user_id)
+    )).one_or_none()
+    if row is None:
+        return None
+    asset_id, legacy_head = row
+    # "" is the backfill's "could not convert": the legacy value decides.
+    asset_id = asset_id or own_asset_id(legacy_head)
+    if not asset_id:
+        return None
+    urls = asset_urls((await load_assets(db, [asset_id])).get(asset_id))
+    return urls.get("thumb") if urls else None
+
+
 async def read_variant(asset: MediaAsset, name: str = "large") -> Optional[bytes]:
     stored = asset.variant_map()
     for candidate in (name, "large", "medium", "thumb"):
