@@ -115,18 +115,18 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1219) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1653) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:527) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:983) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1738) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:460) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:422) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:512) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1318) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:719) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:769) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:696) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1252) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1694) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:529) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1015) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1779) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:462) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:424) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:514) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1351) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:725) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:775) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:702) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -652,7 +652,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-100 files in `backend/tests/`.
+101 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -668,6 +668,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_buy_agent.py` — BROKA - Buy-Agent Tests Run: pytest backend/tests/test_buy_agent.py -v
 - `test_buy_agent_conversation.py` — BROKA - Conversational Buying Agent tests Run: pytest backend/tests/test_buy_agent_conversation.py -v
 - `test_buyer_protection.py` — Partial payments, buyer release, the delivery claim's automatic release, and refund requests (ESCROW_AUDIT.md, "Partial payments" and "Rele…
+- `test_call_answer_and_faces.py` — Answering from a closed app, and faces on notifications (2026-10-08).
 - `test_call_history.py` — Call history (2026-10-02): GET /calls/history, the app's list of calls.
 - `test_call_push_and_teardown.py` — BROKA - call push shaping + WS room teardown regressions (calling audit, 2026-09-18)
 - `test_call_reconnect.py` — Regression tests for the calling audit (2026-09-14).
@@ -982,6 +983,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `last_screen_tracker.dart` — BROKA - Last Screen Tracker Persists a lightweight descriptor of the most recently visited screen (route name + small JSON of primitive arg…
 - `listing_publisher.dart` — Publishing a listing from the sell wizard: the photos' ids, the showcase, then POST /listings - in a form that is safe to repeat.
 - `local_chat_store.dart` — BROKA - Local Chat Store
+- `notification_avatar.dart` — BROKA - the face on a notification.
 - `notification_service.dart` — BROKA - Notification Service (local notifications + FCM foreground/tap handling)
 - `photo_capture.dart` — Taking or picking a photo, the same way everywhere BROKA asks for one.
 - `photo_upload_tracker.dart` — Background uploads for the photos a user picks, one per file.
@@ -1068,6 +1070,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### Tests (`flutter_app/test/`)
 
+- `answer_from_notification_test.dart` — Answering a call from its notification (2026-10-08).
 - `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
 - `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
 - `call_history_screen_test.dart` — Calls (2026-10-02): every call with a buyer or seller, newest first, on Home's visual system.
@@ -1092,6 +1095,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `menu_test.dart` — The Menu tab (formerly Profile), and the Profile and Settings screens it opens.
 - `missed_call_notification_test.dart` — Missed calls and unread messages, as reported from a phone (2026-10-02): "notification for missed calls is not working", and nothing on Hom…
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
+- `notification_faces_test.dart` — Faces on notifications (2026-10-08).
 - `notification_init_test.dart` — The incoming-call notification for a closed app was never posted.
 - `one_call_at_a_time_test.dart` — One call at a time, as reported from phones (2026-10-07): "multiple calls arriving at the same time even when another call is going on / ri…
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
