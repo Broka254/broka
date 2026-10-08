@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-210 endpoints served by `backend/main.py`. **Auth** is read from each
+211 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 58, token 4, user 126.
+Counts: admin 20, optional 2, public 59, token 4, user 126.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -115,17 +115,18 @@ Counts: admin 20, optional 2, public 58, token 4, user 126.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:996) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1421) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1219) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1653) |
 | POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:527) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:769) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1522) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:983) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1738) |
 | POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:460) |
 | GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:422) |
 | POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:512) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1095) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:707) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:684) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1318) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:719) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:769) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:696) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -193,24 +194,24 @@ Counts: admin 20, optional 2, public 58, token 4, user 126.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:213) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:485) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:119) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4267) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4343) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1729) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4164) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4240) |
 | POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3332) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3858) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3923) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1805) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4231) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4307) |
 | POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3177) |
 | GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3432) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3733) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3777) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3824) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:3801) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3798) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3842) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3889) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:3866) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -647,7 +648,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-97 files in `backend/tests/`.
+98 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -708,6 +709,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_negotiation_actions.py` — Tests for Zeno's negotiation action vocabulary (api/core/negotiation_actions.py).
 - `test_notifications.py` — Notifications that reach a phone whose app is closed (2026-10-07).
 - `test_nudge_templates.py` — Tests for the system-generated availability-nudge SMS (api/core/nudge_templates.py).
+- `test_one_call_at_a_time.py` — One call at a time (2026-10-08).
 - `test_otp_sms_retriever.py` — Covers the OTP SMS body built for Android's SMS Retriever API.
 - `test_password_hashing.py` — Password hashing: what bcrypt is given, and what it costs the event loop.
 - `test_password_reset.py` — Forgotten and changed passwords.
@@ -953,6 +955,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/services/`
 
+- `active_call.dart` — BROKA - the call this phone is on, and the calls it is done with.
 - `api_service.dart` — BROKA - API Service
 - `assemblyai_stt_service.dart` — lib/services/assemblyai_stt_service.dart
 - `broka_tts.dart` — BROKA TTS Service
@@ -1076,6 +1079,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `missed_call_notification_test.dart` — Missed calls and unread messages, as reported from a phone (2026-10-02): "notification for missed calls is not working", and nothing on Hom…
 - `negotiation_screens_test.dart` — The two negotiation screens on Home's visual system (2026-09-26): the Zeno negotiation room (NegotiateScreen) and the one-on-one chat (Nego…
 - `notification_init_test.dart` — The incoming-call notification for a closed app was never posted.
+- `one_call_at_a_time_test.dart` — One call at a time, as reported from phones (2026-10-07): "multiple calls arriving at the same time even when another call is going on / ri…
 - `otp_and_phone_test.dart` — Covers the two auth-screen behaviours that were reported as unreliable: OTP code entry (which must accept a code arriving from ANY source,…
 - `password_reset_test.dart` — Forgotten and changed passwords, and Settings' language choice.
 - `photo_capture_test.dart` — Store images are taken the way listing photos are (services/photo_capture.dart): BROKA's own camera first, the phone's camera only as the f…
@@ -1189,7 +1193,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Calls and messages with the app closed (2026-10-07)
+- `CHANGES.md` — One call at a time, and every missed call and message announced (2026-10-08)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
