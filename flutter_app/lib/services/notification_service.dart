@@ -410,15 +410,17 @@ class NotificationService {
     // would be a far worse failure than an occasional late ring.
     final listingId = data['listingId'] as String?;
     if (listingId != null) {
-      try {
-        final live = await ApiService.checkIncomingCall(listingId);
-        if (live == null) {
-          debugPrint('[Notifications] stale incoming-call push for $roomId - not ringing');
-          await callEnded(roomId);
-          return;
-        }
-      } catch (e) {
-        debugPrint('[Notifications] could not verify call $roomId ($e) - ringing anyway');
+      final live = await ApiService.checkIncomingCallStatus(listingId);
+      // Only the server's answer ends the call here - "couldn't tell" rings.
+      // The listing's ringing call is another room when the caller has
+      // dialled again since: this push is for the replaced call.
+      if (live.known && live.call?['room_id'] != roomId) {
+        debugPrint('[Notifications] stale incoming-call push for $roomId - not ringing');
+        await callEnded(roomId);
+        return;
+      }
+      if (!live.known) {
+        debugPrint('[Notifications] could not verify call $roomId - ringing anyway');
       }
     }
 
@@ -523,7 +525,7 @@ class NotificationService {
   /// a thread can have two things to announce at once - a missed call and
   /// the message before it - and with one slot each announcement erased
   /// the other, which was then announced again on the next sweep.
-  static const int _seenIdsKept = 8;
+  static const int _seenIdsKept = 20;
 
   /// The ids announced for a thread, newest last. Stored comma-separated:
   /// a value written by an older build (one id, no comma) reads as a list

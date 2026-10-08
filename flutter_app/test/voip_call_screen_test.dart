@@ -9,6 +9,7 @@ import 'package:broka/main.dart' show BrokaColors;
 import 'package:broka/screens/negotiation_screen.dart';
 import 'package:broka/screens/voip_call_screen.dart';
 import 'package:broka/models/listing.dart';
+import 'package:broka/services/active_call.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/widgets/constellation_background.dart';
 import 'package:flutter/material.dart';
@@ -223,5 +224,60 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
+  });
+
+  // Review, 2026-10-08: a redial's screen opens on top of the call it
+  // replaced. That call then ends - and its screen popped whatever was on
+  // top, hanging up the redial, and stopped the foreground service the
+  // redial's call runs on.
+  testWidgets("a replaced call's screen closes itself, not the redial's on top",
+      (tester) async {
+    final serviceCalls = <String>[];
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('com.broka.app/call_service'), (call) async {
+      serviceCalls.add(call.method);
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(
+          const MethodChannel('com.broka.app/call_service'), (_) async => null);
+      ActiveCall.instance.reset();
+    });
+
+    final nav = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(MaterialApp(navigatorKey: nav, home: const SizedBox()));
+    nav.currentState!.push(MaterialPageRoute<void>(
+      settings: const RouteSettings(name: '/voip-call', arguments: {
+        'roomId': 'room-1',
+        'userId': 'seller-1',
+        'callToken': 't',
+        'peerName': 'Amina Wanjiru',
+        'isCaller': true,
+        'callerRole': 'seller',
+        'listingName': 'Airtel 5G router',
+      }),
+      builder: (_) => const VoipCallScreen(animateBackground: false),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+    // The redial's screen, now the phone's call, opens on top before the
+    // replaced call (microphone refused here: it fails at once) is taken
+    // down.
+    ActiveCall.instance.begin('room-2', answered: true);
+    nav.currentState!.push(MaterialPageRoute<void>(
+      builder: (_) => const SizedBox(key: Key('redial-screen')),
+    ));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    serviceCalls.clear();
+    await tester.pump(const Duration(seconds: 3));
+
+    expect(find.byKey(const Key('redial-screen')), findsOneWidget);
+    expect(find.byType(VoipCallScreen, skipOffstage: false), findsNothing);
+    expect(serviceCalls, isNot(contains('stop')),
+        reason: "the redial's call keeps its foreground service");
+    ActiveCall.instance.reset(); // its keep-alive timer
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 3));
   });
 }

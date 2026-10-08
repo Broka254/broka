@@ -185,14 +185,12 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       if (s == CallState.ended || s == CallState.failed) {
         _noAnswerTimer?.cancel();
         _logCallResultOnce();
-        CallForegroundService.stop();
+        if (_ownsCall) CallForegroundService.stop();
         // Take the call out of iOS's native UI - otherwise the system keeps
         // showing an active call the user can't dismiss, with the audio
         // session still open.
         CallKitService.instance.endCall(_svc.roomId);
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) Navigator.pop(context);
-        });
+        Future.delayed(const Duration(seconds: 2), _closeOwnScreen);
       }
     };
     _svc.onDurationTick = (d) {
@@ -404,13 +402,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _ringEndedSub?.cancel();
     _answerSub?.cancel();
     final roomId = _svc.roomId;
-    // The foreground service, the CallKit hooks and the ring are shared by
-    // the whole app. A screen for a call that is no longer the phone's call
-    // (a ring the same caller's redial replaced) must not take them from
-    // the call that is.
-    final ownsCall = ActiveCall.instance.roomId == roomId;
     RingtoneService.instance.stopFor(roomId);
-    if (ownsCall) {
+    if (_ownsCall) {
       CallForegroundService.stop();
       CallKitService.instance.onEndedByNative = null;
       CallKitService.instance.onMuteChanged = null;
@@ -427,6 +420,30 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /// The foreground service, the CallKit hooks and the ring are shared by
+  /// the whole app. A screen for a call that is no longer the phone's call
+  /// (one a redial replaced, under the redial's screen) must not take them
+  /// from the call that is.
+  bool get _ownsCall {
+    final active = ActiveCall.instance.roomId;
+    return active == null || active == _svc.roomId;
+  }
+
+  /// Close this call's screen - not whatever is on top. A redial's screen
+  /// sits above the call it replaced, and that call ending used to pop the
+  /// redial's screen (hanging the new call up) and leave its own dead
+  /// screen behind (review, 2026-10-08).
+  void _closeOwnScreen() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isActive) return;
+    if (route.isCurrent) {
+      Navigator.of(context).pop();
+    } else {
+      Navigator.of(context).removeRoute(route);
+    }
+  }
 
   String get _durationLabel {
     final m = _duration.inMinutes.remainder(60).toString().padLeft(2, '0');

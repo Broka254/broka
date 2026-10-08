@@ -249,6 +249,11 @@ class GlobalPollerService {
       // The first sweep this install ever makes records what every thread
       // holds without announcing any of it - see _checkThreadForNewMessage.
       final announce = prefs.getBool(_primedKey) ?? false;
+      // Likewise what a last message hides, on the first sweep of a build
+      // that asks for it: the build before kept one id per thread, so a
+      // missed call it announced before a later message would otherwise
+      // be announced again, days late, on the first launch after updating.
+      final hiddenPrimed = prefs.getBool(_hiddenPrimedKey) ?? false;
       for (final thread in threads) {
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
@@ -285,7 +290,8 @@ class GlobalPollerService {
         }
 
         await _checkThreadForNewMessage(thread, prefs, announce: announce);
-        await _checkWhatTheLastMessageHides(thread, prefs, announce: announce);
+        await _checkWhatTheLastMessageHides(thread, prefs,
+            announce: announce && hiddenPrimed);
         // BUG FIX (calling audit, 2026-09-14): this used to be gated on
         // `my_role == 'seller'`. GET /calls/pending/{listing_id} already
         // scopes its answer to the authenticated caller as CALLEE, whatever
@@ -301,6 +307,7 @@ class GlobalPollerService {
         if (!byListing) await _checkThreadForIncomingCall(thread);
       }
       if (!announce) await prefs.setBool(_primedKey, true);
+      if (!hiddenPrimed) await prefs.setBool(_hiddenPrimedKey, true);
     } catch (_) {
       // Network hiccup or not logged in - just try again next tick.
     } finally {
@@ -328,14 +335,28 @@ class GlobalPollerService {
   /// id, and on the first sweep after updating, when no id has been
   /// recorded yet and every thread would otherwise announce its last
   /// message again.
-  bool _alreadyHandled(Map<String, dynamic> thread, SharedPreferences prefs) {
+  ///
+  /// Handled by its text, the id is recorded too. Otherwise the ids of what
+  /// the last message hides (_checkWhatTheLastMessageHides) were the first
+  /// ones in the list, the text fallback stopped applying, and the next
+  /// sweep announced this message again (review, 2026-10-08).
+  Future<bool> _alreadyHandled(
+    Map<String, dynamic> thread, SharedPreferences prefs,
+  ) async {
     final id = thread['last_message_id'] as String?;
+    final listingId = thread['listing_id'] as String;
+    final buyerId = thread['buyer_id'] as String?;
     if (id != null && id.isNotEmpty) {
-      final ids = NotificationService.announcedIds(
-          prefs, thread['listing_id'] as String, thread['buyer_id'] as String?);
+      final ids = NotificationService.announcedIds(prefs, listingId, buyerId);
       if (ids.isNotEmpty) return ids.contains(id);
     }
-    return prefs.getString(_seenKeyFor(thread)) == _textSignature(thread);
+    if (prefs.getString(_seenKeyFor(thread)) != _textSignature(thread)) {
+      return false;
+    }
+    if (id != null && id.isNotEmpty) {
+      await NotificationService.markAnnounced(prefs, listingId, buyerId, id);
+    }
+    return true;
   }
 
   Future<void> _recordHandled(
@@ -346,8 +367,17 @@ class GlobalPollerService {
     if (id != null && id.isNotEmpty) {
       await NotificationService.markAnnounced(prefs,
           thread['listing_id'] as String, thread['buyer_id'] as String?, id);
+      final kind = thread['last_msg_type'] == 'call' ? 'call' : 'message';
+      await prefs.setString(_lastOfKindKey(thread, kind), id);
     }
   }
+
+  /// The last missed call, and the last message, announced for a thread -
+  /// what the inbox's unread_missed_call / unread_message are checked
+  /// against first. The id list alone forgot a missed call still unread
+  /// once eight newer ids had pushed it out, and announced it again.
+  String _lastOfKindKey(Map<String, dynamic> thread, String kind) =>
+      'global_poll_last_${kind}_${thread['listing_id']}_${thread['buyer_id'] ?? ''}';
 
   /// Mark a thread as seen without notifying.
   ///
@@ -368,6 +398,7 @@ class GlobalPollerService {
   /// Key recording that this install has completed at least one sweep.
   /// Distinct from the per-thread signature keys - see below.
   static const _primedKey = 'global_poll_primed_v1';
+  static const _hiddenPrimedKey = 'global_poll_hidden_primed_v1';
 
   Future<void> _checkThreadForNewMessage(
     Map<String, dynamic> thread, SharedPreferences prefs, {
@@ -381,14 +412,14 @@ class GlobalPollerService {
     // Don't notify about our own most recent message.
     if (lastRole == myRole) return;
 
-    if (_alreadyHandled(thread, prefs)) return; // already notified for this message
+    if (await _alreadyHandled(thread, prefs)) return; // already notified for this message
     // The server's push for it may have been shown by Android while this
     // isolate wasn't looking - recorded by the FCM background isolate, in
     // its own copy of the preferences. Read them again before announcing.
     try {
       await prefs.reload();
     } catch (_) {}
-    if (_alreadyHandled(thread, prefs)) return;
+    if (await _alreadyHandled(thread, prefs)) return;
     await _recordHandled(thread, prefs);
 
     // Suppression is now per-INSTALL, not per-thread.
@@ -457,30 +488,35 @@ class GlobalPollerService {
     final lastId = thread['last_message_id'] as String?;
     final fromName = thread['counterpart_name'] as String? ?? 'Someone';
 
-    Future<bool> fresh(Object? item) async {
+    Future<bool> fresh(Object? item, String kind) async {
       if (item is! Map) return false;
       final id = item['id'] as String?;
       if (id == null || id.isEmpty || id == lastId) return false;
-      if (NotificationService.wasAnnounced(prefs, listingId, buyerId, id)) {
-        return false;
-      }
+      final slot = _lastOfKindKey(thread, kind);
+      if (prefs.getString(slot) == id) return false;
       try {
         await prefs.reload(); // a push may have announced it meanwhile
       } catch (_) {}
-      if (NotificationService.wasAnnounced(prefs, listingId, buyerId, id)) {
-        return false;
-      }
+      final pushed =
+          NotificationService.wasAnnounced(prefs, listingId, buyerId, id);
+      await prefs.setString(slot, id);
+      if (pushed) return false;
       await NotificationService.markAnnounced(prefs, listingId, buyerId, id);
       return announce;
     }
 
     final call = thread['unread_missed_call'];
-    if (await fresh(call)) {
+    if (await fresh(call, 'call')) {
       await _announceMissedCall(thread, fromName,
           isVideo: (call as Map)['call_type'] == 'video');
     }
     final message = thread['unread_message'];
-    if (await fresh(message)) {
+    // Under the thread's one message tag: when the last row is itself a
+    // message announced there (Zeno's, say), the older one hidden behind it
+    // would replace it. Recorded, not shown - the newer stays up.
+    final lastIsAnnouncedMessage = thread['last_msg_type'] != 'call' &&
+        thread['last_role'] != (thread['my_role'] ?? 'buyer');
+    if (await fresh(message, 'message') && !lastIsAnnouncedMessage) {
       final m = message as Map;
       await _announceMessage(thread, fromName,
           _previewFor(m['msg_type'] as String? ?? 'text',
@@ -535,7 +571,11 @@ class GlobalPollerService {
     final listingId = thread['listing_id'] as String?;
     if (listingId == null) return;
     try {
-      final callInfo = await ApiService.checkIncomingCall(listingId);
+      final status = await ApiService.checkIncomingCallStatus(listingId);
+      // Couldn't ask: change nothing. Taking the ring down on a failed
+      // request marked a live call done for good (review, 2026-10-08).
+      if (!status.known) return;
+      final callInfo = status.call;
       if (callInfo == null) {
         // No call pending any more. If we posted a ringing notification for
         // this listing earlier, take it down - otherwise a cancelled,

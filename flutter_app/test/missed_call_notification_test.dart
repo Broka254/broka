@@ -89,7 +89,8 @@ void main() {
     shown.clear();
     cancelled.clear();
     // Past the first-ever sweep, which deliberately announces nothing.
-    SharedPreferences.setMockInitialValues({'global_poll_primed_v1': true});
+    SharedPreferences.setMockInitialValues(
+        {'global_poll_primed_v1': true, 'global_poll_hidden_primed_v1': true});
     ApiService.currentUserId = 'seller-1';
     GlobalPollerService.instance.appInForeground = true;
   });
@@ -254,6 +255,70 @@ void main() {
     inbox = [_thread(lastId: 'n1', lastMessage: 'new', lastType: 'text')];
     await sweep();
     expect(shown.map((s) => s['body']), ['new']);
+  });
+
+  // Review, 2026-10-08: the build before kept one id per thread (or, older
+  // still, only the last message's text).
+  test('after updating, a message handled by its text is not announced again',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'global_poll_primed_v1': true,
+      'global_poll_hidden_primed_v1': true,
+      'global_poll_seen_listing-1_buyer-1': 'buyer|text|Call me back',
+    });
+    inbox = [_thread(
+      lastId: 'm2', lastMessage: 'Call me back', lastType: 'text', unread: 2,
+      unreadMessage: {'id': 'm2', 'content': 'Call me back', 'msg_type': 'text'},
+      unreadMissedCall: {'id': 'c1', 'call_type': 'voice'},
+    )];
+    await sweep();
+    await sweep();
+    expect(shown.map((s) => s['title']), ['Missed call from Ann']);
+  });
+
+  test('after updating, a missed call the old build announced is not announced again',
+      () async {
+    // The old build announced c1, then m2, and kept only m2.
+    SharedPreferences.setMockInitialValues({
+      'global_poll_primed_v1': true,
+      'global_poll_seen_id_listing-1_buyer-1': 'm2',
+    });
+    inbox = [_thread(
+      lastId: 'm2', lastMessage: 'Call me back', lastType: 'text', unread: 2,
+      unreadMissedCall: {'id': 'c1', 'call_type': 'voice'},
+    )];
+    await sweep();
+    expect(shown, isEmpty);
+    // A missed call after that is news.
+    inbox = [_thread(
+      lastId: 'm2', lastMessage: 'Call me back', lastType: 'text', unread: 3,
+      unreadMissedCall: {'id': 'c2', 'call_type': 'voice'},
+    )];
+    await sweep();
+    expect(shown.map((s) => s['title']), ['Missed call from Ann']);
+  });
+
+  test('an unread missed call is announced once however many messages follow',
+      () async {
+    for (var i = 0; i < 30; i++) {
+      inbox = [_thread(
+        lastId: 'm$i', lastMessage: 'message $i', lastType: 'text', unread: i + 2,
+        unreadMissedCall: {'id': 'c1', 'call_type': 'voice'},
+      )];
+      await sweep();
+    }
+    expect(shown.where((s) => s['title'] == 'Missed call from Ann'), hasLength(1));
+    expect(shown, hasLength(31));
+  });
+
+  test("an older message hidden behind Zeno's does not replace it", () async {
+    inbox = [_thread(
+      lastId: 'z1', lastMessage: 'Ann asks for the last price', lastType: 'text',
+      lastRole: 'broker', unread: 1,
+      unreadMessage: {'id': 'h1', 'content': 'Last price?', 'msg_type': 'text'},
+    )];
+    await sweep();
+    expect(shown.map((s) => s['body']), ['Ann asks for the last price']);
   });
 
   testWidgets('tapping a missed call opens the chat with the buyer', (tester) async {

@@ -149,6 +149,45 @@ void main() {
     });
   });
 
+  group('a push whose call cannot be checked', () {
+    Map<String, dynamic> push(String room) => {
+          'type': 'incoming_call',
+          'roomId': room,
+          'listingId': 'listing-1',
+          'buyerId': 'buyer-1',
+          'callerName': 'Ann',
+        };
+
+    // Review, 2026-10-08: a timed-out check (a weak signal) read as "no
+    // call", and the live call was marked done - nothing rang it again.
+    test('rings anyway, and the call is not marked done', () async {
+      final down = MockClient((req) async => _json({'detail': 'busy'}, 503));
+      await http.runWithClient(
+          () => NotificationService.instance.handleForegroundFcmMessage(push('room-x')),
+          () => down);
+      expect(ActiveCall.instance.isSettled('room-x'), isFalse);
+      expect(shown, hasLength(1));
+    });
+
+    test('a definite "no call" does not ring', () async {
+      final over = MockClient((req) async => _json({'has_call': false}));
+      await http.runWithClient(
+          () => NotificationService.instance.handleForegroundFcmMessage(push('room-y')),
+          () => over);
+      expect(shown, isEmpty);
+    });
+
+    test('a late push for a call the caller has since replaced does not ring',
+        () async {
+      final newer = MockClient((req) async =>
+          _json({'has_call': true, 'room_id': 'room-new', 'call_token': 't'}));
+      await http.runWithClient(
+          () => NotificationService.instance.handleForegroundFcmMessage(push('room-old')),
+          () => newer);
+      expect(shown, isEmpty);
+    });
+  });
+
   group('a call the server refuses', () {
     test('initiateCall reports why', () async {
       final client = MockClient((req) async => _json({

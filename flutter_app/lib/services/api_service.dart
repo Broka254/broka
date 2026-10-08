@@ -1992,7 +1992,16 @@ class ApiService {
     }
   }
   // ── Incoming call check (polls for active call rooms) ─────────────────────
-  static Future<Map<String, dynamic>?> checkIncomingCall(String listingId) async {
+  static Future<Map<String, dynamic>?> checkIncomingCall(String listingId) async =>
+      (await checkIncomingCallStatus(listingId)).call;
+
+  /// The call ringing me on [listingId], if any - and whether the server
+  /// answered at all. `known` is false on a timeout, a network error or a
+  /// 5xx: "couldn't tell", which must never be read as "no call". Read
+  /// that way, a live call whose check timed out on a weak signal was
+  /// taken down and marked done, and never rang (review, 2026-10-08).
+  static Future<({bool known, Map<String, dynamic>? call})>
+      checkIncomingCallStatus(String listingId) async {
     try {
       var response = await http.get(
         Uri.parse('$baseUrl/calls/pending/$listingId'),
@@ -2017,10 +2026,14 @@ class ApiService {
       }
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data['has_call'] == true) return data;
+        return (
+          known: true,
+          call: data is Map<String, dynamic> && data['has_call'] == true ? data : null,
+        );
       }
+      if (response.statusCode == 404) return (known: true, call: null);
     } catch (_) {}
-    return null;
+    return (known: false, call: null);
   }
 
 }
