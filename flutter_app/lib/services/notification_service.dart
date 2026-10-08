@@ -39,6 +39,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'active_call.dart';
 import 'api_service.dart';
+import 'call_foreground_service.dart';
 import 'notification_avatar.dart';
 import 'ringtone_service.dart';
 
@@ -767,112 +768,13 @@ class NotificationService {
     final type = data['type'] as String?;
 
     if (type == 'incoming_call') {
-      final listingId = data['listingId'] as String?;
-      final buyerId = data['buyerId'] as String? ?? '';
-      final iAmBuyer = ApiService.currentUserId != null &&
-          ApiService.currentUserId == buyerId;
-      if (listingId == null) return;
-      final tappedRoom = data['roomId'] as String?;
-      final active = ActiveCall.instance;
-      if (tappedRoom != null && active.roomId == tappedRoom) {
-        // That call's screen is already open. It used to open a second
-        // time on top of itself - two call screens, two connections to one
-        // call, each replacing the other's on the server. Accept on the
-        // notification answers it on the screen that is there.
-        await _cancelCallNotification(tappedRoom);
-        if (data['answer'] == true) _answerRequests.add(tappedRoom);
-        return;
+      try {
+        await _openIncomingCall(nav, data);
+      } finally {
+        // Opened over the lock screen for this call (MainActivity), it
+        // stays there only if a call screen is now up.
+        releaseLockScreenUnlessOnCall();
       }
-      if (active.onCall && active.answered) {
-        // On another call: this one is not opened over it.
-        if (tappedRoom != null) await _cancelCallNotification(tappedRoom);
-        return;
-      }
-      final pushedToken = data['callToken'] as String?;
-      if (data['answer'] == true && tappedRoom != null && tappedRoom.isNotEmpty &&
-          pushedToken != null && pushedToken.isNotEmpty) {
-        // Accept on a notification that carries the call's own token (the
-        // push's, or the sweep's): the call screen opens now, answered.
-        // It used to ask the server first whether the call was still
-        // ringing - a round trip before anything appeared, and one that
-        // answers "no call" once Accept has told the server (see
-        // answerFromNotification). The call screen finds out instead: the
-        // server refuses the answer for a call that is over, and the
-        // screen closes.
-        await cancelIncomingCall(tappedRoom);
-        nav.pushNamed('/voip-call', arguments: {
-          'roomId':      tappedRoom,
-          'userId':      ApiService.currentUserId ?? '',
-          'callToken':   pushedToken,
-          'isCaller':    false,
-          'peerName':    data['callerName'] as String? ?? 'Someone',
-          'peerId':      data['callerId'] as String?,
-          'peerPhoto':   _nonEmpty(data['callerPhoto']),
-          'listingName': data['listingName'] as String? ?? 'your listing',
-          'listingId':   listingId,
-          'buyerId':     buyerId,
-          'callerRole':  iAmBuyer ? 'seller' : 'buyer',
-          'callType':    data['callType'] as String? ?? 'audio',
-          'autoAccept':  true,
-        });
-        return;
-      }
-      // This may be tapped long after it was posted (app backgrounded or
-      // fully killed in between), so the payload itself only carries
-      // enough to identify *which listing* - re-check the call's live
-      // status here and get a fresh, still-valid room-scoped call token
-      // the same way the in-app poller does, rather than trusting
-      // anything time-sensitive that was baked in when the notification
-      // was first shown. If it's no longer pending (already answered on
-      // another device, missed, or cancelled by the time this is tapped),
-      // land on the conversation instead of a dead call screen.
-      final callInfo = await ApiService.checkIncomingCall(listingId);
-      // While that was asked, Accept on the notification may have opened
-      // this call already (a locked phone's full-screen launch is opened
-      // this way, ringing, and Accept is right there) - or another call
-      // is now under way. Opening anything now would stack a second call
-      // screen, or the chat, over it.
-      final now = ActiveCall.instance;
-      if ((tappedRoom != null && now.roomId == tappedRoom) ||
-          (now.onCall && now.answered)) {
-        return;
-      }
-      final roomId = callInfo?['room_id'] as String?;
-      // Whatever happens next, this notification has served its purpose -
-      // take it down so it can't be tapped again after the call is gone.
-      final postedRoomId = data['roomId'] as String?;
-      if (postedRoomId != null) await cancelIncomingCall(postedRoomId);
-      if (callInfo == null || roomId == null) {
-        nav.pushNamed('/direct-chat', arguments: {
-          'listingId': listingId,
-          'role':      iAmBuyer ? 'buyer' : 'seller',
-          'buyer_id':  buyerId,
-        });
-        return;
-      }
-      nav.pushNamed('/voip-call', arguments: {
-        'roomId':      roomId,
-        'userId':      ApiService.currentUserId ?? '',
-        'callToken':   callInfo['call_token'] as String? ?? '',
-        'isCaller':    false,
-        'peerName':    callInfo['caller_name'] as String? ?? 'Someone',
-        'peerId':      callInfo['caller_id'] as String?,
-        'peerPhoto':   _nonEmpty(callInfo['caller_photo']) ??
-            _nonEmpty(data['callerPhoto']),
-        'listingName': data['listingName'] as String? ?? 'your listing',
-        'listingId':   listingId,
-        'buyerId':     buyerId,
-        'callerRole':  iAmBuyer ? 'seller' : 'buyer',
-        'callType':    callInfo['call_type'] as String? ?? 'audio',
-        // Only the Accept button answers. A tap on the notification body
-        // arrives here looking exactly like the notification's
-        // fullScreenIntent, which Android fires by itself when a call
-        // comes in on a locked phone - so answering on "tapped" answered
-        // every such call with the microphone live before anyone touched
-        // the phone. Otherwise the call screen opens ringing, with its own
-        // Accept and Decline.
-        'autoAccept':  data['answer'] == true,
-      });
       return;
     }
     // "Deal Complete" (api/core/push_subscribers.py, on release) asks the
@@ -896,6 +798,133 @@ class NotificationService {
       });
       return;
     }
+  }
+
+  /// An incoming call's notification, tapped or answered: its call screen,
+  /// or - the call being over - its chat.
+  Future<void> _openIncomingCall(
+      NavigatorState nav, Map<String, dynamic> data) async {
+    final listingId = data['listingId'] as String?;
+    final buyerId = data['buyerId'] as String? ?? '';
+    final iAmBuyer = ApiService.currentUserId != null &&
+        ApiService.currentUserId == buyerId;
+    if (listingId == null) return;
+    final tappedRoom = data['roomId'] as String?;
+    final active = ActiveCall.instance;
+    if (tappedRoom != null && active.roomId == tappedRoom) {
+      // That call's screen is already open. It used to open a second
+      // time on top of itself - two call screens, two connections to one
+      // call, each replacing the other's on the server. Accept on the
+      // notification answers it on the screen that is there.
+      await _cancelCallNotification(tappedRoom);
+      if (data['answer'] == true) _answerRequests.add(tappedRoom);
+      return;
+    }
+    if (active.onCall && active.answered) {
+      // On another call: this one is not opened over it.
+      if (tappedRoom != null) await _cancelCallNotification(tappedRoom);
+      return;
+    }
+    final pushedToken = data['callToken'] as String?;
+    if (data['answer'] == true && tappedRoom != null && tappedRoom.isNotEmpty &&
+        pushedToken != null && pushedToken.isNotEmpty) {
+      // Accept on a notification that carries the call's own token (the
+      // push's, or the sweep's): the call screen opens now, answered.
+      // It used to ask the server first whether the call was still
+      // ringing - a round trip before anything appeared, and one that
+      // answers "no call" once Accept has told the server (see
+      // answerFromNotification). The call screen finds out instead: the
+      // server refuses the answer for a call that is over, and the
+      // screen closes.
+      await cancelIncomingCall(tappedRoom);
+      nav.pushNamed('/voip-call', arguments: {
+        'roomId':      tappedRoom,
+        'userId':      ApiService.currentUserId ?? '',
+        'callToken':   pushedToken,
+        'isCaller':    false,
+        'peerName':    data['callerName'] as String? ?? 'Someone',
+        'peerId':      data['callerId'] as String?,
+        'peerPhoto':   _nonEmpty(data['callerPhoto']),
+        'listingName': data['listingName'] as String? ?? 'your listing',
+        'listingId':   listingId,
+        'buyerId':     buyerId,
+        'callerRole':  iAmBuyer ? 'seller' : 'buyer',
+        'callType':    data['callType'] as String? ?? 'audio',
+        'autoAccept':  true,
+      });
+      return;
+    }
+    // This may be tapped long after it was posted (app backgrounded or
+    // fully killed in between), so the payload itself only carries
+    // enough to identify *which listing* - re-check the call's live
+    // status here and get a fresh, still-valid room-scoped call token
+    // the same way the in-app poller does, rather than trusting
+    // anything time-sensitive that was baked in when the notification
+    // was first shown. If it's no longer pending (already answered on
+    // another device, missed, or cancelled by the time this is tapped),
+    // land on the conversation instead of a dead call screen.
+    final callInfo = await ApiService.checkIncomingCall(listingId);
+    // While that was asked, Accept on the notification may have opened
+    // this call already (a locked phone's full-screen launch is opened
+    // this way, ringing, and Accept is right there) - or another call
+    // is now under way. Opening anything now would stack a second call
+    // screen, or the chat, over it.
+    final now = ActiveCall.instance;
+    if ((tappedRoom != null && now.roomId == tappedRoom) ||
+        (now.onCall && now.answered)) {
+      return;
+    }
+    final roomId = callInfo?['room_id'] as String?;
+    // Whatever happens next, this notification has served its purpose -
+    // take it down so it can't be tapped again after the call is gone.
+    final postedRoomId = data['roomId'] as String?;
+    if (postedRoomId != null) await cancelIncomingCall(postedRoomId);
+    if (callInfo == null || roomId == null) {
+      nav.pushNamed('/direct-chat', arguments: {
+        'listingId': listingId,
+        'role':      iAmBuyer ? 'buyer' : 'seller',
+        'buyer_id':  buyerId,
+      });
+      return;
+    }
+    nav.pushNamed('/voip-call', arguments: {
+      'roomId':      roomId,
+      'userId':      ApiService.currentUserId ?? '',
+      'callToken':   callInfo['call_token'] as String? ?? '',
+      'isCaller':    false,
+      'peerName':    callInfo['caller_name'] as String? ?? 'Someone',
+      'peerId':      callInfo['caller_id'] as String?,
+      'peerPhoto':   _nonEmpty(callInfo['caller_photo']) ??
+          _nonEmpty(data['callerPhoto']),
+      'listingName': data['listingName'] as String? ?? 'your listing',
+      'listingId':   listingId,
+      'buyerId':     buyerId,
+      'callerRole':  iAmBuyer ? 'seller' : 'buyer',
+      'callType':    callInfo['call_type'] as String? ?? 'audio',
+      // Only the Accept button answers. A tap on the notification body
+      // arrives here looking exactly like the notification's
+      // fullScreenIntent, which Android fires by itself when a call
+      // comes in on a locked phone - so answering on "tapped" answered
+      // every such call with the microphone live before anyone touched
+      // the phone. Otherwise the call screen opens ringing, with its own
+      // Accept and Decline.
+      'autoAccept':  data['answer'] == true,
+    });
+  }
+
+  /// The app was opened over the lock screen for an incoming call - which
+  /// MainActivity does for a call's notification. Once the frame after the
+  /// navigation has built, if no call screen is open (the call was over and
+  /// the chat opened, or nobody is signed in), it goes back behind the lock
+  /// screen: only a call is shown on a locked phone.
+  void releaseLockScreenUnlessOnCall() {
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) {
+      if (!ActiveCall.instance.onCall) {
+        unawaited(CallForegroundService.showOverLockScreen(false));
+      }
+    });
+    binding.scheduleFrame();
   }
 
   /// The tag a conversation's message notification is posted under - the

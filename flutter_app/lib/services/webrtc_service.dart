@@ -491,7 +491,7 @@ class WebRtcService {
     ws.stream.listen(
       (raw) => _onSignal(raw, epoch),
       onError: (e) { if (epoch == _wsEpoch) _onWsDisrupted('Signal error: $e'); },
-      onDone:  ()  { if (epoch == _wsEpoch) _onWsDisrupted(null); },
+      onDone:  ()  { if (epoch == _wsEpoch) _onWsClosed(ws.closeCode); },
     );
 
     // Announce presence. The server doesn't read this (it authenticates
@@ -715,6 +715,37 @@ class WebRtcService {
     _peerRecoveryTimer = null;
     debugPrint('WebRTC: PEER_SIGNALING_RESTORED room=$roomId');
   }
+
+  /// The server's close code for "this call is over" (api/routers/calls.py:
+  /// "Call no longer exists" / "Call already ended").
+  static const int callOverCloseCode = 4004;
+
+  /// The signalling socket closed. Normally a drop to reconnect from - but
+  /// not when the server closed it because the call is over and it never
+  /// connected: the caller hung up in the seconds between this phone's
+  /// Accept and its socket joining. Retrying a call that is gone took the
+  /// whole reconnect budget (~15s of "Connecting") before failing, and the
+  /// phone counted as on a call meanwhile. A call that did connect keeps
+  /// the old rule: media can outlive its signalling, so it is not ended on
+  /// the server's word about the session alone.
+  void _onWsClosed(int? code) {
+    final neverConnected = _state == CallState.idle ||
+        _state == CallState.connecting || _state == CallState.calling ||
+        _state == CallState.ringing;
+    if (code == callOverCloseCode && neverConnected) {
+      debugPrint('WebRTC: CALL_ENDED room=$roomId reason=call_over (closed by server)');
+      remoteEndReason = 'call_over';
+      _cleanup();
+      _setState(CallState.ended);
+      return;
+    }
+    _onWsDisrupted(null);
+  }
+
+  /// The signalling socket closing with [code], as if the server had - for
+  /// tests.
+  @visibleForTesting
+  void debugSocketClosed(int? code) => _onWsClosed(code);
 
   /// Fired on both a clean WS close and a transport error - either way the
   /// signaling channel is down. If the call is already over there's

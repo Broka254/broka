@@ -64,6 +64,12 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules">
 
+        <!-- showWhenLocked/turnScreenOn: declared so Android opens a ringing
+             call over the lock screen (its full-screen launch, and Accept on
+             a locked phone without "unlock first"). MainActivity turns both
+             off at runtime except for an incoming call and while a call
+             screen is open - declared alone, they let anyone use BROKA on
+             a locked phone. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

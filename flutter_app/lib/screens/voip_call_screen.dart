@@ -169,6 +169,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     // This phone is on this call now: nothing else rings over it, and a
     // second screen for it never opens (ActiveCall).
     ActiveCall.instance.begin(roomId, answered: _isCaller || autoAccept);
+    // Over the lock screen while the call is on screen, like the phone's
+    // own calls: a locked phone shows it, and turning the screen back on
+    // mid-call comes back to it.
+    unawaited(CallForegroundService.showOverLockScreen(true));
 
     // Whichever path got us here, the ringing notification (if any) has
     // done its job - take it down before anything else so it can't keep
@@ -461,6 +465,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     }
     CallKitService.instance.endCall(roomId);
     ActiveCall.instance.end(roomId);
+    // Back behind the lock screen - unless another call's screen is still
+    // open (a redial's, on top of the call it replaced).
+    if (!ActiveCall.instance.onCall) {
+      unawaited(CallForegroundService.showOverLockScreen(false));
+    }
     _logCallResultOnce();
     _ringCtrl.dispose();
     _fadeCtrl.dispose();
@@ -663,6 +672,12 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     }
     if (_overBeforeAnswer && _isOver) {
       return 'The call ended before you answered';
+    }
+    // The server closed this phone's way into the call because the call is
+    // over - the other person hung up while it was still connecting.
+    if (_callState == CallState.ended && !_everConnected &&
+        _svc.remoteEndReason == 'call_over') {
+      return 'The call ended before it connected';
     }
     if (_callState == CallState.ended && _isCaller && !_everConnected &&
         (_noAnswer || _svc.remoteEndReason == 'no_answer')) {

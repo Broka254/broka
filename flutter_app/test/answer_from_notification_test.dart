@@ -214,6 +214,57 @@ void main() {
     ActiveCall.instance.end('room-1');
   });
 
+  group('over the lock screen', () {
+    // A call's notification opens the app over the lock screen
+    // (MainActivity). Only a call may stay there.
+    final lockScreen = <bool>[];
+    setUp(() {
+      lockScreen.clear();
+      messenger.setMockMethodCallHandler(
+          const MethodChannel('com.broka.app/call_service'), (call) async {
+        if (call.method == 'overLockScreen') {
+          lockScreen.add((call.arguments as Map)['on'] as bool);
+        }
+        return null;
+      });
+    });
+    tearDown(() => messenger.setMockMethodCallHandler(
+        const MethodChannel('com.broka.app/call_service'), null));
+
+    testWidgets('the call over, the chat opens behind the lock screen', (tester) async {
+      final opened = await host(tester);
+      // A tap on a ringing call that has since ended: the chat opens.
+      await tester.runAsync(() => withClient(() => NotificationService.instance
+          .navigateFromPayload({..._push('room-1'), 'answer': false})));
+      await tester.pump();
+      expect(opened.single.$1, '/direct-chat');
+      await tester.runAsync(() => pumpEventQueue());
+      expect(lockScreen, [false]);
+    });
+
+    testWidgets('a call screen that opened keeps it', (tester) async {
+      final key = GlobalKey<NavigatorState>();
+      NotificationService.instance.navigatorKey = key;
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: key,
+        home: const SizedBox(),
+        onGenerateRoute: (settings) => MaterialPageRoute(builder: (_) {
+          // As the call screen does when it opens.
+          final room = (settings.arguments as Map?)?['roomId'] as String?;
+          if (settings.name == '/voip-call' && room != null) {
+            ActiveCall.instance.begin(room, answered: true);
+          }
+          return const SizedBox();
+        }),
+      ));
+      await accept(tester, _push('room-1'));
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+      expect(lockScreen, isEmpty);
+      ActiveCall.instance.end('room-1');
+    });
+  });
+
   test('a call answered while its notification was being drawn is not posted',
       () async {
     // showIncomingCall waits (the ringer starting, the caller's photo); a
@@ -289,6 +340,30 @@ void main() {
       svc.debugReceiveSignal(jsonEncode({'type': 'callee_answered'}));
       expect(answered, 1);
       expect(svc.calleeAnswered, isTrue);
+    });
+
+    test('a call that is over before it connected ends at once', () async {
+      // The caller hung up between this phone's Accept and its socket
+      // joining: the server closes the socket with 4004. It used to be
+      // retried as a dropped connection - ~15s of "Connecting" - first.
+      final svc = WebRtcService(
+          roomId: 'room-1', isCaller: false, userId: 'seller-1', callToken: 't');
+      final states = <CallState>[];
+      svc.onStateChange = states.add;
+      svc.debugSocketClosed(WebRtcService.callOverCloseCode);
+      expect(states, [CallState.ended]);
+      expect(svc.remoteEndReason, 'call_over');
+    });
+
+    test('a dropped socket is still reconnected, not ended', () async {
+      final svc = WebRtcService(
+          roomId: 'room-1', isCaller: false, userId: 'seller-1', callToken: 't');
+      final states = <CallState>[];
+      svc.onStateChange = states.add;
+      svc.debugSocketClosed(1006);
+      svc.debugSocketClosed(null);
+      expect(states, isEmpty);
+      await svc.dispose(); // cancels the reconnect it scheduled
     });
 
     test('a callee ignores it', () {

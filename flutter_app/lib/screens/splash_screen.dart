@@ -157,6 +157,11 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       DeepLinkService.instance.appReady(openPending: false);
       return;
     }
+    // Opened by a call's notification with nobody signed in: no call is
+    // opened, so the app goes back behind the lock screen it was shown over.
+    if (coldStartCall != null) {
+      NotificationService.instance.releaseLockScreenUnlessOnCall();
+    }
 
     // A saved sell-listing draft almost always means the app's process was
     // killed mid-flow (most commonly: the camera launch for a listing

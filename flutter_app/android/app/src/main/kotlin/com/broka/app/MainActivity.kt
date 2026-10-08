@@ -1,14 +1,18 @@
 package com.broka.app
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
 
 class MainActivity : FlutterFragmentActivity() {
     private val CALL_SERVICE_CHANNEL = "com.broka.app/call_service"
@@ -23,6 +27,17 @@ class MainActivity : FlutterFragmentActivity() {
     private var initialLinkConsumed = false
 
     private var smsRetriever: SmsRetrieverBridge? = null
+
+    // A call screen is open in Dart (call_service "overLockScreen"). While
+    // it is, the app shows over the lock screen - and only then.
+    private var callOnScreen = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // A recreation (savedInstanceState) is not a new launch: nothing to
+        // unlock for.
+        applyLockScreenPolicy(intent, freshLaunch = savedInstanceState == null)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -79,6 +94,13 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                     "stop" -> {
                         stopService(Intent(this, CallForegroundService::class.java))
+                        result.success(null)
+                    }
+                    // The call screen opened (true) or the last one closed
+                    // (false) - see applyLockScreenPolicy.
+                    "overLockScreen" -> {
+                        callOnScreen = call.argument<Boolean>("on") ?: false
+                        showOverLockScreen(callOnScreen, turnScreenOn = false)
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -183,7 +205,72 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        applyLockScreenPolicy(intent, freshLaunch = true)
         viewLink(intent)?.let { linksChannel?.invokeMethod("onLink", it) }
+    }
+
+    // ── Over the lock screen: calls only ─────────────────────────────────
+    // The manifest declares showWhenLocked/turnScreenOn. That declaration is
+    // what lets Android open the app over the lock screen for a ringing call
+    // - the notification's full-screen intent, and Accept pressed on a
+    // locked phone, which Android otherwise answers with "unlock first".
+    // But it applied all the time: anyone picking up a locked phone that was
+    // last left in BROKA got BROKA - chats, payments - without unlocking.
+    // So it is overridden here: on for an incoming call's notification, and
+    // while a call screen is open (Dart tells us); off otherwise.
+
+    private fun applyLockScreenPolicy(intent: Intent?, freshLaunch: Boolean) {
+        // Only a call arriving now: not the intent a recreated activity
+        // still holds, nor one replayed when the app is reopened from
+        // Recents - that call is long over.
+        val call = freshLaunch && isIncomingCallIntent(intent)
+        showOverLockScreen(call || callOnScreen, turnScreenOn = call)
+        // Any other notification opened from the lock screen (a message, a
+        // deal update) is let through by the same declaration - ask to
+        // unlock, as for any app, instead of leaving it hidden behind the
+        // lock screen with nothing happening.
+        if (freshLaunch && !call && !callOnScreen) askToUnlock()
+    }
+
+    /** A tap on, the full-screen launch of, or Accept on an incoming-call
+     * notification (flutter_local_notifications' launch intents, whose
+     * payload NotificationService writes). */
+    private fun isIncomingCallIntent(intent: Intent?): Boolean {
+        val action = intent?.action ?: return false
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return false
+        if (action != "SELECT_NOTIFICATION" && action != "SELECT_FOREGROUND_NOTIFICATION") {
+            return false
+        }
+        val payload = intent.getStringExtra("payload") ?: return false
+        return try {
+            JSONObject(payload).optString("type") == "incoming_call"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun showOverLockScreen(on: Boolean, turnScreenOn: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(on)
+            setTurnScreenOn(on && turnScreenOn)
+        } else {
+            // Before Android 8.1 the manifest attributes don't exist; these
+            // flags are how it was done.
+            @Suppress("DEPRECATION")
+            val show = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+            @Suppress("DEPRECATION")
+            val wake = WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            if (on) window.addFlags(show) else window.clearFlags(show)
+            if (on && turnScreenOn) window.addFlags(wake) else window.clearFlags(wake)
+        }
+    }
+
+    private fun askToUnlock() {
+        val keyguard = getSystemService(KeyguardManager::class.java) ?: return
+        if (!keyguard.isKeyguardLocked) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            keyguard.requestDismissKeyguard(this, null)
+        }
     }
 
     /** The https link an ACTION_VIEW intent carries, if any. */

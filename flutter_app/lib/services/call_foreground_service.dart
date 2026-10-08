@@ -46,4 +46,16 @@ class CallForegroundService {
       await _channel.invokeMethod('stop');
     } catch (_) {}
   }
+
+  /// Whether the app shows over the lock screen: true while a call screen
+  /// is open, false once the last one closes. MainActivity does it only
+  /// then - and for an incoming call's notification - so a locked phone
+  /// last left in BROKA no longer opens straight into BROKA.
+  static Future<void> showOverLockScreen(bool on) async {
+    try {
+      await _channel.invokeMethod('overLockScreen', {'on': on});
+    } catch (_) {
+      // iOS, or no platform side (tests): nothing to do.
+    }
+  }
 }

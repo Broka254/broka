@@ -779,7 +779,44 @@ Tests: `backend/tests/test_call_answer_and_faces.py`;
 
 **Still open.** iOS: CallKit's Answer still goes through the old path (no
 call token from `AppDelegate`), and pushes Android draws have no face on
-iOS (that needs a Notification Service Extension). A caller who hangs up in
-the seconds between the callee's Accept and their phone joining leaves the
-callee's screen retrying its socket (the server closes it with 4004, which
-the app does not yet treat as final) until its reconnect budget runs out.
+iOS (that needs a Notification Service Extension). The 4004 case below was
+fixed the same day.
+
+
+# Over the lock screen only for a call; a call over before it connected (2026-10-08)
+
+**The whole app showed over the lock screen.** `MainActivity` declares
+`showWhenLocked` and `turnScreenOn` in the manifest so that a ringing call
+can open over the lock screen - the notification's full-screen launch, and
+Accept on a locked phone without Android asking to unlock first (Android
+decides that from the declaration). But a declaration applies all the time:
+a phone locked while BROKA was open showed BROKA again on waking, chats and
+payments included, to whoever picked it up. The declaration stays (Android
+needs it to launch the call without unlocking); `MainActivity` overrides it
+at runtime (`setShowWhenLocked`, or the window flags before Android 8.1,
+where the attribute did nothing at all): on for an incoming call's
+notification intent - a tap, the full-screen launch, Accept - and while a
+call screen is open, which the call screen reports over
+`com.broka.app/call_service` (`overLockScreen`); off otherwise. Any other
+notification opened from the lock screen asks to unlock
+(`requestDismissKeyguard`) rather than sitting hidden behind it. If a call's
+notification opened the app but no call screen did (the call was over and
+the chat opened, or nobody is signed in), the app goes back behind the lock
+screen (`NotificationService.releaseLockScreenUnlessOnCall`). Intents
+replayed from Recents or held by a recreated activity are not calls.
+
+**A call over before it connected kept "Connecting".** A caller who hung up
+in the seconds between the callee's Accept and their phone joining left the
+callee's call screen retrying its socket: the server refuses a socket for a
+call that is over with close code 4004, and the app took that for a dropped
+connection - about 15 seconds of reconnect attempts before failing. It now
+ends the call at once ("The call ended before it connected") when the call
+never connected. A call that did connect keeps the old rule, since its media
+can outlive the signalling.
+
+Tests: `flutter_app/test/answer_from_notification_test.dart` (the socket
+closed with 4004; the lock screen released when no call screen opened) and
+`voip_call_screen_test.dart` (the call screen claims and releases it). The
+Kotlin was compiled against the Android framework and Flutter embedding
+classes, but the APK could not be built in the environment this was written
+in, and none of it is device-verified.

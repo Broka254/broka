@@ -193,6 +193,26 @@ void main() {
     await close(tester);
   });
 
+  // Over the lock screen only while a call is on screen (MainActivity used
+  // to declare it for the whole app: a locked phone left in BROKA opened
+  // straight into it).
+  testWidgets('shows over the lock screen while open, and not after', (tester) async {
+    final lockScreen = <bool>[];
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('com.broka.app/call_service'), (call) async {
+      if (call.method == 'overLockScreen') {
+        lockScreen.add((call.arguments as Map)['on'] as bool);
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(
+        const MethodChannel('com.broka.app/call_service'), (_) async => null));
+    await open(tester, {'peerName': 'Ann Buyer', 'isCaller': false, 'callerRole': 'buyer'});
+    expect(lockScreen, [true]);
+    await close(tester);
+    expect(lockScreen, [true, false]);
+  });
+
   // A photo arriving as a URL - what the push carries - shows the face;
   // only base64 used to.
   testWidgets('a photo URL is shown, not only an inline selfie', (tester) async {
