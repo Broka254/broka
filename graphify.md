@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-221 endpoints served by `backend/main.py`. **Auth** is read from each
+222 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 59, token 4, user 136.
+Counts: admin 20, optional 2, public 60, token 4, user 136.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -115,18 +115,19 @@ Counts: admin 20, optional 2, public 59, token 4, user 136.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1252) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1694) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:529) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1015) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1779) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:462) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:424) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:514) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1351) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:725) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:775) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:702) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1333) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1776) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:556) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1080) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1861) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:489) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:429) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:541) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1432) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:752) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:802) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:729) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:467) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -663,11 +664,12 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-106 files in `backend/tests/`.
+107 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
 - `test_ai_cost.py` — Tests for the AI cost controls (api/core/ai_cost.py).
+- `test_answered_call_not_lost.py` — An answered call is never lost, never "missed", never keeps anyone busy (2026-10-09).
 - `test_assemblyai_token.py` — BROKA - /stt/assemblyai-token tests Run: pytest backend/tests/test_assemblyai_token.py -v
 - `test_auction_leaderboard.py` — GET /auction/{listing_id}/leaderboard - the list the auction screen shows.
 - `test_auction_lifecycle.py` — BROKA - Auction lifecycle tests Run: pytest backend/tests/test_auction_lifecycle.py -v
@@ -1014,6 +1016,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `photo_upload_tracker.dart` — Background uploads for the photos a user picks, one per file.
 - `realtime_stt.dart` — lib/services/realtime_stt.dart
 - `realtime_stt_manager.dart` — lib/services/realtime_stt_manager.dart
+- `ringback_service.dart` — BROKA - Ringback Service
 - `ringtone_service.dart` — BROKA - Ringtone Service
 - `search_history.dart` — Home's recent listing searches, kept on the phone.
 - `sell_draft_store.dart` — BROKA - Sell Draft Store
@@ -1098,6 +1101,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `answer_from_notification_test.dart` — Answering a call from its notification (2026-10-08).
 - `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
 - `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
+- `call_answer_ring_and_video_test.dart` — Answering a call, its ring, and turning a voice call into video (2026-10-09).
 - `call_history_screen_test.dart` — Calls (2026-10-02): every call with a buyer or seller, newest first, on Home's visual system.
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
