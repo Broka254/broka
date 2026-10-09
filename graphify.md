@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-214 endpoints served by `backend/main.py`. **Auth** is read from each
+218 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 59, token 4, user 129.
+Counts: admin 20, optional 2, public 59, token 4, user 133.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -165,24 +165,28 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:134) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:416) |
 | GET | `/health` | public | `health` (backend/main.py:494) |
-| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:185) |
-| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:243) |
-| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:793) |
-| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:732) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:962) |
+| GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:196) |
+| POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:254) |
+| GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:186) |
+| GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:805) |
+| GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:744) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:974) |
 | GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:179) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:997) |
-| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:342) |
-| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1005) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1040) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1051) |
-| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:595) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:979) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:1021) |
+| PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:353) |
+| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1068) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1103) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1114) |
+| GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:606) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:991) |
+| GET | `/listings/{listing_id}/save` | user | `get_saved` (backend/api/domains/listings/router.py:1034) |
+| POST | `/listings/{listing_id}/save` | user | `save_listing` (backend/api/domains/listings/router.py:1046) |
+| DELETE | `/listings/{listing_id}/save` | user | `unsave_listing` (backend/api/domains/listings/router.py:1058) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1017) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1029) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1080) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1092) |
 | GET | `/live` | public | `live` (backend/main.py:550) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
@@ -194,18 +198,18 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:213) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:485) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:119) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4343) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4354) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1729) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4240) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4251) |
 | POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3332) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3923) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3934) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1805) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4307) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4318) |
 | POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3177) |
 | GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3432) |
 | POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3798) |
@@ -346,6 +350,7 @@ Counts: admin 20, optional 2, public 59, token 4, user 129.
 - `price_rules.py` — How far one price change may move a listing, and what a raise does to its fee.
 - `router.py` — Listings Router v3.0
 - `sell_probability.py` — Probability that a listing sells — and what is holding it back.
+- `sell_signals.py` — The measured inputs to the sell probability, read for many listings at once.
 - `service.py` — Listings Service v3.0
 - `stock.py` — How many of a listing's units are left, and whether buyers still see it.
 - `validation.py` — What a listing may contain - the checks behind POST /listings, PATCH /listings/{id} and POST /listings/{id}/interest.
@@ -654,7 +659,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-103 files in `backend/tests/`.
+104 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -733,6 +738,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_response_time.py` — Response-time measurement (domains/trust/response_time).
 - `test_route_ordering.py` — POST /negotiate/chat must be served by the legacy negotiate.free_chat.
 - `test_search.py` — BROKA - Search Tests (listings and traders) Run: pytest backend/tests/test_search.py -v
+- `test_sell_probability.py` — The sell probability, rebuilt on what is measured (2026-10-09).
 - `test_seller_advice.py` — Seller advice cards (domains/trust/seller_advice).
 - `test_seller_profile_figures.py` — BROKA - The figures a seller's profile shows, and who may review them Run: pytest backend/tests/test_seller_profile_figures.py -v
 - `test_seller_rating.py` — Overall Rating (Design Journal Vol.8 §3.2/§3.3, Part XVI).
@@ -791,6 +797,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/profile` | `ProfileScreen` |
 | `/receipt-history` | `ReceiptHistoryScreen` |
 | `/review` | `ReviewScreen` |
+| `/saved` | `SavedListingsScreen` |
 | `/selfie` | `SelfieCameraScreen` |
 | `/sell` | `SellPhotosScreen` |
 | `/seller-dashboard` | `sellerDashboardOrSetup` |
@@ -968,6 +975,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/core/`
 
+- `errors/user_facing_error.dart` — What the user is told when something fails.
 - `network/api_client.dart` — BROKA v3.0 - Core API Client Centralises HTTP logic: base URL, auth headers, error handling, retries.
 - `network/auction_ws_client.dart` — lib/core/network/auction_ws_client.dart Mirrors deal_ws_client.dart's exact reconnect contract: 25s JSON pings, backoff starting at 1s and…
 - `network/deal_ws_client.dart` — BROKA v3.0 - Deal Status WebSocket Client
@@ -1004,7 +1012,6 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `sell_wizard_data.dart` — BROKA - Sell Wizard Data
 - `showcase_generator.dart` — The AI cover image, from the sell wizard's Cover image step.
 - `sms_autofill_service.dart` — BROKA — Automatic OTP capture (Android SMS Retriever API).
-- `sound_preference_service.dart` — Persists the splash boot-sound on/off toggle so the user isn't asked to reconfigure it every time BROKA opens (splash spec §8: "The sound p…
 - `webrtc_service.dart` — BROKA - WebRTC Service Manages one P2P audio or video call via WebSocket signaling on the BROKA backend.
 - `zeno_chat_store.dart` — Zeno conversations, kept on the phone.
 - `zeno_sms_prompts.dart` — How Zeno asks "should I SMS you when a buyer shows up?" on the sell wizard's last step.
@@ -1072,9 +1079,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `seller_insights.dart` — BROKA — seller insights
 
-### `flutter_app/lib/screens/` (45 files)
+### `flutter_app/lib/screens/` (46 files)
 
-`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
+`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `saved_listings_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
 
 ### Tests (`flutter_app/test/`)
 
@@ -1124,12 +1131,14 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
 - `sms_otp_autofill_test.dart` — The signup wizard's automatic OTP capture (Android SMS Retriever), end to end on the Dart side: a code the native bridge delivers must land…
+- `splash_screen_test.dart` — The splash plays its boot sequence once, the first time BROKA opens on a phone; after that the app opens straight onto Home (2026-10-09).
 - `start_selling_test.dart` — A buyer who starts selling later is asked what signup asks (2026-09-26): a few items - nothing more to fill in - or a business, which goes…
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
 - `subcategory_screen_test.dart` — Types of item on screens of their own (2026-10-08): a category's types are photo cards, each opening a SubcategoryScreen that leads with th…
+- `user_facing_error_test.dart` — What a failure shows on screen (2026-10-09).
 - `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
 - `voip_call_permissions_test.dart` — The app closed the moment a call was placed or answered.
 - `voip_call_screen_test.dart` — The call screen, upgraded (2026-10-02).
@@ -1222,7 +1231,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Paying with escrow services, and no auctions for launch (2026-10-08)
+- `CHANGES.md` — Errors in plain words, a one-time splash, average response time, saves and a stronger sell model (2026-10-09)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
