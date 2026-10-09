@@ -1259,6 +1259,7 @@ Modules:
 - `PRIVACY.md` — Message visibility — how the audience line is enforced
 - `README.md` — BROKA — AI-Mediated P2P Marketplace for East Africa
 - `REPO_REVIEW.md` — BROKA — Repository Review
+- `SECURITY.md` — Security Policy
 - `SELLER_METRICS.md` — Seller metrics — phased build
 - `STORES_PLAN.md` — Online Stores — build plan (2026-09-23)
 - `STORES_REVIEW.md` — BROKA — Online Stores Review
