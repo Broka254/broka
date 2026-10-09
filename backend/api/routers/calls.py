@@ -99,7 +99,12 @@ WS_MAX_FRAME_BYTES = 128 * 1024
 # frozen last frame: disabling a track (track.enabled = false) keeps the
 # transceiver alive and keeps sending, so no `ended` event ever reaches
 # them and there is nothing else in the protocol that would tell them.
-WS_RELAYABLE_TYPES = frozenset({"offer", "answer", "ice", "hangup", "video_state"})
+#
+# "renegotiate" is the callee asking the caller for a fresh offer: only the
+# caller makes offers (two offers crossing would deadlock the call), so a
+# callee switching a voice call to video adds its camera and asks. Relayed
+# verbatim for the same reason - it can only lead to a normal offer.
+WS_RELAYABLE_TYPES = frozenset({"offer", "answer", "ice", "hangup", "video_state", "renegotiate"})
 
 # ── In-memory WebSocket registry (per-process - see module docstring) ──────────
 # Keyed by user_id (not an anonymous Set) so a reconnecting participant can
@@ -458,6 +463,28 @@ async def get_turn_credentials(
     return result
 
 
+@router.post("/{room_id}/turn-credentials")
+async def get_call_turn_credentials(room_id: str, payload: CallAlertedRequest):
+    """GET /turn-credentials for a phone joining one call, authorized by its
+    call token for that call - the token the incoming-call push carries.
+
+    A call answered from a closed app used to start with an access token
+    that had expired while the app was closed: the fetch came back 401, the
+    app renewed its session and asked again - two more round trips before
+    the call could even start connecting, and STUN only (often no audio on
+    mobile data) if the renewal failed. Same limiter, same 503.
+    """
+    claims = decode_call_token(payload.call_token)
+    if not claims or claims.get("room_id") != room_id:
+        raise HTTPException(status_code=401, detail="Invalid call token")
+    session = await call_state.get_session(room_id)
+    if session is None or call_state.is_terminal(session.state):
+        raise HTTPException(status_code=410, detail="This call has already ended")
+    if not session.is_participant(claims.get("sub")):
+        raise HTTPException(status_code=403, detail="You're not a participant on this call")
+    return await get_turn_credentials(current={"id": claims["sub"]})
+
+
 @router.post("/register-token")
 async def register_token(
     payload: RegisterTokenRequest,
@@ -791,7 +818,9 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
     if claims.get("sub") != session.callee_id:
         raise HTTPException(status_code=403, detail="Only the person called can answer")
     if session.state in (CallState.initiating, CallState.ringing):
-        await call_state.update_state(room_id, CallState.accepted)
+        # Remembered as answered, and the callee gets the whole join window
+        # from now (call_state._answer).
+        await call_state.mark_answered(room_id)
         logger.info("[calls] CALL_ANSWERED room=%s", room_id)
         # The caller stops waiting for an answer now. Their screen hung up
         # after 45 seconds unless the callee's socket had joined - and a
@@ -861,6 +890,24 @@ async def _call_in_progress(user_id: str):
     return None
 
 
+def _left(session, user_id: str) -> bool:
+    """A call `user_id` is no longer on: past ringing, not over, and no
+    socket of theirs in its room. (A ringing call has its own rules in
+    _admit_call: a redial replaces it, a crossed call is answered.)"""
+    return (session.state not in _UNANSWERED_STATES
+            and not call_state.is_terminal(session.state)
+            and user_id not in (_rooms.get(session.room_id) or {}))
+
+
+async def _hang_up_room(room_id: str, *, reason: str) -> None:
+    """Tell whoever is still in a call's room that it is over."""
+    for peer in list((_rooms.get(room_id) or {}).values()):
+        try:
+            await peer.send_json({"type": "hangup", "reason": reason})
+        except Exception:
+            pass
+
+
 def _busy(code: str, message: str, **extra) -> HTTPException:
     return HTTPException(status_code=409, detail={"code": code, "message": message, **extra})
 
@@ -881,6 +928,24 @@ async def _admit_call(db: AsyncSession, *, me: str, callee) -> list:
     """
     mine = await _call_in_progress(me)
     theirs = await _call_in_progress(callee.id)
+
+    # Calls I have left: answered or under way, but no socket of mine is in
+    # them. Placing a call is proof I'm not on one - the call screen covers
+    # everything else - so they are over, and neither of us is busy with
+    # them. Reported from phones (2026-10-09): a call answered from a closed
+    # app failed to connect, and calling the person back was refused with
+    # "You're already on a call" while the dead call still read `accepted`.
+    abandoned = {}
+    if mine is not None and _left(mine, me):
+        abandoned[mine.room_id] = mine
+        mine = None
+    if theirs is not None and (theirs.room_id in abandoned
+                               or (theirs.is_participant(me) and _left(theirs, me))):
+        abandoned[theirs.room_id] = theirs
+        theirs = None
+    for old in abandoned.values():
+        await call_state.update_state(old.room_id, CallState.ended)
+        _spawn(_hang_up_room(old.room_id, reason="superseded"))
 
     if (theirs is not None and theirs.caller_id == callee.id
             and theirs.callee_id == me and theirs.state in _UNANSWERED_STATES):
@@ -1103,8 +1168,24 @@ async def _record_outcome(
     reporter    = logged_by or session.caller_id
     reporter_is_seller = reporter == listing.seller_id
 
+    # Answered is never "missed". A callee who pressed Accept on a closed
+    # app's notification, and whose phone then couldn't join in time, had
+    # the call recorded as missed - by their own call screen, or by the
+    # caller's giving up - and got a "Missed call" push for the call they
+    # had answered. It is a call that was answered and didn't connect: the
+    # card says "Answered", and nobody is told they missed it.
+    if outcome in ("missed", "cancelled") and session.answered:
+        outcome = "completed"
+        duration_secs = None
+
     if not call_state.is_terminal(session.state):
-        await call_state.update_state(session.room_id, _OUTCOME_TO_STATE[outcome])
+        updated = await call_state.update_state(session.room_id, _OUTCOME_TO_STATE[outcome])
+        # And the call is over, whatever state it had reached. `accepted`
+        # can't become `missed`, so an answered call that never connected
+        # stayed `accepted` - "on a call" (_call_in_progress) - and calling
+        # the person back was refused with "You're already on a call".
+        if updated is not None and not call_state.is_terminal(updated.state):
+            await call_state.update_state(session.room_id, CallState.ended)
 
     hangup_reason = {"declined": "declined"}.get(outcome)
     if logged_by is None and outcome == "missed":
@@ -1427,6 +1508,7 @@ async def call_signaling(
     if uid == session.callee_id:
         # Only the callee's join means "accepted" - the caller's own join
         # (they're always first) just means they're waiting.
+        await call_state.mark_answered(room_id)
         await call_state.update_state(room_id, CallState.accepted)
         logger.info("[calls] CALL_ACCEPTED room=%s user=%s", room_id, uid)
     logger.info("[calls] user=%s joined room=%s peers=%d", uid, room_id, len(room))

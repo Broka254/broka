@@ -25,7 +25,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from enum import Enum
 from typing import Optional
 
@@ -141,6 +141,42 @@ for _s in _TERMINAL:
 _UNANSWERED: set = {CallState.initiating, CallState.ringing}
 
 
+def _renewed_expiry(session: "CallSession") -> Optional[float]:
+    """Where the heartbeat moves a session's expiry, or None to leave it.
+
+    An answered call whose callee hasn't joined yet (`accepted`) gets the
+    establishment window again, from now - not the 4-hour connected TTL it
+    used to get. A call answered from a closed app that then never connected
+    stayed `accepted` for four hours, and `accepted` counts as being on a
+    call (calls.py _call_in_progress): calling the person back answered
+    "You're already on a call."
+    """
+    if is_terminal(session.state) or session.state in _UNANSWERED:
+        return None
+    if session.state == CallState.accepted:
+        return time.time() + ESTABLISHMENT_SESSION_TTL_SECONDS
+    return time.time() + CONNECTED_SESSION_TTL_SECONDS
+
+
+def _answer(session: "CallSession") -> bool:
+    """Mark `session` answered in place. False when it is already over.
+
+    Moves a ringing call to `accepted`, and gives the callee the whole
+    establishment window from this moment to join: it used to count from
+    when the call was placed, so a call answered late in its ring left a
+    phone starting BROKA from cold a few seconds to get there.
+    """
+    if is_terminal(session.state):
+        return False
+    session.answered = True
+    if session.state in _UNANSWERED and is_valid_transition(session.state, CallState.accepted):
+        session.state = CallState.accepted
+    if session.state == CallState.accepted:
+        session.expires_at = max(session.expires_at,
+                                 time.time() + ESTABLISHMENT_SESSION_TTL_SECONDS)
+    return True
+
+
 def is_valid_transition(current: CallState, new: CallState) -> bool:
     """ended→connected, declined→connected, expired→accepted, failed→
     connected etc. are all rejected here (every terminal state's
@@ -175,6 +211,12 @@ class CallSession:
     # push, or found the call by polling) - what "Ringing" means on the
     # caller's screen. Until then the caller sees "Calling".
     callee_alerted: bool = False
+    # The callee pressed Accept (POST /calls/{room}/answer) or joined the
+    # call. Kept after the call ends: whoever reports the outcome, a call
+    # that was answered is never recorded as missed (calls.py
+    # _record_outcome) - the callee who answered from a closed app, and
+    # whose phone then couldn't join in time, was told "Missed call".
+    answered: bool = False
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -185,7 +227,10 @@ class CallSession:
     def from_json(cls, raw: str) -> "CallSession":
         d = json.loads(raw)
         d["state"] = CallState(d["state"])
-        return cls(**d)
+        # Fields this build doesn't know (written by a newer one during a
+        # deploy) are dropped rather than failing every read of the call.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
     @property
     def is_expired(self) -> bool:
@@ -320,10 +365,20 @@ class _RedisCallStore:
 
     async def renew(self, room_id: str) -> Optional[CallSession]:
         session = await self.get(room_id)
-        if session is None or is_terminal(session.state) or session.state in _UNANSWERED:
+        if session is None:
+            return None
+        expiry = _renewed_expiry(session)
+        if expiry is None:
             return session
-        session.expires_at = time.time() + CONNECTED_SESSION_TTL_SECONDS
-        await self._write(session, ttl_seconds=CONNECTED_SESSION_TTL_SECONDS)
+        session.expires_at = expiry
+        await self._write(session, ttl_seconds=max(int(expiry - time.time()), 1))
+        return session
+
+    async def mark_answered(self, room_id: str) -> Optional[CallSession]:
+        session = await self.get(room_id)
+        if session is None or not _answer(session):
+            return session
+        await self._write(session, ttl_seconds=max(int(session.expires_at - time.time()), 1))
         return session
 
     async def mark_callee_alerted(self, room_id: str) -> Optional[CallSession]:
@@ -459,9 +514,18 @@ class _InMemoryCallStore:
     async def renew(self, room_id: str) -> Optional[CallSession]:
         async with self._lock:
             session = self._store.get(room_id)
-            if session is None or is_terminal(session.state) or session.state in _UNANSWERED:
-                return session
-            session.expires_at = time.time() + CONNECTED_SESSION_TTL_SECONDS
+            if session is None:
+                return None
+            expiry = _renewed_expiry(session)
+            if expiry is not None:
+                session.expires_at = expiry
+            return session
+
+    async def mark_answered(self, room_id: str) -> Optional[CallSession]:
+        async with self._lock:
+            session = self._store.get(room_id)
+            if session is not None:
+                _answer(session)
             return session
 
     async def mark_callee_alerted(self, room_id: str) -> Optional[CallSession]:
@@ -665,6 +729,13 @@ async def renew_session(room_id: str) -> Optional[CallSession]:
     never resurrect or extend a call that's already over.
     """
     return await _store.renew(room_id)
+
+
+async def mark_answered(room_id: str) -> Optional[CallSession]:
+    """The callee answered: a ringing call becomes `accepted`, the session
+    remembers it was answered, and the callee has the establishment window
+    from now to join. Idempotent; a no-op on a call that is over."""
+    return await _store.mark_answered(room_id)
 
 
 async def end_session(room_id: str) -> None:
