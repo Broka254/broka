@@ -89,51 +89,71 @@ class TestListPrice:
         """The founder's case: 200 iPhones are not 3 iPhones.
 
         Regression: the fee used to be the square root of ONE unit's price,
-        capped per category, grown only by the log of the quantity - so 200
-        KES 180k phones (KES 36M) paid 3.7 times one phone, and 2.4 times
-        three.
+        capped per category, grown only by the log of the quantity. Now the
+        fee is on the listing's whole value, up to the monthly ceiling.
         """
         one = engine.list_price(ELECTRONICS, 180_000, 1)
         three = engine.list_price(ELECTRONICS, 180_000, 3)
         two_hundred = engine.list_price(ELECTRONICS, 180_000, 200)
-        assert one < three < two_hundred
-        assert two_hundred > 10 * three
+        assert one < three < two_hundred == engine.MAX_MONTHLY_FEE
         # Only the value counts: ten KES 20k phones are one KES 200k item.
         assert engine.list_price(ELECTRONICS, 20_000, 10) == engine.list_price(ELECTRONICS, 200_000, 1)
 
+    @pytest.mark.parametrize("x, f", [
+        # The founder's own test values (2026-10-09), from their reference
+        # implementation of f(x) = 8.91822 x cbrt(x) - 42.1011 in [10, 2000].
+        (0, 10.0),
+        (100, 10.0),
+        (200, 10.053),
+        (1_500, 59.987),
+        (10_000, 150.036),
+        (20_000, 199.977),
+        (1_000_000, 849.721),
+        (12_000_000, 1_999.662),
+        (20_000_000, 2_000.0),
+    ])
+    def test_one_month_is_the_founders_cube_root(self, x, f):
+        assert engine.value_fee(x) == pytest.approx(f, abs=0.001)
+
     @pytest.mark.parametrize("price, quantity, fee", [
-        (20_000, 1, 100),           # a phone (70 before the 2026-10-06 nudge)
-        (180_000, 1, 420),          # an iPhone (310)
-        (180_000, 3, 835),          # three of them (610)
-        (180_000, 200, 12_640),     # two hundred (8,580)
-        (800_000, 1, 1_120),        # a car (820)
-        (1_500_000, 1, 1_890),      # a plot (1,380)
+        (1_500, 1, 60),             # a dress (10 on the old value bands)
+        (20_000, 1, 200),           # a phone (100)
+        (180_000, 1, 460),          # an iPhone (420)
+        (180_000, 3, 685),          # three of them (835)
+        (180_000, 200, 2_000),      # two hundred (12,640)
+        (800_000, 1, 785),          # a car (1,120)
+        (1_500_000, 1, 980),        # a plot (1,890)
     ])
     def test_the_worked_examples_in_pricing_md(self, price, quantity, fee):
         assert engine.round_kes(engine.list_price(ELECTRONICS, price, quantity)) == fee
 
-    def test_rates_fall_as_value_rises_with_no_step_to_game(self):
-        rates = [rate for _, rate in engine.VALUE_BANDS]
-        assert all(a > b for a, b in zip(rates, rates[1:]))
-        # Continuous at every band edge: a shilling more never jumps the fee.
-        for upper, rate in engine.VALUE_BANDS[:-1]:
-            assert engine.value_fee(upper + 1) - engine.value_fee(upper) < rate + 1e-9
-        values = [10 ** e for e in range(2, 10)]
+    def test_the_fee_rises_smoothly_with_no_step_to_game(self):
+        values = sorted([10 ** e for e in range(2, 10)] + [12_000_000])
         fees = [engine.value_fee(v) for v in values]
-        assert all(a < b for a, b in zip(fees, fees[1:]))
+        assert all(a <= b for a, b in zip(fees, fees[1:]))
+        assert all(engine.MIN_MONTHLY_FEE <= f <= engine.MAX_MONTHLY_FEE for f in fees)
+        # Between the floor and the ceiling a shilling more never jumps it.
+        for v in (300, 20_000, 1_000_000, 11_000_000):
+            assert 0 < engine.value_fee(v + 1) - engine.value_fee(v) < 0.1
 
     def test_the_monthly_ceiling_holds_however_valuable_the_listing(self):
         for c in CATEGORIES.values():
-            assert engine.list_price(c, 10**9, 100) == engine.MAX_MONTHLY_FEE
+            assert engine.list_price(c, 10**9, 100) == engine.MAX_MONTHLY_FEE == 2_000
 
     def test_quantity_is_not_capped_for_the_fee(self):
         """QUANTITY_CAP limits only the duration advice; 5,000 units are priced as 5,000."""
         assert engine.quote(ELECTRONICS, 1_000, 5_000, NEW, 0)["quantity"] == 5_000
         assert engine.list_price(ELECTRONICS, 1_000, 5_000) > engine.list_price(ELECTRONICS, 1_000, 1_000)
 
-    def test_cheap_items_pay_the_cost_of_serving_them(self):
-        assert engine.list_price(FASHION, 300) == pytest.approx(
-            costs.with_vat(costs.listing_month_cost(FASHION.chats_per_month)))
+    def test_cheap_items_pay_ten_shillings_or_the_cost_of_serving_them(self):
+        """KES 10 is the least f gives; where serving the listing costs more
+        than that (Zeno answers more buyers for cars and property), the cost."""
+        assert engine.list_price(FASHION, 100) == engine.MIN_MONTHLY_FEE
+        assert engine.list_price(FASHION, 300) == pytest.approx(engine.value_fee(300))
+        cars = CATEGORIES["Automobiles"]
+        cost = costs.with_vat(costs.listing_month_cost(cars.chats_per_month))
+        assert cost > engine.MIN_MONTHLY_FEE
+        assert engine.list_price(cars, 100) == pytest.approx(cost)
 
     def test_never_below_what_the_listing_costs(self):
         """The best record plus the full launch offer still covers the cost -

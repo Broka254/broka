@@ -1,9 +1,9 @@
 """The monthly listing fee: f = C x R.
 
-  C  what the listing costs to list for a month at full price: a banded
-     share of its value - price x quantity - and never under the cost of
-     serving it (costs.listing_month_cost). This is the "list price" a
-     seller sees crossed out.
+  C  what the listing costs to list for a month at full price: a cube root
+     of its value - price x quantity - held between KES 10 and 2,000, and
+     never under the cost of serving it (costs.listing_month_cost). This is
+     the "list price" a seller sees crossed out.
   R  the risk coefficient, 0.4-1.0: how likely this seller's deals are to
      leave BROKA before the money moves. 1.0 pays the full list price; a
      seller whose deals reliably complete through escrow pays as little as
@@ -36,29 +36,27 @@ from api.domains.pricing.categories import CategoryPricing
 # fee, capped per category and grown only by the log of the quantity, had 200
 # KES 180k iPhones (KES 36M) paying 3.7 times what one did.
 #
-# Marginal bands, like income-tax brackets: each rate applies only to the
-# part of the value inside its band, so the fee rises smoothly with no edge
-# where one more shilling of price jumps the fee. The rates fall as value
-# rises because a listing fee is paid whether or not anything sells - a flat
-# percentage of KES 36M of stock would be an up-front commission with no sale
-# behind it. PRICING.md §2 has the worked examples.
+# One month is a cube root of that value, set by the founder on 2026-10-09:
 #
-# Raised by about a third on every listing on 2026-10-06 (0.35/0.15/0.08/
-# 0.02% before), the same share for every band so no category is singled
-# out: the old bands were set as a small extra on top of a 3.49% commission
-# that payments being paused took away, and recovered a tenth of one phone
-# sale's commission and a hundredth of a house's (BUSINESS_MODEL_REVIEW.md).
-# A KES 20,000 phone pays KES 100 - the most M-Pesa collects for nothing.
-VALUE_BANDS: tuple[tuple[float, float], ...] = (
-    (20_000, 0.0050),          # 0.50% of the first KES 20,000
-    (200_000, 0.0020),         # 0.20% of KES 20,000 - 200,000
-    (2_000_000, 0.0011),       # 0.11% of KES 200,000 - 2M
-    (math.inf, 0.0003),        # 0.03% above KES 2M
-)
+#     f(x) = 8.91822 x cbrt(x) - 42.1011, held between KES 10 and 2,000
+#
+# fitted through round fees - a KES 1,500 dress pays 60, a KES 20,000 phone
+# 200, a KES 1M car 850, and from KES 12M of value the 2,000 ceiling. A cube
+# root rises smoothly (no band edge where one more shilling jumps the fee)
+# and ever more slowly: a listing fee is paid whether or not anything sells,
+# so a share of KES 36M of stock would be an up-front commission with no sale
+# behind it. It replaced the marginal value bands (0.50% of the first
+# KES 20,000 ... 0.03% above 2M, capped at 15,000), which charged a phone
+# half as much and a big listing up to seven times as much. PRICING.md §2 has
+# the worked examples.
+FEE_SCALE = 8.91822
+FEE_OFFSET = -42.1011
 
-# The most one listing pays for a month, however much it offers. Reached at
-# about KES 44M; a seller listing that much stock wants a store.
-MAX_MONTHLY_FEE = 15_000
+# The least and the most one listing pays for a month, however little or
+# much it offers. The ceiling is reached at about KES 12M of value; a seller
+# listing more than that wants a store.
+MIN_MONTHLY_FEE = 10
+MAX_MONTHLY_FEE = 2_000
 
 # Only the duration advice caps quantity: stock past this clears at the same
 # pace. The fee itself counts every unit.
@@ -70,26 +68,27 @@ def listing_value(unit_price: float, quantity: int = 1) -> float:
     return max(unit_price, 0.0) * max(int(quantity or 1), 1)
 
 
+def real_cbrt(x: float) -> float:
+    """The real cube root, negative values included."""
+    return math.copysign(abs(x) ** (1.0 / 3.0), x)
+
+
 def value_fee(value: float) -> float:
-    """The banded fee on a listing worth `value` shillings."""
-    fee, lower = 0.0, 0.0
-    for upper, rate in VALUE_BANDS:
-        if value <= lower:
-            break
-        fee += (min(value, upper) - lower) * rate
-        lower = upper
-    return fee
+    """One month's fee on a listing worth `value` shillings, KES 10-2,000."""
+    raw = FEE_SCALE * real_cbrt(value) + FEE_OFFSET
+    return max(MIN_MONTHLY_FEE, min(MAX_MONTHLY_FEE, raw))
 
 
 def list_price(category: CategoryPricing, unit_price: float, quantity: int = 1) -> float:
     """C for the whole listing: the full monthly fee before any discount.
 
-    Never under what serving the listing costs (with the VAT on it): a KES
-    300 shirt's 0.35% is a shilling, and Zeno answering its buyers is not.
+    Never under what serving the listing costs (with the VAT on it): KES 10
+    is under that for the categories whose buyers keep Zeno busiest (KES
+    10.91-13.18 for electronics, vehicles, property and land), so a listing
+    there worth under about KES 240 pays the cost instead.
     """
     cost = costs.listing_month_cost(category.chats_per_month)
-    banded = min(value_fee(listing_value(unit_price, quantity)), MAX_MONTHLY_FEE)
-    return max(costs.with_vat(cost), banded)
+    return max(costs.with_vat(cost), value_fee(listing_value(unit_price, quantity)))
 
 
 # ── R: the risk coefficient ──────────────────────────────────────────────────

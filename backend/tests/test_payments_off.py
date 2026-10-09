@@ -91,7 +91,7 @@ class TestListingFee:
         proven = engine.SellerRecord(completed_weight=100, completed_deals=100)
         off = engine.quote(e, 20_000, 1, proven, 0, discounts_apply=False)
         on = engine.quote(e, 20_000, 1, proven, 0, discounts_apply=True)
-        assert off["monthly_fee"] == off["list_price"] == 100
+        assert off["monthly_fee"] == off["list_price"] == 200
         assert off["discount_percent"] == 0 and off["discounts"]["apply"] is False
         assert on["monthly_fee"] < off["monthly_fee"]
 
@@ -100,7 +100,7 @@ class TestListingFee:
         q = (await client.get("/pricing/listing-fee/quote", headers=await _headers(),
                               params={"category": "Electronics", "price": 180000, "quantity": 3})).json()
         assert q["listing_value"] == 540_000
-        assert q["monthly_fee"] == q["list_price"] == 835
+        assert q["monthly_fee"] == q["list_price"] == 685
 
 
 class TestSafePayment:
