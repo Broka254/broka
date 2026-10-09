@@ -41,6 +41,11 @@ void main() {
         'That code has expired');
   });
 
+  test("a message for people inside a caller's own words is kept", () {
+    expect(sanitizeErrorText('Could not start call: Exception: BROKA needs microphone access.'),
+        'Could not start call: BROKA needs microphone access.');
+  });
+
   test('anything technical is replaced', () {
     expect(userFacingError(const ApiException(500, 'Internal Server Error')), kGenericErrorMessage);
     expect(sanitizeErrorText('Failed to load https://api.broka.co.ke/x'), kGenericErrorMessage);

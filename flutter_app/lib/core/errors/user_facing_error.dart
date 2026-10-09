@@ -69,10 +69,11 @@ final List<RegExp> _technical = [
 /// [fallback] when the text is empty or technical.
 String sanitizeErrorText(String? text, {String fallback = kGenericErrorMessage}) {
   if (text == null) return fallback;
-  var s = text.trim();
-  while (s.startsWith('Exception: ')) {
-    s = s.substring('Exception: '.length).trim();
-  }
+  // Dart's bare "Exception: " wrapper, wherever it sits - at the front, or
+  // after a caller's own words ("Could not start call: Exception: BROKA
+  // needs microphone access..."). It is noise around a message written for
+  // people, not a sign the message is technical.
+  var s = text.trim().replaceAll(RegExp(r'(^|(?<=\s))Exception: '), '').trim();
   if (s.isEmpty || s == 'null') return fallback;
   if (_isNetworkText(s)) return kOfflineMessage;
   if (s.length > 240) return fallback;
