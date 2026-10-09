@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/main.dart' show BrokaColors, ZoneGlowText;
 import 'package:broka/screens/user_profile_screen.dart';
 import 'package:broka/services/api_service.dart';
@@ -66,6 +67,11 @@ Map<String, dynamic> _deal({bool reviewed = false}) => {
     };
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" test.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUpAll(() async {
     installFakeApi();
     final fonts = '${Platform.environment['FLUTTER_ROOT'] ?? ''}/bin/cache/artifacts/material_fonts';
@@ -153,6 +159,16 @@ void main() {
           allOf(contains('2.0d'), contains('3 deals')));
       expect(textIn(tester, const Key('fact-deals')), contains('14'));
       expect(textIn(tester, const Key('fact-escrow')), contains('93%'));
+      expect(textIn(tester, const Key('fact-disputes')), contains('7%'));
+    });
+
+    testWidgets('with payments hidden (the default build) there is no escrow figure', (tester) async {
+      paymentsShown = false;
+      addTearDown(() => paymentsShown = true);
+      await open(tester);
+      expect(find.byKey(const Key('fact-escrow')), findsNothing);
+      expect(find.text('Escrow success'), findsNothing);
+      expect(textIn(tester, const Key('fact-deals')), contains('14'));
       expect(textIn(tester, const Key('fact-disputes')), contains('7%'));
     });
 

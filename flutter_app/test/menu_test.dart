@@ -407,6 +407,10 @@ void main() {
       await _settle(tester);
 
       await tester.scrollUntilVisible(find.text('Sign out of all devices'), 200);
+      // Built is not on screen: the list builds a little past its bottom
+      // edge, so a short Settings can stop scrolling with the row just below.
+      await tester.ensureVisible(find.text('Sign out of all devices'));
+      await _settle(tester);
       await tester.tap(find.text('Sign out of all devices'));
       await _settle(tester);
       await tester.tap(find.text('Sign out everywhere'));
