@@ -16,10 +16,16 @@
 // does, someone has to keep it honest. It said there was "no featured
 // placement and no paid badge"; boosts and the Verified badge are both
 // paid for, so it says what each does instead.
+//
+// While payments are hidden (payments_shown.dart, 2026-10-09) it says what
+// is true then: BROKA takes no payments and sells nothing, a buyer pays the
+// seller directly once they have checked the item, and nothing on the
+// screen leads to escrow or a badge.
 
 import 'package:flutter/material.dart';
 
 import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
@@ -69,6 +75,30 @@ const _selling = _Journey(Icons.storefront_rounded, BrokaColors.gold, 'Selling o
       'who you are.'),
 ]);
 
+// The two journeys while payments are hidden: no escrow, no review after a
+// release that can't happen, no badge to buy.
+const _buyingDirect = _Journey(Icons.shopping_bag_rounded, BrokaColors.neonBlue, 'Buying on BROKA', [
+  ('Find it', 'Browse a category, search, or tell Zeno\'s Buying Agent what you want - it '
+      'searches, compares and keeps watching for you.'),
+  ('Ask Zeno', 'Is the price fair? Is the seller reliable? What should you check? Tap "Ask '
+      'Zeno" on any listing.'),
+  ('Agree the deal', 'In the deal room Zeno negotiates beside you, or chat with the seller '
+      'directly. A video call shows you the item without a trip.'),
+  ('Check it, then pay', 'BROKA doesn\'t take payments: you pay the seller directly. Meet '
+      'somewhere public, check the item, then pay - never a deposit to "hold" it.'),
+]);
+
+const _sellingDirect = _Journey(Icons.storefront_rounded, BrokaColors.gold, 'Selling on BROKA', [
+  ('List it', 'Photos first - Zeno can write the listing from them. A fair price and a clear '
+      'title get you found.'),
+  ('Answer fast', 'Buyers rarely message one seller. Whoever answers first is usually who '
+      'they buy from - and your reply speed counts toward your rating from day one.'),
+  ('Agree the deal', 'Zeno brokers the price with the buyer and keeps it civil.'),
+  ('Get paid, then hand it over', 'Check your own M-Pesa or bank for the money - never a '
+      'screenshot or an SMS - before the item leaves your hands.'),
+  ('Grow', 'An online store gathers your listings behind one link you can share anywhere.'),
+]);
+
 const _zeno = _Topic(
   Icons.auto_awesome_rounded, BrokaColors.neonPurple,
   'Zeno, on your side',
@@ -80,6 +110,67 @@ const _zeno = _Topic(
         'walks you through paying with escrow one step at a time - which service, how to pay in, '
         'and when it is safe to release the money. Say "walk me through escrow" to start.',
     'It can list an item for you from its photo, and voice mode lets you just talk to it.',
+  ],
+);
+
+const _zenoDirect = _Topic(
+  Icons.auto_awesome_rounded, BrokaColors.neonPurple,
+  'Zeno, on your side',
+  'The AI broker in every deal - and the assistant in the Zeno tab.',
+  [
+    'In a deal room, Zeno negotiates between buyer and seller and keeps both honest: it never '
+        'invents what the other side said, and never pushes a price past what the seller set.',
+    'In the Zeno tab it answers questions, opens screens, searches and finds things for you.',
+    'It can list an item for you from its photo, and voice mode lets you just talk to it.',
+  ],
+);
+
+const _ranking = _Topic(
+  Icons.leaderboard_rounded, BrokaColors.neonBlue,
+  'Ranking, and what buyers see first',
+  'Earned from your numbers - with one paid exception, always marked.',
+  [
+    'Your rank is computed from your completion rate, your response time '
+    'and your credibility. That rank decides how high your listings sit '
+    'when a buyer browses your category.',
+    // It said "there is no featured placement, no promoted listing and no
+    // paid badge" - while the app sold boosts and the Verified badge.
+    'The one thing you can pay for is a boost: a boosted listing is put '
+    'ahead of the others for the time you paid for, and it wears a '
+    'FEATURED badge so buyers always know. The Verified badge is paid for '
+    'too, but it is given only after an ID check, and it does not move '
+    'you up the list.',
+    'Everything else is earned: the seller ahead of you got there by '
+    'closing deals here and answering quickly. So can you.',
+  ],
+);
+
+// With nothing on sale, there is no paid exception to describe.
+const _rankingDirect = _Topic(
+  Icons.leaderboard_rounded, BrokaColors.neonBlue,
+  'Ranking, and what buyers see first',
+  'Earned from your numbers. Nothing on BROKA buys a higher place.',
+  [
+    'Your rank is computed from your completion rate, your response time '
+    'and your credibility. That rank decides how high your listings sit '
+    'when a buyer browses your category.',
+    'The seller ahead of you got there by answering quickly and dealing '
+    'honestly. So can you.',
+  ],
+);
+
+// What replaces the escrow topic while payments are hidden.
+const _payingSafely = _Topic(
+  Icons.shield_rounded, BrokaColors.neonGreen,
+  'Paying safely',
+  "BROKA doesn't take payments. You pay the seller directly - here is how to do it safely.",
+  [
+    'Meet somewhere public, check the item works and is what you agreed, then pay. Never send a '
+        'deposit to "hold" something.',
+    'Never pay a number or a link claiming to be BROKA. BROKA does not collect money for sellers.',
+    'Land and cars go through an official search (Ardhisasa, NTSA) and a bank or an advocate.',
+    'Sellers: hand an item over only once the money shows in your own M-Pesa or bank - a '
+        'screenshot or an SMS is not money.',
   ],
 );
 
@@ -151,10 +242,13 @@ const List<_Topic> _topics = [
       'around a long time is not the same as being good, and a careful new '
       'seller should be able to out-rate a careless old one.',
       'Thin evidence is treated as thin. Two perfect deals do not produce a '
-      'perfect rating; the number stays near the middle until there is '
-      'enough history to say more. That cuts both ways, and it is what '
+      'perfect rating; your deal record stays near the middle until there '
+      'is enough history to say more. That cuts both ways, and it is what '
       'stops a brand-new account outranking someone with years of work '
       'behind them.',
+      'Your reply speed counts in full from your first day, deals or not. '
+      'Answer buyers quickly and your rating rises; leave them waiting and '
+      'it falls.',
     ],
   ),
   _Topic(
@@ -172,25 +266,7 @@ const List<_Topic> _topics = [
       'leaving the platform scores below a careful six-month-old account.',
     ],
   ),
-  _Topic(
-    Icons.leaderboard_rounded, BrokaColors.neonBlue,
-    'Ranking, and what buyers see first',
-    'Earned from your numbers - with one paid exception, always marked.',
-    [
-      'Your rank is computed from your completion rate, your response time '
-      'and your credibility. That rank decides how high your listings sit '
-      'when a buyer browses your category.',
-      // It said "there is no featured placement, no promoted listing and no
-      // paid badge" - while the app sold boosts and the Verified badge.
-      'The one thing you can pay for is a boost: a boosted listing is put '
-      'ahead of the others for the time you paid for, and it wears a '
-      'FEATURED badge so buyers always know. The Verified badge is paid for '
-      'too, but it is given only after an ID check, and it does not move '
-      'you up the list.',
-      'Everything else is earned: the seller ahead of you got there by '
-      'closing deals here and answering quickly. So can you.',
-    ],
-  ),
+  _ranking,
   _Topic(
     Icons.storefront_rounded, BrokaColors.gold,
     'Your online store',
@@ -292,9 +368,18 @@ class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
     });
   }
 
-  List<_Topic> get _shown => _inAppPayments
-      ? _topics
-      : [_payWithEscrow, _completionWhilePaused, ..._topics.skip(2)];
+  List<_Topic> get _shown {
+    if (!paymentsShown) {
+      return [
+        _payingSafely,
+        _completionWhilePaused,
+        for (final t in _topics.skip(2)) identical(t, _ranking) ? _rankingDirect : t,
+      ];
+    }
+    return _inAppPayments
+        ? _topics
+        : [_payWithEscrow, _completionWhilePaused, ..._topics.skip(2)];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -309,16 +394,16 @@ class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
           style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
         ),
       ),
-      const _JourneyCard(_buying),
-      const _JourneyCard(_selling),
-      if (!_inAppPayments)
+      _JourneyCard(paymentsShown ? _buying : _buyingDirect),
+      _JourneyCard(paymentsShown ? _selling : _sellingDirect),
+      if (paymentsShown && !_inAppPayments)
         EscrowCallout(
           margin: const EdgeInsets.only(bottom: 14),
           onOpen: () => openEscrowServices(context, repository: widget.repository),
         ),
       for (final t in shown) ...[
         _TopicCard(t, repository: widget.repository),
-        if (identical(t, shown.first)) const _TopicCard(_zeno),
+        if (identical(t, shown.first)) _TopicCard(paymentsShown ? _zeno : _zenoDirect),
       ],
     ];
     return ChatAmbientBackground(

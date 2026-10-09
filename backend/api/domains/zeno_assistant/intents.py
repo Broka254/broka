@@ -49,6 +49,22 @@ DESTINATIONS: dict[str, str] = {
     "escrow_services": "Pay with escrow - the escrow services BROKA lists, what each costs, and how to use them",
 }
 
+
+
+def destinations() -> dict[str, str]:
+    """DESTINATIONS this server offers now. Not verification while the badge
+    isn't sold (VERIFIED_BADGE_ENABLED), nor the escrow services while the
+    app hides payments (ESCROW_GUIDANCE_ENABLED): Zeno saying "Opening..."
+    for a screen the app won't open is worse than not offering it."""
+    from api.core.config import settings
+    hidden = set()
+    if not settings.verified_badge_enabled:
+        hidden.add("verify")
+    if not settings.escrow_guidance_enabled:
+        hidden.add("escrow_services")
+    return {k: v for k, v in DESTINATIONS.items() if k not in hidden}
+
+
 # GUIDE shows one of guides.GUIDES, built for the user; NEED_INFO is the
 # model asking for the user's own data (knowledge.TOPICS) before it
 # answers. Neither changes anything; see service.py for how each is used.
@@ -222,12 +238,12 @@ def clean_action(raw) -> dict:
 
     if kind == "NAVIGATE":
         dest = raw.get("destination")
-        return {"type": kind, "destination": dest} if dest in DESTINATIONS else {"type": "NONE"}
+        return {"type": kind, "destination": dest} if dest in destinations() else {"type": "NONE"}
 
     if kind == "GUIDE":
-        from .guides import GUIDES
+        from .guides import available
         guide = raw.get("guide")
-        return {"type": kind, "guide": guide} if guide in GUIDES else {"type": "NONE"}
+        return {"type": kind, "guide": guide} if guide in available() else {"type": "NONE"}
 
     if kind == "NEED_INFO":
         from .knowledge import TOPICS

@@ -8,6 +8,7 @@ import '../services/deep_link_service.dart';
 import '../services/global_poller_service.dart';
 import '../services/notification_service.dart';
 import '../services/sell_draft_store.dart';
+import '../widgets/constellation_background.dart';
 import '../widgets/splash_painters.dart';
 import 'home_screen.dart';
 import 'sell_flow.dart';
@@ -21,16 +22,27 @@ import 'sell_photos_screen.dart';
 /// sequence used to play on every launch and held people for ten seconds,
 /// with a chime, before they could do anything.
 ///
-/// Visual layers (back to front): a deep navy backdrop, a sparse
-/// neural-network mesh, three concentric orbital rings around the
-/// BROKA/Zeno logo core, and the boot-status text stack. The sound and the
-/// digital wave along the bottom were removed (2026-10-09). Layout
-/// fractions below are calibrated against the reference artwork.
+/// Visual layers (back to front): the constellation every other screen sits
+/// on (ConstellationBackground - it replaced a plain backdrop and the
+/// splash's own sparser mesh, 2026-10-09), three concentric orbital rings
+/// around the BROKA/Zeno logo core, and the boot-status text stack. The
+/// sound and the digital wave along the bottom were removed (2026-10-09).
+/// Layout fractions below are calibrated against the reference artwork.
+///
+/// Android shows its own splash first (res/values-v31/styles.xml,
+/// drawable/launch_background.xml): the logo alone, [systemLogoSize] across,
+/// in the middle of the screen. A returning launch's one frame here draws
+/// it at that size in that place, so the hand-over doesn't jump. It used to
+/// be the launcher icon there, on its navy tile - a box round the logo.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
   /// Set once the boot sequence has been shown on this phone.
   static const String introSeenKey = 'splash_intro_seen';
+
+  /// The logo's size on Android's own splash (the splash_logo drawables:
+  /// 160dp in a 288dp canvas).
+  static const double systemLogoSize = 160;
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -54,7 +66,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   late final AnimationController _comet;
   late final AnimationController _breathe;
   late final AnimationController _dotsSweepCtrl;
-  late final AnimationController _networkTimeCtrl;
   late final Animation<double> _breatheScale;
 
   /// True while the first-run sequence plays. Until then (and on every
@@ -87,7 +98,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _comet = AnimationController(vsync: this, duration: const Duration(seconds: 5));
     _breathe = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000));
     _dotsSweepCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
-    _networkTimeCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 20));
 
     _breatheScale = Tween<double>(begin: 0.98, end: 1.02)
         .animate(CurvedAnimation(parent: _breathe, curve: Curves.easeInOut));
@@ -131,7 +141,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _comet.repeat();
     _breathe.repeat(reverse: true);
     _dotsSweepCtrl.repeat();
-    _networkTimeCtrl.repeat();
     _scheduleBootMessages();
     _navTimer = Timer(_kIntroLength + const Duration(milliseconds: 200), _decideNextScreen);
   }
@@ -255,7 +264,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _comet.dispose();
     _breathe.dispose();
     _dotsSweepCtrl.dispose();
-    _networkTimeCtrl.dispose();
     for (final t in _msgTimers) {
       t.cancel();
     }
@@ -267,7 +275,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   double get _logoReveal => const Interval(0.0, 0.17, curve: Curves.easeOut).transform(_boot.value);
   double get _textReveal => const Interval(0.08, 0.30, curve: Curves.easeOut).transform(_boot.value);
   double get _ringsReveal => const Interval(0.14, 0.42, curve: Curves.easeOut).transform(_boot.value);
-  double get _networkReveal => const Interval(0.35, 0.68, curve: Curves.easeOut).transform(_boot.value);
   double get _footerReveal => const Interval(0.35, 0.65, curve: Curves.easeOut).transform(_boot.value);
   double get _finalPulse => const Interval(0.85, 1.0, curve: Curves.easeInOut).transform(_boot.value);
 
@@ -278,48 +285,29 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final coreSize = size.width * 0.94;
 
     // A returning user's launch, or the moment before the first-run
-    // sequence starts: the logo alone, still, where the sequence puts it.
+    // sequence starts: the logo alone, still, where Android's own splash
+    // left it - on the constellation.
     if (!_intro) {
-      final logo = size.width * 0.40;
       return Scaffold(
-        backgroundColor: const Color(0xFF03040B),
-        body: Stack(fit: StackFit.expand, children: [
-          const _SplashBackdrop(),
-          Positioned(
-            left: (size.width - logo) / 2,
-            top: size.height * _kLogoCenterY - logo / 2,
-            width: logo,
-            height: logo,
-            child: Image.asset('assets/images/broka_logo_transparent.png', fit: BoxFit.contain),
+        backgroundColor: BrokaColors.bg,
+        body: ConstellationBackground(
+          child: Center(
+            child: SizedBox.square(
+              key: const Key('splash-logo'),
+              dimension: SplashScreen.systemLogoSize,
+              child: Image.asset('assets/images/broka_logo_transparent.png', fit: BoxFit.contain),
+            ),
           ),
-        ]),
+        ),
       );
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF03040B),
-      body: SizedBox.expand(
+      backgroundColor: BrokaColors.bg,
+      body: ConstellationBackground(
         child: Stack(
           fit: StackFit.expand,
           children: [
-            const _SplashBackdrop(),
-
-            // Neural network mesh.
-            RepaintBoundary(
-              child: AnimatedBuilder(
-                animation: Listenable.merge([_boot, _networkTimeCtrl]),
-                builder: (_, __) => CustomPaint(
-                  size: size,
-                  painter: NeuralNetworkPainter(
-                    t: _networkTimeCtrl.value,
-                    reveal: _networkReveal,
-                    nodes: NeuralNetworkField.nodes,
-                    edges: NeuralNetworkField.edges,
-                  ),
-                ),
-              ),
-            ),
-
             // Orbital rings + Zeno core logo.
             Positioned(
               left: (size.width - coreSize) / 2,
@@ -383,24 +371,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SplashBackdrop extends StatelessWidget {
-  const _SplashBackdrop();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: RadialGradient(
-          center: Alignment(0.15, -0.35),
-          radius: 1.25,
-          colors: [Color(0xFF050810), Color(0xFF03040A), Color(0xFF000004)],
-          stops: [0.0, 0.55, 1.0],
         ),
       ),
     );

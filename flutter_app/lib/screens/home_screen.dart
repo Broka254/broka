@@ -42,6 +42,7 @@ import '../theme/motion.dart';
 import '../utils/auth_gate.dart';
 import '../utils/price_format.dart';
 import '../widgets/constellation_background.dart';
+import '../widgets/delivery_nudge.dart';
 import '../widgets/product_grid_view.dart';
 import '../widgets/zeno_avatar.dart';
 import '../features/categories/data/repositories/categories_repository.dart';
@@ -52,6 +53,7 @@ import '../features/categories/presentation/category_navigation.dart';
 import '../features/categories/presentation/widgets/category_art_card.dart';
 import '../features/trending/presentation/trending_screen.dart';
 import '../features/auctions/domain/auctions_enabled.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show openEscrowServices;
 import '../features/auctions/presentation/auction_house_screen.dart';
 import 'zeno_screen.dart';
@@ -1137,6 +1139,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         delay: const Duration(milliseconds: 100),
                         child: _buildActiveBuyAgentSection()),
                   ),
+                // Can't be notified - said where it's seen, with what it
+                // costs (delivery_nudge.dart). Signed in only: a guest has
+                // nobody writing to them yet.
+                if (ApiService.currentUserId != null)
+                  const SliverToBoxAdapter(child: DeliveryNudge()),
                 SliverToBoxAdapter(child: _buildFeedHeading()),
                 _buildFeedSliver(),
                 const SliverToBoxAdapter(child: SizedBox(height: 12)),
@@ -1484,15 +1491,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           // starts in the top half (brief §2) - the full callout is on every
           // listing and in every deal chat (escrow_callout.dart). Flexible
           // and scaled down rather than overflowing at a large text size.
-          const SizedBox(width: 8),
-          const Flexible(
-            flex: 3,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerRight,
-              child: _EscrowPill(),
+          // Hidden with every other way to a payment (payments_shown.dart).
+          if (paymentsShown) ...[
+            const SizedBox(width: 8),
+            const Flexible(
+              flex: 3,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: _EscrowPill(),
+              ),
             ),
-          ),
+          ],
         ]),
       );
 

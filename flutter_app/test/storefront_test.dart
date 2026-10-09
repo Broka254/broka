@@ -2,6 +2,7 @@
 // opening it.
 import 'dart:convert';
 
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/core/network/api_client.dart';
 import 'package:broka/features/safe_payment/escrow_callout.dart';
 import 'package:broka/features/stores/data/repositories/stores_repository.dart';
@@ -144,6 +145,11 @@ Future<void> _pumpStore(WidgetTester tester, _Backend backend,
 }
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" tests.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     ApiService.currentUserId = null;
@@ -658,6 +664,23 @@ void main() {
       expect(find.text('Buyer protection'), findsNothing);
       expect(find.textContaining('BROKA escrow'), findsNothing);
       expect(find.textContaining('held in escrow'), findsNothing);
+    });
+
+    testWidgets('with payments hidden (the default build): pay the store, no escrow anywhere',
+        (tester) async {
+      paymentsShown = false;
+      addTearDown(() => paymentsShown = true);
+      await pumpCart(tester, [item('l1', 'Samsung A15', 18000), item('l2', 'Case', 500)]);
+      expect(find.text('To the store, directly'), findsOneWidget);
+      await tester.dragUntilVisible(find.byKey(const Key('cart-paying-note')),
+          find.byKey(const Key('cart-list')), const Offset(0, -200));
+      final note = find.byKey(const Key('cart-paying-note'));
+      expect(find.descendant(of: note, matching: find.byType(EscrowCallout)), findsNothing);
+      expect(find.descendant(of: note, matching: find.textContaining('See the item')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('cart-checkout')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('pay the store directly once you have seen it'), findsOneWidget);
+      expect(find.textContaining('escrow'), findsNothing);
     });
 
     testWidgets('checkout pays each product in its own deal room', (tester) async {

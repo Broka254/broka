@@ -66,9 +66,11 @@ Three multiplicative factors, each 0..1, per §3.3:
     noting a KSh 2,500 farming attack could buy 100% DCR against the old
     KSh 200 floor.
 
-Low confidence pulls the rating toward NEUTRAL_RATING rather than toward
-zero. A new seller is unproven, not bad, and starting everyone at 0/10 would
-make the number useless as an incentive on day one.
+Low confidence pulls the deal record (DCR, volume, backlog) toward a
+neutral one rather than toward zero. A new seller is unproven, not bad, and
+starting everyone at 0/10 would make the number useless as an incentive on
+day one. Reply speed and tenure are not pulled anywhere: they are measured
+directly, so they count in full from the first day (DEAL_RECORD_PRIOR).
 
 WHAT THIS MODULE IS NOT
 =======================
@@ -131,6 +133,24 @@ MIN_COUNTABLE_DEAL_VALUE_KES = 500.0
 # punishment for being new.
 NEUTRAL_RATING = 6.5
 
+# What thin evidence is shrunk on: the deal record. Reply speed and time on
+# BROKA are measured facts about the seller, not inferences from a handful
+# of deals, so they count as they are however few deals have closed.
+#
+# Until 2026-10-09 the whole rating was shrunk, and with in-app payments off
+# no deal can complete on BROKA - every seller had zero completed deals and
+# sat at exactly 6.5, whether they answered in five minutes or never.
+W_DEAL_RECORD = W_DCR + W_VOLUME + W_BACKLOG
+
+# response_score() for a seller not yet measured.
+UNMEASURED_RESPONSE_SCORE = 0.7
+
+# The deal record's worth (0..1) for a seller with none: chosen so a
+# brand-new seller - no deals, replies not yet measured, first day - still
+# lands exactly on NEUTRAL_RATING.
+DEAL_RECORD_PRIOR = (NEUTRAL_RATING / 10.0
+                     - W_RESPONSE * UNMEASURED_RESPONSE_SCORE) / W_DEAL_RECORD
+
 
 @dataclass(frozen=True)
 class SellerSignals:
@@ -176,7 +196,7 @@ def response_score(median_minutes: Optional[float]) -> float:
     uses for an unmeasured seller, so the two agree.
     """
     if median_minutes is None:
-        return 0.7
+        return UNMEASURED_RESPONSE_SCORE
     if median_minutes <= 0:
         return 1.0
     return math.exp(-math.log(2) * median_minutes / RESPONSE_HALFLIFE_MINUTES)
@@ -297,16 +317,21 @@ def overall_rating(s: SellerSignals) -> RatingBreakdown:
     ten     = tenure_score(s.days_on_broka)
     backlog = backlog_score(s.completed_deals, s.pending_deals)
 
-    raw = (W_DCR * dcr + W_RESPONSE * resp + W_VOLUME * vol
-           + W_TENURE * ten + W_BACKLOG * backlog) * 10.0
+    measured = W_RESPONSE * resp + W_TENURE * ten
+    raw = (W_DCR * dcr + W_VOLUME * vol + W_BACKLOG * backlog + measured) * 10.0
 
     # Quality multiplies DOWN; evidence decides how much of the result to
     # believe versus the prior. Order matters: quality is applied BEFORE
     # shrinkage, so a farmed record is dragged down and then only partly
     # rescued by the prior, instead of being averaged back up toward it.
+    #
+    # The prior is a neutral deal record plus the seller's own reply speed
+    # and tenure, so those move the rating from the first day; at ten deals
+    # it is out of the picture and nothing changes for an established seller.
     quality  = quality_factor(s)
     evidence = evidence_weight(s)
-    rating = evidence * (raw * quality) + (1 - evidence) * NEUTRAL_RATING
+    prior = (W_DEAL_RECORD * DEAL_RECORD_PRIOR + measured) * 10.0
+    rating = evidence * (raw * quality) + (1 - evidence) * prior
 
     return RatingBreakdown(
         rating=round(min(max(rating, 0.0), 10.0), 1),

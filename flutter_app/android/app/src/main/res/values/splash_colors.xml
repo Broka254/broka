@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- BrokaColors.bg: the system splash hands over to the Flutter one
+         without a change of colour. -->
+    <color name="splash_background">#03040A</color>
+</resources>

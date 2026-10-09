@@ -21,6 +21,7 @@ import '../main.dart';
 import '../services/api_service.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
 import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide;
 import '../features/calls/domain/call_record.dart' show callSummary;
 import '../services/chat_screen_memory.dart';
@@ -1385,7 +1386,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         _buildHeader(),
         // Every buyer can pay from here: there is no "finalize" step before
         // it any more (auctions are paid from the auction screen).
-        if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
+        // Nothing at all while payments are hidden (payments_shown.dart).
+        if (!paymentsShown)
+          const SizedBox.shrink()
+        else if (_role == 'buyer' && _listing != null && _listing!.listingType != 'auction')
           _buildPaymentPanel()
         // The seller needs escrow as much: "the money is held" is what lets
         // them hand an item to a stranger - and a screenshot is not.

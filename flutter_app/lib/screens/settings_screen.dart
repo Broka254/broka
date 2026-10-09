@@ -21,10 +21,17 @@
 // New: "Sign out of all devices" (POST /auth/token/revoke-all). The
 // startup-sound switch went with the splash's sound (2026-10-09).
 //
+// Since 2026-10-09 Notifications says whether they are actually on, and
+// "Run in background" whether battery saving holds BROKA back - each fixed
+// with a tap (services/delivery_access.dart), and read again on returning
+// from the phone's settings.
+//
 // Since 2026-10-03: "Change password" (with an SMS-code reset for a
 // forgotten one). Only English and Kiswahili can be chosen as Zeno's
-// language for now; Dholuo, Kikuyu, Luganda and Sheng are shown as coming
-// soon and can't be selected.
+// language. Dholuo, Kikuyu, Luganda and Sheng were listed as "Coming soon"
+// chips that did nothing when tapped; they are gone until Zeno can deal in
+// them (2026-10-09).
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -33,15 +40,19 @@ import '../features/account/data/repositories/account_repository.dart';
 import '../features/auth/presentation/change_password_screen.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../services/delivery_access.dart';
 import '../services/global_poller_service.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/menu_tiles.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, this.repository, this.animateBackground = true});
+  const SettingsScreen({super.key, this.repository, this.animateBackground = true, this.access});
 
   final AccountRepository? repository;
+
+  /// Defaults to DeliveryAccess.instance.
+  final DeliveryAccess? access;
 
   /// False renders the constellation as one still frame - for tests.
   final bool animateBackground;
@@ -58,14 +69,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ('swahili', 'Kiswahili', '🇰🇪'),
   ];
 
-  /// Shown, not offered: not ready for Zeno to deal in yet.
-  static const _comingSoon = [
-    ('luo', 'Dholuo', '🟡'),
-    ('kikuyu', 'Kikuyu', '🟤'),
-    ('luganda', 'Luganda', '🇺🇬'),
-    ('sheng', 'Sheng', '🔥'),
-  ];
-
   AccountRepository get _repo => widget.repository ?? accountRepository;
 
   /// Null until /auth/me answers: the switch is disabled rather than showing
@@ -74,10 +77,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _savingLocation = false;
   String _language = ApiService.currentUserLanguage;
 
+  DeliveryAccess get _access => widget.access ?? DeliveryAccess.instance;
+
+  /// Null until known, or where it can't be told.
+  DeliveryState? _delivery;
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _checkDelivery();
+    _lifecycle = AppLifecycleListener(onResume: _checkDelivery);
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkDelivery() async {
+    final state = await _access.check();
+    if (mounted) setState(() => _delivery = state);
+  }
+
+  Future<void> _allowNotifications() async {
+    await _access.allowNotifications();
+    await _checkDelivery();
+  }
+
+  Future<void> _allowBackground() async {
+    await _access.allowBackground();
+    await _checkDelivery();
   }
 
   Future<void> _load() async {
@@ -229,17 +261,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ]),
         const MenuSectionLabel('Notifications & sound'),
         MenuGroup(children: [
-          MenuTile(
-            icon: Icons.notifications_outlined,
-            title: 'Notifications',
-            subtitle: _notificationsSubtitle(),
-            trailing: const Icon(Icons.open_in_new_rounded, color: BrokaColors.textMid, size: 18),
-            onTap: () async {
-              if (!await openAppSettings() && mounted) {
-                _snack("Couldn't open your phone's settings.");
-              }
-            },
-          ),
+          if (_delivery?.notificationsAllowed == false)
+            MenuTile(
+              key: const Key('settings-notifications-off'),
+              icon: Icons.notifications_off_outlined,
+              tint: BrokaColors.danger,
+              title: 'Notifications',
+              subtitle: "Off - buyers' messages, offers and calls won't reach you. Tap to turn them on",
+              trailing: const MenuPill('OFF', color: BrokaColors.danger),
+              onTap: _allowNotifications,
+            )
+          else
+            MenuTile(
+              icon: Icons.notifications_outlined,
+              title: 'Notifications',
+              subtitle: _notificationsSubtitle(),
+              trailing: const Icon(Icons.open_in_new_rounded, color: BrokaColors.textMid, size: 18),
+              onTap: () async {
+                if (!await openAppSettings() && mounted) {
+                  _snack("Couldn't open your phone's settings.");
+                }
+              },
+            ),
+          if (_delivery != null && defaultTargetPlatform == TargetPlatform.android)
+            MenuTile(
+              key: const Key('settings-background'),
+              icon: Icons.bolt_rounded,
+              tint: _delivery!.backgroundAllowed ? BrokaColors.neonGreen : BrokaColors.gold,
+              title: 'Run in background',
+              subtitle: _delivery!.backgroundAllowed
+                  ? 'On - calls ring and messages arrive with BROKA closed'
+                  : 'Battery saving may hold calls and messages back while BROKA is closed. Tap to allow',
+              trailing: _delivery!.backgroundAllowed
+                  ? const MenuPill('ON', color: BrokaColors.neonGreen)
+                  : const MenuPill('OFF', color: BrokaColors.gold),
+              onTap: _delivery!.backgroundAllowed ? null : _allowBackground,
+            ),
         ]),
         const MenuSectionLabel('Security'),
         MenuGroup(children: [
@@ -308,27 +365,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   width: _language == key ? 1.5 : 1,
                 ),
                 shape: const StadiumBorder(),
-              ),
-            for (final (key, name, flag) in _comingSoon)
-              Opacity(
-                key: Key('settings-language-soon-$key'),
-                opacity: 0.55,
-                child: Chip(
-                  avatar: Text(flag, style: const TextStyle(fontSize: 14)),
-                  label: Text.rich(TextSpan(children: [
-                    TextSpan(text: name),
-                    const TextSpan(
-                      text: '  Coming soon',
-                      style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700,
-                          color: BrokaColors.gold),
-                    ),
-                  ])),
-                  labelStyle: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w500, color: BrokaColors.textMid),
-                  backgroundColor: BrokaColors.bgMid,
-                  side: const BorderSide(color: BrokaColors.border),
-                  shape: const StadiumBorder(),
-                ),
               ),
           ]),
         ]),

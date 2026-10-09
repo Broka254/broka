@@ -45,10 +45,21 @@ Verified ladder:
 
     9.3  95% DCR, 8min replies, 150 deals
     8.5  88/97 over 2 years, 25min replies
-    6.7  2/2 in week one
+    7.4  no deals yet, 8min replies, 3 months on BROKA
+    6.9  2/2 in week one, 25min replies
     6.5  brand new, no deals
-    5.5  26 pending against 4 completed
+    5.0  no deals yet, buyers left waiting two days
     2.5  10 deals, 1 buyer, all under KSh 500
+
+**Reply speed and tenure count from day one (2026-10-09).** Thin evidence
+used to shrink the whole rating toward 6.5, reply speed included. With
+in-app payments off no deal can complete on BROKA, so every seller had zero
+completed deals and every seller was 6.5 - answering in five minutes or
+never. Now only the deal record (DCR, volume, backlog) is shrunk toward a
+neutral record (`DEAL_RECORD_PRIOR`, set so a brand-new seller is still
+exactly 6.5); reply speed and tenure are measured, so they count as they
+are. A seller with ten deals is rated exactly as before. Credibility is
+unchanged: it is the track-record number, and time alone does not buy it.
 
 ### Why snapshots ship before the charts
 

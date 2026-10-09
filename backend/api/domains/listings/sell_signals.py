@@ -15,7 +15,7 @@ from typing import Dict, Iterable, List
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.database import Interest, Listing, NegotiationMessage, Wishlist
+from api.database import Interest, Listing, ListingLike, NegotiationMessage, Wishlist
 from api.domains.media.service import parse_id_list, split_legacy_photos
 
 
@@ -30,8 +30,8 @@ def _photo_count(listing: Listing) -> int:
 async def engagement_signals(
     db: AsyncSession, listings: Iterable[Listing],
 ) -> Dict[str, dict]:
-    """{listing_id: {likes, interested_buyers, best_offer, photo_count,
-    description_chars}} - the ListingSignals fields that come from what
+    """{listing_id: {likes, like_count, interested_buyers, best_offer,
+    photo_count, description_chars}} - the ListingSignals fields that come from what
     buyers did and what the seller wrote.
 
     `interested_buyers` is every buyer who pressed "Is it available?"
@@ -49,6 +49,10 @@ async def engagement_signals(
     saves = dict((await db.execute(
         select(Wishlist.listing_id, func.count(Wishlist.id))
         .where(Wishlist.listing_id.in_(ids)).group_by(Wishlist.listing_id)
+    )).all())
+    liked = dict((await db.execute(
+        select(ListingLike.listing_id, func.count(ListingLike.id))
+        .where(ListingLike.listing_id.in_(ids)).group_by(ListingLike.listing_id)
     )).all())
 
     buyers: Dict[str, set] = {lid: set() for lid in ids}
@@ -85,7 +89,11 @@ async def engagement_signals(
 
     return {
         l.id: {
+            # Saves, under the name the sell model has always used.
             "likes": int(saves.get(l.id, 0)),
+            # Likes themselves: counted for the seller, not (yet) a term in
+            # the sell model - a like costs less than a save and says less.
+            "like_count": int(liked.get(l.id, 0)),
             # Never the seller themselves: a seller testing their own
             # listing's chat is not a buyer.
             "interested_buyers": len(buyers[l.id] - {l.seller_id}),

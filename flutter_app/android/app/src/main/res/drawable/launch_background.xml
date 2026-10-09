@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and below: what shows while the app starts. The logo alone,
+     on the app's own near-black (BrokaColors.bg). It was the launcher icon,
+     which carries its own navy tile - a box around the logo. Android 12 and
+     up use values-v31/styles.xml instead. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#010416"/>
+            <solid android:color="@color/splash_background"/>
         </shape>
     </item>
     <item android:gravity="center">
-        <bitmap android:src="@mipmap/ic_launcher" android:gravity="center"/>
+        <bitmap android:src="@drawable/splash_logo" android:gravity="center"/>
     </item>
 </layer-list>

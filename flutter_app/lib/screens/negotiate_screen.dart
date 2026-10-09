@@ -31,6 +31,7 @@ import '../features/reviews/presentation/review_prompt.dart';
 import '../utils/price_format.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
 import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide, zenoEscrowPrompt;
 import '../core/errors/user_facing_error.dart';
 
@@ -964,7 +965,8 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       // deal, there is nothing to "finalize" first. While BROKA holds no
       // payments the tap opens the escrow sheet instead - independent
       // escrow services and Zeno's walkthrough (safe_payment.dart).
-      if (!_hasFundedDeal && _listing != null && _listing!.listingType != 'auction') {
+      if (paymentsShown && !_hasFundedDeal && _listing != null &&
+          _listing!.listingType != 'auction') {
         chips.add(_chip(
           label: 'Pay with escrow',
           icon: Icons.shield_outlined,
@@ -1317,7 +1319,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
             // this is how either side is protected - and how they learn
             // Zeno walks them through it (escrow_callout.dart). Gone once
             // money is held through BROKA (payments on, deal funded).
-            if (_listing != null && !_hasFundedDeal)
+            if (paymentsShown && _listing != null && !_hasFundedDeal)
               EscrowCallout(
                 compact: true,
                 title: _role == 'seller' ? 'Get paid with escrow' : 'Pay with escrow',
@@ -1365,7 +1367,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
             const SizedBox(width: 5),
             Flexible(
               child: Text(
-                'Zeno mediating · Pay with escrow',
+                paymentsShown ? 'Zeno mediating · Pay with escrow' : 'Zeno mediating',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: BrokaColors.textMid.withOpacity(0.95), fontSize: 11.5),
@@ -1552,7 +1554,9 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   // payments the tap opens the Paying safely sheet (escrow_actions.dart),
   // and with payments on it opens the escrow payment, which is that too.
   Widget _buildActionBar() {
-    if (_currentOffer == null || _role != 'buyer' || _hasFundedDeal) return const SizedBox.shrink();
+    if (!paymentsShown || _currentOffer == null || _role != 'buyer' || _hasFundedDeal) {
+      return const SizedBox.shrink();
+    }
     if (_listing?.listingType == 'auction') return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),

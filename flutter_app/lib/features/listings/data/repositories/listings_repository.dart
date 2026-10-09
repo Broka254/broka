@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/listing.dart';
+import '../../domain/models/listing_engagement.dart';
 import '../../../../core/errors/user_facing_error.dart';
 
 /// Returned by getListings when withTotal=true - a page of results plus
@@ -270,7 +271,37 @@ class ListingsRepository {
     }
   }
 
-  // ── Saves (the heart on a listing) ───────────────────────────────────────
+  // ── Likes and saves ──────────────────────────────────────────────────────
+  //
+  // The heart is a like (since 2026-10-09); the bookmark is a save, which
+  // keeps the listing in Saved items. The seller sees how many of each.
+
+  /// The user's like and save on this listing - with the counts when it is
+  /// their own.
+  Future<Result<ListingEngagement>> engagement(String listingId) async {
+    try {
+      final data = await _client.get('/listings/$listingId/engagement') as Map;
+      return Success(ListingEngagement.fromJson(Map<String, dynamic>.from(data)));
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  /// Likes the listing, or takes the like back.
+  Future<Result<bool>> setLiked(String listingId, bool liked) async {
+    try {
+      final data = liked
+          ? await _client.post('/listings/$listingId/like', const {})
+          : await _client.delete('/listings/$listingId/like');
+      return Success((data as Map?)?['liked'] == true);
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
 
   /// Whether this user has saved the listing.
   Future<Result<bool>> isSaved(String listingId) async {

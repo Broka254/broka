@@ -167,6 +167,55 @@ void main() {
     expect(find.text('DIRECT SALE'), findsOneWidget);
   });
 
+  // A like and a save are two things (2026-10-09): the heart only saved,
+  // and nothing counted a like.
+  group('likes and saves', () {
+    List<FakeRequest> sent(String method, String path) => fakeRequests
+        .where((r) => r.method == method && r.uri.path == path).toList();
+
+    testWidgets('a buyer likes it with the heart and saves it with the bookmark', (tester) async {
+      setFakeRoute((uri) => switch (uri.path) {
+            '/listings/listing-1/engagement' => {'liked': false, 'saved': false},
+            '/listings/listing-1/like' => {'liked': true},
+            '/listings/listing-1/save' => {'saved': true},
+            _ => null,
+          });
+      await open(tester, _listing());
+      expect(find.byTooltip('Like'), findsOneWidget);
+      expect(find.byTooltip('Save'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('product-like')));
+      await tester.pumpAndSettle();
+      expect(sent('POST', '/listings/listing-1/like'), hasLength(1));
+      expect(find.byTooltip('Unlike'), findsOneWidget);
+      // A like keeps nothing in Saved items.
+      expect(sent('POST', '/listings/listing-1/save'), isEmpty);
+
+      await tester.tap(find.byKey(const Key('product-save')));
+      await tester.pumpAndSettle();
+      expect(sent('POST', '/listings/listing-1/save'), hasLength(1));
+      expect(find.byTooltip('Remove from saved'), findsOneWidget);
+      expect(find.textContaining('Saved items'), findsOneWidget);
+    });
+
+    testWidgets('what the buyer already did shows when it opens', (tester) async {
+      setFakeRoute((uri) => uri.path == '/listings/listing-1/engagement'
+          ? {'liked': true, 'saved': true} : null);
+      await open(tester, _listing());
+      expect(find.byTooltip('Unlike'), findsOneWidget);
+      expect(find.byTooltip('Remove from saved'), findsOneWidget);
+    });
+
+    testWidgets('its seller sees how many liked and saved it, and no buttons', (tester) async {
+      setFakeRoute((uri) => uri.path == '/listings/listing-1/engagement'
+          ? {'liked': false, 'saved': false, 'likes': 7, 'saves': 2} : null);
+      await open(tester, _listing(sellerId: 'buyer-1'));
+      expect(find.byKey(const Key('product-like')), findsNothing);
+      expect(find.byKey(const Key('product-save')), findsNothing);
+      expect(find.bySemanticsLabel('7 likes, 2 saves'), findsOneWidget);
+    });
+  });
+
   group('deal terms', () {
     testWidgets('a negotiable listing the seller delivers', (tester) async {
       await open(tester, _listing());

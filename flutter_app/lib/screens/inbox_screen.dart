@@ -14,6 +14,7 @@ import '../features/categories/domain/category_visual.dart';
 import '../widgets/chat_parts.dart' show kChatGradient;
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
+import '../widgets/delivery_nudge.dart';
 import '../widgets/gradient_button.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
@@ -208,6 +209,11 @@ class _InboxScreenState extends State<InboxScreen> {
                     trailingKey: unread,
                   ),
                 ),
+                if (ApiService.currentUserId != null)
+                  const SliverToBoxAdapter(
+                    child: DeliveryNudge(place: DeliveryNudgePlace.inbox,
+                        margin: EdgeInsets.fromLTRB(16, 4, 16, 8)),
+                  ),
                 ..._body(media),
               ],
             ),

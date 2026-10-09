@@ -129,6 +129,14 @@ void main() {
 
       expect(_sent('/auth/password/reset').single.json,
           {'reset_token': 'reset-tok', 'new_password': 'NewPassw0rd'});
+      // It says it worked before it goes anywhere: the screen used to close
+      // the moment the server answered, and someone who reset from the
+      // login screen landed on Home with no word that anything happened.
+      expect(popped, isEmpty);
+      expect(find.byKey(const Key('reset-done')), findsOneWidget);
+      expect(find.text('Password reset'), findsOneWidget);
+      expect(find.textContaining("You're signed in with your new password"), findsOneWidget);
+      await tapText(tester, 'Continue');
       expect(popped, [true]);
       expect(ApiService.authToken, 'new-access');
       expect(ApiService.currentUserId, 'user-1');
@@ -161,6 +169,43 @@ void main() {
       await settle(tester);
       expect(find.text('Incorrect code'), findsOneWidget);
       expect(find.byKey(const Key('reset-new-password')), findsNothing);
+    });
+
+    testWidgets('a refused reset says it failed, and why', (tester) async {
+      setFakeRoute(_backend({
+        '/auth/password/reset': const FakeResponse(
+            {'detail': 'This reset has expired. Request a new code and try again.'},
+            statusCode: 400),
+      }));
+      final popped = await open(tester,
+          const PasswordResetScreen(phone: '+254712345678', animateBackground: false));
+      await tapText(tester, 'Send code');
+      tester.widget<OtpCodeField>(find.byType(OtpCodeField)).controller.text = '481902';
+      await settle(tester);
+      await tester.enterText(find.byKey(const Key('reset-new-password')), 'NewPassw0rd');
+      await tester.enterText(find.byKey(const Key('reset-confirm-password')), 'NewPassw0rd');
+      await tapText(tester, 'Save password');
+
+      expect(find.textContaining('Your password was not changed'), findsOneWidget);
+      expect(find.textContaining('This reset has expired'), findsOneWidget);
+      expect(find.byKey(const Key('reset-done')), findsNothing);
+      expect(popped, isEmpty);
+    });
+
+    testWidgets("an answer that never came says it can't tell, and what to do", (tester) async {
+      setFakeRoute(_backend({
+        '/auth/password/reset': const FakeResponse(null, statusCode: 503),
+      }));
+      await open(tester, const PasswordResetScreen(phone: '+254712345678', animateBackground: false));
+      await tapText(tester, 'Send code');
+      tester.widget<OtpCodeField>(find.byType(OtpCodeField)).controller.text = '481902';
+      await settle(tester);
+      await tester.enterText(find.byKey(const Key('reset-new-password')), 'NewPassw0rd');
+      await tester.enterText(find.byKey(const Key('reset-confirm-password')), 'NewPassw0rd');
+      await tapText(tester, 'Save password');
+
+      expect(find.textContaining("couldn't confirm"), findsOneWidget);
+      expect(find.byKey(const Key('reset-done')), findsNothing);
     });
 
     testWidgets('passwords that differ or are too short are caught before sending', (tester) async {
@@ -252,7 +297,7 @@ void main() {
       expect(find.byType(ChangePasswordScreen), findsOneWidget);
     });
 
-    testWidgets('offers English and Kiswahili; the rest are coming soon', (tester) async {
+    testWidgets('offers English and Kiswahili, and nothing "coming soon"', (tester) async {
       tester.view.physicalSize = const Size(1080, 2400);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
@@ -262,19 +307,17 @@ void main() {
       final choices = tester.widgetList<ChoiceChip>(find.byType(ChoiceChip))
           .map((c) => (c.label as Text).data).toList();
       expect(choices, ['English', 'Kiswahili']);
-      for (final key in ['luo', 'kikuyu', 'luganda', 'sheng']) {
-        final soon = find.byKey(Key('settings-language-soon-$key'));
-        expect(soon, findsOneWidget, reason: key);
-        expect(find.descendant(of: soon, matching: find.textContaining('Coming soon')),
-            findsOneWidget, reason: key);
+      expect(find.textContaining('Coming soon'), findsNothing);
+      for (final name in ['Dholuo', 'Kikuyu', 'Luganda', 'Sheng']) {
+        expect(find.textContaining(name), findsNothing, reason: name);
       }
 
-      // Tapping one changes nothing.
+      // Kiswahili is chosen, and sent.
       clearFakeRequests();
-      await tester.tap(find.byKey(const Key('settings-language-soon-sheng')));
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Kiswahili'));
       await settle(tester);
-      expect(ApiService.currentUserLanguage, isNot('sheng'));
-      expect(fakeRequests.where((r) => r.uri.path == '/auth/language'), isEmpty);
+      expect(ApiService.currentUserLanguage, 'swahili');
+      expect(fakeRequests.where((r) => r.uri.path == '/auth/language'), isNotEmpty);
     });
   });
 

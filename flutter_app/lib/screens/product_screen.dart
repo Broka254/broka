@@ -31,8 +31,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
+import '../features/listings/domain/models/listing_engagement.dart';
 import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/stores/data/store_cart.dart';
 import '../features/stores/presentation/store_cart_screen.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
@@ -73,10 +75,14 @@ class _ProductScreenState extends State<ProductScreen> {
   /// then the standing tiles are placeholders, not "not measured yet".
   bool _sellerLoaded = false;
 
-  /// Whether this user has saved (hearted) the listing. Null until known,
-  /// and for a guest or the listing's own seller, who get no heart.
-  bool? _saved;
+  /// What this user did with the listing: the heart likes it, the bookmark
+  /// saves it to Saved items (two things since 2026-10-09; the heart used to
+  /// save, and nothing counted a like). Null until known, and for a guest.
+  /// On the seller's own listing it carries how many people liked and saved
+  /// it instead - they get no buttons.
+  ListingEngagement? _engagement;
   bool _saving = false;
+  bool _liking = false;
 
   @override
   void didChangeDependencies() {
@@ -87,7 +93,7 @@ class _ProductScreenState extends State<ProductScreen> {
         _listing = args;
         _loadSeller();
         _refreshListing(args.id);
-        _loadSaved();
+        _loadEngagement();
         LastScreenTracker.save('/product', {'listingId': args.id});
       } else if (args is Map && args['listingId'] is String) {
         // Restored from a relaunch - we only persisted the ID, fetch fresh.
@@ -102,7 +108,7 @@ class _ProductScreenState extends State<ProductScreen> {
       if (!mounted) return;
       setState(() => _listing = listing);
       _loadSeller();
-      _loadSaved();
+      _loadEngagement();
       LastScreenTracker.save('/product', {'listingId': listingId});
     } catch (_) {
       // Listing may have been deleted/sold since the app was last open.
@@ -123,12 +129,34 @@ class _ProductScreenState extends State<ProductScreen> {
     } catch (_) {}
   }
 
-  Future<void> _loadSaved() async {
+  Future<void> _loadEngagement() async {
     final l = _listing;
-    if (l == null || ApiService.currentUserId == null || _isMine) return;
-    final result = await listingsRepository.isSaved(l.id);
+    if (l == null || ApiService.currentUserId == null) return;
+    final result = await listingsRepository.engagement(l.id);
     if (!mounted) return;
-    if (result case Success(:final data)) setState(() => _saved = data);
+    if (result case Success(:final data)) setState(() => _engagement = data);
+  }
+
+  /// Likes the listing, or takes the like back. Shown at once; put back,
+  /// with a word, if the server says no.
+  Future<void> _toggleLike() async {
+    final l = _listing;
+    if (l == null || _liking) return;
+    if (!await requireAuth(context, reason: 'to like listings')) return;
+    if (!mounted || _isMine) return;
+    final before = _engagement ?? const ListingEngagement();
+    final next = !before.liked;
+    setState(() {
+      _engagement = before.copyWith(liked: next);
+      _liking = true;
+    });
+    final result = await listingsRepository.setLiked(l.id, next);
+    if (!mounted) return;
+    setState(() => _liking = false);
+    if (result case Failure(:final message)) {
+      setState(() => _engagement = (_engagement ?? before).copyWith(liked: !next));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
   }
 
   /// Saves the listing, or takes the save back. Shown at once; put back,
@@ -138,16 +166,17 @@ class _ProductScreenState extends State<ProductScreen> {
     if (l == null || _saving) return;
     if (!await requireAuth(context, reason: 'to save listings')) return;
     if (!mounted || _isMine) return;
-    final next = !(_saved ?? false);
+    final before = _engagement ?? const ListingEngagement();
+    final next = !before.saved;
     setState(() {
-      _saved = next;
+      _engagement = before.copyWith(saved: next);
       _saving = true;
     });
     final result = await listingsRepository.setSaved(l.id, next);
     if (!mounted) return;
     setState(() => _saving = false);
     if (result case Failure(:final message)) {
-      setState(() => _saved = !next);
+      setState(() => _engagement = (_engagement ?? before).copyWith(saved: !next));
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -289,7 +318,7 @@ class _ProductScreenState extends State<ProductScreen> {
       // description: BROKA holds no payments, and escrow is how a buyer
       // who can't see it first is protected (EscrowCallout's header).
       // "Ask Zeno" brings the listing with it.
-      if (!_isMine)
+      if (!_isMine && paymentsShown)
         EscrowCallout(
           margin: const EdgeInsets.fromLTRB(16, 4, 16, 14),
           onZeno: () => _openZeno(ZenoScreen.escrowOpener),
@@ -382,31 +411,87 @@ class _ProductScreenState extends State<ProductScreen> {
         const SizedBox(width: 8),
         _saleTypeBadge(l),
         if (!_isMine) ...[
-          const SizedBox(width: 6),
+          const SizedBox(width: 2),
+          _likeButton(),
           _saveButton(),
-        ],
+        ] else if (_engagement?.likes != null)
+          _myCounts(_engagement!),
       ]),
     );
   }
 
-  Widget _saveButton() {
-    final saved = _saved ?? false;
-    return IconButton(
-      key: const Key('product-save'),
-      tooltip: saved ? 'Remove from saved' : 'Save',
-      onPressed: _toggleSave,
-      icon: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 200),
-        transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
-        child: Icon(
-          saved ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-          key: ValueKey(saved),
-          color: saved ? BrokaColors.danger : BrokaColors.textHigh,
-          size: 22,
+  Widget _toggleIcon({
+    required Key key,
+    required bool on,
+    required String tooltip,
+    required IconData onIcon,
+    required IconData offIcon,
+    required Color onColor,
+    required VoidCallback onPressed,
+  }) =>
+      IconButton(
+        key: key,
+        tooltip: tooltip,
+        onPressed: onPressed,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+        padding: EdgeInsets.zero,
+        icon: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+          child: Icon(on ? onIcon : offIcon,
+              key: ValueKey(on), color: on ? onColor : BrokaColors.textHigh, size: 22),
         ),
-      ),
+      );
+
+  Widget _likeButton() {
+    final liked = _engagement?.liked ?? false;
+    return _toggleIcon(
+      key: const Key('product-like'),
+      on: liked,
+      tooltip: liked ? 'Unlike' : 'Like',
+      onIcon: Icons.favorite_rounded,
+      offIcon: Icons.favorite_border_rounded,
+      onColor: BrokaColors.danger,
+      onPressed: _toggleLike,
     );
   }
+
+  Widget _saveButton() {
+    final saved = _engagement?.saved ?? false;
+    return _toggleIcon(
+      key: const Key('product-save'),
+      on: saved,
+      tooltip: saved ? 'Remove from saved' : 'Save',
+      onIcon: Icons.bookmark_rounded,
+      offIcon: Icons.bookmark_border_rounded,
+      onColor: BrokaColors.gold,
+      onPressed: _toggleSave,
+    );
+  }
+
+  /// The seller's own listing: how many people liked and saved it. Only
+  /// they see it (the server sends the counts to nobody else).
+  Widget _myCounts(ListingEngagement e) => Padding(
+        key: const Key('product-my-counts'),
+        padding: const EdgeInsets.only(left: 8),
+        child: Semantics(
+          label: '${e.likes} ${e.likes == 1 ? 'like' : 'likes'}, '
+              '${e.saves} ${e.saves == 1 ? 'save' : 'saves'}',
+          excludeSemantics: true,
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.favorite_rounded, size: 15, color: BrokaColors.danger),
+            const SizedBox(width: 3),
+            Text('${e.likes}', style: const TextStyle(color: BrokaColors.textHigh,
+                fontSize: 13, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 8),
+            const Icon(Icons.bookmark_rounded, size: 15, color: BrokaColors.gold),
+            const SizedBox(width: 3),
+            Text('${e.saves}', style: const TextStyle(color: BrokaColors.textHigh,
+                fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      );
 
   Widget _saleTypeBadge(Listing l) {
     final color = _isAuction ? BrokaColors.danger : BrokaColors.gold;

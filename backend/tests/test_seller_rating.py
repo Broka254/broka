@@ -90,6 +90,32 @@ def test_response_time_is_the_biggest_lever_a_seller_can_move_today():
     assert fast - slow > 2.0
 
 
+def test_reply_speed_moves_the_rating_before_any_deal_closes():
+    """With in-app payments off no deal can complete on BROKA, so every
+    seller has zero completed deals - and the rating shrank everything,
+    reply speed included, to the neutral 6.5. A seller answering in five
+    minutes and one ignoring buyers for two days were rated the same."""
+    base = dict(completed_deals=0, days_on_broka=60)
+    fast = overall_rating(SellerSignals(median_response_minutes=5, **base)).rating
+    slow = overall_rating(SellerSignals(median_response_minutes=2880, **base)).rating
+    assert fast > NEUTRAL_RATING > slow
+    assert fast - slow > 2.0
+
+
+def test_time_on_broka_counts_before_any_deal_closes_but_only_a_little():
+    """Still damped, as for a seller with deals: under a point."""
+    new = overall_rating(SellerSignals(days_on_broka=1)).rating
+    settled = overall_rating(SellerSignals(days_on_broka=365)).rating
+    assert 0.3 < settled - new < 1.0
+
+
+def test_no_deals_and_fast_replies_still_below_a_proven_good_seller():
+    """Reply speed counts without deals, but cannot outrank a record."""
+    eager = SellerSignals(median_response_minutes=1, completed_deals=0,
+                          days_on_broka=730)
+    assert overall_rating(eager).rating < overall_rating(VETERAN).rating
+
+
 def test_leaking_deals_off_platform_costs_the_most():
     """DCR is the heaviest weight - that is the product intent."""
     base = dict(median_response_minutes=30, completed_deals=30, pending_deals=8,
@@ -107,7 +133,14 @@ def test_backlog_is_a_ratio_not_a_count():
     stuck = SellerSignals(dcr_percent=90, median_response_minutes=20,
                           completed_deals=2, pending_deals=40,
                           days_on_broka=400, unique_counterparties=2)
-    assert overall_rating(busy).rating > overall_rating(stuck).rating + 2
+    idle = SellerSignals(dcr_percent=90, median_response_minutes=20,
+                         completed_deals=200, pending_deals=0,
+                         days_on_broka=400, unique_counterparties=150)
+    # The margin was 2 while the stuck seller's prior was a flat 6.5; it now
+    # carries their own 20-minute replies and 400 days, as the busy one's
+    # record does, so the gap is the deal record alone.
+    assert overall_rating(busy).rating > overall_rating(stuck).rating + 1.5
+    assert overall_rating(idle).rating - overall_rating(busy).rating < 0.3
 
 
 @pytest.mark.parametrize("fn,lo,hi", [

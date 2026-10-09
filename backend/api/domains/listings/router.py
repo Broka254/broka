@@ -712,7 +712,12 @@ async def listing_metrics(
         "listing_id": listing_id,
         "current": {
             "views": signals.views,
+            # "likes" has always been the SAVE count (the wishlists table);
+            # older app builds read it by that name. "saves" says so, and
+            # "like_count" is the likes themselves (since 2026-10-09).
             "likes": likes,
+            "saves": likes,
+            "like_count": engagement["like_count"],
             "like_to_view_ratio": round(likes / signals.views, 4) if signals.views else None,
             "interested_buyers": interested,
             "views_per_day": round(signals.views / max(days_listed, 1.0), 2),
@@ -1062,6 +1067,41 @@ async def unsave_listing(
 ):
     svc = ListingService(db)
     return await svc.unsave_listing(listing_id, current_user["id"])
+
+
+@router.get("/{listing_id}/engagement")
+async def get_engagement(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether the caller liked and saved this listing. Its seller gets the
+    counts instead; nobody else does - which products are moving is what a
+    rival would price against."""
+    svc = ListingService(db)
+    return await svc.engagement(listing_id, current_user["id"])
+
+
+@router.post("/{listing_id}/like")
+async def like_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Like a listing. Idempotent. Apart from saving it: a save keeps it in
+    the buyer's Saved items, a like only tells the seller it's liked."""
+    svc = ListingService(db)
+    return await svc.like_listing(listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}/like")
+async def unlike_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    return await svc.unlike_listing(listing_id, current_user["id"])
 
 
 @router.delete("/{listing_id}")

@@ -1,3 +1,78 @@
+# A splash with no box, likes and saves, a rating that moves, no payments for now (2026-10-09)
+
+Raised by the owner from a phone, with a screenshot of the splash.
+
+**The splash: the logo alone, then the constellation.** The box was
+Android 12+'s own splash, which draws the launcher icon - the adaptive
+icon's navy background cut to the phone's icon shape. It now draws the logo
+alone (`res/drawable-*/splash_logo.png`, transparent, 160dp in Android's
+288dp icon canvas so the glow stays inside the circle it keeps) on the app's
+near-black (`values-v31/styles.xml`; `drawable/launch_background.xml` for
+Android 11 and below, which showed the launcher icon too). The Flutter
+splash then draws the logo at the same size in the same place - it was
+higher and 0.40 of the width - on `ConstellationBackground`, the
+interconnected dots every other screen sits on; the first-launch sequence
+is on it too, in place of its own sparser mesh.
+
+**Likes and saves, both counted.** The heart only saved; nothing counted a
+like. Now the heart likes a listing (`POST/DELETE /listings/{id}/like`, the
+new `listing_likes` table) and a bookmark saves it to Saved items. The
+seller sees both: on their own listing ("7 likes, 2 saves"), from
+`GET /listings/{id}/engagement`, and as LIKES beside SAVES in the listing's
+insights (`like_count` and `saves` in `/metrics`; `likes` stays the save
+count for older builds). Other buyers see neither count. Likes are not in
+the sell probability: a like costs less than a save and says less.
+
+**Languages: English and Kiswahili only.** The four "Coming soon" chips
+(Dholuo, Kikuyu, Luganda, Sheng) that did nothing when tapped are gone.
+
+**A password reset says how it went.** It closed the moment the server
+answered: from the login screen, Home appeared with no word that anything
+had changed. Now "Password reset - you're signed in with your new
+password" with Continue; a refusal says the password was not changed, and
+why; an answer that never came says it can't tell, and what to do.
+
+**Getting people to let BROKA reach them** (`services/delivery_access.dart`,
+`widgets/delivery_nudge.dart`). Notifications were asked for once at
+start-up and background running once per install, and a "no" was final.
+Now, while either is off: a glowing reminder on Home and in the Inbox that
+says what it costs ("You have 3 unread messages BROKA couldn't tell you
+about") and turns it on in one tap - the system dialog while Android still
+shows it, BROKA's settings page when it won't - with the Autostart step
+Tecno, Infinix, Xiaomi and Oppo phones need; "Later" puts it away for three
+days, not for good. A seller who has just posted a listing is asked then.
+Settings says whether notifications and background running are on. Each
+checks again on coming back from the phone's settings.
+
+**The seller rating moves with reply speed and time on BROKA.** It was 6.5
+for every seller. Thin evidence shrank the whole rating toward 6.5 until a
+seller had ten completed deals - and with in-app payments off no deal can
+complete on BROKA, so every seller had none, whatever their reply speed or
+tenure. Only the deal record (completion rate, volume, backlog) is shrunk
+now; reply speed and tenure are measured and count from day one
+(`trust/seller_rating.py`, SELLER_METRICS.md). With no deals yet, a seller
+three months in who replies within ten minutes is 7.4, and one who leaves
+buyers waiting two days is 5.0; a seller with ten or more completed deals
+is rated exactly as before.
+Credibility is unchanged. Still true and not fixed here: with payments
+outside BROKA, completed deals, the completion rate and buyer reviews (which
+need a released deal) cannot grow.
+
+**No payments or Verified badge for now.** The app hides every way to a
+payment (`features/safe_payment/payments_shown.dart`, off unless built with
+`--dart-define=PAYMENTS_SHOWN=true`): the escrow callouts on listings, both
+chats, the cart and the store page, the Home pill, the pay buttons, the
+Menu's escrow and receipts rows, Zeno's "Help me pay with escrow" opener,
+"Escrow success" on profiles and Profile's "Get verified". How BROKA works
+says to check the item, then pay the seller directly. The server stops
+selling the badge (`VERIFIED_BADGE_ENABLED`, off: `POST /verify/purchase`
+answers 409 `VERIFIED_BADGE_OFF`, which older builds show) and Zeno stops
+pushing escrow or naming a "Pay with escrow" button the app no longer has
+(`ESCROW_GUIDANCE_ENABLED`, off; asked about escrow, it still answers), and
+neither offers nor opens verification or the escrow services. Badges
+already bought keep showing; a deal already paid through BROKA still shows
+its release and refund steps.
+
 # Errors in plain words, a one-time splash, average response time, saves and a stronger sell model (2026-10-09)
 
 Raised by the owner from a phone.

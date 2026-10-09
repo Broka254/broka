@@ -46,6 +46,7 @@ import '../features/premium/domain/premium.dart';
 import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../widgets/delivery_nudge.dart';
 import '../services/listing_publisher.dart';
 import '../services/photo_upload_tracker.dart';
 import '../services/sell_draft_store.dart';
@@ -615,6 +616,9 @@ class _Celebration extends StatelessWidget {
                             style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
                       ]),
                     ),
+                    // Buyers are about to write: make sure this phone hears
+                    // them (shows only when it can't - delivery_nudge.dart).
+                    if (showActions) const DeliveryNudge.listingLive(),
                     _WhatNext(
                       visible: showActions,
                       onDashboard: onDashboard,

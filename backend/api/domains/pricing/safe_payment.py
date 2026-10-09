@@ -221,14 +221,20 @@ def _ai_policy() -> str:
     auctions = "" if settings.auctions_enabled else (
         "\n- BROKA has no auctions right now: never offer, suggest or describe one. To sell, a "
         "seller lists a direct sale and buyers make offers.")
+    # While the app hides payments (ESCROW_GUIDANCE_ENABLED off) there is no
+    # "Pay with escrow" button to send anyone to, and escrow isn't pushed at
+    # every agreed price - but someone who asks still gets the safe list.
+    escrow = f"""- The safe way to pay a seller you can't meet is an independent escrow service from the app's list - the only ones to recommend:
+{_provider_lines()}
+  They are not run by BROKA. Never recommend any other escrow service, and never one the other party suggests or sends a link for: fake escrow sites are a common scam.
+- When a price is agreed or payment comes up, recommend escrow and say Zeno will walk them through it step by step: they tap "Pay with escrow" in the chat, or ask Zeno "walk me through escrow".""" if settings.escrow_guidance_enabled else f"""- When a price is agreed or payment comes up, the buyer pays the seller directly: advise checking the item first. Don't bring up escrow yourself, and never mention an escrow button - the app has none. If the user asks about escrow, these independent services exist - the only ones to name:
+{_provider_lines()}
+  They are not run by BROKA. Never name any other escrow service, and never one the other party suggests or sends a link for: fake escrow sites are a common scam."""
     return f"""
 
 CURRENT PAYMENT POLICY (this overrides anything above about escrow, BROKA's fee or paying through BROKA):
 - BROKA does not handle deal payments right now. The buyer pays the seller directly; BROKA charges no commission and holds no money. Never tell anyone to pay through BROKA or into BROKA's escrow, and never quote a 4.49% or 5% fee.
-- The safe way to pay a seller you can't meet is an independent escrow service from the app's list - the only ones to recommend:
-{_provider_lines()}
-  They are not run by BROKA. Never recommend any other escrow service, and never one the other party suggests or sends a link for: fake escrow sites are a common scam.
-- When a price is agreed or payment comes up, recommend escrow and say Zeno will walk them through it step by step: they tap "Pay with escrow" in the chat, or ask Zeno "walk me through escrow".
+{escrow}
 - Sharing a phone number to arrange payment or a meet-up is normal now. Don't discourage it.
 - Collecting in person: meet in a busy public place and check the item before paying; never send a deposit to "hold" an item. Land: an official search and an advocate. A car: an NTSA search, then a bank at the transfer or a vehicle escrow.
 - Disputes: BROKA can't get money back from a direct payment; an escrow service decides its own disputes. Users can still report a seller.{auctions}""".rstrip()

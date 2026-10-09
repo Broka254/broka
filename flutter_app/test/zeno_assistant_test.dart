@@ -18,11 +18,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/features/zeno_assistant/domain/zeno_action.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_guide_card.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_live_overlay.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_orb.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_session_host.dart';
+import 'package:broka/features/zeno_assistant/zeno_action_runner.dart';
 import 'package:broka/features/zeno_assistant/zeno_session.dart';
 import 'package:broka/screens/listing_search_screen.dart';
 import 'package:broka/screens/zeno_screen.dart';
@@ -35,6 +37,11 @@ import 'support/fake_api.dart';
 import 'support/fake_voice.dart';
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" tests.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUpAll(() {
     installFakeApi();
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -98,6 +105,33 @@ void main() {
         for (final r in fakeRequests)
           if (r.uri.path == path) r,
       ];
+
+  group('with payments hidden (the default build)', () {
+    setUp(() => paymentsShown = false);
+    tearDown(() => paymentsShown = true);
+
+    testWidgets("Zeno doesn't open a screen that leads to a payment", (tester) async {
+      final opened = <String>[];
+      final nav = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: nav,
+        home: const SizedBox(),
+        onGenerateRoute: (s) {
+          opened.add(s.name!);
+          return MaterialPageRoute(builder: (_) => const SizedBox());
+        },
+      ));
+      for (final dest in ['verify', 'escrow_services', 'deal_history']) {
+        final ran = await ZenoActionRunner.runOn(nav.currentState!,
+            ZenoAction(type: ZenoActionType.navigate, destination: dest));
+        expect(ran, isFalse, reason: dest);
+      }
+      expect(await ZenoActionRunner.runOn(nav.currentState!,
+          const ZenoAction(type: ZenoActionType.navigate, destination: 'settings')), isTrue);
+      await tester.pump();
+      expect(opened, ['/settings']);
+    });
+  });
 
   group('typed', () {
     testWidgets('"open my inbox" opens the inbox, by itself', (tester) async {

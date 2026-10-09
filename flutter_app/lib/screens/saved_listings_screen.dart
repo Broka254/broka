@@ -1,6 +1,8 @@
-// Saved items: the listings this user has hearted (2026-10-09).
+// Saved items: the listings this user has saved (2026-10-09).
 //
-// The heart on a listing is new - the wishlists table sat unused, so the
+// Saving is the bookmark on a listing; the heart beside it is a like, which
+// tells the seller without keeping anything here. Saving was new that day
+// too (it was the heart until likes came) - the wishlists table sat unused, so the
 // seller dashboard's chance-of-selling score read a "likes" figure nothing
 // could ever raise. A save is also a buyer's own shortlist, and this is
 // where they find it again. Only listings still on sale are shown.
@@ -42,7 +44,7 @@ class _SavedListingsScreenState extends State<SavedListingsScreen> {
 
   Future<void> _open(dynamic item) async {
     await Navigator.pushNamed(context, '/product', arguments: {'listingId': item.id as String});
-    // An item un-hearted on its screen leaves this list.
+    // An item unsaved on its screen leaves this list.
     if (mounted) await _grid.refresh();
   }
 
@@ -80,10 +82,10 @@ class _SavedListingsScreenState extends State<SavedListingsScreen> {
                   onTapItem: _open,
                   padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + media.padding.bottom),
                   emptyStateBuilder: (_) => const BrokaEmptyState(
-                    emoji: '🤍',
+                    emoji: '🔖',
                     gradient: _gradient,
                     headline: 'Nothing saved yet',
-                    body: 'Tap the heart on a listing to keep it here for later.',
+                    body: 'Tap the bookmark on a listing to keep it here for later.',
                   ),
                 ),
               ],

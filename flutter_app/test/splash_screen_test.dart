@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/screens/home_screen.dart';
 import 'package:broka/screens/splash_screen.dart';
+import 'package:broka/widgets/constellation_background.dart';
 
 import 'support/fake_api.dart';
 
@@ -39,6 +40,44 @@ void main() {
     // Shorter than it was: Home within five seconds, not ten.
     await run(tester, const Duration(milliseconds: 5000));
     expect(find.byType(HomeScreen), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await run(tester, const Duration(milliseconds: 300));
+  });
+
+  // The system splash (Android's, values-v31/styles.xml) draws the logo
+  // alone, 160dp, in the middle of the screen. The first Flutter frame
+  // puts it in the same place at the same size - it was 0.40 of the width,
+  // higher up, over a plain backdrop - and adds the constellation every
+  // other screen sits on.
+  testWidgets('a returning launch: the logo where the system splash left it, on the constellation',
+      (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    SharedPreferences.setMockInitialValues({SplashScreen.introSeenKey: true});
+    await tester.pumpWidget(const MaterialApp(home: SplashScreen()));
+
+    expect(find.byType(ConstellationBackground), findsOneWidget);
+    final logo = find.byKey(const Key('splash-logo'));
+    expect(logo, findsOneWidget);
+    expect(tester.getSize(logo), const Size(160, 160));
+    expect(tester.getCenter(logo), const Offset(180, 400));
+    // The logo with no tile behind it: the transparent artwork, not the icon.
+    final image = tester.widget<Image>(find.descendant(of: logo, matching: find.byType(Image)));
+    expect((image.image as AssetImage).assetName, 'assets/images/broka_logo_transparent.png');
+
+    await run(tester, const Duration(milliseconds: 400));
+    await tester.pumpWidget(const SizedBox());
+    await run(tester, const Duration(milliseconds: 300));
+  });
+
+  testWidgets('the first-launch sequence is on the constellation too', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(app());
+    await run(tester, const Duration(milliseconds: 600));
+    expect(find.text('BOOTING ZENO'), findsOneWidget);
+    expect(find.byType(ConstellationBackground), findsOneWidget);
+    await run(tester, const Duration(milliseconds: 5000));
     await tester.pumpWidget(const SizedBox());
     await run(tester, const Duration(milliseconds: 300));
   });

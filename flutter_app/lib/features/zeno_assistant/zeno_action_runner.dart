@@ -19,6 +19,7 @@ import '../../screens/listing_search_screen.dart';
 import '../../screens/zeno_screen.dart';
 import '../../services/api_service.dart';
 import '../../services/notification_service.dart';
+import '../safe_payment/payments_shown.dart';
 import 'domain/zeno_action.dart';
 
 class ZenoActionRunner {
@@ -44,6 +45,10 @@ class ZenoActionRunner {
     'start_selling': '/start-selling',
     'escrow_services': '/escrow-services',
   };
+
+  /// Screens that lead to a payment: not opened while payments are hidden
+  /// (payments_shown.dart), whatever Zeno - or an older server - names.
+  static const paymentDestinations = {'verify', 'escrow_services', 'deal_history'};
 
   /// What the action chip says while it happens.
   static String label(ZenoAction a) => switch (a.type) {
@@ -130,6 +135,7 @@ class ZenoActionRunner {
           await push(MaterialPageRoute(builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent)));
           return true;
         }
+        if (!paymentsShown && paymentDestinations.contains(dest)) return false;
         final route = routes[dest];
         if (route == null) return false;
         await pushNamed(route);

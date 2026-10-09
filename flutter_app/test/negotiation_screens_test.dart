@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/features/safe_payment/escrow_callout.dart';
 import 'package:broka/models/listing.dart';
 import 'package:broka/screens/negotiate_screen.dart';
@@ -31,6 +32,11 @@ const _reply = 'The seller has come down to 21,000 and says the charger is '
     'included. That is within the range you gave me.';
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" tests.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUpAll(() async {
     installFakeApi();
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -200,6 +206,30 @@ void main() {
       await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
       await _settle(tester);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('with payments hidden (the default build)', () {
+    setUp(() => paymentsShown = false);
+    tearDown(() => paymentsShown = true);
+
+    testWidgets('the Zeno room has no escrow callout, pay chip or pay line', (tester) async {
+      await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(tester.takeException(), isNull);
+      expect(find.text('Zeno mediating'), findsOneWidget);
+      expect(find.byType(EscrowCallout), findsNothing);
+      expect(find.textContaining('Pay with escrow'), findsNothing);
+    });
+
+    testWidgets('the direct chat has no payment panel', (tester) async {
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('pay-now')), findsNothing);
+      expect(find.byType(EscrowCallout), findsNothing);
+      expect(find.textContaining('escrow'), findsNothing);
+      expect(find.byType(ChatComposerPill), findsOneWidget);
     });
   });
 

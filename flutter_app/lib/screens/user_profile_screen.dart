@@ -37,6 +37,7 @@ import 'package:flutter/services.dart';
 import '../core/utils/result.dart';
 import '../features/reviews/data/repositories/reviews_repository.dart';
 import '../features/reviews/domain/models/review.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../main.dart';
 import '../models/listing.dart';
 import '../models/seller_standing.dart';
@@ -641,11 +642,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               key: const Key('fact-deals')),
           _vDivider(),
           _fact(listings, 'Listings', BrokaColors.neonBlue, key: const Key('fact-listings')),
-          _vDivider(),
           // Null, not 0%, until a deal has been paid for: "fails every deal"
           // is not what "no deals yet" means (api/core/fraud.seller_deal_stats).
-          _fact(escrow == null ? '—' : '${escrow.round()}%', 'Escrow success',
-              BrokaColors.gold, key: const Key('fact-escrow')),
+          // Hidden with payments: nobody can pay through BROKA, so it would
+          // be a dash on every profile (payments_shown.dart).
+          if (paymentsShown) ...[
+            _vDivider(),
+            _fact(escrow == null ? '—' : '${escrow.round()}%', 'Escrow success',
+                BrokaColors.gold, key: const Key('fact-escrow')),
+          ],
           _vDivider(),
           _fact(disputes == null ? '—' : '${disputes.round()}%', 'Disputed',
               BrokaColors.neonCyan, key: const Key('fact-disputes')),

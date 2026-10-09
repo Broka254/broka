@@ -25,6 +25,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../main.dart' show BrokaColors;
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/constellation_background.dart';
+import '../../../safe_payment/payments_shown.dart';
 import '../../../safe_payment/safe_payment.dart';
 import '../../domain/models/store.dart';
 import '../my_store_screen.dart' show StoreLogo;
@@ -244,26 +245,31 @@ class StoreDetailsView extends StatelessWidget {
         // (KES 250,000 a payment), and the official search is what proves
         // the seller owns it.
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Icon(Icons.visibility_outlined, color: BrokaColors.success),
-            SizedBox(width: 12),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.visibility_outlined, color: BrokaColors.success),
+            const SizedBox(width: 12),
             Expanded(child: Text(
-              "BROKA doesn't hold payments for now. Buying from a distance? Pay through an "
-              "escrow service: it holds the money until you have the item. BROKA doesn't run "
-              'them, and Zeno walks you through it. Collecting? See the item first, then pay '
-              'the store. Never send a deposit to "hold" an item. Land or a car: see Pay with escrow.',
-              style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.45),
+              paymentsShown
+                  ? "BROKA doesn't hold payments for now. Buying from a distance? Pay through an "
+                    "escrow service: it holds the money until you have the item. BROKA doesn't run "
+                    'them, and Zeno walks you through it. Collecting? See the item first, then pay '
+                    'the store. Never send a deposit to "hold" an item. Land or a car: see Pay with escrow.'
+                  : "BROKA doesn't hold payments: you pay the store directly. See the item first, "
+                    'then pay. Never send a deposit to "hold" an item, and never pay a number '
+                    'claiming to be BROKA.',
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.45),
             )),
           ]),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              key: const Key('store-paying-safely'),
-              onPressed: () => showSafePaymentSheet(context, openUrl: openUrl),
-              icon: const Icon(Icons.shield_rounded, size: 17),
-              label: const Text('Pay with escrow'),
+          if (paymentsShown)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: const Key('store-paying-safely'),
+                onPressed: () => showSafePaymentSheet(context, openUrl: openUrl),
+                icon: const Icon(Icons.shield_rounded, size: 17),
+                label: const Text('Pay with escrow'),
+              ),
             ),
-          ),
         ]),
       ),
     ]);

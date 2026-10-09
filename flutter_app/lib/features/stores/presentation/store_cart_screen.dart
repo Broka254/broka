@@ -17,6 +17,7 @@ import '../../../widgets/broka_image.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../categories/domain/category_visual.dart';
 import '../../safe_payment/escrow_callout.dart';
+import '../../safe_payment/payments_shown.dart';
 import '../data/store_cart.dart';
 
 /// Opens the cart for [storeId] ([storeName] in the title).
@@ -396,8 +397,9 @@ class _Summary extends StatelessWidget {
         // offer while payments are paused. Who is paid is what the buyer
         // needs to know: the store - through an independent escrow service,
         // or directly - never a number claiming to be BROKA.
-        row('Payment', const Text('Escrow, or the store', textAlign: TextAlign.end,
-            style: TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600))),
+        row('Payment', Text(paymentsShown ? 'Escrow, or the store' : 'To the store, directly',
+            textAlign: TextAlign.end,
+            style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w600))),
         const Divider(color: BrokaColors.border, height: 18),
         row('Subtotal', Text(formatKes(cart.subtotal), key: const Key('cart-subtotal'),
             style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17,
@@ -418,8 +420,10 @@ class _PayingNote extends StatelessWidget {
         key: const Key('cart-paying-note'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const EscrowCallout(),
-          const SizedBox(height: 10),
+          if (paymentsShown) ...[
+            const EscrowCallout(),
+            const SizedBox(height: 10),
+          ],
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -427,16 +431,19 @@ class _PayingNote extends StatelessWidget {
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: BrokaColors.success.withOpacity(0.35)),
             ),
-            child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Icon(Icons.visibility_outlined, color: BrokaColors.success, size: 22),
-              SizedBox(width: 10),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.visibility_outlined, color: BrokaColors.success, size: 22),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  "BROKA doesn't hold payments for now. Can't see the item before paying? Use "
-                  "an escrow service - they're independent, not run by BROKA. Collecting it? "
-                  'See the item first, then pay the store directly. Never send a deposit to '
-                  '"hold" an item.',
-                  style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.4)),
+                  paymentsShown
+                      ? "BROKA doesn't hold payments for now. Can't see the item before paying? Use "
+                        "an escrow service - they're independent, not run by BROKA. Collecting it? "
+                        'See the item first, then pay the store directly. Never send a deposit to '
+                        '"hold" an item.'
+                      : "BROKA doesn't hold payments: you pay the store directly. See the item "
+                        'first, then pay. Never send a deposit to "hold" an item.',
+                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.4)),
               ),
             ]),
           ),
@@ -547,11 +554,14 @@ class _CheckoutSheetState extends State<_CheckoutSheet> {
                 style: const TextStyle(color: BrokaColors.textHigh, fontSize: 19,
                     fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
-            const Text(
-              'Each product has its own deal room: agree it with the store there, then '
-              'pay through an escrow service - Zeno walks you through it - or pay the '
-              'store directly once you have seen it.',
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
+            Text(
+              paymentsShown
+                  ? 'Each product has its own deal room: agree it with the store there, then '
+                    'pay through an escrow service - Zeno walks you through it - or pay the '
+                    'store directly once you have seen it.'
+                  : 'Each product has its own deal room: agree it with the store there, then '
+                    'pay the store directly once you have seen it.',
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
             const SizedBox(height: 14),
             for (final item in widget.items)
               Padding(

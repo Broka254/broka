@@ -12,7 +12,7 @@ from sqlalchemy import select, func, desc, case, or_
 
 from api.database import (
     Listing, ListingStatus, ListingType, User, Interest, Deal, DealStatus, Category,
-    CategoryFilter, SellerMetrics, Wishlist,
+    CategoryFilter, ListingLike, SellerMetrics, Wishlist,
 )
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
@@ -977,6 +977,61 @@ class ListingService:
                                store=stores.get(l.store_id), assets=assets, card=True)
             for l in rows
         ]
+
+    # ── Likes (2026-10-09) ────────────────────────────────────────────────
+    #
+    # A like is a buyer saying "I like this"; a save keeps it in their
+    # Saved items. Both are counted for the seller (GET /listings/{id}/
+    # engagement and /metrics) and neither count is shown to other buyers.
+
+    async def like_listing(self, listing_id: str, user_id: str) -> dict:
+        listing = await self.db.get(Listing, listing_id)
+        if not listing or not is_live(listing):
+            raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.seller_id == user_id:
+            # The seller's own likes would only inflate their own count.
+            raise HTTPException(status_code=400, detail="You can't like your own listing.")
+        exists = (await self.db.execute(select(ListingLike.id).where(
+            ListingLike.user_id == user_id, ListingLike.listing_id == listing_id,
+        ))).scalar_one_or_none()
+        if exists is None:
+            self.db.add(ListingLike(user_id=user_id, listing_id=listing_id))
+            try:
+                await self.db.commit()
+            except IntegrityError:
+                # Two taps racing: the other one liked it.
+                await self.db.rollback()
+        return {"liked": True}
+
+    async def unlike_listing(self, listing_id: str, user_id: str) -> dict:
+        row = (await self.db.execute(select(ListingLike).where(
+            ListingLike.user_id == user_id, ListingLike.listing_id == listing_id,
+        ))).scalar_one_or_none()
+        if row is not None:
+            await self.db.delete(row)
+            await self.db.commit()
+        return {"liked": False}
+
+    async def engagement(self, listing_id: str, user_id: str) -> dict:
+        """Whether the caller liked and saved the listing - and, for its
+        seller only, how many people have."""
+        listing = await self.db.get(Listing, listing_id)
+        if not listing:
+            raise HTTPException(status_code=404, detail="Listing not found")
+
+        async def mine(model) -> bool:
+            return (await self.db.execute(select(model.id).where(
+                model.user_id == user_id, model.listing_id == listing_id,
+            ))).scalar_one_or_none() is not None
+
+        async def count(model) -> int:
+            return int((await self.db.execute(select(func.count(model.id)).where(
+                model.listing_id == listing_id))).scalar() or 0)
+
+        if listing.seller_id == user_id:
+            return {"liked": False, "saved": False,
+                    "likes": await count(ListingLike), "saves": await count(Wishlist)}
+        return {"liked": await mine(ListingLike), "saved": await mine(Wishlist)}
 
     async def express_interest(
         self,

@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api.core import mpesa_stk
+from api.core.config import settings
 from api.core.rate_limit import stk_limiter
 from api.core.zetupay import ZetuPayUnavailable
 from api.database import get_db, User, VerificationPayment, MpesaStatus
@@ -80,6 +81,12 @@ VERIFY_TIERS = {
         "description":  "Gold badge on all your listings for 24 months.",
     },
 }
+
+VERIFIED_BADGE_OFF_CODE = "VERIFIED_BADGE_OFF"
+VERIFIED_BADGE_OFF_MESSAGE = (
+    "The Verified badge isn't available right now. Your listings and your "
+    "rating work the same without it."
+)
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -130,6 +137,14 @@ async def purchase_verification(
     Initiate M-Pesa STK Push for badge purchase.
     Returns checkout_request_id - poll /verify/status to confirm.
     """
+    # Not sold for now (VERIFIED_BADGE_ENABLED). A 409 with a code and a
+    # message, like payments' and auctions' guards: an older app build still
+    # offers "Get verified" and shows the message instead of an M-Pesa prompt.
+    if not settings.verified_badge_enabled:
+        raise HTTPException(status_code=409, detail={
+            "code": VERIFIED_BADGE_OFF_CODE,
+            "message": VERIFIED_BADGE_OFF_MESSAGE,
+        })
     tier_info = VERIFY_TIERS.get(payload.tier)
     if not tier_info:
         raise HTTPException(

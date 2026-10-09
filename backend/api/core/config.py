@@ -403,6 +403,26 @@ class Settings:
         "IN_APP_PAYMENTS_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
 
+    # ── Escrow guidance (pricing/safe_payment.py) ─────────────────────────────
+    # Off for now (2026-10-09), with the app's payment screens (flutter_app
+    # payments_shown.dart): Zeno doesn't recommend escrow unprompted, offer
+    # its walkthrough or tell people to tap a "Pay with escrow" button the
+    # app no longer shows, and doesn't open the escrow services screen.
+    # Asked about escrow, it still answers. On: escrow is recommended
+    # whenever a price is agreed, as from 2026-10-08.
+    escrow_guidance_enabled: bool = field(default_factory=lambda: os.getenv(
+        "ESCROW_GUIDANCE_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+
+    # ── Verified badge (routers/verify.py) ───────────────────────────────────
+    # Off for now (2026-10-09): the badge isn't sold. POST /verify/purchase
+    # answers 409 VERIFIED_BADGE_OFF, with a message an older app build
+    # shows, and Zeno neither opens verification nor suggests it. Badges
+    # already bought keep showing until they expire.
+    verified_badge_enabled: bool = field(default_factory=lambda: os.getenv(
+        "VERIFIED_BADGE_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+
     # ── Auctions (AUCTIONS.md) ───────────────────────────────────────────────
     # Off for launch: an auction's winner pays through BROKA's escrow, and
     # with in-app payments paused there is no way to hold a winning bid -

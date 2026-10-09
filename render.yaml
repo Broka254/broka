@@ -98,6 +98,11 @@ services:
         value: "false"       # true: buyers pay through BROKA's escrow again, with commission.
                              # Off: buyers pay sellers directly (PRICING.md, "While BROKA
                              # handles no payments"). Only once an escrow provider works.
+      - key: ESCROW_GUIDANCE_ENABLED
+        value: "false"       # true: Zeno recommends escrow when a price is agreed and points at the
+                             # app's Pay with escrow buttons. Off while the app hides payments.
+      - key: VERIFIED_BADGE_ENABLED
+        value: "false"       # true: the Verified badge is sold again. Off: purchases are refused.
       - key: AUCTIONS_ENABLED
         value: "false"       # true: auctions are back - creating, bidding, the Auction House. Off for
                              # launch: a winning bid needs in-app escrow (AUCTIONS.md).

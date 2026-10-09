@@ -139,6 +139,15 @@ the way back. A marker naming a service not on BROKA's list is ignored,
 and the only links it ever sends are the list's. The model asking for the
 `escrow` guide starts the walkthrough instead of a card.
 
+While the app hides payments (2026-10-09; `ESCROW_GUIDANCE_ENABLED` off on
+the server, `payments_shown.dart` in the app) Zeno doesn't bring escrow up
+itself, recommend it at every agreed price or name a "Pay with escrow"
+button the app no longer shows, and doesn't open the escrow services
+screen. Someone who asks about escrow still gets the list and the
+walkthrough. With `VERIFIED_BADGE_ENABLED` off it neither opens
+verification nor suggests getting verified (`intents.destinations()`,
+`guides.available()`).
+
 
 - **Only people the user already talks to.** `contacts.resolve` matches the
   words the user said against the other party of the user's own threads -

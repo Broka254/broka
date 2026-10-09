@@ -11,6 +11,13 @@
 // Also reached from Settings > Change password, for someone signed in who
 // has forgotten the current one - with the number fixed to the account's.
 //
+// Says how it went before it closes (2026-10-09). It used to pop the moment
+// the server answered: from the login screen that landed someone on Home
+// with no word that their password had changed, and a failure at the last
+// step read like any other error. Now a fourth screen says "Password
+// reset"; a refusal says the password was not changed, and why; and an
+// answer that never arrived says so, rather than guessing either way.
+//
 // Pops with true once the new password is set and this phone is signed in.
 import 'dart:async';
 
@@ -61,6 +68,7 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
   static const _sPhone = 0;
   static const _sCode = 1;
   static const _sPassword = 2;
+  static const _sDone = 3;
 
   static const _resendWait = 60;
 
@@ -162,13 +170,42 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
           setState(() => _error = 'Both passwords must match');
           return;
         }
-        _run(() async {
-          await ApiService.resetPassword(
-              resetToken: _resetToken!, newPassword: _passwordCtrl.text);
-          if (mounted) Navigator.pop(context, true);
-        });
+        _saveNewPassword();
+      case _sDone:
+        _finish();
     }
   }
+
+  Future<void> _saveNewPassword() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await ApiService.resetPassword(resetToken: _resetToken!, newPassword: _passwordCtrl.text);
+      if (!mounted) return;
+      _passwordCtrl.clear();
+      _confirmCtrl.clear();
+      setState(() => _step = _sDone);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      // A 4xx is the server refusing: nothing was changed. Anything else
+      // (a 5xx, a timeout) may have been saved before the answer was lost.
+      setState(() => _error = e.statusCode < 500
+          ? 'Your password was not changed. ${e.message}'
+          : _unconfirmed);
+    } catch (_) {
+      if (mounted) setState(() => _error = _unconfirmed);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  static const _unconfirmed = "We couldn't confirm your new password was saved. Try signing in "
+      "with it - if that doesn't work, your old password still stands: request a new code.";
+
+  /// Back on the screen it came from, signed in with the new password.
+  void _finish() => Navigator.pop(context, true);
 
   void _back() {
     setState(() {
@@ -215,34 +252,69 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final done = _step == _sDone;
     final (title, subtitle) = switch (_step) {
       _sPhone => ('Reset your password', "We'll text a code to the number on your account"),
       _sCode => ('Enter the code', 'It proves this number is yours'),
-      _ => ('Choose a new password', 'At least 6 characters. Other phones will be signed out.'),
+      _sPassword => ('Choose a new password', 'At least 6 characters. Other phones will be signed out.'),
+      _ => ('Password reset', 'Your new password is saved'),
     };
-    return WizardScaffold(
-      flowTitle: 'Forgot password',
-      position: _step,
-      total: 3,
-      title: title,
-      subtitle: subtitle,
-      onNext: _next,
-      onBack: _step == _sPhone ? null : _back,
-      nextLabel: switch (_step) {
-        _sPhone => 'Send code',
-        _sCode => 'Verify',
-        _ => 'Save password',
+    // Done, every way out - Continue, the close button, the back gesture -
+    // returns signed in.
+    return PopScope(
+      canPop: !done,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && done) _finish();
       },
-      loading: _loading,
-      error: _error,
-      animateBackground: widget.animateBackground,
-      child: switch (_step) {
-        _sPhone => _phoneStep(),
-        _sCode => _codeStep(),
-        _ => _passwordStep(),
-      },
+      child: WizardScaffold(
+        flowTitle: 'Forgot password',
+        position: done ? _sPassword : _step,
+        total: 3,
+        title: title,
+        subtitle: subtitle,
+        onNext: _next,
+        onBack: _step == _sPhone || done ? null : _back,
+        onClose: done ? _finish : null,
+        nextLabel: switch (_step) {
+          _sPhone => 'Send code',
+          _sCode => 'Verify',
+          _sPassword => 'Save password',
+          _ => 'Continue',
+        },
+        nextIcon: done ? Icons.check_rounded : Icons.arrow_forward_rounded,
+        loading: _loading,
+        error: _error,
+        animateBackground: widget.animateBackground,
+        child: switch (_step) {
+          _sPhone => _phoneStep(),
+          _sCode => _codeStep(),
+          _sPassword => _passwordStep(),
+          _ => _doneStep(),
+        },
+      ),
     );
   }
+
+  Widget _doneStep() => Container(
+        key: const Key('reset-done'),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: BrokaColors.success.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: BrokaColors.success.withOpacity(0.45)),
+        ),
+        child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.check_circle_rounded, color: BrokaColors.success, size: 30),
+          SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              "You're signed in with your new password. Any other phone that was signed "
+              'in to your account has been signed out.',
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 14, height: 1.5),
+            ),
+          ),
+        ]),
+      );
 
   Widget _phoneStep() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         CountryPhoneField(

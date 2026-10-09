@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/screens/zeno_screen.dart';
 import 'package:broka/services/zeno_chat_store.dart';
 import 'package:broka/widgets/chat_ambient_background.dart';
@@ -16,6 +17,11 @@ import 'package:broka/widgets/zeno_streaming_text.dart';
 import 'support/fake_api.dart';
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" tests.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUpAll(() {
     installFakeApi();
     // BrokaTts owns an AudioPlayer; nothing plays in these tests.
@@ -388,6 +394,17 @@ void main() {
   // one. Since 2026-10-08 the first opener starts Zeno's escrow walkthrough
   // (an independent service, step by step), and Zeno's welcome says it
   // helps with paying - so nobody has to guess that it does.
+  testWidgets('with payments hidden (the default build) no opener or welcome is about paying',
+      (tester) async {
+    paymentsShown = false;
+    addTearDown(() => paymentsShown = true);
+    await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
+    await _settle(tester);
+    expect(find.text(ZenoScreen.escrowOpener), findsNothing);
+    expect(find.textContaining('escrow'), findsNothing);
+    expect(find.text('Is KES 800K fair for a Toyota Axio 2012?'), findsOneWidget);
+  });
+
   testWidgets("the first opener is Zeno's escrow walkthrough, never BROKA escrow", (tester) async {
     await tester.pumpWidget(const MaterialApp(home: ZenoScreen()));
     await _settle(tester);

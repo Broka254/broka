@@ -386,7 +386,10 @@ class _ListingAnalyticsScreenState extends State<ListingAnalyticsScreen> {
 
   Widget _statGrid() {
     final views = (_current['views'] as num?)?.toInt() ?? 0;
-    final likes = (_current['likes'] as num?)?.toInt() ?? 0;
+    // "likes" has always carried the save count (older servers send only
+    // that); "like_count" is likes themselves, since 2026-10-09.
+    final saves = (_current['saves'] as num? ?? _current['likes'] as num?)?.toInt() ?? 0;
+    final liked = (_current['like_count'] as num?)?.toInt();
     final ratio = (_current['like_to_view_ratio'] as num?)?.toDouble();
     final asking = (_current['interested_buyers'] as num?)?.toInt() ?? 0;
     final vpd = (_current['views_per_day'] as num?)?.toDouble() ?? 0;
@@ -414,12 +417,16 @@ class _ListingAnalyticsScreenState extends State<ListingAnalyticsScreen> {
       Row(children: [
         tile('$views', 'VIEWS', BrokaColors.neonBlue),
         const SizedBox(width: 8),
-        tile('$likes', 'SAVES', BrokaColors.gold),
-        const SizedBox(width: 8),
-        tile('$asking', 'ASKED', BrokaColors.neonGreen),
+        if (liked != null) ...[
+          tile('$liked', 'LIKES', BrokaColors.danger),
+          const SizedBox(width: 8),
+        ],
+        tile('$saves', 'SAVES', BrokaColors.gold),
       ]),
       const SizedBox(height: 8),
       Row(children: [
+        tile('$asking', 'ASKED', BrokaColors.neonGreen),
+        const SizedBox(width: 8),
         tile(ratio == null ? '—' : '${(ratio * 100).toStringAsFixed(1)}%',
              'SAVES PER VIEW', BrokaColors.neonCyan),
         const SizedBox(width: 8),

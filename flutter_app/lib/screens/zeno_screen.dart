@@ -86,6 +86,7 @@ import '../core/utils/result.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
 import '../features/premium/presentation/premium_upsell.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/zeno_assistant/data/zeno_assistant_repository.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../features/zeno_assistant/domain/zeno_action.dart';
@@ -342,9 +343,10 @@ class _ZenoScreenState extends State<ZenoScreen>
     return n != null && n.isNotEmpty ? n.split(' ').first : '';
   }
 
-  static const _assistantSuggestions = [
-    // First, because it is what a first deal needs most.
-    ('🛡️', ZenoScreen.escrowOpener),
+  static List<(String, String)> get _assistantSuggestions => [
+    // First, because it is what a first deal needs most - while payments
+    // are shown at all (payments_shown.dart).
+    if (paymentsShown) ('🛡️', ZenoScreen.escrowOpener),
     ('🚗', 'Is KES 800K fair for a Toyota Axio 2012?'),
     ('🏪', 'How do I open an online store?'),
     ('⭐', 'What do you think of my rating?'),
@@ -367,7 +369,7 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// before they start negotiating, and the way out when it doesn't fit.
   List<(String, String)> get _listingSuggestions => [
         ('💰', 'Is this a fair price?'),
-        ('🛡️', ZenoScreen.escrowOpener),
+        if (paymentsShown) ('🛡️', ZenoScreen.escrowOpener),
         ('⭐', 'Is this seller reliable?'),
         ('🔍', 'What should I check before buying?'),
         if (_about?.delivers != false) ('🚚', 'Can it be delivered to me?'),
@@ -621,7 +623,8 @@ class _ZenoScreenState extends State<ZenoScreen>
       'swahili' => 'Habari$greet! Mimi ni Zeno, mshauri wako wa biashara wa BROKA. Ninaweza kukusaidia kutathmini bei, kugundua udanganyifu, au kupanga mkakati wa mazungumzo. Niulize chochote! 🤝',
       'luo'     => 'Misawa$greet! An Zeno, jakony mar ohala mar BROKA. Anyalo konyi nyiso nengo maber, neno wach miriambo, kata loso hera. Penj gimoro amora! 🤝',
       'kikuyu'  => 'Wĩmwega$greet! Nĩ niĩ Zeno, mũteithia waku wa biashara wa BROKA. Ngũkuteithia gũthagania thaara, gwĩkira mahinda ma mũrũgamo, kana gũtheria wĩhĩo. Ĩũlĩria kĩndũ kĩothe! 🤝',
-      _         => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings and plan your negotiation - and when it\'s time to pay, I\'ll walk you through paying safely with an escrow service, step by step. Ask me anything! 🤝',
+      _ when paymentsShown => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings and plan your negotiation - and when it\'s time to pay, I\'ll walk you through paying safely with an escrow service, step by step. Ask me anything! 🤝',
+      _         => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings and plan your negotiation. Ask me anything! 🤝',
     };
     _turns.add(_Turn(Message(role: 'broker', content: welcomeMsg)));
   }

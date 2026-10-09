@@ -11,7 +11,8 @@
 //                 didn't find the screen that tells them what is selling
 //   Selling       posting a listing (or becoming a seller)
 //   Online store  the store summary and its actions (MenuStoreSection)
-//   Account       Saved items, Settings, payment receipts, help
+//   Account       Saved items, Settings, help (escrow and receipts while
+//                 payments are shown - payments_shown.dart)
 //   Sign out
 //
 // On the constellation, like Home and every screen reached from it.
@@ -21,6 +22,7 @@ import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/account/domain/models/my_account.dart';
 import '../features/safe_payment/escrow_callout.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show safePaymentRepository;
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../main.dart';
@@ -187,9 +189,9 @@ class _MenuScreenState extends State<MenuScreen> {
         const SizedBox(height: 14),
         _dashboardCard(),
       ],
-      // Above everything else on the Menu: BROKA holds no payments, so how
-      // to pay a stranger safely is the most useful thing on it.
-      const EscrowCallout(margin: EdgeInsets.only(top: 14)),
+      // Above everything else on the Menu while payments are shown: BROKA
+      // holds no payments, so how to pay a stranger safely leads.
+      if (paymentsShown) const EscrowCallout(margin: EdgeInsets.only(top: 14)),
       const MenuSectionLabel('Selling'),
       MenuGroup(children: [
         if (isSeller) ...[
@@ -217,10 +219,10 @@ class _MenuScreenState extends State<MenuScreen> {
       MenuGroup(children: [
         MenuTile(
           key: const Key('menu-saved'),
-          icon: Icons.favorite_rounded,
-          tint: BrokaColors.danger,
+          icon: Icons.bookmark_rounded,
+          tint: BrokaColors.gold,
           title: 'Saved items',
-          subtitle: "Listings you've hearted, to come back to",
+          subtitle: "Listings you've saved, to come back to",
           onTap: () => _open('/saved'),
         ),
         MenuTile(
@@ -244,7 +246,7 @@ class _MenuScreenState extends State<MenuScreen> {
           subtitle: 'Voice and video calls with buyers and sellers',
           onTap: () => _open('/call-history'),
         ),
-        if (_inAppPayments)
+        if (paymentsShown && _inAppPayments)
           MenuTile(
             icon: Icons.receipt_long_rounded,
             tint: BrokaColors.neonBlue,
@@ -252,18 +254,21 @@ class _MenuScreenState extends State<MenuScreen> {
             subtitle: 'M-Pesa receipts saved on this phone',
             onTap: () => _open('/deal-history'),
           ),
-        MenuTile(
-          icon: Icons.shield_rounded,
-          tint: BrokaColors.neonGreen,
-          title: 'Escrow payments',
-          subtitle: 'Escrow services in Kenya, and Zeno to guide you',
-          onTap: () => _open('/escrow-services'),
-        ),
+        if (paymentsShown)
+          MenuTile(
+            icon: Icons.shield_rounded,
+            tint: BrokaColors.neonGreen,
+            title: 'Escrow payments',
+            subtitle: 'Escrow services in Kenya, and Zeno to guide you',
+            onTap: () => _open('/escrow-services'),
+          ),
         MenuTile(
           icon: Icons.help_outline_rounded,
           tint: BrokaColors.neonBlue,
           title: 'Help & how BROKA works',
-          subtitle: 'Buying, selling, paying with escrow, and Zeno',
+          subtitle: paymentsShown
+              ? 'Buying, selling, paying with escrow, and Zeno'
+              : 'Buying, selling, staying safe, and Zeno',
           onTap: () => _open('/how-broka-works'),
         ),
       ]),

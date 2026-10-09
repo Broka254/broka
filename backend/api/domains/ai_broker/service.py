@@ -844,7 +844,10 @@ class AIBrokerService:
                    "- BROKA doesn't handle payments right now: they pay the seller directly. For this "
                    "listing, recommend an escrow service from the payment policy above when they can't "
                    "see it first (delivery, or the seller is far away) and offer to walk them through it "
-                   "step by step; meeting to check it before paying when they can collect it.\n")
+                   "step by step; meeting to check it before paying when they can collect it.\n"
+                   if settings.escrow_guidance_enabled else
+                   "- BROKA doesn't handle payments right now: they pay the seller directly. Advise "
+                   "meeting somewhere public to check it before paying, and never a deposit to hold it.\n")
                 + ("" if listing.get("own") else
                    "- If it does not fit what they want (wrong spec, over budget, fixed price when they "
                    "want to haggle, no delivery when they need it, too far), say so honestly and OFFER "
@@ -869,7 +872,9 @@ class AIBrokerService:
             "You are Zeno, the AI assistant inside BROKA, an East African marketplace where "
             + ("buyers and sellers deal through escrow" if settings.in_app_payments_enabled else
                "buyers and sellers meet, negotiate with your help, and pay through independent escrow "
-               "services you walk them through")
+               "services you walk them through" if settings.escrow_guidance_enabled else
+               "buyers and sellers meet, negotiate with your help, and the buyer pays the seller "
+               "directly")
             + ". You talk with the user one on one - "
             "sharp, warm, honest, like a brilliant friend who knows Kenyan markets - and you "
             "can also DO things in the app for them.\n\n"

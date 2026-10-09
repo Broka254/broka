@@ -650,6 +650,21 @@ class Wishlist(Base):
     )
 
 
+class ListingLike(Base):
+    """A buyer liking a listing (2026-10-09) - apart from saving it
+    (Wishlist), which keeps it in their Saved items. The count is the
+    seller's to see, like saves: it tells a rival which products move."""
+    __tablename__ = "listing_likes"
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id    = Column(String, ForeignKey("users.id"), nullable=False)
+    listing_id = Column(String, ForeignKey("listings.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "listing_id", name="uq_listing_like_user_listing"),
+    )
+
+
 class UserSpecialization(Base):
     """Derived from what a seller actually lists (via
     trader_specialization_subscribers.py on every ListingCreated event),

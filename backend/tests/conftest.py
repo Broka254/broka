@@ -11,6 +11,11 @@ os.environ.setdefault("IN_APP_PAYMENTS_ENABLED", "true")
 # Auctions too are off in production for launch, and on here for the suites
 # that test them; test_auctions_off.py switches them off itself.
 os.environ.setdefault("AUCTIONS_ENABLED", "true")
+# The Verified badge and Zeno's unprompted escrow advice are off in
+# production for now (2026-10-09) and on here for the suites written for
+# them; test_payments_hidden.py switches them off.
+os.environ.setdefault("VERIFIED_BADGE_ENABLED", "true")
+os.environ.setdefault("ESCROW_GUIDANCE_ENABLED", "true")
 # Likewise the listing-fee tests price a seller's first listing at full
 # price; free places and the founding offer are tested on their own
 # (test_listing_fee_payment.py, test_founding_sellers.py).
@@ -48,3 +53,16 @@ def auctions_off():
     object.__setattr__(settings, "auctions_enabled", False)
     yield
     object.__setattr__(settings, "auctions_enabled", before)
+
+
+@pytest.fixture
+def payments_hidden():
+    """VERIFIED_BADGE_ENABLED and ESCROW_GUIDANCE_ENABLED off, as production
+    runs them while the app hides payments."""
+    from api.core.config import settings
+    before = (settings.verified_badge_enabled, settings.escrow_guidance_enabled)
+    object.__setattr__(settings, "verified_badge_enabled", False)
+    object.__setattr__(settings, "escrow_guidance_enabled", False)
+    yield
+    object.__setattr__(settings, "verified_badge_enabled", before[0])
+    object.__setattr__(settings, "escrow_guidance_enabled", before[1])

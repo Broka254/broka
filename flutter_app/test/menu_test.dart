@@ -3,6 +3,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/widgets/broka_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,6 +21,7 @@ Map<String, dynamic> _me({
   int deals = 3,
   bool locationVisible = true,
   String? photo,
+  bool verified = true,
 }) =>
     {
       'id': 'user-1',
@@ -30,7 +32,7 @@ Map<String, dynamic> _me({
       'phone': '+254700000001',
       'account_type': accountType,
       'seller_tier': 'long_term',
-      'is_verified': true,
+      'is_verified': verified,
       'rating': 4.7,
       'completed_deals': deals,
       'location_visible': locationVisible,
@@ -90,6 +92,11 @@ FakeRoute _account({
     };
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" tests.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUpAll(installFakeApi);
 
   setUp(() {
@@ -288,6 +295,31 @@ void main() {
       await _settle(tester);
       expect(tester.takeException(), isNull, reason: '$name, scrolled');
     }
+  });
+
+  group('with payments hidden (the default build)', () {
+    setUp(() => paymentsShown = false);
+    tearDown(() => paymentsShown = true);
+
+    testWidgets('the Menu leads to no payment - even while BROKA takes payments', (tester) async {
+      setFakeRoute(_account(extra: (uri) =>
+          uri.path == '/pricing/safe-payment' ? {'in_app_payments': true} : null));
+      phoneSize(tester);
+      await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.byType(EscrowCallout), findsNothing);
+      await tester.scrollUntilVisible(find.text('Sign out'), 200);
+      expect(find.text('Escrow payments'), findsNothing);
+      expect(find.text('Payment receipts'), findsNothing);
+      expect(find.text('Saved items'), findsOneWidget);
+    });
+
+    testWidgets('Profile offers no badge to buy', (tester) async {
+      setFakeRoute(_account(me: _me(verified: false)));
+      await tester.pumpWidget(app(const ProfileScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.text('Get verified'), findsNothing);
+    });
   });
 
   group('Profile', () {

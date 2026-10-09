@@ -39,6 +39,15 @@ GUIDES: dict[str, str] = {
 }
 
 
+def available() -> dict[str, str]:
+    """GUIDES this server offers now: no "getting verified" while the badge
+    isn't sold (VERIFIED_BADGE_ENABLED) - its guide ends on a purchase the
+    server would refuse."""
+    if settings.verified_badge_enabled:
+        return GUIDES
+    return {k: v for k, v in GUIDES.items() if k != "get_verified"}
+
+
 def _step(title: str, detail: str = "", destination: Optional[str] = None) -> dict:
     step = {"title": title, "detail": detail}
     if destination:
@@ -105,7 +114,7 @@ async def _sell_faster(db: AsyncSession, user_id: str) -> dict:
                   "and a fair price.", "sell"),
             _step("Price it like the market", "Search for the same item and see what it goes for.", "search"),
         ]
-        if not verified:
+        if not verified and settings.verified_badge_enabled:
             steps.append(_step("Get verified", "Buyers trust the badge.", "verify"))
         return {"id": "sell_faster", "title": "Selling faster on BROKA",
                 "intro": "You have no active listings yet - here's how to start strong.", "steps": steps}
@@ -133,7 +142,7 @@ async def _sell_faster(db: AsyncSession, user_id: str) -> dict:
         if f["enquiries"]:
             steps.append(_step(f"Answer the buyers of {name}",
                                f"{f['enquiries']} buyer(s) asked about it - a quick reply closes deals.", "inbox"))
-    if not verified:
+    if not verified and settings.verified_badge_enabled:
         steps.append(_step("Get verified", "Buyers trust the badge on every listing.", "verify"))
     if not steps:
         return {"id": "sell_faster", "title": "Selling faster on BROKA",
@@ -239,6 +248,6 @@ async def build(db: AsyncSession, user_id: str, guide_id: str) -> Optional[dict]
         return await _open_store(db, user_id)
     if guide_id == "sell_faster":
         return await _sell_faster(db, user_id)
-    if guide_id in GUIDES:
+    if guide_id in available():
         return _static(guide_id)
     return None

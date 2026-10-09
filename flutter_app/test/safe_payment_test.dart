@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:broka/features/safe_payment/payments_shown.dart';
 import 'package:broka/core/utils/result.dart';
 import 'package:broka/features/escrow/data/repositories/escrow_repository.dart';
 import 'package:broka/features/escrow/presentation/escrow_actions.dart';
@@ -42,6 +43,11 @@ class _PaymentsOff extends EscrowRepository {
 }
 
 void main() {
+  // Written for a build that shows payments. The default build hides them
+  // (payments_shown.dart): see the "payments hidden" tests.
+  setUpAll(() => paymentsShown = true);
+  tearDownAll(() => paymentsShown = false);
+
   setUpAll(installFakeApi);
 
   testWidgets('the pay button opens the safe-paying advice instead of a payment form', (tester) async {
@@ -121,6 +127,27 @@ void main() {
     await scrollTo(tester, find.text('Escrow: how money moves'));
     expect(find.text('Escrow: how money moves'), findsOneWidget);
     expect(find.byType(EscrowCallout), findsNothing);
+  });
+
+  group('with payments hidden (the default build)', () {
+    setUp(() => paymentsShown = false);
+    tearDown(() => paymentsShown = true);
+
+    testWidgets('How BROKA works says to pay directly, with nothing leading to escrow or a badge',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(home: HowBrokaWorksScreen(repository: _FakeSafePayment(_info))));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Check it, then pay'), findsOneWidget);
+      expect(find.byType(EscrowCallout), findsNothing);
+      await scrollTo(tester, find.text('Paying safely'));
+      expect(find.text('Paying safely'), findsOneWidget);
+      expect(find.text('Pay safely with escrow'), findsNothing);
+      await scrollTo(tester, find.text('Ranking, and what buyers see first'));
+      expect(find.textContaining('Verified badge is paid for'), findsNothing);
+      expect(find.textContaining('Nothing on BROKA buys a higher place'), findsOneWidget);
+      expect(find.textContaining('Pay with escrow'), findsNothing);
+      expect(find.text('Walk me through paying with escrow'), findsNothing);
+    });
   });
 
   group('the escrow services screen', () {

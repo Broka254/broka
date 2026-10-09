@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/account/domain/models/my_account.dart';
+import '../features/safe_payment/payments_shown.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../widgets/broka_image.dart';
@@ -165,7 +166,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _header(account),
             const SizedBox(height: 20),
             _stats(account),
-            if (!account.isVerified) ...[
+            // Not sold while payments are hidden (payments_shown.dart), and
+            // the server refuses it too (VERIFIED_BADGE_ENABLED).
+            if (paymentsShown && !account.isVerified) ...[
               const SizedBox(height: 12),
               MenuGroup(children: [
                 MenuTile(
