@@ -30,6 +30,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../features/zeno_assistant/presentation/zeno_launcher.dart';
 import '../main.dart';
 
 class ListingCameraScreen extends StatefulWidget {
@@ -95,6 +96,13 @@ class _ListingCameraScreenState extends State<ListingCameraScreen>
     WidgetsBinding.instance.addObserver(this);
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     _start();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Zeno's floating orb keeps off the viewfinder.
+    ZenoLauncher.hideOver(context);
   }
 
   @override

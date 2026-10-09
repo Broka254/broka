@@ -58,6 +58,7 @@ import '../features/safe_payment/safe_payment.dart' show openEscrowServices;
 import '../features/auctions/presentation/auction_house_screen.dart';
 import 'zeno_screen.dart';
 import '../features/zeno_assistant/zeno_session.dart';
+import '../features/zeno_assistant/zeno_action_runner.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
 import '../features/buy_agent/domain/models/buy_agent_request.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
@@ -629,6 +630,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _openBuyAgentHub() => Navigator.push(
         context,
         MaterialPageRoute(
+          settings: const RouteSettings(name: ZenoActionRunner.buyingAgentRoute),
           builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent),
         ),
       ).then((_) {

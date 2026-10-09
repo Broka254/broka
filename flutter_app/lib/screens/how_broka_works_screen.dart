@@ -21,12 +21,18 @@
 // is true then: BROKA takes no payments and sells nothing, a buyer pays the
 // seller directly once they have checked the item, and nothing on the
 // screen leads to escrow or a badge.
+//
+// 2026-10-09: it opens with Zeno offering to show the user around - the
+// same tour a new account is offered (zeno_tour.dart), for anyone who
+// would rather be shown than read.
 
 import 'package:flutter/material.dart';
 
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart';
+import '../features/zeno_assistant/zeno_session.dart';
+import '../widgets/zeno_avatar.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/motion_widgets.dart';
@@ -394,6 +400,7 @@ class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
           style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
         ),
       ),
+      if (ZenoSession.maybeOf(context) case final session?) _TourCta(session: session),
       _JourneyCard(paymentsShown ? _buying : _buyingDirect),
       _JourneyCard(paymentsShown ? _selling : _sellingDirect),
       if (paymentsShown && !_inAppPayments)
@@ -427,6 +434,51 @@ class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
       ),
     );
   }
+}
+
+/// "Show me around" - Zeno's tour, from here.
+class _TourCta extends StatelessWidget {
+  const _TourCta({required this.session});
+  final ZenoSession session;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: const Key('how-broka-works-tour'),
+            borderRadius: BorderRadius.circular(16),
+            onTap: session.startTour,
+            child: Ink(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: LinearGradient(colors: [
+                  BrokaColors.neonPurple.withOpacity(0.28),
+                  BrokaColors.neonBlue.withOpacity(0.14),
+                ]),
+                border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.55)),
+                boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.2), blurRadius: 16)],
+              ),
+              child: const Row(children: [
+                ZenoAvatar(size: 40, glow: true),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Let Zeno show you around',
+                        style: TextStyle(color: BrokaColors.textHigh, fontSize: 14.5, fontWeight: FontWeight.w800)),
+                    SizedBox(height: 3),
+                    Text('A one-minute tour - Zeno opens each screen and says what it does.',
+                        style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.35)),
+                  ]),
+                ),
+                Icon(Icons.play_circle_fill_rounded, color: BrokaColors.neonCyan, size: 30),
+              ]),
+            ),
+          ),
+        ),
+      );
 }
 
 class _JourneyCard extends StatelessWidget {

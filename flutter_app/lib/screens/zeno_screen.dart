@@ -93,6 +93,7 @@ import '../features/zeno_assistant/domain/zeno_action.dart';
 import '../features/zeno_assistant/presentation/zeno_action_card.dart';
 import '../features/zeno_assistant/zeno_action_runner.dart';
 import '../features/zeno_assistant/zeno_session.dart';
+import '../features/zeno_assistant/zeno_tour.dart' show isTourRequest;
 import '../features/listings/domain/models/listing.dart';
 import '../theme/motion.dart';
 import '../utils/price_format.dart';
@@ -311,6 +312,9 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// The longest Zeno's current reply may keep voice mode "speaking" - see
   /// _speak.
   Timer? _speakCap;
+
+  /// Replies this screen is reading aloud.
+  int _saying = 0;
   static const _searchPhases = [
     'Scanning Broka listings…',
     'Matching against your specs…',
@@ -433,7 +437,10 @@ class _ZenoScreenState extends State<ZenoScreen>
     _searchTicker?.cancel();
     _searchDelay?.cancel();
     _speakCap?.cancel();
-    _tts.stop();
+    // Only this screen's own reply: Zeno's tour narrates over the Buying
+    // Agent and moves on, and closing the screen under it must not cut
+    // the next line off.
+    if (_saying > 0) _tts.stop();
     _voice.dispose();
     super.dispose();
   }
@@ -653,6 +660,23 @@ class _ZenoScreenState extends State<ZenoScreen>
     final session = _session;
     if (!_isBuying && photo == null && session != null && session.isActive) {
       unawaited(session.send(text));
+      return;
+    }
+    // "Show me around": Zeno's tour of BROKA (zeno_tour.dart), which opens
+    // the screens it talks about - no model needed to say "follow me".
+    if (!_isBuying && _about == null && photo == null && session != null && isTourRequest(text)) {
+      final reply = _langKey == 'swahili' || _langKey == 'sheng'
+          ? 'Twende - nifuate!'
+          : "Let's go - follow me!";
+      setState(() {
+        _addArriving(_Turn(Message(role: 'user', content: text)));
+        _addArriving(_Turn(Message(role: 'broker', content: reply)));
+      });
+      _history
+        ..add({'role': 'user', 'content': text})
+        ..add({'role': 'assistant', 'content': reply});
+      _persist();
+      session.startTour();
       return;
     }
     setState(() {
@@ -990,8 +1014,10 @@ class _ZenoScreenState extends State<ZenoScreen>
     }
     _speakCap?.cancel();
     _speakCap = Timer(Duration(milliseconds: (6000 + 450 * words).clamp(6000, 60000)), finish);
+    _saying++;
     unawaited(_tts.speakToEnd(text, language: _langKey).whenComplete(finish));
     await done.future;
+    _saying--;
     _speakCap?.cancel();
     if (!mounted) return;
     _voice.setZenoSpeaking(false);

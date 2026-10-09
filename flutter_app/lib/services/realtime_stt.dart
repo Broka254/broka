@@ -396,6 +396,14 @@ class MicrophoneSource {
         echoCancel: true,
         noiseSuppress: true,
         autoGain: true,
+        // Never paused by other audio. record's default (pause) takes
+        // Android's audio focus and pauses capture on any focus loss,
+        // with no resume - and Zeno's own reply, played by BrokaTts's
+        // AudioPlayer, requests focus. So the first thing Zeno said
+        // paused the microphone for the rest of the session, while the
+        // socket's KeepAlive kept it looking connected: voice mode said
+        // "Listening" and heard nothing the user said after Zeno spoke.
+        audioInterruption: AudioInterruptionMode.none,
       ));
       _running = true;
       SttDiagnostics.record(SttDiagnostic(

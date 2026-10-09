@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import '../features/auth/presentation/password_reset_screen.dart';
+import '../features/zeno_assistant/zeno_tour.dart';
 import '../main.dart';
 import '../widgets/gradient_button.dart';
 import '../services/api_service.dart';
@@ -784,6 +785,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           await ApiService.enrollBiometric(_chosenBiometric);
         } catch (_) { /* non-fatal */ }
       }
+      // A new account: Zeno offers to show it around the first time Home
+      // is in front (zeno_tour.dart) - not over whatever sign-up was for.
+      final newUser = ApiService.currentUserId;
+      if (newUser != null) await ZenoTourStore.markNewAccount(newUser);
       if (mounted) {
         GlobalPollerService.instance.start();
         _returnAuthenticated();

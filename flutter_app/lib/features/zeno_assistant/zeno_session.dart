@@ -28,12 +28,25 @@
 //     microphone), and so does signing out;
 //   - the app leaving the foreground ends it (ZenoSessionHost): nothing
 //     listens from the background;
-//   - a minute with nothing said stops the microphone - the speech
-//     provider bills by the minute, whether anyone is talking or not - and
-//     the pill says "Tap to talk".
+//   - a silence is not the end of the conversation (2026-10-09). The
+//     microphone used to stop after a minute with nothing said, without a
+//     word: the voice view folded away and whatever the user said next was
+//     never heard. Now Zeno checks in - "are you still there?", in a few
+//     different ways (zeno_check_ins.dart) - and only after two of those,
+//     says it is stepping back and stops the microphone (the speech
+//     provider bills by the minute, whether anyone is talking or not). The
+//     pill then says "Tap to talk".
+//
+// Words said while Zeno is still working out its last answer are kept and
+// sent after it, not dropped (they used to be: send() returned early).
+//
+// It also runs Zeno's tour of BROKA (zeno_tour.dart), offered to a new
+// account the first time Home is in front, and tells the floating orb
+// (zeno_launcher.dart) which screen is showing.
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../../core/utils/result.dart';
 import '../../services/api_service.dart';
@@ -45,6 +58,8 @@ import 'data/zeno_assistant_repository.dart';
 import 'domain/zeno_action.dart';
 import 'presentation/zeno_action_card.dart' show ZenoActionPhase;
 import 'zeno_action_runner.dart';
+import 'zeno_check_ins.dart';
+import 'zeno_tour.dart';
 
 enum ZenoSessionView { closed, expanded, docked }
 
@@ -76,9 +91,12 @@ abstract interface class ZenoSessionChat {
 /// NavigatorState to act on and has no route context to find one from;
 /// this observer is attached to the app's Navigator and hands it over.
 class ZenoRouteWatch extends NavigatorObserver {
-  ZenoRouteWatch(this._onPush);
+  ZenoRouteWatch(this._onPush, [this._onTop]);
 
   final void Function(Route<dynamic> route) _onPush;
+
+  /// The screen in front changed, any way at all.
+  final VoidCallback? _onTop;
 
   Route<dynamic>? top;
 
@@ -86,43 +104,75 @@ class ZenoRouteWatch extends NavigatorObserver {
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     top = route;
     _onPush(route);
+    _onTop?.call();
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     if (identical(route, top)) top = previousRoute;
+    _onTop?.call();
   }
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
     if (identical(route, top)) top = previousRoute;
+    _onTop?.call();
   }
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
     if (identical(oldRoute, top)) top = newRoute;
     if (newRoute != null) _onPush(newRoute);
+    _onTop?.call();
   }
 }
 
-class ZenoSession extends ChangeNotifier {
-  ZenoSession({ZenoAssistantRepository? repository, BrokaTts? tts})
-      : _repository = repository ?? zenoAssistantRepository,
-        _tts = tts ?? BrokaTts.instance {
-    routes = ZenoRouteWatch(_onRoutePushed);
+class ZenoSession extends ChangeNotifier implements ZenoTourHost {
+  ZenoSession({
+    ZenoAssistantRepository? repository,
+    BrokaTts? tts,
+    ZenoCheckIns? checkIns,
+    @visibleForTesting this.voiceService,
+  })  : _repository = repository ?? zenoAssistantRepository,
+        _tts = tts ?? BrokaTts.instance,
+        _checkIns = checkIns ?? ZenoCheckIns() {
+    routes = ZenoRouteWatch(_onRoutePushed, _onTopChanged);
   }
 
   /// Attach to the app's Navigator (MaterialApp.navigatorObservers).
   late final ZenoRouteWatch routes;
 
+  /// The speech provider for a session started without one (the floating
+  /// orb's). Tests pass a fake; the app leaves it null for the real one.
+  final RealtimeSttProvider Function()? voiceService;
+
+  /// Zeno showing the user around (zeno_tour.dart).
+  late final ZenoTour tour = ZenoTour(this);
+
+  /// Goes up each time the screen in front changes - for what is drawn
+  /// over it (the floating orb), told after the frame that changed it.
+  final ValueNotifier<int> screenChanged = ValueNotifier(0);
+
   final ZenoAssistantRepository _repository;
   final BrokaTts _tts;
+  final ZenoCheckIns _checkIns;
 
   /// Where voice mode grows from when the Zeno tab's microphone opens it.
   static const fromMic = Alignment(0.82, 0.9);
 
-  /// A minute of nothing said, and the microphone stops. See the header.
-  static const quietFor = Duration(seconds: 60);
+  // A silence, and what Zeno does about it - see the header. Full screen,
+  // the user is talking to Zeno and a pause is a pause: it checks in,
+  // asks again, then rests. Docked over a screen it opened, the user is
+  // reading, not ignoring it: once, later, then it rests.
+  static const checkInAfter = Duration(seconds: 14);
+  static const checkInAgainAfter = Duration(seconds: 18);
+  static const restAfter = Duration(seconds: 16);
+  static const browsingCheckInAfter = Duration(seconds: 45);
+  static const browsingRestAfter = Duration(seconds: 40);
+
+  /// Screens the tour is never offered over: Home is the first route,
+  /// and these can be first too.
+  static const _noTourOn = {'/splash', '/auth', '/voip-call'};
 
   /// Routes the session must not survive: a call needs the microphone,
   /// and signing out or starting over ends the account's conversation.
@@ -159,6 +209,22 @@ class ZenoSession extends ChangeNotifier {
   Alignment _origin = fromMic;
   bool _speakingSelf = false;
   bool _wasListening = false;
+
+  /// Check-ins since the user last said anything. See _onQuiet.
+  int _nudges = 0;
+
+  /// Zeno's last real answer this session (not a check-in), for what a
+  /// check-in follows.
+  String? _answered;
+
+  /// Said while Zeno was still answering: sent next.
+  String? _queued;
+  Timer? _queueTimer;
+
+  bool _tourOfferScheduled = false;
+  Timer? _tourOffer;
+  bool _screenNotifyScheduled = false;
+  bool _disposed = false;
 
   /// The screen Zeno opened last. When it is still the one in front, the
   /// next screen Zeno opens replaces it - see ZenoActionRunner.runOn.
@@ -205,12 +271,21 @@ class ZenoSession extends ChangeNotifier {
 
   // ── Opening, docking, closing ─────────────────────────────────────────────
 
-  /// Opens voice mode, or brings it back if it is docked.
-  Future<void> start({RealtimeSttProvider? service, Alignment from = fromMic, bool? muted}) async {
-    if (isActive) return expand(from: from);
+  /// Opens voice mode, or brings it back if it is docked. [docked] opens it
+  /// straight into the pill - the tour's demo, asked over Home.
+  Future<void> start({
+    RealtimeSttProvider? service,
+    Alignment from = fromMic,
+    bool? muted,
+    bool docked = false,
+  }) async {
+    if (isActive) return docked ? resumeMic() : expand(from: from);
     _epoch++;
     _heard = null;
     _reply = null;
+    _answered = null;
+    _queued = null;
+    _nudges = 0;
     _action = null;
     _phase = null;
     _thinking = false;
@@ -218,8 +293,8 @@ class ZenoSession extends ChangeNotifier {
     _opened = null;
     _guideVisited.clear();
     if (muted != null) _muted = muted;
-    _origin = from;
-    _view = ZenoSessionView.expanded;
+    _origin = docked ? dockOrigin : from;
+    _view = docked ? ZenoSessionView.docked : ZenoSessionView.expanded;
     _history.clear();
     final chat = _chat;
     _seeding = chat == null ? _seedFromStore() : null;
@@ -235,7 +310,7 @@ class ZenoSession extends ChangeNotifier {
   ZenoVoiceController _makeVoice(RealtimeSttProvider? service) => ZenoVoiceController(
         onSubmit: send,
         languageKey: () => ApiService.currentUserLanguage,
-        service: service,
+        service: service ?? voiceService?.call(),
       )..addListener(_onVoice);
 
   Future<void> _seedFromStore() async {
@@ -251,6 +326,7 @@ class ZenoSession extends ChangeNotifier {
     _origin = from ?? dockOrigin;
     _view = ZenoSessionView.expanded;
     _typing = false;
+    _nudges = 0;
     notifyListeners();
     final voice = _voice;
     if (voice != null && !voice.isOpen) await voice.open();
@@ -263,6 +339,8 @@ class ZenoSession extends ChangeNotifier {
     _origin = dockOrigin;
     _view = ZenoSessionView.docked;
     notifyListeners();
+    // Over a screen, a silence is someone reading: the longer wait.
+    _touch();
   }
 
   /// Ends the session: the microphone closes and Zeno leaves the screen.
@@ -273,6 +351,7 @@ class ZenoSession extends ChangeNotifier {
     _view = ZenoSessionView.closed;
     _typing = false;
     _thinking = false;
+    _queued = null;
     _cancelTimers();
     _tts.playing.removeListener(_onTtsPlaying);
     if (_speakingSelf || _tts.isSpeaking) unawaited(_tts.stop());
@@ -293,6 +372,7 @@ class ZenoSession extends ChangeNotifier {
   Future<void> resumeMic() async {
     if (!isActive) return;
     _typing = false;
+    _nudges = 0;
     notifyListeners();
     await _voice?.open();
     _touch();
@@ -352,7 +432,29 @@ class ZenoSession extends ChangeNotifier {
   /// sends (POST /zeno/assistant/turn).
   Future<void> send(String text) async {
     text = text.trim();
-    if (text.isEmpty || !isActive || _thinking) return;
+    if (text.isEmpty || !isActive) return;
+    _nudges = 0;
+    // The tour's "next" and "stop", and its demo's answer, are the tour's;
+    // anything else ends it and is answered as usual.
+    if (tour.active && tour.handleSpeech(text)) {
+      _heard = text;
+      notifyListeners();
+      _touch();
+      return;
+    }
+    if (!tour.active && isTourRequest(text)) {
+      _heard = text;
+      if (expanded) dock();
+      notifyListeners();
+      tour.begin(firstName: _firstName, language: ApiService.currentUserLanguage);
+      return;
+    }
+    if (_thinking) {
+      // Said while Zeno works out its last answer: the rest of the
+      // sentence, or the next thing. Kept, and sent once that answer is in.
+      _queued = _queued == null ? text : '$_queued $text';
+      return;
+    }
     final epoch = _epoch;
     await _seeding;
     if (epoch != _epoch) return;
@@ -393,12 +495,17 @@ class ZenoSession extends ChangeNotifier {
         if (epoch != _epoch) return;
         _thinking = false;
         _reply = reply;
+        _answered = reply;
         _action = data.action;
         _phase = data.action == null ? null : ZenoActionPhase.pending;
         _guideVisited.clear();
         _guideFolded = false;
         notifyListeners();
         _afterReply(epoch);
+        // After a screen it opens by itself has opened, not instead of it.
+        _sendQueued(after: data.action?.runsByItself == true
+            ? Duration(milliseconds: expanded ? 1500 : 1100)
+            : Duration.zero);
       case Failure(:final message, :final statusCode):
         _history.removeLast();
         if (identical(_chat, chat)) chat?.sessionFailed(text);
@@ -409,12 +516,25 @@ class ZenoSession extends ChangeNotifier {
           // say so in the server's words, and stop listening - every
           // further sentence would be refused the same way.
           _reply = message;
+          _queued = null;
           pauseMic();
         } else {
           _reply = "I couldn't reach Zeno just now. Try again in a moment.";
+          _sendQueued();
         }
         notifyListeners();
     }
+  }
+
+  void _sendQueued({Duration after = Duration.zero}) {
+    final queued = _queued;
+    if (queued == null) return;
+    _queued = null;
+    final epoch = _epoch;
+    _queueTimer?.cancel();
+    _queueTimer = Timer(after, () {
+      if (epoch == _epoch && isActive) unawaited(send(queued));
+    });
   }
 
   List<Map<String, String>> _context(ZenoSessionChat? chat, int count) {
@@ -546,7 +666,7 @@ class ZenoSession extends ChangeNotifier {
 
   // ── Speaking and listening ────────────────────────────────────────────────
 
-  Future<void> _speak(String text) async {
+  Future<void> _speak(String text, {String? language}) async {
     final voice = _voice;
     _speakingSelf = true;
     voice?.setZenoSpeaking(true);
@@ -560,7 +680,9 @@ class ZenoSession extends ChangeNotifier {
 
     _speakCap?.cancel();
     _speakCap = Timer(Duration(milliseconds: (6000 + 450 * words).clamp(6000, 60000)), finish);
-    unawaited(_tts.speakToEnd(text, language: ApiService.currentUserLanguage).whenComplete(finish));
+    unawaited(_tts
+        .speakToEnd(text, language: language ?? ApiService.currentUserLanguage)
+        .whenComplete(finish));
     await done.future;
     _speakCap?.cancel();
     _speakingSelf = false;
@@ -582,8 +704,8 @@ class ZenoSession extends ChangeNotifier {
     if (open != _wasListening) {
       _wasListening = open;
       // Closed by something other than this session - another voice card
-      // took the microphone, or it was closed for quiet: the session stays,
-      // docked, with "Tap to talk".
+      // took the microphone, or Zeno stepped back after a silence: the
+      // session stays, docked, with "Tap to talk".
       if (!open && _view == ZenoSessionView.expanded) {
         _origin = dockOrigin;
         _view = ZenoSessionView.docked;
@@ -592,32 +714,186 @@ class ZenoSession extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (open && (voice.interim.isNotEmpty || voice.state != VoiceSessionState.listening)) _touch();
+    if (!open) return;
+    final userTalking = voice.interim.isNotEmpty ||
+        voice.hasSendableText ||
+        voice.state == VoiceSessionState.processing ||
+        voice.state == VoiceSessionState.readyToSend;
+    if (userTalking) _nudges = 0;
+    if (userTalking || voice.state != VoiceSessionState.listening) _touch();
   }
 
-  /// Something was said: the quiet clock starts again.
+  /// Something happened: the quiet clock starts again, from wherever the
+  /// check-ins have got to.
   void _touch() {
     _quiet?.cancel();
     if (!isActive || !listening) return;
-    _quiet = Timer(quietFor, () {
-      final voice = _voice;
-      if (voice == null || !voice.isOpen || _thinking) return;
-      if (voice.state == VoiceSessionState.listening && voice.interim.isEmpty && !voice.hasSendableText) {
-        pauseMic();
-      } else {
-        _touch();
-      }
-    });
+    _quiet = Timer(_quietDelay, _onQuiet);
+  }
+
+  Duration get _quietDelay => docked
+      ? (_nudges == 0 ? browsingCheckInAfter : browsingRestAfter)
+      : switch (_nudges) {
+          0 => checkInAfter,
+          1 => checkInAgainAfter,
+          _ => restAfter,
+        };
+
+  /// The silence has lasted: check in, or - after enough check-ins - rest.
+  void _onQuiet() {
+    final voice = _voice;
+    if (voice == null || !voice.isOpen || !isActive) return;
+    final busy = _thinking ||
+        _speakingSelf ||
+        tour.active ||
+        voice.state != VoiceSessionState.listening ||
+        voice.interim.isNotEmpty ||
+        voice.hasSendableText;
+    if (busy) {
+      _touch();
+      return;
+    }
+    final checkIns = docked ? 1 : 2;
+    if (_nudges >= checkIns) {
+      unawaited(_rest());
+      return;
+    }
+    final line = _checkIns.checkIn(
+      ZenoCheckIns.momentAfter(_answered, docked: docked),
+      nudge: _nudges,
+      firstName: _firstName,
+      language: ApiService.currentUserLanguage,
+    );
+    _nudges++;
+    _reply = line.text;
+    notifyListeners();
+    if (_muted) {
+      _touch();
+    } else {
+      unawaited(_speak(line.text, language: line.language));
+    }
+  }
+
+  /// Zeno says it is stepping back, then the microphone stops.
+  Future<void> _rest() async {
+    final epoch = _epoch;
+    final line = _checkIns.resting(firstName: _firstName, language: ApiService.currentUserLanguage);
+    _reply = line.text;
+    notifyListeners();
+    if (!_muted) await _speak(line.text, language: line.language);
+    if (epoch != _epoch || !isActive) return;
+    final voice = _voice;
+    // Spoke up as Zeno said it: the conversation goes on.
+    if (voice != null && (voice.interim.isNotEmpty || voice.hasSendableText || _thinking)) {
+      _nudges = 0;
+      _touch();
+      return;
+    }
+    _nudges = 0;
+    pauseMic();
+  }
+
+  static String? get _firstName {
+    final n = ApiService.currentUserName?.trim() ?? '';
+    return n.isEmpty ? null : n.split(RegExp(r'\s+')).first;
   }
 
   void _onRoutePushed(Route<dynamic> route) {
-    if (_endsOn.contains(route.settings.name)) end();
+    if (_endsOn.contains(route.settings.name)) {
+      end();
+      tour.end();
+    }
   }
+
+  // ── The screen in front ───────────────────────────────────────────────────
+
+  void _onTopChanged() {
+    // Told after the frame: the Navigator reports its first route while it
+    // is itself being built, and nothing may rebuild then.
+    if (!_screenNotifyScheduled) {
+      _screenNotifyScheduled = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _screenNotifyScheduled = false;
+        if (!_disposed) screenChanged.value++;
+      });
+      SchedulerBinding.instance.ensureVisualUpdate();
+    }
+    unawaited(_maybeOfferTour());
+  }
+
+  /// Whether [route] is Home: the first screen, and not the splash or
+  /// sign-in on its way to it.
+  static bool _isHome(Route<dynamic>? route) =>
+      route != null && route.isFirst && route is PageRoute && !_noTourOn.contains(route.settings.name);
+
+  /// A new account, and Home in front: Zeno offers the tour - once, after
+  /// a moment for Home to draw itself.
+  Future<void> _maybeOfferTour() async {
+    final user = ApiService.currentUserId;
+    if (user == null || _tourOfferScheduled || tour.active || isActive) return;
+    if (!_isHome(routes.top)) return;
+    if (!await ZenoTourStore.isPending(user)) return;
+    if (_disposed || _tourOfferScheduled) return;
+    _tourOfferScheduled = true;
+    _tourOffer?.cancel();
+    _tourOffer = Timer(const Duration(milliseconds: 1400), () {
+      _tourOfferScheduled = false;
+      if (_disposed || ApiService.currentUserId != user || tour.active || isActive) return;
+      if (!_isHome(routes.top)) return;
+      unawaited(ZenoTourStore.markOffered(user));
+      tour.offer(firstName: _firstName, language: ApiService.currentUserLanguage);
+    });
+  }
+
+  /// The tour, from anywhere - How BROKA works' button.
+  void startTour() {
+    if (isActive && expanded) dock();
+    tour.begin(firstName: _firstName, language: ApiService.currentUserLanguage);
+  }
+
+  // ── ZenoTourHost ──────────────────────────────────────────────────────────
+
+  @override
+  Future<void> tourNavigate(String destination) async {
+    final nav = routes.navigator;
+    if (nav == null) return;
+    if (expanded) dock();
+    _burst++;
+    notifyListeners();
+    await _open(nav, (replace) => ZenoActionRunner.openDestination(nav, destination, replace: replace),
+        home: destination == 'home');
+  }
+
+  @override
+  Future<void> tourSay(String text, String language) async {
+    if (_muted) return;
+    await _speak(text, language: language);
+  }
+
+  @override
+  void tourStopSpeaking() {
+    if (_speakingSelf || _tts.isSpeaking) unawaited(_tts.stop());
+  }
+
+  @override
+  Future<void> tourFindForMe(String query) async {
+    final nav = routes.navigator;
+    if (nav == null) return;
+    // The Buying Agent has a voice of its own: Zeno hands over, as it does
+    // for a spoken "find me one".
+    if (isActive) end();
+    _opened = null;
+    await ZenoActionRunner.runOn(nav, ZenoAction(type: ZenoActionType.findForMe, query: query));
+  }
+
+  @override
+  Future<void> tourListen() => start(docked: true, muted: _muted);
 
   void _cancelTimers() {
     _beat?.cancel();
     _quiet?.cancel();
     _speakCap?.cancel();
+    _queueTimer?.cancel();
   }
 
   /// The host is going away: nothing may keep listening or ticking.
@@ -625,6 +901,8 @@ class ZenoSession extends ChangeNotifier {
     _epoch++;
     _view = ZenoSessionView.closed;
     _cancelTimers();
+    _tourOffer?.cancel();
+    tour.hold();
     _tts.playing.removeListener(_onTtsPlaying);
     _voice?.stopForDispose();
   }
@@ -632,6 +910,9 @@ class ZenoSession extends ChangeNotifier {
   @override
   void dispose() {
     stopForDispose();
+    _disposed = true;
+    tour.dispose();
+    screenChanged.dispose();
     _voice?.removeListener(_onVoice);
     _voice?.dispose();
     super.dispose();

@@ -685,7 +685,8 @@ void main() {
       await run(tester, const Duration(milliseconds: 600));
     });
 
-    testWidgets('a minute with nothing said stops the microphone', (tester) async {
+    testWidgets('a long silence over a screen Zeno opened: it checks in, then stops the microphone',
+        (tester) async {
       answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
@@ -696,7 +697,12 @@ void main() {
 
       await tester.pump(const Duration(seconds: 30));
       expect(mic.running, isTrue);
-      await tester.pump(ZenoSession.quietFor);
+      expect(session.reply, 'Opening your inbox.');
+      // The user is reading the inbox: one check-in, and still listening.
+      await tester.pump(ZenoSession.browsingCheckInAfter);
+      expect(mic.running, isTrue);
+      expect(session.reply, isNot('Opening your inbox.'), reason: 'Zeno checked in');
+      await tester.pump(ZenoSession.browsingRestAfter);
       await letTeardownFinish(tester);
       expect(mic.running, isFalse, reason: 'the speech provider bills by the minute');
       expect(session.isActive, isTrue);

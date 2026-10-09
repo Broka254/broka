@@ -148,6 +148,9 @@ class FakeRecorder implements AudioRecorder {
   bool running = false;
   int startCount = 0;
 
+  /// What the last start asked the platform for.
+  RecordConfig? lastConfig;
+
   void emit(Uint8List chunk) {
     if (!_audio.isClosed) _audio.add(chunk);
   }
@@ -163,6 +166,7 @@ class FakeRecorder implements AudioRecorder {
     expect(config.encoder, AudioEncoder.pcm16bits);
     expect(config.sampleRate, 16000);
     expect(config.numChannels, 1);
+    lastConfig = config;
     if (failToStart) throw StateError('recorder unavailable');
     if (hangsOnStart) return Completer<Stream<Uint8List>>().future;
     startCount++;

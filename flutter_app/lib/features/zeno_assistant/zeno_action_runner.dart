@@ -46,6 +46,11 @@ class ZenoActionRunner {
     'escrow_services': '/escrow-services',
   };
 
+  /// The Buying Agent's route name. It has no entry in main.dart's routes
+  /// (it is pushed with its query), but a name lets the floating orb
+  /// (zeno_launcher.dart) keep off it.
+  static const buyingAgentRoute = '/buying-agent';
+
   /// Screens that lead to a payment: not opened while payments are hidden
   /// (payments_shown.dart), whatever Zeno - or an older server - names.
   static const paymentDestinations = {'verify', 'escrow_services', 'deal_history'};
@@ -132,7 +137,9 @@ class ZenoActionRunner {
           return true;
         }
         if (dest == 'buying_agent') {
-          await push(MaterialPageRoute(builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent)));
+          await push(MaterialPageRoute(
+              settings: const RouteSettings(name: buyingAgentRoute),
+              builder: (_) => const ZenoScreen(mode: ZenoMode.buyingAgent)));
           return true;
         }
         if (!paymentsShown && paymentDestinations.contains(dest)) return false;
@@ -145,6 +152,7 @@ class ZenoActionRunner {
         return true;
       case ZenoActionType.findForMe:
         await push(MaterialPageRoute(
+            settings: const RouteSettings(name: buyingAgentRoute),
             builder: (_) => ZenoScreen(mode: ZenoMode.buyingAgent, initialQuery: action.query)));
         return true;
       case ZenoActionType.openChat:

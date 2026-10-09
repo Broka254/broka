@@ -41,6 +41,7 @@ import '../widgets/constellation_background.dart';
 import '../widgets/product_grid_view.dart';
 import '../widgets/zeno_avatar.dart';
 import 'zeno_screen.dart';
+import '../features/zeno_assistant/zeno_action_runner.dart';
 
 /// Heuristic-only, deliberately conservative: a plain product name ("iPhone
 /// 13") should never get swept into this, only text that reads like a buyer
@@ -230,6 +231,7 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
+        settings: const RouteSettings(name: ZenoActionRunner.buyingAgentRoute),
         builder: (_) => ZenoScreen(mode: ZenoMode.buyingAgent, initialQuery: _query),
       ),
     );

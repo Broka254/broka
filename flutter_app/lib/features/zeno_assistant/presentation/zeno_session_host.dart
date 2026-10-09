@@ -8,6 +8,10 @@
 //
 // It has an Overlay of its own: it sits outside the Navigator's, and
 // tooltips and text fields need one.
+//
+// 2026-10-09: also Zeno's orb at the edge of every screen, the way into
+// voice from anywhere (zeno_launcher.dart), and Zeno's tour of BROKA for a
+// new account (zeno_tour_layer.dart).
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -18,8 +22,10 @@ import '../../../theme/motion.dart';
 import '../domain/zeno_action.dart';
 import '../zeno_session.dart';
 import 'zeno_action_card.dart';
+import 'zeno_launcher.dart';
 import 'zeno_live_overlay.dart';
 import 'zeno_orb.dart';
+import 'zeno_tour_layer.dart';
 
 class ZenoSessionHost extends StatefulWidget {
   const ZenoSessionHost({super.key, required this.session, required this.child});
@@ -48,6 +54,8 @@ class _ZenoSessionHostState extends State<ZenoSessionHost> with WidgetsBindingOb
     // the microphone permission dialog, and the notification shade.
     if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
       widget.session.end();
+      // Nothing more said or opened while nobody is looking; Next goes on.
+      widget.session.tour.hold();
     }
   }
 
@@ -99,6 +107,8 @@ class _SessionLayer extends StatelessWidget {
                 child: const SizedBox.shrink(),
               ),
             _Dock(session: session, card: session.docked ? _card(context, large: false) : null),
+            ZenoLauncher(session: session),
+            ZenoTourLayer(session: session),
           ]);
         },
       );

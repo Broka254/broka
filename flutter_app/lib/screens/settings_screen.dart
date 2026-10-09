@@ -18,6 +18,9 @@
 //    "coming soon". Help is in the Menu (How BROKA works); the other two have
 //    nothing behind them yet and are left out rather than promised.
 //
+// Since 2026-10-09 a Zeno section: the switch for Zeno's orb on every
+// screen (zeno_launcher.dart), and Zeno's tour of BROKA, run again.
+//
 // New: "Sign out of all devices" (POST /auth/token/revoke-all). The
 // startup-sound switch went with the splash's sound (2026-10-09).
 //
@@ -31,6 +34,8 @@
 // language. Dholuo, Kikuyu, Luganda and Sheng were listed as "Coming soon"
 // chips that did nothing when tapped; they are gone until Zeno can deal in
 // them (2026-10-09).
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -38,6 +43,8 @@ import 'package:permission_handler/permission_handler.dart';
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/auth/presentation/change_password_screen.dart';
+import '../features/zeno_assistant/presentation/zeno_launcher.dart';
+import '../features/zeno_assistant/zeno_session.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/delivery_access.dart';
@@ -88,6 +95,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _load();
     _checkDelivery();
+    unawaited(ZenoLauncherPrefs.load());
     _lifecycle = AppLifecycleListener(onResume: _checkDelivery);
   }
 
@@ -246,6 +254,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Widget> _sections() => [
         const MenuSectionLabel('Language'),
         _languageCard(),
+        const MenuSectionLabel('Zeno'),
+        MenuGroup(children: [
+          MenuTile(
+            icon: Icons.blur_circular_rounded,
+            tint: BrokaColors.neonPurple,
+            title: "Zeno's orb on every screen",
+            subtitle: 'Tap it on any screen to talk to Zeno; hold it to type',
+            trailing: ValueListenableBuilder<bool>(
+              valueListenable: ZenoLauncherPrefs.enabled,
+              builder: (_, on, __) => _switch(
+                key: const Key('settings-zeno-orb-switch'),
+                value: on,
+                onChanged: ZenoLauncherPrefs.setEnabled,
+              ),
+            ),
+          ),
+          if (ZenoSession.maybeOf(context) != null)
+            MenuTile(
+              key: const Key('settings-zeno-tour'),
+              icon: Icons.explore_rounded,
+              tint: BrokaColors.neonCyan,
+              title: 'Take the tour with Zeno',
+              subtitle: 'A minute around BROKA, with Zeno showing you what it can do',
+              onTap: () => ZenoSession.maybeOf(context)?.startTour(),
+            ),
+        ]),
         const MenuSectionLabel('Privacy'),
         MenuGroup(children: [
           MenuTile(

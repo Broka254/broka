@@ -68,6 +68,7 @@ class ZenoVoiceController extends ChangeNotifier {
     /// Direct voice mode: a completed utterance goes to Zeno without the user
     /// tapping send. False makes every turn edit-then-send.
     this.autoSend = true,
+    this.stallAfter = const Duration(seconds: 4),
   })  : _onSubmit = onSubmit,
         _languageKey = languageKey,
         _service = service ?? RealtimeSttManager();
@@ -76,6 +77,10 @@ class ZenoVoiceController extends ChangeNotifier {
   final String Function() _languageKey;
   final RealtimeSttProvider _service;
   final bool autoSend;
+
+  /// How long the microphone may go without a single frame, while it is
+  /// meant to be open, before it counts as stalled. See [_heardAudio].
+  final Duration stallAfter;
 
   /// The editable transcript. A TextEditingController rather than a String so
   /// the card's field is a real text field - brief §35: the user must never be
@@ -109,6 +114,23 @@ class ZenoVoiceController extends ChangeNotifier {
   /// taken to be Zeno: the provider's final text for the last words it
   /// heard arrives a few hundred milliseconds after the audio.
   static const echoTail = Duration(milliseconds: 700);
+
+  /// Whether the screen says Zeno is talking - kept apart from [_state],
+  /// which a microphone restart passes through connecting.
+  bool _zenoSpeaking = false;
+
+  // The stall watch. Armed by the first frame of audio (a fake provider in
+  // a test that never sends any is never watched), checked every half of
+  // [stallAfter]: a check that finds no frame since the last one counts,
+  // a frame resets the count.
+  Timer? _stallWatch;
+  bool _audioSinceCheck = false;
+  int _silentChecks = 0;
+  int _stallRestarts = 0;
+
+  /// Restarts in a row that brought no audio back before the microphone is
+  /// reported as stopped rather than restarted again.
+  static const maxStallRestarts = 2;
 
   /// The session holding the microphone, if any.
   ///
@@ -174,6 +196,8 @@ class ZenoVoiceController extends ChangeNotifier {
     _open = true;
     final session = ++_session;
     _userEdited = false;
+    _zenoSpeaking = false;
+    _stallRestarts = 0;
     transcript.clear();
     // Opened again before the last close has finished - the pill's "tap to
     // talk" a moment after its microphone was stopped. The provider ignores
@@ -199,6 +223,7 @@ class ZenoVoiceController extends ChangeNotifier {
     final session = _session;
     _errorMessage = null;
     _errorReference = null;
+    _stallRestarts = 0;
     _set(VoiceSessionState.connecting);
     await _cancelSubs();
     await _service.cancel();
@@ -226,7 +251,9 @@ class ZenoVoiceController extends ChangeNotifier {
         await _service.cancel();
         return;
       }
-      _set(VoiceSessionState.listening);
+      // Restarted under Zeno's voice (a stalled microphone, below): what
+      // it hears is still Zeno until the screen says otherwise.
+      _set(_zenoSpeaking ? VoiceSessionState.speaking : VoiceSessionState.listening);
     } on VoiceSessionException catch (e) {
       _failWith(e);
     } catch (e) {
@@ -249,6 +276,8 @@ class ZenoVoiceController extends ChangeNotifier {
     _autoSendTimer = null;
     _echoTimer?.cancel();
     _echoTimer = null;
+    _stopStallWatch();
+    _zenoSpeaking = false;
     _interim = '';
     _level = 0;
     transcript.clear();
@@ -300,6 +329,7 @@ class ZenoVoiceController extends ChangeNotifier {
   /// can show "Zeno is speaking..." without this file knowing what TTS is.
   void setZenoSpeaking(bool speaking) {
     if (!_open) return;
+    _zenoSpeaking = speaking;
     if (speaking) {
       _autoSendTimer?.cancel();
       _interim = '';
@@ -351,6 +381,7 @@ class ZenoVoiceController extends ChangeNotifier {
     _autoSendTimer = null;
     _echoTimer?.cancel();
     _echoTimer = null;
+    _stopStallWatch();
     _state = VoiceSessionState.idle;
     _interim = '';
     _level = 0;
@@ -365,6 +396,7 @@ class ZenoVoiceController extends ChangeNotifier {
     if (identical(_holder, this)) _holder = null;
     _autoSendTimer?.cancel();
     _echoTimer?.cancel();
+    _stopStallWatch();
     unawaited(_cancelSubs());
     unawaited(_service.dispose());
     transcript.dispose();
@@ -401,7 +433,9 @@ class ZenoVoiceController extends ChangeNotifier {
       _service.speechFinal.listen((_) {
         if (!_open || _hearingZeno) return;
         if (!hasSendableText) {
-          _set(VoiceSessionState.listening);
+          // An UtteranceEnd for words that have already gone to Zeno: the
+          // turn is still on its way, not back to listening.
+          if (_state != VoiceSessionState.sendingToZeno) _set(VoiceSessionState.listening);
           return;
         }
         _set(VoiceSessionState.readyToSend);
@@ -414,6 +448,7 @@ class ZenoVoiceController extends ChangeNotifier {
       _service.audioLevel.listen((v) {
         if (!_open) return;
         _level = v;
+        _heardAudio();
         notifyListeners();
       }),
       _service.reconnecting.listen((busy) {
@@ -433,6 +468,97 @@ class ZenoVoiceController extends ChangeNotifier {
       }),
       _service.failures.listen(_failWith),
     ]);
+  }
+
+  // ── A microphone that stops without saying so ──────────────────────────────
+  //
+  // The provider's socket stays open on its own KeepAlive whether or not
+  // audio reaches it, so a recorder the platform pauses (another app's
+  // audio focus, an iOS session deactivated under it) used to look exactly
+  // like a quiet user: "Listening", and nothing the user said was heard,
+  // for as long as the session lasted. Audio arrives every few dozen
+  // milliseconds while the microphone runs - silence is still frames - so
+  // [stallAfter] without one is a stopped microphone, and it is opened
+  // again. What was already transcribed stays in the box.
+
+  void _heardAudio() {
+    _audioSinceCheck = true;
+    if (_stallWatch == null) _startStallWatch();
+  }
+
+  void _startStallWatch() {
+    _stallWatch?.cancel();
+    _silentChecks = 0;
+    final every = Duration(microseconds: stallAfter.inMicroseconds ~/ 2);
+    _stallWatch = Timer.periodic(every, (_) => _checkForStall());
+  }
+
+  void _stopStallWatch() {
+    _stallWatch?.cancel();
+    _stallWatch = null;
+    _audioSinceCheck = false;
+    _silentChecks = 0;
+  }
+
+  /// States in which the microphone is streaming. Connecting, reconnecting
+  /// and an error are the provider's own business and say so on screen.
+  bool get _micShouldStream => switch (_state) {
+        VoiceSessionState.listening ||
+        VoiceSessionState.processing ||
+        VoiceSessionState.readyToSend ||
+        VoiceSessionState.sendingToZeno ||
+        VoiceSessionState.speaking =>
+          true,
+        _ => false,
+      };
+
+  void _checkForStall() {
+    if (!_open) {
+      _stopStallWatch();
+      return;
+    }
+    if (_audioSinceCheck || !_micShouldStream) {
+      if (_audioSinceCheck) _stallRestarts = 0;
+      _audioSinceCheck = false;
+      _silentChecks = 0;
+      return;
+    }
+    if (++_silentChecks < 2) return;
+    _stopStallWatch();
+    if (_stallRestarts >= maxStallRestarts) {
+      // Opened again and again, and still nothing: say so rather than
+      // pretend to listen.
+      _failWith(VoiceSessionException(
+        VoiceFailure.microphoneStartFailed,
+        'microphone stopped delivering audio',
+        SttDiagnostic(
+            provider: 'microphone', stage: SttStage.streaming, event: 'MICROPHONE_STALLED'),
+      ));
+      return;
+    }
+    _stallRestarts++;
+    unawaited(_restartAfterStall());
+  }
+
+  Future<void> _restartAfterStall() async {
+    final session = _session;
+    SttDiagnostics.record(SttDiagnostic(
+      provider: 'microphone',
+      stage: SttStage.streaming,
+      event: 'MICROPHONE_STALLED_RESTARTING',
+      info: {'attempt': _stallRestarts},
+    ));
+    _autoSendTimer?.cancel();
+    _interim = '';
+    _level = 0;
+    _set(VoiceSessionState.reconnecting);
+    await _cancelSubs();
+    await _service.cancel();
+    if (!_open || session != _session) return;
+    await _start();
+    // Watched from the start this time: a microphone that comes back with
+    // no audio at all is the same stall.
+    if (_open && session == _session && _state != VoiceSessionState.error) _startStallWatch();
   }
 
   /// A short grace period before a completed utterance is sent.
@@ -467,6 +593,7 @@ class ZenoVoiceController extends ChangeNotifier {
   }
 
   void _failWith(VoiceSessionException e) {
+    _stopStallWatch();
     _errorMessage = _messageFor(e.failure);
     _errorReference = referenceFor(e);
     _interim = '';

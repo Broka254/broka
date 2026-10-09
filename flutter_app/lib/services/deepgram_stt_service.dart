@@ -468,6 +468,12 @@ class DeepgramSttService implements RealtimeSttProvider {
           // pause ends a turn, long enough to survive someone thinking
           // mid-sentence.
           'endpointing': '300',
+          // An UtteranceEnd after a second with no new words, whatever the
+          // room sounds like. Endpointing listens for silence, and a street
+          // or a matatu is never silent: speech_final could fail to come,
+          // and what the user said sat in the box, "Got it…", never sent.
+          // This was handled in _onSocketMessage but never asked for.
+          'utterance_end_ms': '1000',
           if (accessToken != null) 'access_token': accessToken,
         },
       );
