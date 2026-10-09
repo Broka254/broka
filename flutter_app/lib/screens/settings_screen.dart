@@ -254,32 +254,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Widget> _sections() => [
         const MenuSectionLabel('Language'),
         _languageCard(),
-        const MenuSectionLabel('Zeno'),
-        MenuGroup(children: [
-          MenuTile(
-            icon: Icons.blur_circular_rounded,
-            tint: BrokaColors.neonPurple,
-            title: "Zeno's orb on every screen",
-            subtitle: 'Tap it on any screen to talk to Zeno; hold it to type',
-            trailing: ValueListenableBuilder<bool>(
-              valueListenable: ZenoLauncherPrefs.enabled,
-              builder: (_, on, __) => _switch(
-                key: const Key('settings-zeno-orb-switch'),
-                value: on,
-                onChanged: ZenoLauncherPrefs.setEnabled,
-              ),
-            ),
-          ),
-          if (ZenoSession.maybeOf(context) != null)
-            MenuTile(
-              key: const Key('settings-zeno-tour'),
-              icon: Icons.explore_rounded,
-              tint: BrokaColors.neonCyan,
-              title: 'Take the tour with Zeno',
-              subtitle: 'A minute around BROKA, with Zeno showing you what it can do',
-              onTap: () => ZenoSession.maybeOf(context)?.startTour(),
-            ),
-        ]),
         const MenuSectionLabel('Privacy'),
         MenuGroup(children: [
           MenuTile(
@@ -330,6 +304,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ? const MenuPill('ON', color: BrokaColors.neonGreen)
                   : const MenuPill('OFF', color: BrokaColors.gold),
               onTap: _delivery!.backgroundAllowed ? null : _allowBackground,
+            ),
+        ]),
+        const MenuSectionLabel('Zeno'),
+        MenuGroup(children: [
+          MenuTile(
+            icon: Icons.blur_circular_rounded,
+            tint: BrokaColors.neonPurple,
+            title: "Zeno's orb on every screen",
+            subtitle: 'Tap it on any screen to talk to Zeno; hold it to type',
+            trailing: ValueListenableBuilder<bool>(
+              valueListenable: ZenoLauncherPrefs.enabled,
+              builder: (_, on, __) => _switch(
+                key: const Key('settings-zeno-orb-switch'),
+                value: on,
+                onChanged: ZenoLauncherPrefs.setEnabled,
+              ),
+            ),
+          ),
+          if (ZenoSession.maybeOf(context) != null)
+            MenuTile(
+              key: const Key('settings-zeno-tour'),
+              icon: Icons.explore_rounded,
+              tint: BrokaColors.neonCyan,
+              title: 'Take the tour with Zeno',
+              subtitle: 'A minute around BROKA, with Zeno showing you what it can do',
+              onTap: () => ZenoSession.maybeOf(context)?.startTour(),
             ),
         ]),
         const MenuSectionLabel('Security'),

@@ -2,11 +2,14 @@
 // shows while it works, and the weak spots that pass found in the screen.
 // Each test in the "weak spots" group failed on the code before it (see
 // CHANGES.md).
+//
+// "The agent's room" covers the HUD pass (2026-10-09, agent_hud.dart).
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/buy_agent/presentation/widgets/agent_hud.dart';
 import 'package:broka/screens/zeno_screen.dart';
 import 'package:broka/services/zeno_chat_store.dart';
 
@@ -407,6 +410,80 @@ void main() {
       expect(find.text('Found it.'), findsOneWidget);
       expect(find.text('Test item 1'), findsOneWidget);
       expect(find.text('1 exact match'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group("the agent's room", () {
+    testWidgets('a holographic room of its own, a HUD header, and the agent online', (tester) async {
+      await tester.pumpWidget(agent());
+      await run(tester, const Duration(seconds: 2));
+      expect(find.byType(AgentHoloBackdrop), findsOneWidget);
+      expect(find.byType(AgentHudBeam), findsOneWidget);
+      expect(find.text('BUYING AGENT'), findsOneWidget, reason: "the header's state tag");
+      expect(find.text('AGENT ONLINE · READY FOR YOUR BRIEF'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the assistant keeps the constellation', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: ZenoScreen(animateBackground: false)));
+      await run(tester, const Duration(milliseconds: 500));
+      expect(find.byType(AgentHoloBackdrop), findsNothing);
+      expect(find.byType(AgentHudBeam), findsNothing);
+    });
+
+    testWidgets('while Zeno thinks: waves, and the header says so', (tester) async {
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? const FakeResponse({
+              'reply': 'Which storage size?',
+              'phase': 'ASKING',
+              'slots': {'query': 'iphone'},
+              'questions_asked': 1,
+            }, delay: Duration(seconds: 1))
+          : null);
+      await tester.pumpWidget(agent());
+      await run(tester, const Duration(milliseconds: 500));
+      await type(tester, 'an iPhone');
+      await run(tester, const Duration(milliseconds: 300));
+      expect(find.byType(AgentThinkingWave), findsOneWidget);
+      expect(find.text('ZENO IS THINKING'), findsOneWidget);
+      expect(find.text('THINKING…'), findsOneWidget);
+      await run(tester, const Duration(seconds: 2));
+      expect(find.byType(AgentThinkingWave), findsNothing);
+      expect(find.text('Which storage size?'), findsOneWidget);
+    });
+
+    testWidgets('each result is locked on as it is dealt', (tester) async {
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? {
+              'reply': 'Two of them.',
+              'phase': 'RESULTS',
+              'verdict': 'EXACT',
+              'matches': [
+                for (var i = 1; i <= 2; i++) fakeListingJson(i)..['match_is_exact'] = true,
+              ],
+              'slots': {'query': 'item', 'category': 'Electronics', 'max_price': 2000},
+              'questions_asked': 0,
+            }
+          : null);
+      await tester.pumpWidget(agent());
+      await run(tester, const Duration(milliseconds: 500));
+      await type(tester, 'an item');
+      await run(tester, const Duration(seconds: 4));
+      expect(find.text('2 exact matches'), findsOneWidget);
+      expect(find.byType(AgentLockOn), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('fits a 320dp phone at 1.3x text', (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MediaQuery(
+        data: const MediaQueryData(size: Size(320, 568), textScaler: TextScaler.linear(1.3)),
+        child: agent(),
+      ));
+      await run(tester, const Duration(seconds: 2));
       expect(tester.takeException(), isNull);
     });
   });

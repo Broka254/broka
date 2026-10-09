@@ -21,6 +21,7 @@ import '../../../services/zeno_voice_controller.dart';
 import '../../../theme/motion.dart';
 import '../domain/zeno_action.dart';
 import '../zeno_session.dart';
+import '../zeno_tour.dart';
 import 'zeno_action_card.dart';
 import 'zeno_launcher.dart';
 import 'zeno_live_overlay.dart';
@@ -57,6 +58,23 @@ class _ZenoSessionHostState extends State<ZenoSessionHost> with WidgetsBindingOb
       // Nothing more said or opened while nobody is looking; Next goes on.
       widget.session.tour.hold();
     }
+  }
+
+  /// Back, with nothing under it to go back to (Home - where the tour
+  /// starts): it closes the tour rather than leave the app from under it.
+  /// The Navigator is asked first, so on any other screen back is back.
+  @override
+  Future<bool> didPopRoute() async {
+    final tour = widget.session.tour;
+    if (tour.phase == ZenoTourPhase.welcome) {
+      tour.decline();
+      return true;
+    }
+    if (tour.active) {
+      tour.end();
+      return true;
+    }
+    return false;
   }
 
   @override

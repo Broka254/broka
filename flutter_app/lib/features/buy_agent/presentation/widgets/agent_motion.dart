@@ -17,6 +17,10 @@
 //   AgentEntrance       a bubble arriving.
 //   AgentLiveEdge       the edge of a reply that is still being written.
 //
+// 2026-10-09: the HUD pass (agent_hud.dart) gave the agent a room of its
+// own and redrew the core as a reactor; the hunt card's edge turns, its
+// radar locks on to blips, and results are locked on as they are dealt.
+//
 // Every one honours the OS reduce-motion setting (BrokaMotion.reduced): the
 // layout is identical, the motion is not there. The looping ones drive a
 // painter from their controller rather than rebuilding, and sit behind a
@@ -29,6 +33,7 @@ import '../../../../main.dart' show BrokaColors;
 import '../../../../theme/motion.dart';
 import '../../../../utils/price_format.dart';
 import '../../../../widgets/zeno_avatar.dart';
+import 'agent_hud.dart';
 
 /// Home's Zeno CTA and the Buying Agent's header avatar share this tag, so
 /// Zeno flies from Home into the agent when it opens.
@@ -374,6 +379,8 @@ class _AgentCoreHeroState extends State<AgentCoreHero> with TickerProviderStateM
                     style: const TextStyle(
                         color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
               ),
+              const SizedBox(height: 10),
+              _BootLine(loop: _loop, enter: _enter),
             ]),
           ),
         ),
@@ -446,24 +453,30 @@ class _CorePainter extends CustomPainter {
   final Animation<double> loop;
   final Animation<double> enter;
 
+  // 2026-10-09: the core became a reactor - a HUD of rings around Zeno,
+  // each turning at its own whole multiple of the loop: a glow, a radar
+  // sweep, a ring of ticks, gauge arcs, a dashed orbit and a comet, with
+  // radar rings going out behind them all.
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
     final t = loop.value;
     final e = Curves.easeOutCubic.transform(enter.value.clamp(0.0, 1.0));
     final maxR = size.shortestSide / 2;
+    const tau = 2 * math.pi;
 
-    // A glow behind Zeno.
+    // A glow behind Zeno, breathing.
+    final breathe = 0.5 + 0.5 * math.sin(t * tau * 6);
     canvas.drawCircle(
       c,
-      maxR * 0.55,
+      maxR * 0.6,
       Paint()
         ..shader = RadialGradient(colors: [
-          _violet.withOpacity(0.28 * e),
-          _blue.withOpacity(0.10 * e),
+          _violet.withOpacity((0.30 + 0.08 * breathe) * e),
+          _blue.withOpacity(0.12 * e),
           Colors.transparent,
         ], stops: const [0.0, 0.55, 1.0])
-            .createShader(Rect.fromCircle(center: c, radius: maxR * 0.55)),
+            .createShader(Rect.fromCircle(center: c, radius: maxR * 0.6)),
     );
 
     // Radar rings going out, one every four seconds.
@@ -475,26 +488,80 @@ class _CorePainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.2
-          ..color = _cyan.withOpacity((1 - p) * 0.30 * e),
+          ..color = _cyan.withOpacity((1 - p) * 0.28 * e),
       );
     }
 
-    // A dashed orbit turning one way...
-    final r1 = maxR * 0.62;
-    final dash = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round
-      ..color = _violet.withOpacity(0.38 * e);
-    const dashes = 40;
-    final rot = -t * 2 * math.pi;
-    for (var k = 0; k < dashes; k++) {
-      canvas.drawArc(Rect.fromCircle(center: c, radius: r1),
-          rot + k * 2 * math.pi / dashes, math.pi / dashes, false, dash);
+    // A radar sweep turning round the core.
+    final sweepR = maxR * 0.5;
+    final sweepAt = (t * 4 % 1.0) * tau;
+    final sweepRect = Rect.fromCircle(center: c, radius: sweepR);
+    canvas.drawArc(
+      sweepRect,
+      sweepAt - 0.9,
+      0.9,
+      true,
+      Paint()
+        ..shader = SweepGradient(
+          colors: [_cyan.withOpacity(0), _cyan.withOpacity(0.22 * e)],
+          stops: const [0.0, 0.9 / (2 * math.pi)],
+          transform: GradientRotation(sweepAt - 0.9),
+        ).createShader(sweepRect),
+    );
+
+    // A ring of ticks, every fifth one longer - a dial, turning slowly.
+    final tickR = maxR * 0.5;
+    final tick = Paint()
+      ..strokeWidth = 1.1
+      ..strokeCap = StrokeCap.round;
+    const ticks = 72;
+    final dial = t * tau;
+    for (var k = 0; k < ticks; k++) {
+      final ang = dial + k * tau / ticks;
+      final long = k % 6 == 0;
+      tick.color = (long ? _cyan : _violet).withOpacity((long ? 0.7 : 0.35) * e);
+      final dir = Offset(math.cos(ang), math.sin(ang));
+      canvas.drawLine(c + dir * tickR, c + dir * (tickR + (long ? 7 : 3.5)), tick);
     }
 
-    // ...and a comet on the outer one turning the other, twice as fast.
-    final r2 = maxR * 0.80;
+    // Gauge arcs on a ring between, turning the other way.
+    final gaugeR = maxR * 0.62;
+    final gaugeRect = Rect.fromCircle(center: c, radius: gaugeR);
+    final back = -t * tau * 2;
+    for (final (start, sweep, color) in [
+      (0.0, 1.1, _violet),
+      (2.2, 0.55, _cyan),
+      (3.4, 1.5, _blue),
+      (5.3, 0.4, _cyan),
+    ]) {
+      canvas.drawArc(
+        gaugeRect,
+        back + start,
+        sweep,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3
+          ..strokeCap = StrokeCap.round
+          ..color = color.withOpacity(0.55 * e),
+      );
+    }
+
+    // A dashed orbit...
+    final r1 = maxR * 0.72;
+    final dash = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1
+      ..strokeCap = StrokeCap.round
+      ..color = _violet.withOpacity(0.32 * e);
+    const dashes = 48;
+    final rot = t * tau;
+    for (var k = 0; k < dashes; k++) {
+      canvas.drawArc(Rect.fromCircle(center: c, radius: r1), rot + k * tau / dashes, math.pi / dashes, false, dash);
+    }
+
+    // ...and a comet on the outer ring, twice as fast the other way.
+    final r2 = maxR * 0.86;
     final rect = Rect.fromCircle(center: c, radius: r2);
     canvas.drawCircle(
       c,
@@ -504,7 +571,7 @@ class _CorePainter extends CustomPainter {
         ..strokeWidth = 1
         ..color = _blue.withOpacity(0.16 * e),
     );
-    final start = (t * 2 % 1.0) * 2 * math.pi;
+    final start = (t * 2 % 1.0) * tau;
     const sweep = math.pi * 0.9;
     canvas.drawArc(
       rect,
@@ -525,10 +592,72 @@ class _CorePainter extends CustomPainter {
     canvas.drawCircle(head, 6,
         Paint()..color = _cyan.withOpacity(0.5 * e)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
     canvas.drawCircle(head, 2.2, Paint()..color = Colors.white.withOpacity(e));
+
+    // Four bearing marks on the outermost ring, like a sight.
+    final mark = Paint()
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..color = _cyan.withOpacity(0.6 * e);
+    for (var k = 0; k < 4; k++) {
+      final ang = k * math.pi / 2 + math.pi / 4;
+      final dir = Offset(math.cos(ang), math.sin(ang));
+      canvas.drawLine(c + dir * (maxR - 8), c + dir * (maxR - 1), mark);
+    }
   }
 
   @override
   bool shouldRepaint(_CorePainter old) => old.loop != loop || old.enter != enter;
+}
+
+/// "AGENT ONLINE", typed out as the core arrives, with a caret blinking
+/// after it - the agent saying it is ready. States a fact, no number.
+class _BootLine extends StatelessWidget {
+  const _BootLine({required this.loop, required this.enter});
+
+  final Animation<double> loop;
+  final Animation<double> enter;
+
+  static const text = 'AGENT ONLINE · READY FOR YOUR BRIEF';
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        label: 'Agent online, ready for your brief',
+        excludeSemantics: true,
+        child: AnimatedBuilder(
+          animation: Listenable.merge([loop, enter]),
+          builder: (_, __) {
+            final typed = const Interval(0.5, 1.0).transform(enter.value.clamp(0.0, 1.0));
+            final shown = (text.length * typed).round().clamp(0, text.length);
+            final caretOn = loop.value * 24 % 1.0 < 0.5;
+            // One line, smaller on a narrow phone rather than cut off.
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: BrokaColors.success,
+                  boxShadow: [BoxShadow(color: BrokaColors.success.withOpacity(0.8), blurRadius: 6)],
+                ),
+              ),
+              const SizedBox(width: 7),
+              Text(text.substring(0, shown),
+                  style: const TextStyle(
+                      color: _cyan, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.8)),
+              Opacity(
+                opacity: caretOn ? 1 : 0,
+                child: Container(width: 7, height: 12, margin: const EdgeInsets.only(left: 2), color: _cyan),
+              ),
+            ]),
+              ),
+            );
+          },
+        ),
+      );
 }
 
 /// Tell me -> I hunt -> I negotiate, with a light travelling along the line
@@ -547,18 +676,24 @@ class _StepsRow extends StatelessWidget {
       builder: (_, __) {
         // The light crosses once every three seconds (four per loop).
         final travel = (loop.value * 4) % 1.0;
+        // The steps share the width with the lines between them: at large
+        // text on a small phone their labels used to push the row off the
+        // screen (101px over at 320dp and 1.3x).
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Row(children: [
             for (var i = 0; i < steps.length; i++) ...[
               if (i > 0)
                 Expanded(child: _Connector(lit: _litBetween(travel, i - 1))),
-              _Step(
-                icon: steps[i].$1,
-                label: steps[i].$2,
-                glow: _glowAt(travel, i / (steps.length - 1)),
-                appear: Curves.easeOutBack.transform(
-                    Interval(0.45 + 0.13 * i, 0.8 + 0.07 * i).transform(enter.value.clamp(0.0, 1.0))),
+              Expanded(
+                flex: 2,
+                child: _Step(
+                  icon: steps[i].$1,
+                  label: steps[i].$2,
+                  glow: _glowAt(travel, i / (steps.length - 1)),
+                  appear: Curves.easeOutBack.transform(
+                      Interval(0.45 + 0.13 * i, 0.8 + 0.07 * i).transform(enter.value.clamp(0.0, 1.0))),
+                ),
               ),
             ],
           ]),
@@ -613,11 +748,15 @@ class _Step extends StatelessWidget {
               child: Icon(icon, size: 19, color: Color.lerp(BrokaColors.textMid, Colors.white, glow)),
             ),
             const SizedBox(height: 6),
-            Text(label,
-                style: TextStyle(
-                    color: Color.lerp(BrokaColors.textMid, BrokaColors.textHigh, glow),
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700)),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(label,
+                  maxLines: 1,
+                  style: TextStyle(
+                      color: Color.lerp(BrokaColors.textMid, BrokaColors.textHigh, glow),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700)),
+            ),
           ]),
         ),
       );
@@ -714,34 +853,51 @@ class _AgentScanCardState extends State<AgentScanCard> with TickerProviderStateM
         child: ScaleTransition(
           scale: Tween(begin: 0.85, end: 1.0).animate(enter),
           alignment: Alignment.centerLeft,
-          child: Container(
-            margin: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+            // The edge turns while the hunt is on.
+            child: AgentHoloBorder(
+              live: true,
+              borderRadius: BorderRadius.circular(20),
+              glow: 0.3,
+              child: Container(
             padding: const EdgeInsets.fromLTRB(10, 10, 14, 10),
             decoration: BoxDecoration(
-              color: BrokaColors.bgCard.withOpacity(0.95),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _cyan.withOpacity(0.35)),
-              boxShadow: [BoxShadow(color: _cyan.withOpacity(0.14), blurRadius: 18)],
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [BrokaColors.bgCard.withOpacity(0.96), const Color(0xF20A0F1F)],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [BoxShadow(color: _cyan.withOpacity(0.16), blurRadius: 22)],
             ),
             child: Row(children: [
               SizedBox(
-                width: 64,
-                height: 64,
+                width: 74,
+                height: 74,
                 child: Stack(alignment: Alignment.center, children: [
                   Positioned.fill(
                       child: RepaintBoundary(child: CustomPaint(painter: _RadarPainter(_c)))),
-                  const ZenoAvatar(size: 24),
+                  const ZenoAvatar(size: 26),
                 ]),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('ZENO IS HUNTING',
-                      style: TextStyle(
-                          color: _cyan,
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.6)),
+                  const Row(children: [
+                    Flexible(
+                      child: Text('ZENO IS HUNTING',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: _cyan,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.6)),
+                    ),
+                    SizedBox(width: 8),
+                    AgentHudTag('LIVE', color: BrokaColors.success),
+                  ]),
                   const SizedBox(height: 4),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 380),
@@ -791,6 +947,8 @@ class _AgentScanCardState extends State<AgentScanCard> with TickerProviderStateM
                 ]),
               ),
             ]),
+          ),
+            ),
           ),
         ),
       ),
@@ -859,6 +1017,30 @@ class _RadarPainter extends CustomPainter {
       canvas.drawCircle(p, 4.5,
           Paint()..color = _cyan.withOpacity(0.45 * glow)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
       canvas.drawCircle(p, 1.8, Paint()..color = Colors.white.withOpacity(glow));
+      // Just swept: brackets lock on to it.
+      if (glow > 0.75) {
+        final k = (glow - 0.75) / 0.25;
+        final s = 7.0 - 2.5 * k;
+        final bracket = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = Colors.white.withOpacity(0.8 * k);
+        for (final (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]) {
+          final corner = p + Offset(dx * s, dy * s);
+          canvas.drawLine(corner, corner - Offset(dx * 3, 0), bracket);
+          canvas.drawLine(corner, corner - Offset(0, dy * 3), bracket);
+        }
+      }
+    }
+
+    // Ticks round the rim, like a scope's bezel.
+    final tick = Paint()
+      ..strokeWidth = 1
+      ..color = _cyan.withOpacity(0.4);
+    for (var k = 0; k < 36; k++) {
+      final ang = k * math.pi / 18;
+      final dir = Offset(math.cos(ang), math.sin(ang));
+      canvas.drawLine(c + dir * (r - (k % 3 == 0 ? 4 : 2)), c + dir * r, tick);
     }
   }
 
@@ -972,12 +1154,7 @@ class AgentBriefStrip extends StatelessWidget {
         child: Row(children: [
           const Padding(
             padding: EdgeInsets.only(right: 8),
-            child: Text('BRIEF',
-                style: TextStyle(
-                    color: BrokaColors.textMid,
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.6)),
+            child: AgentHudTag('BRIEF'),
           ),
           for (var i = 0; i < chips.length; i++)
             _BriefChip(
@@ -1072,7 +1249,7 @@ class AgentMatchCarousel extends StatefulWidget {
     required this.exact,
     required this.itemBuilder,
     this.dealIn = false,
-    this.itemHeight = 300,
+    this.itemHeight = 312,
   });
 
   final int count;
@@ -1163,9 +1340,15 @@ class _AgentMatchCarouselState extends State<AgentMatchCarousel>
             itemCount: widget.count,
             onPageChanged: (i) => setState(() => _page = i),
             itemBuilder: (context, i) {
+              // Each result locked on as it is dealt: brackets closing on
+              // it in the verdict's colour.
               final card = Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: widget.itemBuilder(context, i),
+                padding: const EdgeInsets.fromLTRB(6, 6, 18, 6),
+                child: AgentLockOn(
+                  tone: tone,
+                  play: widget.dealIn,
+                  child: widget.itemBuilder(context, i),
+                ),
               );
               if (still) return card;
               return AnimatedBuilder(

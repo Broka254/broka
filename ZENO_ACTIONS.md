@@ -63,10 +63,61 @@ It ends, and releases the microphone:
 The microphone also stops, with the session still on:
 - when another voice session takes it (`ZenoVoiceController`'s one-holder
   rule);
-- after a minute with nothing said, since the speech provider bills by the
-  minute.
+- after a long silence, since the speech provider bills by the minute -
+  but not before Zeno has checked in (below).
 
 A call still waits for a tap, from the pill as from anywhere.
+
+## Keeping the user's voice (2026-10-09)
+
+- **Zeno's own voice no longer pauses the microphone.** `record` paused
+  capture on any loss of Android audio focus, for good, and Zeno's reply
+  player takes focus: the session said "Listening" and heard nothing
+  after Zeno's first answer. It records with `AudioInterruptionMode.none`.
+- **A microphone that stops is opened again.** Audio arrives every few
+  dozen milliseconds while it runs; `stallAfter` (4s) without a frame is a
+  stopped microphone, and the controller restarts the session keeping the
+  transcript. Two restarts with nothing back and it says the microphone
+  stopped.
+- **A noisy room still ends a turn** (Deepgram `utterance_end_ms=1000`).
+- **Words said while Zeno thinks are sent after its answer**, not dropped.
+
+## Checking in on a silence (2026-10-09)
+
+Full screen: a check-in after 14s (what it says follows what came before -
+nothing yet, a question Zeno asked, an answer), "are you still there?"
+18s later, then Zeno says it is stepping back and the microphone stops
+16s after that. Docked over a screen Zeno opened, one check-in after 45s,
+then rest after 40s. Any word from the user starts the count again. The
+lines (`zeno_check_ins.dart`) are written, not generated - instant, free,
+and there when the providers are down - vary, never repeat back to back,
+use the first name some of the time, and are Swahili for Swahili and Sheng
+speakers. A check-in is not a turn: it is shown and said, and not added
+to the conversation.
+
+## The tour (2026-10-09)
+
+`zeno_tour.dart`: offered once to an account made on this phone
+(`ZenoTourStore`, set at sign-up), the first time Home - the first route,
+not the splash or sign-in - is in front. Six steps, each opening its
+screen with the session's replace-the-last-one rule (`tourNavigate`), then
+a demo that hands what the user would love to buy to the Buying Agent
+(`FIND_FOR_ME`, ending the session as a spoken one does). Scripted in
+English and Swahili; no model call. While it runs, what is said reaches
+`ZenoTour.handleSpeech` first: next / back / again / stop, and in the demo
+the thing to hunt; anything else ends the tour and goes to the server as
+usual. "Show me around", "give me a tour", "nitembeze" start it, said or
+typed (`isTourRequest` - not "find me a tour guide").
+
+## Zeno's orb on every screen (2026-10-09)
+
+`zeno_launcher.dart`, drawn by the session host: a signed-in user's way
+into voice from any screen. Tap: voice mode, grown from the orb. Hold: the
+Zeno tab. Drag: anywhere, remembered. Hidden on `/splash`, `/auth`,
+`/voip-call`, `/selfie`, `/zeno`, `/buying-agent` (the Buying Agent's
+routes are named for this), any `PopupRoute`, a screen that calls
+`ZenoLauncher.hideOver` (the listing camera), while the keyboard is up and
+while the session is on screen. Settings has its switch.
 
 ## Asking about a listing (2026-09-29)
 

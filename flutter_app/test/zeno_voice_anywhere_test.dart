@@ -27,6 +27,7 @@ import 'package:broka/features/zeno_assistant/zeno_check_ins.dart';
 import 'package:broka/features/zeno_assistant/zeno_session.dart';
 import 'package:broka/features/zeno_assistant/zeno_tour.dart';
 import 'package:broka/screens/listing_search_screen.dart';
+import 'package:broka/screens/settings_screen.dart';
 import 'package:broka/screens/zeno_screen.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/broka_tts.dart';
@@ -485,6 +486,19 @@ void main() {
       expect(find.text('MEET ZENO'), findsNothing);
     });
 
+    testWidgets("back closes the welcome, rather than leaving the app from under it", (tester) async {
+      ApiService.currentUserId = 'new-3';
+      await ZenoTourStore.markNewAccount('new-3');
+      await tester.pumpWidget(app());
+      await run(tester, const Duration(seconds: 3));
+      expect(session.tour.phase, ZenoTourPhase.welcome);
+      final handled = await tester.binding.handlePopRoute();
+      await run(tester, const Duration(seconds: 1));
+      expect(handled, isTrue);
+      expect(session.tour.active, isFalse);
+      expect(find.text('Home'), findsOneWidget, reason: 'still on Home');
+    });
+
     testWidgets('not over a screen sign-up was for: it waits for Home', (tester) async {
       ApiService.currentUserId = 'new-2';
       await ZenoTourStore.markNewAccount('new-2');
@@ -613,6 +627,22 @@ void main() {
       expect(orb, findsNothing, reason: 'switched off in Settings');
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getBool('zeno_launcher_on'), isFalse);
+    });
+
+    testWidgets("Settings' switch turns it off, and back on", (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(const MaterialApp(home: SettingsScreen(animateBackground: false)));
+      await run(tester, const Duration(milliseconds: 300));
+      final toggle = find.byKey(const Key('settings-zeno-orb-switch'));
+      await tester.scrollUntilVisible(toggle, 200, scrollable: find.byType(Scrollable).first);
+      await tester.tap(toggle);
+      await run(tester, const Duration(milliseconds: 300));
+      expect(ZenoLauncherPrefs.enabled.value, isFalse);
+      await tester.tap(toggle);
+      await run(tester, const Duration(milliseconds: 300));
+      expect(ZenoLauncherPrefs.enabled.value, isTrue);
     });
 
     testWidgets('dragged across, it stays on the side it was put', (tester) async {

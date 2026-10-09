@@ -56,6 +56,7 @@ class ZenoTourStep {
     required this.title,
     required this.line,
     required this.destination,
+    this.cardAtTop = false,
   });
 
   final String id;
@@ -66,6 +67,10 @@ class ZenoTourStep {
 
   /// The screen it opens (a kZenoDestinations key).
   final String destination;
+
+  /// The card goes at the top, out of the way of what this step is about:
+  /// the Sell tab at the bottom, Zeno's orb at the edge.
+  final bool cardAtTop;
 }
 
 /// Every line of the tour, in the user's language.
@@ -147,6 +152,7 @@ class ZenoTourScript {
             id: 'sell',
             title: 'Kuuza',
             destination: 'home',
+            cardAtTop: true,
             line: 'Una kitu cha kuuza? Gusa Sell upige picha - naweza kuandika tangazo lote kwa ajili '
                 'yako kutoka kwenye picha hiyo.',
           ),
@@ -154,6 +160,7 @@ class ZenoTourScript {
             id: 'anywhere',
             title: 'Niko kila mahali',
             destination: 'home',
+            cardAtTop: true,
             line: 'Na niko karibu kila wakati. Unaona duara langu pembeni mwa skrini? Ligusa kwenye '
                 'skrini yoyote uongee nami - naweza kufungua kurasa, kutafuta, kukuongoza hatua kwa '
                 'hatua, hata kumpigia muuzaji simu.',
@@ -208,6 +215,7 @@ class ZenoTourScript {
           id: 'sell',
           title: 'Selling',
           destination: 'home',
+          cardAtTop: true,
           line: 'Got something to sell? Tap Sell and take a photo - I can write the whole listing '
               'for you from it.',
         ),
@@ -215,6 +223,7 @@ class ZenoTourScript {
           id: 'anywhere',
           title: "I'm everywhere",
           destination: 'home',
+          cardAtTop: true,
           line: "And I'm never more than a tap away. See my orb at the edge of your screen? Tap it "
               'on any screen and just talk - I can open screens, search, guide you step by step, '
               'even call a seller for you.',

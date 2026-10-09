@@ -45,8 +45,9 @@ class ZenoTourLayer extends StatelessWidget {
             _ => null,
           };
           // After the demo the Buying Agent is hunting below: its composer
-          // is at the bottom, so the last card goes at the top.
-          final atTop = tour.phase == ZenoTourPhase.finale && tour.demoRan;
+          // is at the bottom, so the last card goes at the top - as do the
+          // steps about what is at the bottom or the edge.
+          final atTop = (tour.phase == ZenoTourPhase.finale && tour.demoRan) || (tour.step?.cardAtTop ?? false);
           return Stack(fit: StackFit.expand, children: [
             AnimatedPositioned(
               duration: BrokaMotion.of(context, BrokaMotion.standard),

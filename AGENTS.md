@@ -153,7 +153,8 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 | Browsing by category, type of item and brand (Home's category cards, Zones, type screens, card artwork) | `flutter_app/lib/features/categories/` (`category_visual.dart`, `subcategory_visual.dart`, `presentation/subcategory_screen.dart`), `backend/api/domains/categories/seed.py` (`BRAND_SUGGESTIONS`) |
 | Images | `backend/api/domains/media/`, `backend/api/core/image_processing.py` |
 | Zeno (the AI broker) | `backend/api/routers/negotiate.py`, `backend/api/domains/ai_broker/`, `ZENO_ACTIONS.md` |
-| Zeno as the assistant (the Zeno tab, voice mode, the pill across screens, guides) | `backend/api/domains/zeno_assistant/`, `flutter_app/lib/features/zeno_assistant/` (`zeno_session.dart`), `ZENO_ACTIONS.md` |
+| Zeno as the assistant (the Zeno tab, voice mode, the pill across screens, the orb on every screen, check-ins, the new-user tour, guides) | `backend/api/domains/zeno_assistant/`, `flutter_app/lib/features/zeno_assistant/` (`zeno_session.dart`, `zeno_tour.dart`, `presentation/zeno_launcher.dart`), `ZENO_ACTIONS.md` |
+| The Buying Agent's screen (its HUD, motion and results) | `flutter_app/lib/screens/zeno_screen.dart` (buying mode), `flutter_app/lib/features/buy_agent/presentation/widgets/` (`agent_motion.dart`, `agent_hud.dart`) |
 | Calls | `backend/api/routers/calls.py`, `CALLING.md` |
 | Push notifications (calls, messages, alerts to a closed app) | `backend/api/core/push_devices.py`, `message_push.py`, `flutter_app/lib/services/notification_service.dart`, `NOTIFICATIONS.md` |
 | Scheduled work | `backend/api/core/workers.py` (the 5-minute sweep) |

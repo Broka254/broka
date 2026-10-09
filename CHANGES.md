@@ -1,3 +1,72 @@
+# Zeno's voice that kept listening, a tour for new users, Zeno on every screen, the Buying Agent's room (2026-10-09)
+
+Raised by the owner: voice mode stopped capturing what was said after a
+while; Zeno should check in when the user goes quiet; new accounts should
+be shown around by Zeno; voice should be reachable from any screen; and the
+Buying Agent should feel premium and futuristic.
+
+**Voice mode went deaf after Zeno first spoke.** `record`'s default
+`audioInterruption` (pause) takes Android's audio focus and pauses capture
+on any focus loss, with no resume - and BrokaTts's `AudioPlayer` requests
+focus every time Zeno answers. The Deepgram socket stayed open on its own
+KeepAlive, so nothing failed: the screen said "Listening" and nothing the
+user said was captured, for the rest of the session. Now:
+- the microphone records with `AudioInterruptionMode.none`
+  (`realtime_stt.dart`);
+- a microphone that stops delivering audio while it should be streaming is
+  opened again, keeping what was already transcribed; after two restarts
+  that bring nothing back the session says the microphone stopped, instead
+  of pretending to listen (`ZenoVoiceController`, `stallAfter`);
+- Deepgram is asked for `utterance_end_ms`, so a turn ends in a noisy room
+  too (the `UtteranceEnd` it handled was never requested; endpointing alone
+  can wait forever for silence a street never gives);
+- words said while Zeno is still working out its answer are kept and sent
+  after it (`ZenoSession.send` used to return early and drop them).
+
+**Zeno checks in instead of going quiet** (`zeno_check_ins.dart`). The
+microphone used to stop after a minute of silence without a word. Now, full
+screen, Zeno checks in after 14s ("Xavier, should I carry on?"), asks
+whether the user is still there 18s later, and after 16s more says it is
+stepping back and stops the microphone. Docked over a screen it opened, the
+user is reading: one gentle check-in after 45s, then rest. Lines vary,
+never repeat back to back, use the first name some of the time, and are
+Swahili for Swahili and Sheng speakers. Written, not generated: on time,
+free, and working when every AI provider is down.
+
+**Zeno shows new users around** (`zeno_tour.dart`, `zeno_tour_layer.dart`).
+An account made on this phone is offered the tour the first time Home is
+in front (not over the screen sign-up was for), once. "Meet Zeno" full
+screen, then six steps - Home, Search, the Buying Agent, the Inbox,
+selling, and Zeno's orb - each opening its screen while Zeno says what it
+is for, moving on by itself or with Next/Back; then "tell me one thing
+you'd love to buy" and Zeno hunts it with the Buying Agent there and then.
+Scripted (no model call), works without the microphone, and with it hears
+"next", "go back", "say that again" and "stop" (English and Swahili);
+anything else ends the tour and is answered as usual. Run again from How
+BROKA works, Settings, or by saying or typing "show me around".
+
+**Voice from any screen** (`zeno_launcher.dart`). Zeno's orb floats at the
+edge of every signed-in screen: tap to talk (voice mode grows out of it),
+hold to type, drag it anywhere and it stays there. It keeps off sign-in,
+calls, cameras, the Zeno tab and the Buying Agent (their own microphones),
+dialogs and the keyboard. Settings can turn it off.
+
+**The Buying Agent's room** (`agent_hud.dart`). A holographic backdrop of
+its own (aurora, a perspective grid floor, rising motes, a passing scan
+line, a burst of light on arrival), a HUD header with the agent's state as
+a tag and a beam of light under it, the core redrawn as a reactor (dial
+ticks, gauge arcs, a radar sweep) with "AGENT ONLINE · READY FOR YOUR
+BRIEF" typed out, glass bubbles whose edge turns while Zeno writes,
+Zeno's thinking as waves, the hunt card with a turning edge and a radar
+that locks on to blips, each result locked on with brackets as it is
+dealt, and a composer whose edge comes alive as the buyer types. All of it
+honours reduce-motion. Also fixed while there: the core's three steps
+overflowed a 320dp phone at 1.3x text by 101px.
+
+Tests: `test/zeno_voice_anywhere_test.dart` (each fix's test fails on the
+code before it), `test/buy_agent_ui_test.dart` ("the agent's room"), and
+`zeno_assistant_test.dart`'s quiet test rewritten for the check-ins.
+
 # A splash with no box, likes and saves, a rating that moves, no payments for now (2026-10-09)
 
 Raised by the owner from a phone, with a screenshot of the splash.

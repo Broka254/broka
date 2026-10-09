@@ -51,6 +51,12 @@
 // switches on with a burst. The same pass fixed the screen's weak spots -
 // see CHANGES.md and test/buy_agent_ui_test.dart.
 //
+// 2026-10-09: the Buying Agent got its own room (agent_hud.dart): a
+// holographic backdrop instead of the constellation, a HUD header with a
+// beam of light under it, glass bubbles with turning edges, Zeno's
+// thinking as waves, results locked on with brackets as they are dealt,
+// and a composer whose edge comes alive as the buyer types.
+//
 // 2026-09-29: a listing's "Ask Zeno" card opens the assistant about that
 // listing (aboutListing): pinned under the header, its id sent with every
 // turn so the server can read it to Zeno, suggestions about it, and its own
@@ -84,6 +90,7 @@ import '../models/models.dart';
 // CI red on the first push of the conversational buying agent.
 import '../core/utils/result.dart';
 import '../features/buy_agent/data/repositories/buy_agent_repository.dart';
+import '../features/buy_agent/presentation/widgets/agent_hud.dart';
 import '../features/buy_agent/presentation/widgets/agent_motion.dart';
 import '../features/premium/presentation/premium_upsell.dart';
 import '../features/safe_payment/payments_shown.dart';
@@ -1314,21 +1321,7 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   @override
   Widget build(BuildContext context) {
-    // The same constellation as Home and every screen reached from it.
-    final conversation = ConstellationBackground(
-      animate: widget.animateBackground,
-      child: DecoratedBox(
-        // Zeno's colour washing down from the top, as a category's does
-        // in its Zone - over the constellation, fading to transparent.
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.topCenter,
-            radius: 1.2,
-            colors: [BrokaColors.neonPurple.withOpacity(0.14), Colors.transparent],
-            stops: const [0.0, 0.6],
-          ),
-        ),
-        child: SafeArea(
+    final content = SafeArea(
           child: Stack(children: [
             Column(children: [
               _buildHeader(),
@@ -1353,9 +1346,27 @@ class _ZenoScreenState extends State<ZenoScreen>
             ]),
             Positioned.fill(child: AgentConfetti(burst: _confetti)),
           ]),
-        ),
-      ),
-    );
+        );
+    // The Buying Agent's own room; the assistant has the constellation of
+    // Home and every screen reached from it.
+    final conversation = _isBuying
+        ? AgentHoloBackdrop(animate: widget.animateBackground, child: content)
+        : ConstellationBackground(
+            animate: widget.animateBackground,
+            child: DecoratedBox(
+              // Zeno's colour washing down from the top, as a category's
+              // does in its Zone - over the constellation, fading out.
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.topCenter,
+                  radius: 1.2,
+                  colors: [BrokaColors.neonPurple.withOpacity(0.14), Colors.transparent],
+                  stops: const [0.0, 0.6],
+                ),
+              ),
+              child: content,
+            ),
+          );
     return Scaffold(
       backgroundColor: BrokaColors.bg,
       // Voice floats OVER the conversation rather than replacing it: the
@@ -1388,11 +1399,20 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// Zeno, a glowing title, and square controls on the right.
   Widget _buildHeader() {
     final lang = _langByKey(_langKey);
-    return Container(
+    final bar = Container(
       padding: const EdgeInsets.fromLTRB(6, 6, 12, 10),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6))),
-      ),
+      decoration: _isBuying
+          // Glass over the room, and a beam of light for an edge (below).
+          ? BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [BrokaColors.bg.withOpacity(0.85), BrokaColors.bg.withOpacity(0.35)],
+              ),
+            )
+          : BoxDecoration(
+              border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6))),
+            ),
       child: Row(children: [
         IconButton(
           tooltip: 'Back',
@@ -1427,6 +1447,26 @@ class _ZenoScreenState extends State<ZenoScreen>
             const ZoneGlowText('Zeno',
                 gradient: _zenoGradient, fontSize: 20, maxLines: 1, letterSpacing: 1.6),
             const SizedBox(height: 3),
+            if (_isBuying)
+              // What the agent is doing, as a HUD tag that takes its colour.
+              Row(children: [
+                Flexible(
+                  flex: 3,
+                  child: AnimatedSwitcher(
+                    duration: BrokaMotion.quick,
+                    child: AgentHudTag(_agentState.$1.toUpperCase(),
+                        key: ValueKey(_agentState.$1), color: _agentState.$2),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text('${lang.flag} ${lang.name}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+                ),
+              ])
+            else
             Row(children: [
               // The agent's state, not only that it is online: the dot
               // takes the colour of what it is doing and breathes while it
@@ -1487,6 +1527,8 @@ class _ZenoScreenState extends State<ZenoScreen>
         ],
       ]),
     );
+    if (!_isBuying) return bar;
+    return Column(mainAxisSize: MainAxisSize.min, children: [bar, AgentHudBeam(busy: _typing)]);
   }
 
   /// The listing being asked about, pinned under the header: what it is,
@@ -1597,6 +1639,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           child: _ZenoBubble(
             message: turn.message,
             photo: turn.photo,
+            holo: _isBuying,
             stream: writing,
             onStreamed: () => _streamed(turn),
             onGrow: _followStream,
@@ -1813,10 +1856,12 @@ class _ZenoScreenState extends State<ZenoScreen>
     steps: _searchPhases.length,
   );
 
-  Widget _buildTypingIndicator() => const Padding(
-    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-    child: AgentEntrance(play: true, fromUser: false, child: ZenoTypingBubble()),
-  );
+  Widget _buildTypingIndicator() => _isBuying
+      ? const AgentEntrance(play: true, fromUser: false, child: AgentThinkingWave())
+      : const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: AgentEntrance(play: true, fromUser: false, child: ZenoTypingBubble()),
+        );
 
   /// Under Zeno's newest reply: the link it offers, then the replies the
   /// user can tap - each sent exactly as if typed, so the conversation
@@ -1895,7 +1940,7 @@ class _ZenoScreenState extends State<ZenoScreen>
             ),
             child: Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: Material(
+              child: _isBuying ? _holoChip(s.$1, s.$2) : Material(
                 color: BrokaColors.bgCard.withOpacity(0.86),
                 shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonPurple.withOpacity(0.35))),
                 child: InkWell(
@@ -1918,25 +1963,80 @@ class _ZenoScreenState extends State<ZenoScreen>
     ),
   );
 
+  /// An opener on the Buying Agent: glass with a gradient hairline, its
+  /// emoji in a lit well.
+  Widget _holoChip(String emoji, String text) => DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(22),
+          gradient: LinearGradient(colors: [
+            BrokaColors.neonPurple.withOpacity(0.8),
+            BrokaColors.neonCyan.withOpacity(0.6),
+          ]),
+          boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.25), blurRadius: 10)],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(1),
+          child: Material(
+            color: const Color(0xF20B1022),
+            shape: const StadiumBorder(),
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: () => _send(text),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(5, 0, 14, 0),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                    width: 26,
+                    height: 26,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        BrokaColors.neonPurple.withOpacity(0.45),
+                        BrokaColors.neonBlue.withOpacity(0.08),
+                      ]),
+                    ),
+                    child: Text(emoji, style: const TextStyle(fontSize: 13)),
+                  ),
+                  const SizedBox(width: 7),
+                  Text(text,
+                      style: const TextStyle(
+                          color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+
   /// Home's search pill as the composer: the same fill, outline and focus
-  /// glow, so typing to Zeno looks like typing anywhere else in BROKA.
+  /// glow, so typing to Zeno looks like typing anywhere else in BROKA. On
+  /// the Buying Agent its edge is a gradient that turns while the buyer
+  /// types or Zeno works.
   Widget _buildInputBar() => Padding(
     padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(
-          child: AnimatedContainer(
+          child: AgentHoloBorder(
+            live: _isBuying && (_composerFocused || _typing),
+            borderRadius: BorderRadius.circular(26),
+            width: _isBuying ? (_composerFocused ? 1.6 : 1.2) : 0,
+            glow: _isBuying ? (_composerFocused ? 0.35 : 0.12) : 0,
+            child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             constraints: const BoxConstraints(minHeight: 50),
             decoration: BoxDecoration(
-              color: BrokaColors.bgCard.withOpacity(0.92),
+              color: _isBuying ? const Color(0xF00B1022) : BrokaColors.bgCard.withOpacity(0.92),
               borderRadius: BorderRadius.circular(26),
               // The composer doesn't highlight for listening - the voice
               // card above owns that state, and a second "recording" outline
               // down here read as a competing session.
               border: Border.all(
-                color: BrokaColors.neonBlue.withOpacity(_composerFocused ? 0.85 : 0.45),
+                color: _isBuying
+                    ? Colors.transparent
+                    : BrokaColors.neonBlue.withOpacity(_composerFocused ? 0.85 : 0.45),
                 width: _composerFocused ? 1.6 : 1.2,
               ),
               boxShadow: _composerFocused
@@ -1953,9 +2053,13 @@ class _ZenoScreenState extends State<ZenoScreen>
                 if (_isBuying)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 14, 4, 14),
-                    child: Icon(Icons.auto_awesome_rounded,
-                        size: 18,
-                        color: _composerFocused ? BrokaColors.neonBlue : BrokaColors.textMid),
+                    child: ShaderMask(
+                      blendMode: BlendMode.srcIn,
+                      shaderCallback: (r) => const LinearGradient(
+                        colors: [BrokaColors.neonPurple, BrokaColors.neonCyan],
+                      ).createShader(r),
+                      child: const Icon(Icons.auto_awesome_rounded, size: 18),
+                    ),
                   )
                 else
                   ChatComposerAction(
@@ -2017,6 +2121,7 @@ class _ZenoScreenState extends State<ZenoScreen>
             ),
             ]),
           ),
+          ),
         ),
         ChatSendButton(visible: _hasDraft || _photo != null, busy: _typing, onTap: () => _send()),
       ],
@@ -2074,8 +2179,12 @@ class _ZenoBubble extends StatelessWidget {
   final bool stream;
   final VoidCallback? onStreamed;
   final VoidCallback? onGrow;
+
+  /// The Buying Agent's glass: a gradient edge that turns while Zeno writes.
+  final bool holo;
   const _ZenoBubble({
     required this.message, this.photo, this.stream = false, this.onStreamed, this.onGrow,
+    this.holo = false,
   });
 
   static const _zenoCorners = BorderRadius.only(
@@ -2094,56 +2203,95 @@ class _ZenoBubble extends StatelessWidget {
         mainAxisAlignment: isAI ? MainAxisAlignment.start : MainAxisAlignment.end,
         children: [
           if (isAI) ...[
-            const ZenoAvatar(size: 28),
+            if (holo)
+              Container(
+                padding: const EdgeInsets.all(1.6),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const SweepGradient(colors: [
+                    BrokaColors.neonPurple, BrokaColors.neonCyan, BrokaColors.neonBlue, BrokaColors.neonPurple,
+                  ]),
+                  boxShadow: [BoxShadow(color: BrokaColors.neonCyan.withOpacity(0.35), blurRadius: 8)],
+                ),
+                child: const ZenoAvatar(size: 26),
+              )
+            else
+              const ZenoAvatar(size: 28),
             const SizedBox(width: 8),
           ],
           Flexible(
             // A light runs round the edge of a reply while it is written.
-            child: AgentLiveEdge(
+            child: holo
+                ? (isAI
+                    ? AgentHoloBorder(
+                        live: stream,
+                        borderRadius: _zenoCorners,
+                        width: 1.1,
+                        glow: stream ? 0.3 : 0.08,
+                        child: _body(context, isAI),
+                      )
+                    : _body(context, isAI))
+                : AgentLiveEdge(
               active: isAI && stream,
               borderRadius: _zenoCorners,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                constraints: BoxConstraints(
-                    maxWidth: MediaQuery.of(context).size.width * 0.82),
-                decoration: BoxDecoration(
-                  color: isAI ? BrokaColors.bgCard.withOpacity(0.92) : null,
-                  gradient: isAI
-                      ? null
-                      : const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
-                  borderRadius: isAI
-                      ? _zenoCorners
-                      : const BorderRadius.only(
-                          topLeft: Radius.circular(16),
-                          topRight: Radius.circular(4),
-                          bottomLeft: Radius.circular(16),
-                          bottomRight: Radius.circular(16)),
-                  border: isAI
-                      ? Border.all(color: BrokaColors.neonPurple.withOpacity(0.30))
-                      : null,
-                  boxShadow: isAI
-                      ? null
-                      : [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 10)],
-                ),
-                child: isAI
-                    ? ZenoStreamingText(
-                        message.content,
-                        key: ObjectKey(message),
-                        style: const TextStyle(
-                            color: BrokaColors.textHigh, fontSize: 14.5, height: 1.5),
-                        animate: stream,
-                        onDone: onStreamed,
-                        onGrow: onGrow,
-                      )
-                    : _userContent(context),
-              ),
+              child: _body(context, isAI),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _body(BuildContext context, bool isAI) {
+    const userCorners = BorderRadius.only(
+        topLeft: Radius.circular(16),
+        topRight: Radius.circular(4),
+        bottomLeft: Radius.circular(16),
+        bottomRight: Radius.circular(16));
+    final BoxDecoration decoration;
+    if (isAI && holo) {
+      // Glass, tinted with Zeno's violet; the edge is AgentHoloBorder's.
+      decoration = BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [const Color(0xF0161C3C), BrokaColors.bgCard.withOpacity(0.86)],
+        ),
+        borderRadius: _zenoCorners,
+      );
+    } else if (isAI) {
+      decoration = BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.92),
+        borderRadius: _zenoCorners,
+        border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.30)),
+      );
+    } else {
+      decoration = BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: holo
+              ? const [BrokaColors.neonPurple, BrokaColors.neonBlue, Color(0xFF1FA9C9)]
+              : const [BrokaColors.neonPurple, BrokaColors.neonBlue],
+        ),
+        borderRadius: userCorners,
+        boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(holo ? 0.32 : 0.18), blurRadius: holo ? 16 : 10)],
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
+      decoration: decoration,
+      child: isAI
+          ? ZenoStreamingText(
+              message.content,
+              key: ObjectKey(message),
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14.5, height: 1.5),
+              animate: stream,
+              onDone: onStreamed,
+              onGrow: onGrow,
+            )
+          : _userContent(context),
     );
   }
 }
