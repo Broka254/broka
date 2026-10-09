@@ -7,6 +7,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../../../services/api_service.dart';
 import '../../domain/models/my_account.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class AccountRepository {
   final ApiClient _client;
@@ -16,9 +17,9 @@ class AccountRepository {
     try {
       return Success(await call());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 

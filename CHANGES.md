@@ -1,3 +1,51 @@
+# Errors in plain words, a one-time splash, average response time, saves and a stronger sell model (2026-10-09)
+
+Raised by the owner from a phone.
+
+**Errors never show the app's insides** (`flutter_app/lib/core/errors/user_facing_error.dart`).
+The login screen showed "ClientException with SocketFailed host lookup:
+'api.broka.co.ke' (OS Error ... errno = 7), uri=https://api.broka.co.ke/auth/login"
+to a phone with no signal. Every repository, the screens that showed
+`e.toString()`, the call screen's errors and the wizard error banner now go
+through `userFacingError` / `sanitizeErrorText`: a network failure is
+"Can't reach BROKA right now. Check your internet connection", and a message
+carrying an address, an OS error, a type name or a stack frame is replaced
+with a plain one. The server's own messages for people are kept.
+
+**The splash plays once.** The boot sequence (shortened from ten seconds
+to under five) plays the first time BROKA is opened on a phone; after that
+the app opens straight onto Home, with the logo for the frame it takes to
+decide where to go. The startup sound, its switch in Settings and the wave
+along the bottom of the splash are gone.
+
+**Average response time.** A seller's response time is now the mean of
+their waits (capped at 48h each), not the median, which hid slow replies
+as long as most were quick. Labelled "Avg response" in the app; the API
+field keeps its name for older builds.
+
+**Stock left on a listing.** A panel under the price: "12 of 100 bags
+left" with a bar, "100 bags available", or "Only 1 available"; "Selling
+fast" when a tenth or less is left. A listing opened from a list now
+fetches itself, so the count is current (and the view counts).
+
+**Unread, not total, on the chat badges.** The badge on "Chat directly"
+in Zeno's room counted every direct message on the thread, the user's own
+included, against a count saved only when that button was tapped ("17" on
+a thread with nothing new); the Zeno badge in the direct chat did the same
+with Zeno's messages. Both now come from the server's own unread counts,
+added to `GET /negotiate/{id}/read-status` (`unread`, `zeno_unread`).
+
+**Saves, and a sell probability built on what is measured.** See
+SELLER_METRICS.md, Phase 4. A heart on every listing, a Saved items screen,
+and the model rebuilt: smoothed save rate, every buyer who wrote, offers,
+photos and description, staleness.
+
+**Seller Dashboard, easier to find and better to look at.** Its own glowing
+card under the profile on the Menu. The dashboard's line graphs glow, run a
+gradient, fade the area beneath, mark each point with a hollow dot and the
+latest with a halo and a guide to its date; the revenue chart traces in and
+labels its latest value.
+
 # Paying with escrow services, and no auctions for launch (2026-10-08)
 
 Raised by the owner: no escrow provider's API can carry BROKA's payments or

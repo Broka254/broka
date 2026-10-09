@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../core/errors/user_facing_error.dart';
 
 enum _VerifyStep { tiers, payment, waiting, success, failed }
 
@@ -108,7 +109,7 @@ class _VerificationScreenState extends State<VerificationScreen>
       _startPolling();
     } catch (e) {
       setState(() {
-        _errorMsg = e.toString().replaceFirst('Exception: ', '');
+        _errorMsg = userFacingError(e);
         _step     = _VerifyStep.tiers;
       });
     }

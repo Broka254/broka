@@ -267,7 +267,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
       await _celebrate.forward(from: 0);
       if (mounted) setState(() => _celebrated = true);
     } on PhotoUploadIncomplete catch (e) {
-      _showError('$e. Check your connection and try again.');
+      _showError("Photo ${e.index + 1} couldn't be uploaded. Check your connection and try again.");
     } on ApiException catch (e) {
       _showError(e.message);
     } on TimeoutException {

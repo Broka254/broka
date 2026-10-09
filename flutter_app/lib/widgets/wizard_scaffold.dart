@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import '../main.dart' show BrokaColors;
 import 'constellation_background.dart';
 import 'gradient_button.dart';
+import '../core/errors/user_facing_error.dart';
 
 /// Violet into blue: the primary call-to-action gradient of the wizard
 /// flows.
@@ -215,7 +216,7 @@ class WizardErrorBanner extends StatelessWidget {
     child: Row(children: [
       const Icon(Icons.error_outline, color: BrokaColors.danger, size: 16),
       const SizedBox(width: 10),
-      Expanded(child: Text(message,
+      Expanded(child: Text(sanitizeErrorText(message),
           style: const TextStyle(color: BrokaColors.danger, fontSize: 12))),
     ]),
   );

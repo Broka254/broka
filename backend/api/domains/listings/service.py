@@ -12,7 +12,7 @@ from sqlalchemy import select, func, desc, case, or_
 
 from api.database import (
     Listing, ListingStatus, ListingType, User, Interest, Deal, DealStatus, Category,
-    CategoryFilter, SellerMetrics,
+    CategoryFilter, SellerMetrics, Wishlist,
 )
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
@@ -529,16 +529,19 @@ class ListingService:
         meta.status = _lifecycle.effective_status(meta, now)
         self.db.add(meta)
 
-    async def get_listing(self, listing_id: str) -> dict:
+    async def get_listing(self, listing_id: str, viewer_id: Optional[str] = None) -> dict:
         r = await self.db.execute(select(Listing).where(Listing.id == listing_id))
         listing = r.scalar_one_or_none()
         # An unpaid or lapsed listing is not there for buyers, the same as
         # one that never existed - its seller sees it at /private.
         if not listing or not is_live(listing):
             raise HTTPException(status_code=404, detail="Listing not found")
-        # Increment view count
-        listing.views = (listing.views or 0) + 1
-        await self.db.commit()
+        # A view is a buyer looking. The seller opening their own listing to
+        # check it counted too, and padded the views the sell probability
+        # divides saves by.
+        if viewer_id is None or viewer_id != listing.seller_id:
+            listing.views = (listing.views or 0) + 1
+            await self.db.commit()
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
@@ -906,6 +909,74 @@ class ListingService:
         count_q = select(func.count()).select_from(base_query.order_by(None).subquery())
         r = await self.db.execute(count_q)
         return r.scalar_one()
+
+    # ── Saves (the heart on a listing) ────────────────────────────────────
+    #
+    # The wishlists table had been in the schema since the start, and the
+    # sell probability read it as a fifth of its score - but nothing ever
+    # wrote to it: no endpoint, no button. Every listing scored zero on it.
+
+    async def save_listing(self, listing_id: str, user_id: str) -> dict:
+        listing = await self.db.get(Listing, listing_id)
+        if not listing or not is_live(listing):
+            raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.seller_id == user_id:
+            # A seller saving their own listing would only inflate the
+            # number they are judged on.
+            raise HTTPException(status_code=400, detail="You can't save your own listing.")
+        exists = (await self.db.execute(select(Wishlist.id).where(
+            Wishlist.user_id == user_id, Wishlist.listing_id == listing_id,
+        ))).scalar_one_or_none()
+        if exists is None:
+            self.db.add(Wishlist(user_id=user_id, listing_id=listing_id))
+            try:
+                await self.db.commit()
+            except IntegrityError:
+                # Two taps racing: the other one saved it.
+                await self.db.rollback()
+        return {"saved": True}
+
+    async def unsave_listing(self, listing_id: str, user_id: str) -> dict:
+        row = (await self.db.execute(select(Wishlist).where(
+            Wishlist.user_id == user_id, Wishlist.listing_id == listing_id,
+        ))).scalar_one_or_none()
+        if row is not None:
+            await self.db.delete(row)
+            await self.db.commit()
+        return {"saved": False}
+
+    async def is_saved(self, listing_id: str, user_id: str) -> dict:
+        exists = (await self.db.execute(select(Wishlist.id).where(
+            Wishlist.user_id == user_id, Wishlist.listing_id == listing_id,
+        ))).scalar_one_or_none()
+        return {"saved": exists is not None}
+
+    async def saved_listings(self, user_id: str, limit: int = 100) -> list:
+        """The user's saved listings still on sale, most recently saved first."""
+        rows = (await self.db.execute(
+            select(Listing)
+            .join(Wishlist, Wishlist.listing_id == Listing.id)
+            .where(Wishlist.user_id == user_id,
+                   Listing.status == ListingStatus.active, live_clause())
+            .order_by(desc(Wishlist.created_at))
+            .limit(limit)
+        )).scalars().all()
+        seller_ids = {l.seller_id for l in rows if l.seller_id}
+        sellers = {}
+        if seller_ids:
+            sellers = {u.id: u for u in (await self.db.execute(
+                select(User).where(User.id.in_(seller_ids)))).scalars().all()}
+        store_ids = {l.store_id for l in rows if l.store_id}
+        stores = {}
+        if store_ids:
+            stores = {s.id: s for s in (await self.db.execute(
+                select(Store).where(Store.id.in_(store_ids)))).scalars().all()}
+        assets = await load_listing_media(self.db, rows, sellers.values())
+        return [
+            self._listing_dict(l, seller=sellers.get(l.seller_id),
+                               store=stores.get(l.store_id), assets=assets, card=True)
+            for l in rows
+        ]
 
     async def express_interest(
         self,

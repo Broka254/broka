@@ -46,7 +46,7 @@ def test_unanswered_time_is_capped():
     """One thread abandoned for a month must not read as a month's latency.
 
     Past two days the exact figure carries no extra signal, and uncapped
-    values let a single abandoned thread dominate a sparse seller's median.
+    values let a single abandoned thread dominate a sparse seller's average.
     """
     rows = [_m("dead", f"L{i}", f"B{i}", "buyer", None, 14400 - i) for i in range(3)]
     assert _run(rows)["dead"] == MAX_OBSERVATION_MINUTES
@@ -90,7 +90,7 @@ def test_zeno_messages_addressed_to_the_seller_do_start_it():
 
 
 def test_thin_history_is_unmeasured_not_fast():
-    """Below MIN_OBSERVATIONS the median is noise.
+    """Below MIN_OBSERVATIONS the average is noise.
 
     Returning None keeps "we have not measured this" distinguishable from
     "measured, and quick" - the caller falls back to a neutral score rather
@@ -102,18 +102,30 @@ def test_thin_history_is_unmeasured_not_fast():
     assert MIN_OBSERVATIONS >= 3
 
 
-def test_median_survives_one_forgotten_thread():
-    """Two fast replies and one abandonment should still read as fast.
+def test_the_figure_is_the_average_of_every_reply():
+    """Average response time: every wait counts.
 
-    The median is chosen precisely so a single holiday does not define a
-    seller's month; a mean would let one 48h observation swamp it.
+    Replies after 5, 15 and 40 minutes average 20. The median (15) it used
+    to report hid the 40-minute wait entirely - a seller could leave a
+    third of their buyers waiting and the number would not move.
     """
+    rows = [_m("avg", "L1", "B1", "buyer", None, 100),
+            _m("avg", "L1", "B1", "seller", None, 95),
+            _m("avg", "L2", "B2", "buyer", None, 90),
+            _m("avg", "L2", "B2", "seller", None, 75),
+            _m("avg", "L3", "B3", "buyer", None, 70),
+            _m("avg", "L3", "B3", "seller", None, 30)]
+    assert _run(rows)["avg"] == pytest.approx(20.0)
+
+
+def test_one_forgotten_thread_counts_but_is_capped():
+    """An abandoned thread raises the average by at most its 48h cap."""
     rows = [_m("mix", "L1", "B1", "buyer", None, 100),
             _m("mix", "L1", "B1", "seller", None, 95),
             _m("mix", "L2", "B2", "buyer", None, 90),
             _m("mix", "L2", "B2", "seller", None, 85),
-            _m("mix", "L3", "B3", "buyer", None, 2500)]
-    assert _run(rows)["mix"] < 30
+            _m("mix", "L3", "B3", "buyer", None, 99999)]
+    assert _run(rows)["mix"] == pytest.approx((5 + 5 + MAX_OBSERVATION_MINUTES) / 3, abs=0.1)
 
 
 def test_ranking_and_the_seller_facing_score_use_the_same_curve():

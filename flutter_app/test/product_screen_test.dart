@@ -198,7 +198,7 @@ void main() {
       await open(tester, _listing());
       expect(textIn(tester, const Key('standing-rating')), contains('8.5/10'));
       expect(textIn(tester, const Key('standing-dcr')), allOf(contains('92%'), contains('of deals completed')));
-      expect(textIn(tester, const Key('standing-response')), allOf(contains('25m'), contains('typical reply')));
+      expect(textIn(tester, const Key('standing-response')), allOf(contains('25m'), contains('average reply time')));
       expect(textIn(tester, const Key('standing-deal-time')),
           allOf(contains('2.5h'), contains('agreed to paid · 12 deals')));
       // In the dashboard's colours: all four are in its green band.
@@ -348,6 +348,17 @@ void main() {
     testWidgets('before any are sold, the total', (tester) async {
       await open(tester, _listing(quantity: 100, priceUnit: 'bag'));
       expect(textIn(tester, const Key('units-left')), '100 bags available');
+    });
+
+    testWidgets('a single item says it is the only one', (tester) async {
+      // Buyers saw no stock at all on a one-off listing.
+      await open(tester, _listing());
+      expect(textIn(tester, const Key('units-left')), 'Only 1 available');
+    });
+
+    testWidgets('a sold-out listing shows no stock line', (tester) async {
+      await open(tester, _listing(status: 'pending', soldOut: true, quantity: 10, unitsLeft: 0));
+      expect(find.byKey(const Key('units-left')), findsNothing);
     });
   });
 

@@ -10,7 +10,6 @@ import 'package:flutter/material.dart';
 import '../services/broka_tts.dart';
 import '../services/zeno_voice_controller.dart';
 import '../widgets/zeno_voice_card.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../widgets/chat_parts.dart';
 import '../widgets/collapsing_screen_header.dart';
@@ -33,6 +32,7 @@ import '../utils/price_format.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide, zenoEscrowPrompt;
+import '../core/errors/user_facing_error.dart';
 
 class NegotiateScreen extends StatefulWidget {
   const NegotiateScreen({super.key, this.animateBackground = true});
@@ -335,29 +335,25 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     } catch (_) {}
   }
 
-  List<Message> _directChatContext = [];
+  /// The other person's direct messages this user hasn't read yet - the
+  /// badge on "Chat directly". From the server (the Inbox's own count): it
+  /// used to be every direct message on the thread, this user's own
+  /// included, less a count saved only when that button was tapped.
   int _directChatUnreadCount = 0;
-
-  String _directChatSeenKey() {
-    final buyerScope = _role == 'buyer' ? (ApiService.currentUserId ?? '') : '';
-    return 'directchat_seen_count_${_listing?.id}_$buyerScope';
-  }
+  Timer? _unreadTimer;
 
   Future<void> _refreshDirectChatUnreadCount() async {
-    if (_listing == null) return;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final seenCount = prefs.getInt(_directChatSeenKey()) ?? 0;
-      final unread = _directChatContext.length - seenCount;
-      if (mounted) setState(() => _directChatUnreadCount = unread > 0 ? unread : 0);
-    } catch (_) {}
+    final listing = _listing;
+    if (listing == null) return;
+    final counts = await ApiService.getUnreadCounts(listing.id,
+        buyerId: _role == 'seller' ? _buyerId : null);
+    if (counts == null || !mounted) return;
+    setState(() => _directChatUnreadCount = counts.unread);
   }
 
-  Future<void> _markDirectChatSeen() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_directChatSeenKey(), _directChatContext.length);
-    } catch (_) {}
+  /// Going to the direct chat, which marks what's there read as it opens.
+  void _markDirectChatSeen() {
+    if (mounted) setState(() => _directChatUnreadCount = 0);
   }
 
   /// Zeno's messages in this room are on screen. The Inbox stops counting
@@ -403,12 +399,9 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       // the buyer/seller's own side of the conversation from view.
       final aiThread = history.where((m) =>
           m.role == 'broker' || ((m.role == 'buyer' || m.role == 'seller') && m.viaAi)).toList();
-      // Direct (human-to-human) messages - only used here to size the
-      // "open direct chat" unread badge, never rendered in this transcript.
-      _directChatContext = history
-          .where((m) => (m.role == 'buyer' || m.role == 'seller') && !m.viaAi)
-          .toList();
       _refreshDirectChatUnreadCount();
+      _unreadTimer ??= Timer.periodic(
+          const Duration(seconds: 30), (_) => _refreshDirectChatUnreadCount());
       if (mounted) {
         if (aiThread.isEmpty) {
           _addGreeting();
@@ -459,6 +452,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   @override
   void dispose() {
+    _unreadTimer?.cancel();
     // Symmetric with the markScreenActive in _finishInit/initState.
     // Leaving it registered would silence this thread's
     // notifications permanently.
@@ -639,7 +633,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       if (mounted) {
         setState(() => _typing = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: ${e.toString().replaceAll("Exception: ", "")}'),
+          content: Text('Error: ${userFacingError(e)}'),
           behavior: SnackBarBehavior.floating,
         ));
       }
@@ -1393,6 +1387,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
         ),
         if (_directChatUnreadCount > 0)
           Positioned(right: -4, top: -4, child: IgnorePointer(child: Container(
+            key: const Key('direct-unread-badge'),
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
             decoration: BoxDecoration(color: BrokaColors.danger,
               borderRadius: BorderRadius.circular(8), border: Border.all(color: BrokaColors.bg, width: 1.5)),

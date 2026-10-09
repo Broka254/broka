@@ -3896,12 +3896,20 @@ async def get_read_status(
     When each side last read this thread, so the frontend can show
     per-message "seen" ticks: a message is seen once the counterpart's
     last_read_at is at or after that message's created_at.
+
+    Also the caller's own unread counts, by the inbox's rules: `unread`,
+    the other person's direct messages since the caller last read the
+    direct chat, and `zeno_unread`, Zeno's since they were last in its
+    room. The two chat screens badge the button to the other screen with
+    these. They used to count every message on the phone instead - the
+    caller's own included - and showed "17" on a thread with nothing new.
     """
-    _, effective_buyer_id = await _resolve_role_and_buyer(
+    role, effective_buyer_id = await _resolve_role_and_buyer(
         listing_id, buyer_id, db, current)
     if not effective_buyer_id:
         return {"buyer_last_read": None, "seller_last_read": None,
-                "buyer_last_delivered": None, "seller_last_delivered": None}
+                "buyer_last_delivered": None, "seller_last_delivered": None,
+                "unread": 0, "zeno_unread": 0}
 
     rows = await db.execute(select(ThreadReadState).where(
         ThreadReadState.listing_id == listing_id,
@@ -3916,6 +3924,9 @@ async def get_read_status(
             out[f"{row.role}_last_read"] = row.last_read_at.isoformat() + "Z"
         if row.last_delivered_at:
             out[f"{row.role}_last_delivered"] = row.last_delivered_at.isoformat() + "Z"
+    out["unread"], _ = await _thread_unread_and_seen(
+        db, listing_id, effective_buyer_id, role, None, messages_only=True)
+    out["zeno_unread"] = await _zeno_unread(db, listing_id, effective_buyer_id, role)
     return out
 
 

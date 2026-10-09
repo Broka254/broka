@@ -63,7 +63,6 @@ flutter:
     - assets/images/zeno_full.png
     - assets/images/zeno_icon.png
     - assets/audio/ringtone.mp3
-    - assets/audio/zeno_boot.wav
     # Category and subcategory card artwork, the same pictures the website's
     # category pages use (lib/features/categories/domain/category_visual.dart
     # and subcategory_visual.dart say which is which). 640px WebP: sharp on a

@@ -199,3 +199,39 @@ async def test_someone_outside_the_thread_cannot_mark_it(client):
     listing_id, _, buyer = await _thread()
     r = await client.post("/negotiate/no-such-listing/zeno-read", headers=_auth(buyer), json={})
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_read_status_gives_the_callers_own_unread_counts(client):
+    """The chat screens' badges (2026-10-09).
+
+    Each screen badges the button to the other with what is unread there.
+    They counted every message they held - the user's own replies too - so
+    a thread with nothing new showed "17". read-status now says, by the
+    inbox's rules, what is unread for the caller.
+    """
+    listing_id, seller, buyer = await _thread()
+    async with AsyncSessionLocal() as db:
+        # The seller's own replies: never unread for the seller.
+        for i in range(3):
+            db.add(NegotiationMessage(listing_id=listing_id, sender_id=seller, role="seller",
+                                      content=f"reply {i}", buyer_id=buyer, via_ai=False,
+                                      created_at=_ago(9 - i)))
+        await db.commit()
+    await _zeno_says(listing_id, buyer, to="seller", minutes_ago=2)
+
+    s = (await client.get(f"/negotiate/{listing_id}/read-status",
+                          params={"buyer_id": buyer}, headers=_auth(seller))).json()
+    assert s["unread"] == 1
+    assert s["zeno_unread"] == 1
+    b = (await client.get(f"/negotiate/{listing_id}/read-status",
+                          headers=_auth(buyer))).json()
+    assert b["unread"] == 3
+    assert b["zeno_unread"] == 0
+
+    r = await client.post(f"/negotiate/{listing_id}/mark-read", headers=_auth(seller),
+                          json={"buyer_id": buyer})
+    assert r.status_code == 200
+    s = (await client.get(f"/negotiate/{listing_id}/read-status",
+                          params={"buyer_id": buyer}, headers=_auth(seller))).json()
+    assert s["unread"] == 0

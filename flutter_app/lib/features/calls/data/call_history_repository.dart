@@ -2,6 +2,7 @@
 import '../../../core/network/api_client.dart';
 import '../../../core/utils/result.dart';
 import '../domain/call_record.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class CallHistoryRepository {
   final ApiClient _client;
@@ -16,9 +17,9 @@ class CallHistoryRepository {
       });
       return Success(CallHistoryPage.fromJson(data as Map<String, dynamic>));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

@@ -207,16 +207,16 @@ async def write_listing_snapshots(db: AsyncSession, on_date: date | None = None)
     directly would be wrong for any missed day - it would attribute two days
     of traffic to one, and nothing downstream could tell.
     """
-    from api.database import Interest, ListingMetricSnapshot, Wishlist
+    from api.database import ListingMetricSnapshot
     from api.domains.listings.sell_probability import (
-        ListingSignals, compute_sell_probability,
+        MIN_COMPARABLE_LISTINGS, ListingSignals, compute_sell_probability,
     )
+    from api.domains.listings.sell_signals import engagement_signals
 
     snapshot_day = on_date or datetime.utcnow().date()
 
     listings_r = await db.execute(
-        select(Listing.id, Listing.seller_id, Listing.views,
-               Listing.created_at, Listing.price, Listing.category)
+        select(Listing)
         # ListingStatus.active, not the string "active" - status is an Enum
         # column, and comparing it to a bare string matches nothing on
         # Postgres while quietly working on SQLite. That mismatch would have
@@ -224,35 +224,34 @@ async def write_listing_snapshots(db: AsyncSession, on_date: date | None = None)
         # suite locally.
         .where(Listing.status == ListingStatus.active)
     )
-    listings = listings_r.all()
+    listings = listings_r.scalars().all()
     if not listings:
         return 0
 
-    ids = [row[0] for row in listings]
+    ids = [l.id for l in listings]
+    engagement = await engagement_signals(db, listings)
 
-    likes_r = await db.execute(
-        select(Wishlist.listing_id, func.count(Wishlist.id))
-        .where(Wishlist.listing_id.in_(ids)).group_by(Wishlist.listing_id))
-    likes = dict(likes_r.all())
+    # Category prices, for the price-position term. One pass over active
+    # listings rather than a query per listing. Each listing is compared
+    # with OTHER sellers' listings only, as on its screen: counting its own
+    # price (or its seller's other listings) made a category of one say
+    # "competitively priced" - and the snapshot never passed a comparable
+    # count at all, so this term silently never applied here.
+    by_category: Dict[str, List[tuple]] = {}
+    for l in listings:
+        if l.price:
+            by_category.setdefault(l.category or "", []).append((l.seller_id, float(l.price)))
 
-    interest_r = await db.execute(
-        select(Interest.listing_id, func.count(func.distinct(Interest.buyer_id)))
-        .where(Interest.listing_id.in_(ids)).group_by(Interest.listing_id))
-    interested = dict(interest_r.all())
-
-    # Category medians, for the price-position term. One pass over active
-    # listings rather than a query per listing.
-    by_category: Dict[str, List[float]] = {}
-    for _id, _sid, _v, _c, price, category in listings:
-        if price:
-            by_category.setdefault(category or "", []).append(float(price))
-    medians = {
-        c: sorted(v)[len(v) // 2] for c, v in by_category.items() if v
-    }
+    def _benchmark(l) -> tuple:
+        prices = sorted(p for sid, p in by_category.get(l.category or "", [])
+                        if sid != l.seller_id)
+        if len(prices) < MIN_COMPARABLE_LISTINGS:
+            return None, len(prices)
+        return prices[len(prices) // 2], len(prices)
 
     seller_dcr_r = await db.execute(
         select(SellerMetrics.user_id, SellerMetrics.dcr_score)
-        .where(SellerMetrics.user_id.in_([row[1] for row in listings])))
+        .where(SellerMetrics.user_id.in_({l.seller_id for l in listings})))
     seller_dcr = dict(seller_dcr_r.all())
 
     try:
@@ -268,18 +267,25 @@ async def write_listing_snapshots(db: AsyncSession, on_date: date | None = None)
     existing = {row.listing_id: row for row in existing_r.scalars().all()}
 
     written = 0
-    for lid, sid, views, created_at, price, category in listings:
-        days_listed = ((datetime.utcnow() - created_at).total_seconds() / 86400.0
-                       if created_at else 1.0)
+    for l in listings:
+        lid, sid, views = l.id, l.seller_id, l.views
+        days_listed = ((datetime.utcnow() - l.created_at).total_seconds() / 86400.0
+                       if l.created_at else 1.0)
+        e = engagement[lid]
+        median, comparable = _benchmark(l)
         prob = compute_sell_probability(ListingSignals(
             views=int(views or 0),
-            likes=int(likes.get(lid, 0)),
-            interested_buyers=int(interested.get(lid, 0)),
+            likes=e["likes"],
+            interested_buyers=e["interested_buyers"],
             days_listed=max(days_listed, 1.0),
             seller_dcr_percent=seller_dcr.get(sid),
             seller_response_minutes=response_medians.get(sid),
-            price=float(price) if price else None,
-            category_median_price=medians.get(category or ""),
+            price=float(l.price) if l.price else None,
+            category_median_price=median,
+            comparable_count=comparable,
+            best_offer=e["best_offer"],
+            photo_count=e["photo_count"],
+            description_chars=e["description_chars"],
         ))
 
         row = existing.get(lid)
@@ -288,8 +294,8 @@ async def write_listing_snapshots(db: AsyncSession, on_date: date | None = None)
                 id=str(uuid.uuid4()), listing_id=lid, snapshot_date=snapshot_day)
             db.add(row)
         row.views             = int(views or 0)
-        row.likes             = int(likes.get(lid, 0))
-        row.interested_buyers = int(interested.get(lid, 0))
+        row.likes             = e["likes"]
+        row.interested_buyers = e["interested_buyers"]
         row.sell_probability  = prob.probability
         written += 1
 

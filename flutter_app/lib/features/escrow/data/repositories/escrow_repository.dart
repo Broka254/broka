@@ -1,6 +1,7 @@
 // BROKA v3.0 - Escrow / Deal Repository
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class EscrowRepository {
   final ApiClient _client;
@@ -19,9 +20,9 @@ class EscrowRepository {
       });
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -30,9 +31,9 @@ class EscrowRepository {
       await _client.post('/deal/$dealId/confirm-delivery', {});
       return const Success(null);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -43,9 +44,9 @@ class EscrowRepository {
       final data = await send();
       return Success((data as Map).cast<String, dynamic>());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode, code: e.code);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode, code: e.code);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -122,9 +123,9 @@ class EscrowRepository {
       final data = await _client.get('/deal/$dealId');
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -133,9 +134,9 @@ class EscrowRepository {
       final data = await _client.get('/deal/') as List;
       return Success(data.cast<Map<String, dynamic>>());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -153,9 +154,9 @@ class EscrowRepository {
       });
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -166,9 +167,9 @@ class EscrowRepository {
       });
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -177,9 +178,9 @@ class EscrowRepository {
       final data = await _client.get('/mpesa/status/$dealId');
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

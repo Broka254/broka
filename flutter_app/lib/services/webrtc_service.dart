@@ -31,6 +31,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'api_service.dart';
+import '../core/errors/user_facing_error.dart';
 
 enum CallState {
   idle,
@@ -1948,6 +1949,9 @@ class WebRtcService {
     debugPrint('WebRTC: CALL_FAILED room=$roomId reason=$msg');
     _cleanup();
     _setState(CallState.failed);
-    onError?.call(msg);
+    // [msg] can carry the exception that ended the call (a socket
+    // error naming the server); the screen gets the plain version.
+    onError?.call(sanitizeErrorText(msg,
+        fallback: "The call couldn't connect. Please try again."));
   }
 }

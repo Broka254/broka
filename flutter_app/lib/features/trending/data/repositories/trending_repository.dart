@@ -2,6 +2,7 @@
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../../listings/domain/models/listing.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class TrendingRepository {
   final ApiClient _client;
@@ -21,9 +22,9 @@ class TrendingRepository {
       final res = await _client.get('/trending', queryParams: params);
       return Success((res as List).map((e) => BrokaListing.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

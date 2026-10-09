@@ -86,9 +86,12 @@ Design points worth knowing:
   *them*, not when the buyer typed.
 - **A burst of buyer messages is one wait.** Counting each would punish the
   seller for the buyer's typing habits.
-- **Median, 30-day window, min 3 observations.** One forgotten thread
-  shouldn't define a month; below three observations it returns NULL, which
-  keeps "unmeasured" distinguishable from "fast".
+- **Average, 30-day window, min 3 observations.** The mean of every wait
+  (the median until 2026-10-09, which hid slow replies as long as most were
+  quick); the 48h cap keeps one forgotten thread from swamping it. Below
+  three observations it returns NULL, which keeps "unmeasured"
+  distinguishable from "fast". Still stored and sent as
+  `median_response_minutes`, which older app builds read.
 
 **`GET /listings/seller/{id}/metrics?days=90`** returns current standing
 (with the component breakdown Phase 3's advice panel needs) plus the daily
@@ -124,7 +127,8 @@ should hold a different problem.
 ## Phase 4 — listing metrics ✅ backend (this round)
 
 Likes and interested buyers already existed (`Wishlist`, `Interest`, both
-timestamped). Only per-listing **view history** was missing — `Listing.views`
+timestamped) - in the schema. Nothing wrote to `Wishlist` until 2026-10-09:
+no endpoint and no button, so every listing's likes were 0 (see below). Only per-listing **view history** was missing — `Listing.views`
 is a bare running counter — so `ListingMetricSnapshot` ships now and starts
 accruing, same argument as the seller snapshots.
 
@@ -141,6 +145,23 @@ being 30% over is an obstacle while being 30% under is the seller leaving
 money behind. Shrunk toward the category base rate by an evidence weight, so
 a listing with 3 views and 1 like reports ~38%, not the 90% a naive 33% like
 rate would give.
+
+**Rebuilt on what is measured (2026-10-09).** A fifth of the score was the
+like rate, and likes were never collected. Now: saves are collected (the
+heart on a listing, `POST/DELETE /listings/{id}/save`, `GET /listings/saved`,
+a Saved items screen in the Menu); the save rate is smoothed toward 5% over
+20 prior views, so a listing nobody could save yet is not "unwanted"; buyers
+asking counts everyone who wrote about the listing where the seller can see
+it, not only the availability button; the best offer counts (at 90% of the
+price or more, full marks); a sixth term scores the listing itself (photos
+70%, description 30%); a listing nobody has asked about for three weeks is
+marked down, by at most 40%; and evidence counts buyers (x5) and saves (x3)
+as well as views. Price and the listing term are left out, their weight
+redistributed, when they weren't measured. Both readers - the listing
+screen and the nightly snapshot - gather the inputs in one place,
+`listings/sell_signals.py`; the snapshot had been skipping the price
+benchmark. Views no longer count the seller opening their own listing, and
+opening a listing from a list now reaches the server, so it counts.
 
 **The listing screen** (`screens/listing_analytics_screen.dart`, route
 `/listing-insights`) is built: chance of selling with its five component

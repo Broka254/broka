@@ -14,6 +14,16 @@
 //
 // Optional bands (good / acceptable / poor) are shaded behind the line for
 // metrics with a known healthy range - see FactorTrendChart.
+//
+// THE LOOK (2026-10-09). The traces were a flat 2px line on a grey grid,
+// which read as a spreadsheet rather than the rest of the app. Now: the
+// line glows (a blurred copy under it) and runs a gradient from the
+// series colour into a lighter tint of it, the area under it fades in
+// three steps, the grid is a faint dashed one that stays behind the data,
+// each measurement is a hollow neon dot, and the latest one carries a halo,
+// a guide down to the date axis and, where asked, its value. Nothing
+// about WHAT is drawn changed: same scale, same dates, same straight
+// segments.
 
 import 'dart:math' as math;
 
@@ -101,6 +111,9 @@ class AxisLineChartPainter extends CustomPainter {
   /// 0..1: how much of the line is drawn, so it traces in from the left.
   final double progress;
 
+  /// Label the latest point with its value, in a small bubble above it.
+  final bool showLastValue;
+
   AxisLineChartPainter({
     required this.values,
     required this.positions,
@@ -111,6 +124,7 @@ class AxisLineChartPainter extends CustomPainter {
     this.yFloor,
     this.minStep = 0,
     this.progress = 1,
+    this.showLastValue = false,
   }) : assert(values.length == positions.length);
 
   static const _label = TextStyle(color: BrokaColors.textMid, fontSize: 9);
@@ -151,31 +165,47 @@ class AxisLineChartPainter extends CustomPainter {
       final goodY = y(bands!.good).clamp(plot.top, plot.bottom);
       final poorY = y(bands!.poor).clamp(plot.top, plot.bottom);
       final upper = math.min(goodY, poorY), lower = math.max(goodY, poorY);
-      final goodFill = Paint()..color = BrokaColors.neonGreen.withOpacity(0.07);
-      final poorFill = Paint()..color = BrokaColors.danger.withOpacity(0.07);
-      canvas.drawRect(Rect.fromLTRB(plot.left, plot.top, plot.right, upper),
-          bands!.higherIsBetter ? goodFill : poorFill);
+      // Each band fades toward the middle of the chart rather than sitting
+      // as a flat block of colour - present, but behind the line.
+      Paint band(Color c, Rect r, {required bool fromTop}) => Paint()
+        ..shader = LinearGradient(
+          begin: fromTop ? Alignment.topCenter : Alignment.bottomCenter,
+          end: fromTop ? Alignment.bottomCenter : Alignment.topCenter,
+          colors: [c.withOpacity(0.13), c.withOpacity(0.03)],
+        ).createShader(r);
+      final topRect = Rect.fromLTRB(plot.left, plot.top, plot.right, upper);
+      final bottomRect = Rect.fromLTRB(plot.left, lower, plot.right, plot.bottom);
+      final topColor = bands!.higherIsBetter ? BrokaColors.neonGreen : BrokaColors.danger;
+      final bottomColor = bands!.higherIsBetter ? BrokaColors.danger : BrokaColors.neonGreen;
+      if (topRect.height > 0) canvas.drawRect(topRect, band(topColor, topRect, fromTop: true));
       canvas.drawRect(Rect.fromLTRB(plot.left, upper, plot.right, lower),
-          Paint()..color = BrokaColors.gold.withOpacity(0.05));
-      canvas.drawRect(Rect.fromLTRB(plot.left, lower, plot.right, plot.bottom),
-          bands!.higherIsBetter ? poorFill : goodFill);
+          Paint()..color = BrokaColors.gold.withOpacity(0.035));
+      if (bottomRect.height > 0) {
+        canvas.drawRect(bottomRect, band(bottomColor, bottomRect, fromTop: false));
+      }
       _dashed(canvas, plot, goodY, BrokaColors.neonGreen);
       _dashed(canvas, plot, poorY, BrokaColors.danger);
     }
 
     // ── Grid and y-axis values ───────────────────────────────────────────
-    final grid = Paint()..color = BrokaColors.border.withOpacity(0.7)..strokeWidth = 0.6;
     for (var i = 0; i < ticks.length; i++) {
       final ty = y(ticks[i]);
-      if (i > 0) canvas.drawLine(Offset(plot.left, ty), Offset(plot.right, ty), grid);
+      if (i > 0) _dotted(canvas, plot.left, plot.right, ty, BrokaColors.textMid.withOpacity(0.16));
       final l = yLabels[i];
       l.paint(canvas, Offset(left - 6 - l.width, ty - l.height / 2));
     }
 
     // ── Axes ─────────────────────────────────────────────────────────────
-    final axis = Paint()..color = BrokaColors.textMid.withOpacity(0.6)..strokeWidth = 1;
+    // A faint y-axis, and a baseline that glows faintly in the series colour.
+    final axis = Paint()..color = BrokaColors.textMid.withOpacity(0.35)..strokeWidth = 1;
     canvas.drawLine(plot.topLeft, plot.bottomLeft, axis);
-    canvas.drawLine(plot.bottomLeft, plot.bottomRight, axis);
+    canvas.drawLine(plot.bottomLeft, plot.bottomRight, Paint()
+      ..strokeWidth = 1
+      ..shader = LinearGradient(colors: [
+        BrokaColors.textMid.withOpacity(0.45),
+        lineColor.withOpacity(0.55),
+        BrokaColors.textMid.withOpacity(0.25),
+      ]).createShader(Rect.fromLTRB(plot.left, plot.bottom - 1, plot.right, plot.bottom + 1)));
 
     // ── x-axis dates ─────────────────────────────────────────────────────
     for (final t in xTicks) {
@@ -193,6 +223,7 @@ class AxisLineChartPainter extends CustomPainter {
     // ── The line ─────────────────────────────────────────────────────────
     final visible = (values.length * progress).ceil().clamp(1, values.length);
     final pts = [for (var i = 0; i < visible; i++) Offset(x(positions[i]), y(values[i]))];
+    final light = Color.lerp(lineColor, Colors.white, 0.45)!;
     if (pts.length > 1) {
       // Straight segments, not a spline: a curve invents values between
       // measurements that were never taken.
@@ -207,23 +238,71 @@ class AxisLineChartPainter extends CustomPainter {
       canvas.drawPath(fill, Paint()
         ..shader = LinearGradient(
           begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          colors: [lineColor.withOpacity(0.22), lineColor.withOpacity(0.0)],
+          colors: [lineColor.withOpacity(0.34), lineColor.withOpacity(0.10), lineColor.withOpacity(0.0)],
+          stops: const [0.0, 0.55, 1.0],
         ).createShader(plot));
+      // The glow: a wide, blurred copy of the line beneath it.
       canvas.drawPath(path, Paint()
-        ..color = lineColor
-        ..strokeWidth = 2.2
+        ..color = lineColor.withOpacity(0.55)
+        ..strokeWidth = 6
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+      canvas.drawPath(path, Paint()
+        ..shader = LinearGradient(colors: [lineColor, light]).createShader(plot)
+        ..strokeWidth = 2.4
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round);
     }
     // A dot on every measurement when there are few enough to tell apart,
     // so a reader can see where the values are, not just the line between.
+    // Hollow, with the card's colour inside, so the line reads through it.
     final dots = pts.length <= 31;
-    for (var i = 0; i < pts.length; i++) {
-      final last = i == pts.length - 1;
-      if (!dots && !last) continue;
-      canvas.drawCircle(pts[i], last ? 5 : 3.2, Paint()..color = lineColor.withOpacity(0.25));
-      canvas.drawCircle(pts[i], last ? 2.8 : 1.8, Paint()..color = lineColor);
+    for (var i = 0; i < pts.length - 1; i++) {
+      if (!dots) break;
+      canvas.drawCircle(pts[i], 3.0, Paint()..color = lineColor);
+      canvas.drawCircle(pts[i], 1.6, Paint()..color = BrokaColors.bgCard);
+    }
+
+    // The latest measurement: a guide down to its date, a halo, and a
+    // bright core.
+    final lastPt = pts.last;
+    _dotted(canvas, lastPt.dy, plot.bottom, lastPt.dx, lineColor.withOpacity(0.45), vertical: true);
+    canvas.drawCircle(lastPt, 11, Paint()
+      ..color = lineColor.withOpacity(0.18)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    canvas.drawCircle(lastPt, 6.5, Paint()..color = lineColor.withOpacity(0.28));
+    canvas.drawCircle(lastPt, 4, Paint()..color = lineColor);
+    canvas.drawCircle(lastPt, 1.8, Paint()..color = Colors.white);
+
+    if (showLastValue && visible == values.length) {
+      final tp = TextPainter(
+        text: TextSpan(text: yFormat(values[visible - 1]), style: const TextStyle(
+            color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w800)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final w = tp.width + 12, h = tp.height + 6;
+      final bx = (lastPt.dx - w / 2).clamp(plot.left, size.width - w);
+      // Above the point, or below it when it is at the top of the chart.
+      final by = lastPt.dy - h - 10 < 0 ? lastPt.dy + 10 : lastPt.dy - h - 10;
+      final r = RRect.fromRectAndRadius(Rect.fromLTWH(bx, by, w, h), const Radius.circular(7));
+      canvas.drawRRect(r, Paint()..shader = LinearGradient(colors: [
+        lineColor.withOpacity(0.9), Color.lerp(lineColor, BrokaColors.neonPurple, 0.5)!.withOpacity(0.9),
+      ]).createShader(r.outerRect));
+      tp.paint(canvas, Offset(bx + 6, by + 3));
+    }
+  }
+
+  /// A faint dotted rule, horizontal at [at] from [from] to [to], or
+  /// vertical when [vertical].
+  void _dotted(Canvas canvas, double from, double to, double at, Color c, {bool vertical = false}) {
+    final p = Paint()..color = c..strokeWidth = 1..strokeCap = StrokeCap.round;
+    const dash = 2.0, gap = 4.0;
+    for (double d = from; d < to; d += dash + gap) {
+      final e = math.min(d + dash, to);
+      canvas.drawLine(vertical ? Offset(at, d) : Offset(d, at), vertical ? Offset(at, e) : Offset(e, at), p);
     }
   }
 
@@ -237,7 +316,8 @@ class AxisLineChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(AxisLineChartPainter oldDelegate) =>
-      oldDelegate.progress != progress || oldDelegate.values != values || oldDelegate.positions != positions;
+      oldDelegate.progress != progress || oldDelegate.values != values ||
+      oldDelegate.positions != positions || oldDelegate.lineColor != lineColor;
 }
 
 /// The painter with its axis titles: [yTitle] up the left side, [xTitle]
@@ -254,6 +334,7 @@ class AxisLineChart extends StatelessWidget {
   final double? yFloor;
   final double minStep;
   final double progress;
+  final bool showLastValue;
 
   const AxisLineChart({
     super.key,
@@ -268,6 +349,7 @@ class AxisLineChart extends StatelessWidget {
     this.yFloor,
     this.minStep = 0,
     this.progress = 1,
+    this.showLastValue = false,
   });
 
   static const _title = TextStyle(color: BrokaColors.textMid, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.4);
@@ -293,6 +375,7 @@ class AxisLineChart extends StatelessWidget {
                   yFloor: yFloor,
                   minStep: minStep,
                   progress: progress,
+                  showLastValue: showLastValue,
                 ),
                 child: const SizedBox.expand(),
               ),

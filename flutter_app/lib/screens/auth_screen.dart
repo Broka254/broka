@@ -29,6 +29,7 @@ import '../widgets/country_phone_field.dart';
 import '../widgets/otp_code_field.dart';
 import '../widgets/seller_setup.dart';
 import '../widgets/wizard_scaffold.dart';
+import '../core/errors/user_facing_error.dart';
 
 /// Primary call-to-action gradient: violet into blue, the left two thirds of
 /// the BROKA logo sweep. BrokaColors.gradMid (a deep purple) is the app-wide
@@ -268,7 +269,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           if (mounted) {
             setState(() {
             _loading = false;
-            _error = e.toString().replaceFirst('Exception: ', '');
+            _error = userFacingError(e);
           });
           }
         }
@@ -287,7 +288,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           if (mounted) {
             setState(() {
             _loading = false;
-            _error = e.toString().replaceFirst('Exception: ', '');
+            _error = userFacingError(e);
           });
           }
         }
@@ -386,7 +387,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         if (mounted) {
           setState(() {
           _loading = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = userFacingError(e);
         });
         }
       }
@@ -408,7 +409,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       if (mounted) {
         setState(() {
         _loading = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = userFacingError(e);
       });
       }
     }
@@ -455,7 +456,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       _emailOtpCtrl.clear();
       await _sendEmailOtp();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = userFacingError(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -636,7 +637,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       _otpCtrl.clear();
       await _sendOtp();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = userFacingError(e));
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -686,11 +687,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
           }
         });
       }
-    } on PlatformException catch (e) {
+    } on PlatformException {
       if (mounted) {
         setState(() {
         _loading = false;
-        _error = 'Biometric error: ${e.message}';
+        _error = "Biometric sign-in isn't available right now. Use your password.";
       });
       }
     }
@@ -788,7 +789,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         _returnAuthenticated();
       }
     } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      setState(() => _error = userFacingError(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -807,7 +808,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         _returnAuthenticated();
       }
     } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      setState(() => _error = userFacingError(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }

@@ -123,6 +123,7 @@ class FactorTrendChart extends StatelessWidget {
       if (today == null) {
         return _ChartFrame(
           label: label,
+          color: lineColor,
           child: const Center(
             child: Text('Not measured yet',
                 style: TextStyle(color: BrokaColors.textMid, fontSize: 11)),
@@ -131,6 +132,7 @@ class FactorTrendChart extends StatelessWidget {
       }
       return _ChartFrame(
         label: label,
+        color: lineColor,
         trailing: Text(format(today),
             style: TextStyle(color: lineColor, fontSize: 13, fontWeight: FontWeight.w800)),
         footer: 'Tracking starts today - the line grows a point a day',
@@ -146,6 +148,7 @@ class FactorTrendChart extends StatelessWidget {
 
     return _ChartFrame(
       label: label,
+      color: lineColor,
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         if (!flat)
           Icon(
@@ -167,34 +170,74 @@ class FactorTrendChart extends StatelessWidget {
   }
 }
 
+/// The card a chart sits on: glass over the constellation, tinted and
+/// lit by the chart's own colour, its name beside a glowing marker.
 class _ChartFrame extends StatelessWidget {
   final String label;
+  final Color color;
   final Widget child;
   final Widget? trailing;
   final String? footer;
-  const _ChartFrame({required this.label, required this.child, this.trailing, this.footer});
+  const _ChartFrame({
+    required this.label,
+    required this.color,
+    required this.child,
+    this.trailing,
+    this.footer,
+  });
 
   @override
   Widget build(BuildContext context) => Container(
         height: footer == null ? 220 : 236,
         padding: const EdgeInsets.fromLTRB(10, 12, 14, 10),
         decoration: BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: BrokaColors.border),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color.alphaBlend(color.withOpacity(0.10), BrokaColors.bgCard),
+              BrokaColors.bgCard,
+              Color.alphaBlend(BrokaColors.neonPurple.withOpacity(0.06), BrokaColors.bgCard),
+            ],
+            stops: const [0.0, 0.55, 1.0],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withOpacity(0.28)),
+          boxShadow: [
+            BoxShadow(color: color.withOpacity(0.12), blurRadius: 22, spreadRadius: -4, offset: const Offset(0, 6)),
+          ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Padding(
             padding: const EdgeInsets.only(left: 4),
             child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Flexible(
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: color,
+                  boxShadow: [BoxShadow(color: color.withOpacity(0.8), blurRadius: 6)],
+                ),
+              ),
+              const SizedBox(width: 7),
+              Expanded(
                 child: Text(label.toUpperCase(),
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        color: BrokaColors.textMid, fontSize: 10,
-                        letterSpacing: 1.2, fontWeight: FontWeight.w700)),
+                        color: BrokaColors.textHigh, fontSize: 10,
+                        letterSpacing: 1.4, fontWeight: FontWeight.w800)),
               ),
-              if (trailing != null) trailing!,
+              if (trailing != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: BrokaColors.bg.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: color.withOpacity(0.25)),
+                  ),
+                  child: trailing!,
+                ),
             ]),
           ),
           const SizedBox(height: 10),

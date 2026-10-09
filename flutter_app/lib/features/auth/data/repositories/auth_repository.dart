@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/user.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class AuthRepository {
   final ApiClient _client;
@@ -115,9 +116,9 @@ class AuthRepository {
       await _persistSession(data, email: email, lat: lat, lng: lng, phone: phone);
       return Success(BrokaUser.fromJson({...data, 'email': email}));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -132,9 +133,9 @@ class AuthRepository {
       await _persistSession(data, email: email);
       return Success(BrokaUser.fromJson({...data, 'email': email}));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -143,9 +144,9 @@ class AuthRepository {
       final data = await _client.get('/auth/me');
       return Success(BrokaUser.fromJson(data));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -166,9 +167,9 @@ class AuthRepository {
       }
       return const Success(null);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -184,7 +185,7 @@ class AuthRepository {
       );
       return const Success(null);
     } on ApiException catch (e) {
-      return Failure(e.message);
+      return Failure(sanitizeErrorText(e.message));
     } catch (_) {
       return const Success(null); // silent failure for location updates
     }
@@ -210,9 +211,9 @@ class AuthRepository {
       final data = await _client.get('/auth/user/$userId', queryParams: params);
       return Success(BrokaUser.fromJson(data));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -224,9 +225,9 @@ class AuthRepository {
       final data = await _client.get('/auth/search', queryParams: params) as List;
       return Success(data.map((e) => BrokaUser.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

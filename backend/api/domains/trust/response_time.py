@@ -47,11 +47,18 @@ from that message until now, capped at MAX_OBSERVATION_MINUTES. It is a
 lower bound on the true wait — they might still reply — and a lower bound is
 the honest thing to use when it is the seller's own silence producing it.
 
-MEDIAN, NOT MEAN
-================
-One forgotten thread from a holiday should not define a seller's month. The
-median is robust to exactly that, and the cap keeps a single abandoned
-thread from dragging the distribution.
+AVERAGE, NOT MEDIAN (since 2026-10-09)
+======================================
+The number is the seller's average response time: the mean of every
+observation in the window. It used to be the median, which people read as
+an average anyway, and which hid a seller's slow replies as long as most
+were quick - half their buyers could wait a day and the figure would not
+move. The mean counts every wait. The 48h cap (MAX_OBSERVATION_MINUTES) is
+what keeps one abandoned thread from swamping it.
+
+The field is still called `median_response_minutes` wherever it is stored
+or sent (metric snapshots, the API, and older app builds read it by that
+name); the value in it is the average.
 """
 from __future__ import annotations
 
@@ -75,10 +82,10 @@ WINDOW_DAYS = 30
 # An unanswered thread stops accruing here. Beyond two days the exact
 # figure adds nothing ("ignored for 3 days" and "ignored for 30" are the
 # same signal to a buyer) and an uncapped value would let one abandoned
-# thread dominate even the median once a seller has few observations.
+# thread dominate the average.
 MAX_OBSERVATION_MINUTES = 2880.0   # 48h
 
-# Below this many observations the median is noise. The rating's own
+# Below this many observations the average is noise. The rating's own
 # evidence-weighting handles thin data, but returning None here keeps
 # "unmeasured" distinguishable from "measured and fast".
 MIN_OBSERVATIONS = 3
@@ -95,7 +102,7 @@ def _is_inbound_to_seller(role: str, recipient_role: Optional[str]) -> bool:
 
 
 def compute_response_times(rows: List[tuple], now: datetime) -> Dict[str, float]:
-    """Median response minutes per seller, from ordered message rows.
+    """Average response minutes per seller, from ordered message rows.
 
     `rows` is (seller_id, listing_id, buyer_id, role, recipient_role,
     created_at), sorted by thread then time. Pure function — no DB — so the
@@ -138,14 +145,14 @@ def compute_response_times(rows: List[tuple], now: datetime) -> Dict[str, float]
     _close_thread()
 
     return {
-        sid: round(statistics.median(times), 1)
+        sid: round(statistics.fmean(times), 1)
         for sid, times in per_seller.items()
         if len(times) >= MIN_OBSERVATIONS
     }
 
 
 async def compute_all_response_times(db: AsyncSession) -> Dict[str, float]:
-    """Median response minutes for every seller, over the rolling window.
+    """Average response minutes for every seller, over the rolling window.
 
     One query for the whole platform, ordered so `compute_response_times`
     can walk it thread by thread in a single pass. Per-seller queries here

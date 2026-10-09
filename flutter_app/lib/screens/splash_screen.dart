@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/deep_link_service.dart';
 import '../services/global_poller_service.dart';
 import '../services/notification_service.dart';
 import '../services/sell_draft_store.dart';
-import '../services/sound_preference_service.dart';
 import '../widgets/splash_painters.dart';
 import 'home_screen.dart';
 import 'sell_flow.dart';
@@ -16,14 +15,23 @@ import 'sell_photos_screen.dart';
 
 /// BROKA splash screen — the Zeno "AI boot sequence".
 ///
+/// Played in full only the first time BROKA is opened on a phone. After
+/// that the app opens straight onto Home, like WhatsApp: the logo shows for
+/// the one frame it takes to decide where to go, nothing more. The full
+/// sequence used to play on every launch and held people for ten seconds,
+/// with a chime, before they could do anything.
+///
 /// Visual layers (back to front): a deep navy backdrop, a sparse
 /// neural-network mesh, three concentric orbital rings around the
-/// BROKA/Zeno logo core, a flowing digital wave along the bottom, and the
-/// boot-status text stack. See the splash spec for the full breakdown -
-/// layout fractions below are calibrated directly against the reference
-/// artwork.
+/// BROKA/Zeno logo core, and the boot-status text stack. The sound and the
+/// digital wave along the bottom were removed (2026-10-09). Layout
+/// fractions below are calibrated against the reference artwork.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  /// Set once the boot sequence has been shown on this phone.
+  static const String introSeenKey = 'splash_intro_seen';
+
   @override
   State<SplashScreen> createState() => _SplashScreenState();
 }
@@ -32,7 +40,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   // Layout calibration (fractions of screen height/width) - see splash spec.
   static const double _kLogoCenterY = 0.426;
   static const double _kTextTopY = 0.548;
-  static const double _kWaveHeightFrac = 0.24;
+
+  // How long the first-run sequence runs before handing over to Home.
+  static const Duration _kIntroLength = Duration(milliseconds: 4600);
 
   // Master boot timeline - phase fractions below all read from this.
   late final AnimationController _boot;
@@ -43,13 +53,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   late final AnimationController _ringOuter;
   late final AnimationController _comet;
   late final AnimationController _breathe;
-  late final AnimationController _waveDrift;
   late final AnimationController _dotsSweepCtrl;
   late final AnimationController _networkTimeCtrl;
   late final Animation<double> _breatheScale;
 
-  final AudioPlayer _bootPlayer = AudioPlayer(playerId: 'broka_splash_boot');
-  bool _soundOn = true;
+  /// True while the first-run sequence plays. Until then (and on every
+  /// later launch) only the logo is drawn, so a returning user never sees
+  /// the sequence start and get cut off.
+  bool _intro = false;
 
   int _bootMsgIndex = 0;
   static const _bootMessages = [
@@ -57,10 +68,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     'Initializing Commerce Intelligence...',
     'Negotiation Engine Online...',
     'Securing Transaction Layer...',
-    'Marketplace Intelligence Ready...',
     'Zeno Ready.',
   ];
-  static const _bootMsgOffsetsMs = [0, 1445, 2890, 4335, 5780, 7225];
+  static const _bootMsgOffsetsMs = [0, 800, 1600, 2400, 3300];
 
   final List<Timer> _msgTimers = [];
   Timer? _navTimer;
@@ -69,60 +79,61 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   void initState() {
     super.initState();
 
-    _boot = AnimationController(vsync: this, duration: const Duration(milliseconds: 8500))..forward();
+    _boot = AnimationController(vsync: this, duration: _kIntroLength);
 
-    _ringInner = AnimationController(vsync: this, duration: const Duration(seconds: 9))..repeat();
-    _ringMiddle = AnimationController(vsync: this, duration: const Duration(seconds: 22))..repeat();
-    _ringOuter = AnimationController(vsync: this, duration: const Duration(seconds: 14))..repeat();
-    _comet = AnimationController(vsync: this, duration: const Duration(seconds: 5))..repeat();
-    _breathe = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))..repeat(reverse: true);
-    _waveDrift = AnimationController(vsync: this, duration: const Duration(seconds: 11))..repeat();
-    _dotsSweepCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat();
-    _networkTimeCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 20))..repeat();
+    _ringInner = AnimationController(vsync: this, duration: const Duration(seconds: 9));
+    _ringMiddle = AnimationController(vsync: this, duration: const Duration(seconds: 22));
+    _ringOuter = AnimationController(vsync: this, duration: const Duration(seconds: 14));
+    _comet = AnimationController(vsync: this, duration: const Duration(seconds: 5));
+    _breathe = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000));
+    _dotsSweepCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+    _networkTimeCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 20));
 
     _breatheScale = Tween<double>(begin: 0.98, end: 1.02)
         .animate(CurvedAnimation(parent: _breathe, curve: Curves.easeInOut));
 
     // Opened from a notification - Accept on an incoming call, above all:
-    // straight there, without the boot sequence or its chime. The call
-    // screen used to wait out all ten seconds of it, after Android had
-    // already spent seconds starting the app, and the caller had hung up
-    // by the time the call appeared.
+    // straight there, without the boot sequence. The call screen used to
+    // wait out all of it, after Android had already spent seconds starting
+    // the app, and the caller had hung up by the time the call appeared.
     if (pendingColdStartCallData != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _decideNextScreen());
       return;
     }
 
-    _initSound();
-    _scheduleBootMessages();
-
-    _navTimer = Timer(const Duration(milliseconds: 10300), _decideNextScreen);
+    _start();
   }
 
-  Future<void> _initSound() async {
-    final enabled = await SoundPreferenceService.load();
-    if (!mounted) return;
-    setState(() => _soundOn = enabled);
-    if (enabled) _playBootSound();
-  }
-
-  Future<void> _playBootSound() async {
+  Future<void> _start() async {
+    var seen = false;
     try {
-      // A short, original synthesised chime (assets/audio/zeno_boot.wav) -
-      // not a sampled/licensed sound, same approach as ringtone.mp3.
-      await _bootPlayer.play(AssetSource('audio/zeno_boot.wav'));
+      final prefs = await SharedPreferences.getInstance();
+      seen = prefs.getBool(SplashScreen.introSeenKey) ?? false;
+      // Marked before it plays: a first launch that is closed half way
+      // through has still been shown it.
+      if (!seen) await prefs.setBool(SplashScreen.introSeenKey, true);
     } catch (_) {
-      // Missing/unsupported audio asset shouldn't block the boot animation.
+      // Storage unreadable: open the app rather than play the sequence on
+      // every launch.
+      seen = true;
     }
-  }
+    if (!mounted) return;
+    if (seen) {
+      _decideNextScreen(quick: true);
+      return;
+    }
 
-  void _toggleSound() {
-    final next = !_soundOn;
-    setState(() => _soundOn = next);
-    SoundPreferenceService.setEnabled(next);
-    if (!next) {
-      _bootPlayer.stop().catchError((_) {});
-    }
+    setState(() => _intro = true);
+    _boot.forward();
+    _ringInner.repeat();
+    _ringMiddle.repeat();
+    _ringOuter.repeat();
+    _comet.repeat();
+    _breathe.repeat(reverse: true);
+    _dotsSweepCtrl.repeat();
+    _networkTimeCtrl.repeat();
+    _scheduleBootMessages();
+    _navTimer = Timer(_kIntroLength + const Duration(milliseconds: 200), _decideNextScreen);
   }
 
   void _scheduleBootMessages() {
@@ -134,8 +145,11 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     }
   }
 
-  Future<void> _decideNextScreen() async {
+  /// [quick]: a returning user's launch - a short fade instead of the
+  /// sequence's slower hand-off.
+  Future<void> _decideNextScreen({bool quick = false}) async {
     if (!mounted) return;
+    Route smoothRoute(Widget page) => _smoothRoute(page, quick: quick);
     // ApiService.loadSavedSession() already ran in main() before runApp,
     // so currentUserId is populated here if a session exists.
     final loggedIn = ApiService.currentUserId != null && ApiService.authToken != null;
@@ -152,7 +166,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     if (loggedIn && coldStartCall != null) {
       // Home underneath, so Back from the call or the conversation lands
       // there - not on this splash screen, which has already done its job.
-      Navigator.of(context).pushReplacement(_smoothRoute(const HomeScreen()));
+      Navigator.of(context).pushReplacement(smoothRoute(const HomeScreen()));
       await NotificationService.instance.navigateFromPayload(coldStartCall);
       DeepLinkService.instance.appReady(openPending: false);
       return;
@@ -193,8 +207,8 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     if (!mounted) return;
     if (freshDraft) {
       final nav = Navigator.of(context);
-      nav.pushReplacement(_smoothRoute(const HomeScreen()));
-      nav.push(_smoothRoute(const SellPhotosScreen()));
+      nav.pushReplacement(smoothRoute(const HomeScreen()));
+      nav.push(smoothRoute(const SellPhotosScreen()));
       // A store link that opened the app goes on top; Back returns here.
       DeepLinkService.instance.appReady();
       return;
@@ -204,7 +218,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // Splash now always lands on Home — account-gated actions (Sell, talk
     // to Zeno, negotiations, Profile) prompt sign-up only when actually
     // attempted (see lib/utils/auth_gate.dart), not up front.
-    Navigator.of(context).pushReplacement(_smoothRoute(const HomeScreen()));
+    Navigator.of(context).pushReplacement(smoothRoute(const HomeScreen()));
     // A store link that opened the app goes on top; Back returns to Home.
     DeepLinkService.instance.appReady();
   }
@@ -218,9 +232,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   /// that haven't been through this redesign pass yet. Once the login
   /// screen gets its own pass, this is the natural place to add a Hero
   /// handoff for the logo itself.
-  Route _smoothRoute(Widget page) {
+  Route _smoothRoute(Widget page, {bool quick = false}) {
     return PageRouteBuilder(
-      transitionDuration: const Duration(milliseconds: 700),
+      transitionDuration: Duration(milliseconds: quick ? 220 : 700),
       reverseTransitionDuration: const Duration(milliseconds: 400),
       pageBuilder: (_, __, ___) => page,
       transitionsBuilder: (_, animation, __, child) {
@@ -240,14 +254,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _ringOuter.dispose();
     _comet.dispose();
     _breathe.dispose();
-    _waveDrift.dispose();
     _dotsSweepCtrl.dispose();
     _networkTimeCtrl.dispose();
     for (final t in _msgTimers) {
       t.cancel();
     }
     _navTimer?.cancel();
-    _bootPlayer.dispose();
     super.dispose();
   }
 
@@ -256,7 +268,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   double get _textReveal => const Interval(0.08, 0.30, curve: Curves.easeOut).transform(_boot.value);
   double get _ringsReveal => const Interval(0.14, 0.42, curve: Curves.easeOut).transform(_boot.value);
   double get _networkReveal => const Interval(0.35, 0.68, curve: Curves.easeOut).transform(_boot.value);
-  double get _waveReveal => const Interval(0.35, 0.65, curve: Curves.easeOut).transform(_boot.value);
+  double get _footerReveal => const Interval(0.35, 0.65, curve: Curves.easeOut).transform(_boot.value);
   double get _finalPulse => const Interval(0.85, 1.0, curve: Curves.easeInOut).transform(_boot.value);
 
   @override
@@ -264,6 +276,25 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final size = MediaQuery.of(context).size;
     final bottomSafe = MediaQuery.of(context).padding.bottom;
     final coreSize = size.width * 0.94;
+
+    // A returning user's launch, or the moment before the first-run
+    // sequence starts: the logo alone, still, where the sequence puts it.
+    if (!_intro) {
+      final logo = size.width * 0.40;
+      return Scaffold(
+        backgroundColor: const Color(0xFF03040B),
+        body: Stack(fit: StackFit.expand, children: [
+          const _SplashBackdrop(),
+          Positioned(
+            left: (size.width - logo) / 2,
+            top: size.height * _kLogoCenterY - logo / 2,
+            width: logo,
+            height: logo,
+            child: Image.asset('assets/images/broka_logo_transparent.png', fit: BoxFit.contain),
+          ),
+        ]),
+      );
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF03040B),
@@ -311,27 +342,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               ),
             ),
 
-            // Digital wave, bottom band.
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: size.height * _kWaveHeightFrac,
-              child: RepaintBoundary(
-                child: AnimatedBuilder(
-                  animation: Listenable.merge([_boot, _waveDrift]),
-                  builder: (_, __) => CustomPaint(
-                    size: Size(size.width, size.height * _kWaveHeightFrac),
-                    painter: DigitalWavePainter(
-                      t: _waveDrift.value,
-                      reveal: _waveReveal,
-                      layers: kSplashWaveLayers,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
             // Boot-status text stack.
             Positioned(
               left: 0,
@@ -359,19 +369,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               ),
             ),
 
-            // Sound toggle, bottom-left.
-            Positioned(
-              left: 22,
-              bottom: bottomSafe + size.height * 0.048,
-              child: AnimatedBuilder(
-                animation: _boot,
-                builder: (_, __) => Opacity(
-                  opacity: _waveReveal,
-                  child: _SoundToggle(on: _soundOn, onTap: _toggleSound),
-                ),
-              ),
-            ),
-
             // Bottom branding.
             Positioned(
               left: 0,
@@ -380,7 +377,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               child: AnimatedBuilder(
                 animation: _boot,
                 builder: (_, __) => Opacity(
-                  opacity: _waveReveal,
+                  opacity: _footerReveal,
                   child: const _PoweredByFooter(),
                 ),
               ),
@@ -620,40 +617,6 @@ class _BootTextBlock extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _SoundToggle extends StatelessWidget {
-  final bool on;
-  final VoidCallback onTap;
-  const _SoundToggle({required this.on, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: BrokaColors.gold.withOpacity(0.55), width: 1.2),
-          ),
-          child: Icon(
-            on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-            color: BrokaColors.gold.withOpacity(0.9),
-            size: 20,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          on ? 'SOUND ON' : 'SOUND OFF',
-          style: const TextStyle(fontSize: 9, letterSpacing: 2, fontWeight: FontWeight.w600, color: BrokaColors.textMid),
-        ),
-      ]),
     );
   }
 }

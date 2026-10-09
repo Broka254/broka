@@ -27,6 +27,7 @@ import '../widgets/broka_image.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/factor_trend_chart.dart';
 import '../widgets/motion_widgets.dart';
+import '../core/errors/user_facing_error.dart';
 
 class ListingAnalyticsScreen extends StatefulWidget {
   const ListingAnalyticsScreen({super.key});
@@ -66,7 +67,7 @@ class _ListingAnalyticsScreenState extends State<ListingAnalyticsScreen> {
       // Shows the failure rather than an empty screen that looks like a
       // listing with no activity - those are very different messages to
       // give a seller.
-      if (mounted) setState(() { _loading = false; _error = '$e'; });
+      if (mounted) setState(() { _loading = false; _error = userFacingError(e); });
     }
   }
 
@@ -341,16 +342,16 @@ class _ListingAnalyticsScreenState extends State<ListingAnalyticsScreen> {
     );
   }
 
-  /// The five terms behind the headline number.
+  /// The terms behind the headline number.
   ///
   /// Shown because a percentage on its own is a verdict a seller can only
-  /// accept or ignore. Broken into demand / interest / buyers / you / price,
-  /// the short bar is the thing to work on.
+  /// accept or ignore. Broken into demand / saves / buyers / you / price /
+  /// the listing itself, the short bar is the thing to work on.
   Widget _componentBars() {
     final c = (_current['components'] as Map?)?.cast<String, dynamic>() ?? const {};
     const labels = {
       'demand': 'Views', 'intent': 'Saves', 'commitment': 'Buyers asking',
-      'seller': 'Your service', 'price_fit': 'Price',
+      'seller': 'Your service', 'price_fit': 'Price', 'quality': 'Photos & details',
     };
     return Column(children: [
       for (final e in labels.entries)

@@ -3,6 +3,7 @@
 
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 // ── Evidence types (mirrors backend EvidenceType enum) ──────────────────────
 enum EvidenceType {
@@ -250,9 +251,9 @@ class DisputesRepository {
       });
       return Success(DisputeCase.fromJson(data as Map<String, dynamic>));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -265,9 +266,9 @@ class DisputesRepository {
       if (caseData == null) return const Success(null);
       return Success(DisputeCase.fromJson(caseData as Map<String, dynamic>));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -277,9 +278,9 @@ class DisputesRepository {
       final data = await _client.get('/disputes/v2/$caseId');
       return Success(DisputeCase.fromJson(data as Map<String, dynamic>));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -300,9 +301,9 @@ class DisputesRepository {
       });
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -312,9 +313,9 @@ class DisputesRepository {
       final data = await _client.post('/disputes/v2/$caseId/analyse', {});
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -324,9 +325,9 @@ class DisputesRepository {
       final data = await _client.post('/disputes/v2/$caseId/execute', {});
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -340,9 +341,9 @@ class DisputesRepository {
           .toList();
       return Success(list);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -363,9 +364,9 @@ class DisputesRepository {
       });
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -374,9 +375,9 @@ class DisputesRepository {
       final data = await _client.get('/disputes/$disputeId');
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -385,9 +386,9 @@ class DisputesRepository {
       final data = await _client.get('/disputes/') as List;
       return Success(data.cast<Map<String, dynamic>>());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

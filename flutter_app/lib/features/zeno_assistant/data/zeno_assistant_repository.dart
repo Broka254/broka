@@ -3,6 +3,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/utils/result.dart';
 import '../../../services/api_service.dart';
 import '../domain/zeno_action.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class ZenoAssistantRepository {
   ZenoAssistantRepository({ApiClient? client}) : _client = client ?? apiClient;
@@ -52,9 +53,9 @@ class ZenoAssistantRepository {
           return Success(ZenoTurnResult(reply: reply));
         } catch (_) {}
       }
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

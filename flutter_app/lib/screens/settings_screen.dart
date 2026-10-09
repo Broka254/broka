@@ -18,8 +18,8 @@
 //    "coming soon". Help is in the Menu (How BROKA works); the other two have
 //    nothing behind them yet and are left out rather than promised.
 //
-// New: the splash's startup sound, which could only be changed on the splash
-// itself, and "Sign out of all devices" (POST /auth/token/revoke-all).
+// New: "Sign out of all devices" (POST /auth/token/revoke-all). The
+// startup-sound switch went with the splash's sound (2026-10-09).
 //
 // Since 2026-10-03: "Change password" (with an SMS-code reset for a
 // forgotten one). Only English and Kiswahili can be chosen as Zeno's
@@ -34,7 +34,6 @@ import '../features/auth/presentation/change_password_screen.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
-import '../services/sound_preference_service.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/menu_tiles.dart';
@@ -73,7 +72,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// a guess.
   bool? _locationVisible;
   bool _savingLocation = false;
-  bool _sound = SoundPreferenceService.cached;
   String _language = ApiService.currentUserLanguage;
 
   @override
@@ -83,8 +81,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    final sound = await SoundPreferenceService.load();
-    if (mounted) setState(() => _sound = sound);
     final me = await _repo.getMe();
     if (!mounted) return;
     if (me case Success(:final data)) {
@@ -131,11 +127,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setLanguage(String key) async {
     setState(() => _language = key);
     await ApiService.setLanguage(key);
-  }
-
-  Future<void> _setSound(bool on) async {
-    setState(() => _sound = on);
-    await SoundPreferenceService.setEnabled(on);
   }
 
   Future<void> _changePassword() async {
@@ -248,16 +239,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _snack("Couldn't open your phone's settings.");
               }
             },
-          ),
-          MenuTile(
-            icon: Icons.volume_up_outlined,
-            title: 'Startup sound',
-            subtitle: 'Play the BROKA sound when the app opens',
-            trailing: _switch(
-              key: const Key('settings-sound-switch'),
-              value: _sound,
-              onChanged: _setSound,
-            ),
           ),
         ]),
         const MenuSectionLabel('Security'),

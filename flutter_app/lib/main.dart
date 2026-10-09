@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
 import 'screens/splash_screen.dart';
+import 'screens/saved_listings_screen.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/sell_photos_screen.dart';
@@ -572,6 +573,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/selfie':           (_) => const SelfieCameraScreen(),
         '/user-profile':     (_) => const UserProfileScreen(),
         '/seller-dashboard': (_) => sellerDashboardOrSetup(),
+        '/saved':            (_) => const SavedListingsScreen(),
         '/start-selling':    (_) => const StartSellingScreen(),
         '/mpesa-confirm':    (_) => const MpesaConfirmationScreen(),
         '/escrow-payment':   (_) => const EConfirmPaymentScreen(),

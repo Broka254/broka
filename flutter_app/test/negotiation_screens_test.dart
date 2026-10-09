@@ -25,6 +25,8 @@ import 'package:broka/widgets/zeno_streaming_text.dart';
 
 import 'support/fake_api.dart';
 
+Map<String, dynamic>? _readStatus;
+
 const _reply = 'The seller has come down to 21,000 and says the charger is '
     'included. That is within the range you gave me.';
 
@@ -54,6 +56,7 @@ void main() {
   });
 
   setUp(() {
+    _readStatus = null;
     SharedPreferences.setMockInitialValues({});
     ApiService.currentUserId = 'buyer-1';
     ApiService.currentUserName = 'Amina Wanjiru';
@@ -70,6 +73,7 @@ void main() {
       }
       if (p == '/negotiate/message') return {'role': 'broker', 'content': _reply, 'id': 'm5'};
       if (p.startsWith('/negotiate/deal-status')) return {'has_deal': false};
+      if (p == '/negotiate/listing-1/read-status') return _readStatus;
       if (p == '/auth/user/seller-1') {
         return {
           'id': 'seller-1',
@@ -97,6 +101,43 @@ void main() {
           builder: (_) => child,
         ),
       );
+
+  // The badge on the button to the other screen is what is unread there,
+  // from the server - not how many messages the thread holds. The history
+  // above has two direct messages, one of them the user's own: the badge
+  // used to say 2 however much of it had been read (reported at 17 on a
+  // thread with nothing new, 2026-10-09).
+  group('unread badges', () {
+    testWidgets("Zeno's room badges the direct chat with what is unread", (tester) async {
+      _readStatus = {'unread': 1, 'zeno_unread': 0};
+      await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.descendant(of: find.byKey(const Key('direct-unread-badge')),
+          matching: find.text('1')), findsOneWidget);
+    });
+
+    testWidgets('nothing unread, no badge', (tester) async {
+      _readStatus = {'unread': 0, 'zeno_unread': 0};
+      await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.byKey(const Key('direct-unread-badge')), findsNothing);
+    });
+
+    testWidgets("the direct chat badges Zeno with Zeno's unread", (tester) async {
+      _readStatus = {'unread': 0, 'zeno_unread': 2};
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.descendant(of: find.byKey(const Key('zeno-unread-badge')),
+          matching: find.text('2')), findsOneWidget);
+    });
+
+    testWidgets('Zeno read in its room, no badge in the direct chat', (tester) async {
+      _readStatus = {'unread': 0, 'zeno_unread': 0};
+      await tester.pumpWidget(screen(const NegotiationScreen(animateBackground: false)));
+      await _settle(tester);
+      expect(find.byKey(const Key('zeno-unread-badge')), findsNothing);
+    });
+  });
 
   group('Zeno negotiation room', () {
     testWidgets("is on Home's visual system", (tester) async {

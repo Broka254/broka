@@ -1202,6 +1202,37 @@ class ApiService {
     return null;
   }
 
+  /// What is unread for this user in one thread, by the Inbox's rules:
+  /// `unread`, the other person's direct messages since this user last
+  /// read the direct chat, and `zenoUnread`, Zeno's messages to them since
+  /// they were last in its room. Null when the request failed.
+  ///
+  /// The two chat screens badge the button to the other screen with these.
+  /// They used to count the messages they held - this user's own replies
+  /// included - against a count saved on the phone only when that button
+  /// was tapped, so a thread read any other way showed every message it
+  /// had ever had ("17") as new.
+  static Future<({int unread, int zenoUnread})?> getUnreadCounts(
+    String listingId, {
+    String? buyerId,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/negotiate/$listingId/read-status').replace(
+        queryParameters: buyerId != null ? {'buyer_id': buyerId} : null,
+      );
+      final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 10)));
+      if (response.statusCode != 200) return null;
+      final m = jsonDecode(response.body) as Map<String, dynamic>;
+      // A server from before these counts sends neither: no badge, rather
+      // than a guess.
+      if (!m.containsKey('unread') && !m.containsKey('zeno_unread')) return null;
+      int n(String key) => (m[key] as num?)?.toInt() ?? 0;
+      return (unread: n('unread'), zenoUnread: n('zeno_unread'));
+    } catch (_) {}
+    return null;
+  }
+
   // ── Auction ────────────────────────────────────────────────────────────────
 
   /// Place a bid. Throws [BidRejection] when the backend refuses it.

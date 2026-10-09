@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../widgets/lighting_coach.dart';
+import '../core/errors/user_facing_error.dart';
 
 // ─── Blur / brightness helpers ────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
       // Start brightness stream
       _startBrightnessStream();
     } catch (e) {
-      if (mounted) setState(() { _initialising = false; _initError = e.toString(); });
+      if (mounted) setState(() { _initialising = false; _initError = userFacingError(e, fallback: "Couldn't start the camera. Please try again."); });
     }
   }
 
@@ -175,7 +176,7 @@ class _SelfieCameraScreenState extends State<SelfieCameraScreen>
       if (mounted) {
         setState(() => _capturing = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Camera error: $e'),
+          content: Text(userFacingError(e, fallback: "Couldn't take the photo. Please try again.")),
           backgroundColor: BrokaColors.danger,
         ));
       }

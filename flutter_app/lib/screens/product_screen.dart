@@ -30,6 +30,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../features/listings/data/repositories/listings_repository.dart';
+import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/stores/data/store_cart.dart';
 import '../features/stores/presentation/store_cart_screen.dart';
@@ -71,6 +73,11 @@ class _ProductScreenState extends State<ProductScreen> {
   /// then the standing tiles are placeholders, not "not measured yet".
   bool _sellerLoaded = false;
 
+  /// Whether this user has saved (hearted) the listing. Null until known,
+  /// and for a guest or the listing's own seller, who get no heart.
+  bool? _saved;
+  bool _saving = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -79,6 +86,8 @@ class _ProductScreenState extends State<ProductScreen> {
       if (args is Listing) {
         _listing = args;
         _loadSeller();
+        _refreshListing(args.id);
+        _loadSaved();
         LastScreenTracker.save('/product', {'listingId': args.id});
       } else if (args is Map && args['listingId'] is String) {
         // Restored from a relaunch - we only persisted the ID, fetch fresh.
@@ -93,10 +102,59 @@ class _ProductScreenState extends State<ProductScreen> {
       if (!mounted) return;
       setState(() => _listing = listing);
       _loadSeller();
+      _loadSaved();
       LastScreenTracker.save('/product', {'listingId': listingId});
     } catch (_) {
       // Listing may have been deleted/sold since the app was last open.
       if (mounted) Navigator.pushReplacementNamed(context, '/home');
+    }
+  }
+
+  /// The single-listing read for a listing opened from a list. A list's
+  /// card has no stock left (units_left) or sold-out state, and opening it
+  /// never reached the server - so the view wasn't counted, and the views
+  /// the seller's sell probability divides saves by were short. Best
+  /// effort: the card's copy stays on screen if this fails.
+  Future<void> _refreshListing(String id) async {
+    try {
+      final fresh = await ApiService.getListing(id);
+      if (!mounted || fresh.id != id) return;
+      setState(() => _listing = fresh);
+    } catch (_) {}
+  }
+
+  Future<void> _loadSaved() async {
+    final l = _listing;
+    if (l == null || ApiService.currentUserId == null || _isMine) return;
+    final result = await listingsRepository.isSaved(l.id);
+    if (!mounted) return;
+    if (result case Success(:final data)) setState(() => _saved = data);
+  }
+
+  /// Saves the listing, or takes the save back. Shown at once; put back,
+  /// with a word, if the server says no.
+  Future<void> _toggleSave() async {
+    final l = _listing;
+    if (l == null || _saving) return;
+    if (!await requireAuth(context, reason: 'to save listings')) return;
+    if (!mounted || _isMine) return;
+    final next = !(_saved ?? false);
+    setState(() {
+      _saved = next;
+      _saving = true;
+    });
+    final result = await listingsRepository.setSaved(l.id, next);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (result case Failure(:final message)) {
+      setState(() => _saved = !next);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        duration: const Duration(seconds: 2),
+        content: Text(next ? 'Saved - find it under Saved items in the Menu'
+                           : 'Removed from your saved items'),
+      ));
     }
   }
 
@@ -323,7 +381,30 @@ class _ProductScreenState extends State<ProductScreen> {
         ),
         const SizedBox(width: 8),
         _saleTypeBadge(l),
+        if (!_isMine) ...[
+          const SizedBox(width: 6),
+          _saveButton(),
+        ],
       ]),
+    );
+  }
+
+  Widget _saveButton() {
+    final saved = _saved ?? false;
+    return IconButton(
+      key: const Key('product-save'),
+      tooltip: saved ? 'Remove from saved' : 'Save',
+      onPressed: _toggleSave,
+      icon: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
+        child: Icon(
+          saved ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+          key: ValueKey(saved),
+          color: saved ? BrokaColors.danger : BrokaColors.textHigh,
+          size: 22,
+        ),
+      ),
     );
   }
 
@@ -508,16 +589,15 @@ class _ProductScreenState extends State<ProductScreen> {
           ]),
         ),
       ]),
+      if (_unitsLabel(l) case final units?) ...[
+        const SizedBox(height: 12),
+        _stockPanel(l, units),
+      ],
       const SizedBox(height: 12),
       Wrap(spacing: 8, runSpacing: 8, children: [
         _chip(l.category, Icons.category_rounded, BrokaColors.neonBlue),
         if (LandSize.describe(l.attributes) != null)
           _chip(LandSize.describe(l.attributes)!, Icons.straighten_rounded, BrokaColors.neonGreen),
-        if (_unitsLabel(l) case final units?)
-          KeyedSubtree(
-            key: const Key('units-left'),
-            child: _chip(units, Icons.inventory_2_outlined, BrokaColors.neonCyan),
-          ),
         if (l.locationName != null)
           _chip(l.locationName!, Icons.location_on_rounded, BrokaColors.gold),
         if (_distanceKm != null)
@@ -593,16 +673,70 @@ class _ProductScreenState extends State<ProductScreen> {
     );
   }
 
-  /// A listing of several units: "100 bags available", or "12 of 100 bags
-  /// left" once some are sold or in deals. The count left comes from the
-  /// single-listing read; a listing opened from a list shows the total.
-  /// Nothing for a single item, or when there is nothing left to buy.
+  /// How many a buyer can still get: "12 of 100 bags left" once some are
+  /// sold or in deals, "100 bags available" before, "Only 1 available" for
+  /// a single item. The count left comes from the single-listing read; a
+  /// listing opened from a list shows the total until it arrives. Nothing
+  /// when there is nothing left to buy, for an auction, or for one thing
+  /// priced per hour or per month (a service, a rental), which has no stock.
   String? _unitsLabel(Listing l) {
+    if (_unavailable || l.listingType == 'auction') return null;
     final total = l.quantity ?? 1;
-    if (total <= 1 || _unavailable) return null;
+    if (total <= 1) return l.priceUnit == null ? 'Only 1 available' : null;
     final left = l.unitsLeft;
     if (left == null || left >= total) return '${PriceUnits.quantity(total, l.priceUnit)} available';
     return '$left of ${PriceUnits.quantity(total, l.priceUnit)} left';
+  }
+
+  /// The stock line under the price, where a buyer deciding looks - it was
+  /// a chip among the category and location ones, easy to miss. A bar shows
+  /// how much of the stock is still there once some has gone.
+  Widget _stockPanel(Listing l, String label) {
+    final total = l.quantity ?? 1;
+    final left = l.unitsLeft;
+    final fraction = (total > 1 && left != null && left < total)
+        ? (left / total).clamp(0.0, 1.0) : null;
+    // Running low: a tenth or less of the stock left, or its last unit. Not
+    // a single item - one of one has not sold fast, it is just one.
+    final low = fraction != null && (fraction <= 0.1 || left == 1);
+    final color = low ? BrokaColors.gold : BrokaColors.neonCyan;
+    return Container(
+      key: const Key('units-left-panel'),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [
+          color.withOpacity(0.14), color.withOpacity(0.04),
+        ], begin: Alignment.topLeft, end: Alignment.bottomRight),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.inventory_2_rounded, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(child: KeyedSubtree(
+            key: const Key('units-left'),
+            child: Text(label, style: TextStyle(
+                color: color, fontSize: 14, fontWeight: FontWeight.w800)),
+          )),
+          if (low)
+            Text('Selling fast', style: TextStyle(
+                color: color.withOpacity(0.85), fontSize: 11, fontWeight: FontWeight.w600)),
+        ]),
+        if (fraction != null) ...[
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: fraction,
+              minHeight: 5,
+              backgroundColor: Colors.white.withOpacity(0.06),
+              valueColor: AlwaysStoppedAnimation(color),
+            ),
+          ),
+        ],
+      ]),
+    );
   }
 
   Widget _termTile({

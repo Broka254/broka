@@ -20,6 +20,7 @@ import '../services/api_service.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/local_chat_store.dart';
+import '../core/errors/user_facing_error.dart';
 
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key, this.animateBackground = true});
@@ -127,7 +128,7 @@ class _InboxScreenState extends State<InboxScreen> {
     if (s.contains('TimeoutException')) {
       return 'The connection timed out.\nPull down to try again.';
     }
-    return s.replaceFirst('Exception: ', '');
+    return userFacingError(e);
   }
 
   int get _totalUnread =>

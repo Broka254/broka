@@ -2,7 +2,9 @@
 //
 // These establish the futuristic design language described in the splash
 // spec (deep navy backdrop, neural-network mesh, concentric orbital rings
-// around the Zeno core, and a flowing digital wave). They're kept separate
+// around the Zeno core). The flowing digital wave that ran along the bottom
+// was removed with the splash's sound (2026-10-09): too much on screen
+// for something people see every time they open the app. They're kept separate
 // from splash_screen.dart - and written as plain, configurable
 // CustomPainters rather than splash-only internals - so the same pieces
 // can be reused when the login screen and other screens go through this
@@ -257,139 +259,6 @@ class OrbitRingPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant OrbitRingPainter oldDelegate) =>
       oldDelegate.reveal != reveal || oldDelegate.cometAngle != cometAngle;
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Digital wave (bottom band)
-// ─────────────────────────────────────────────────────────────────────────
-
-class WaveLayer {
-  final double amplitude; // fraction of the wave band's own height
-  final double frequency; // cycles across the width
-  final double phaseOffset;
-  final double yFraction; // vertical centre, fraction of the wave band height
-  final int density; // spine samples
-  final double opacity;
-
-  const WaveLayer({
-    required this.amplitude,
-    required this.frequency,
-    required this.phaseOffset,
-    required this.yFraction,
-    required this.density,
-    required this.opacity,
-  });
-}
-
-/// Six overlapping layers, back-to-front - matches the reference splash
-/// art's bottom wave band. Amplitude is a fraction of the wave band's own
-/// height. `density` is the number of ridge samples - the painter draws a
-/// small dust cluster (bright core + soft falloff) at each sample, not a
-/// single particle. Colour is NOT per-layer (see [waveColorAt]) - every
-/// layer shares one continuous left-to-right gradient so overlapping
-/// layers read as one coherent scene instead of mismatched, independently
-/// coloured curves.
-const List<WaveLayer> kSplashWaveLayers = [
-  WaveLayer(amplitude: 0.22, frequency: 0.75, phaseOffset: 0.0, yFraction: 0.18, density: 90, opacity: 0.50),
-  WaveLayer(amplitude: 0.27, frequency: 0.95, phaseOffset: 1.1, yFraction: 0.34, density: 98, opacity: 0.58),
-  WaveLayer(amplitude: 0.25, frequency: 0.65, phaseOffset: 2.3, yFraction: 0.49, density: 104, opacity: 0.64),
-  WaveLayer(amplitude: 0.30, frequency: 0.85, phaseOffset: 3.4, yFraction: 0.63, density: 110, opacity: 0.70),
-  WaveLayer(amplitude: 0.26, frequency: 1.05, phaseOffset: 4.4, yFraction: 0.76, density: 110, opacity: 0.75),
-  WaveLayer(amplitude: 0.31, frequency: 0.80, phaseOffset: 5.4, yFraction: 0.88, density: 116, opacity: 0.82),
-];
-
-/// One shared colour ramp across the *entire* wave band width, used by
-/// every layer, so the whole thing reads as a single violet-to-cyan scene
-/// rather than each layer carrying its own independent (and visually
-/// clashing) colour pair.
-Color waveColorAt(double xFrac) {
-  if (xFrac < 0.5) return Color.lerp(BrokaColors.gold, BrokaColors.neonBlue, xFrac / 0.5)!;
-  return Color.lerp(BrokaColors.neonBlue, BrokaColors.neonCyan, (xFrac - 0.5) / 0.5)!;
-}
-
-class DigitalWavePainter extends CustomPainter {
-  final double t; // 0..1, phase driver (angle-based, so wraps cleanly)
-  final double reveal;
-  final List<WaveLayer> layers;
-
-  DigitalWavePainter({required this.t, required this.reveal, required this.layers});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (reveal <= 0.0) return;
-    for (int li = 0; li < layers.length; li++) {
-      final layer = layers[li];
-      // Seeded per-layer (not per-frame) so particle jitter is stable
-      // across frames instead of flickering like noise.
-      final rnd = Random(li * 7919 + 13);
-      final baseY = size.height * layer.yFraction;
-      final n = layer.density;
-
-      // Ridge line - the underlying crest curve for this layer. A single,
-      // gentle harmonic (low frequency/amplitude, only a faint second
-      // overtone) keeps this a smooth rolling curve rather than the tight
-      // loop-like crossings a busier waveform produces.
-      final ridge = <Offset>[];
-      for (int i = 0; i <= n; i++) {
-        final xFrac = i / n;
-        final x = xFrac * size.width;
-        final theta = xFrac * layer.frequency * 2 * pi + layer.phaseOffset + t * 2 * pi;
-        final y = baseY +
-            sin(theta) * size.height * layer.amplitude +
-            sin(theta * 2.1 + 1.0) * size.height * layer.amplitude * 0.12;
-        ridge.add(Offset(x, y));
-      }
-
-      // Crisp highlight along the crest itself - the only "connecting
-      // line" drawn; consecutive-point-only, so no segment can span more
-      // than one sample's worth of x/y, unlike a skip-ahead connector.
-      final path = Path()..moveTo(ridge[0].dx, ridge[0].dy);
-      for (int i = 1; i < ridge.length; i++) {
-        path.lineTo(ridge[i].dx, ridge[i].dy);
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.9
-          ..color = waveColorAt(0.5).withOpacity(layer.opacity * 0.40 * reveal),
-      );
-
-      // Dust clusters along the ridge: a bright core tight to the crest
-      // plus a soft gaussian-ish falloff spreading above and below it.
-      // The falloff is what reads as hills/valleys with real volume
-      // instead of a thin outline - a single row of particles along an
-      // exact curve is inherently flat/2D, a cloud that's dense at the
-      // crest and thins with distance is what implies depth.
-      for (int i = 0; i < ridge.length; i++) {
-        final base = ridge[i];
-        final xFrac = i / n;
-        final color = waveColorAt(xFrac);
-        final coreColor = Color.lerp(color, Colors.white, 0.40)!;
-
-        final coreJitter = (rnd.nextDouble() - 0.5) * 3.6;
-        canvas.drawCircle(
-          Offset(base.dx, base.dy + coreJitter),
-          0.55 + rnd.nextDouble() * 0.75,
-          Paint()..color = coreColor.withOpacity(layer.opacity * reveal * (0.7 + rnd.nextDouble() * 0.3)),
-        );
-
-        for (int h = 0; h < 2; h++) {
-          final spread = ((rnd.nextDouble() + rnd.nextDouble() + rnd.nextDouble()) / 3 - 0.5) * 22.0;
-          final falloff = _clampD(1.0 - spread.abs() / 15.0, 0.0, 1.0);
-          if (falloff <= 0.02) continue;
-          canvas.drawCircle(
-            Offset(base.dx + (rnd.nextDouble() - 0.5) * 4.0, base.dy + spread),
-            0.35 + rnd.nextDouble() * 0.55,
-            Paint()..color = color.withOpacity(layer.opacity * reveal * falloff * 0.5),
-          );
-        }
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant DigitalWavePainter oldDelegate) => oldDelegate.t != t || oldDelegate.reveal != reveal;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

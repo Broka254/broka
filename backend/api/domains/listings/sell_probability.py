@@ -13,25 +13,49 @@ the obvious thing to replace with fitted ones — the shape stays, the
 constants stop being guesses. Until then they are stated in one place and
 argued for individually rather than buried.
 
+WHAT CHANGED ON 2026-10-09
+==========================
+A fifth of the score was the like rate, and nothing collected likes: the
+`wishlists` table had no endpoint and the app no button, so every listing
+scored 0 on it - and every listing with 20 views was told "20 views and no
+saves", an accusation built on a number that could only ever be zero. Saves
+are now collected (POST /listings/{id}/save, the heart on a listing), and
+the model was rebuilt around what is really measured:
+
+  * the save rate is smoothed toward a prior, so a listing nobody has had
+    the chance to save yet is not scored as one nobody wants;
+  * "buyers asking" counts everyone who has started a conversation about
+    the listing, not only the availability button (`Interest`) - most
+    buyers simply write;
+  * an offer near the asking price is the closest thing to a sale short of
+    one, and now counts;
+  * the listing itself - photos, a description - is a term: it is the part
+    the seller controls completely;
+  * a listing that has sat for weeks with nobody asking is marked down;
+  * evidence counts buyers and saves, not only views, so three buyers
+    asking about a listing with eight views is not "too early to tell".
+
 THE SIGNALS, AND WHY EACH IS IN
 ===============================
   Demand — views per day. The raw measure of whether anyone is looking.
-  Intent — likes ÷ views. A like is a buyer saying "I want this but not
-           today", which is a far stronger signal than a view: they looked,
-           they considered, and something stopped them. Usually price.
-  Commitment — interested buyers (people who asked about availability).
-           The strongest per-listing signal there is, because asking costs
-           effort and exposes the buyer to a reply.
+  Intent — saves ÷ views, smoothed. A save is a buyer saying "I want this
+           but not today": they looked, they considered, and something
+           stopped them. Usually price.
+  Commitment — buyers who have asked or written about it, and how close
+           their best offer is to the price. The strongest per-listing
+           signal there is, because asking costs effort and exposes the
+           buyer to a reply.
   Seller — DCR and response time. The same listing sells at different rates
            depending on who is answering the messages, and this is the term
            that makes the seller's own behaviour visible on the listing
            screen rather than only on the dashboard.
   Price — position against the category's current median.
-  Category — how much the category moves on BROKA at all.
+  Listing — photos and a description. Listings with one photo and no words
+           are the ones buyers scroll past.
 
 THE CONFIDENCE PROBLEM, AGAIN
 =============================
-A listing with 3 views and 1 like has a 33% like rate, which naively reads
+A listing with 3 views and 1 save has a 33% save rate, which naively reads
 as extraordinary demand. Same trap as the seller rating: thin evidence
 produces extreme numbers. So the score is shrunk toward the category base
 rate by an evidence weight, and a brand-new listing reports roughly what the
@@ -44,20 +68,44 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 # ── Weights (sum to 1.0) ────────────────────────────────────────────────────
-W_DEMAND      = 0.20
-W_INTENT      = 0.20
-W_COMMITMENT  = 0.25   # largest: asking about availability costs effort
-W_SELLER      = 0.20
+W_DEMAND      = 0.15
+W_INTENT      = 0.15
+W_COMMITMENT  = 0.25   # largest: asking about it costs effort
+W_SELLER      = 0.15
 W_PRICE       = 0.15
+W_QUALITY     = 0.15
 
 # ── Normalisation ───────────────────────────────────────────────────────────
 VIEWS_PER_DAY_HALF   = 5.0    # 5 views/day scores 0.5 on demand
-GOOD_LIKE_RATE       = 0.15   # 15% of viewers liking it is strong
-INTEREST_HALF        = 3.0    # 3 people asking scores 0.5 on commitment
+GOOD_LIKE_RATE       = 0.15   # 15% of viewers saving it is strong
+INTEREST_HALF        = 3.0    # 3 buyers asking scores 0.5 on commitment
+
+# The save rate is smoothed as if every listing started with PRIOR_VIEWS
+# views and PRIOR_SAVE_RATE of them saved. Without it a listing's first
+# viewer decides its whole intent score: one save is 100%, no save is 0%.
+PRIOR_VIEWS          = 20.0
+PRIOR_SAVE_RATE      = 0.05
+
+# An offer at this share of the price or more is a buyer ready to deal.
+STRONG_OFFER_RATIO   = 0.9
+# Below this an offer says more about the buyer than about the listing.
+WEAK_OFFER_RATIO     = 0.6
+
+# Photos and words that make a complete listing.
+GOOD_PHOTO_COUNT       = 4
+GOOD_DESCRIPTION_CHARS = 120
+
+# After this many days with nobody asking, a listing is going stale: the
+# buyers who will ever find it mostly have.
+STALE_AFTER_DAYS     = 21.0
+STALE_FLOOR          = 0.6    # the most staleness can take off: 40%
 
 # Evidence needed before the listing's own numbers outweigh the category
-# base rate. 20 views is roughly a day or two of normal traffic.
+# base rate. 20 views is roughly a day or two of normal traffic; a buyer
+# asking is worth five views of evidence, a save three.
 VIEWS_FOR_FULL_CONFIDENCE = 20.0
+EVIDENCE_PER_BUYER        = 5.0
+EVIDENCE_PER_SAVE         = 3.0
 
 # Fallback when a category has too little history to have its own rate.
 DEFAULT_CATEGORY_SELL_RATE = 0.35
@@ -79,8 +127,8 @@ MIN_COMPARABLE_LISTINGS = 5
 @dataclass(frozen=True)
 class ListingSignals:
     views: int = 0
-    likes: int = 0
-    interested_buyers: int = 0
+    likes: int = 0                  # saves (the wishlists table)
+    interested_buyers: int = 0      # distinct buyers who asked or wrote
     days_listed: float = 1.0
     seller_dcr_percent: Optional[float] = None
     seller_response_minutes: Optional[float] = None
@@ -90,6 +138,12 @@ class ListingSignals:
     # How many OTHER listings the median was computed from. None or below
     # MIN_COMPARABLE_LISTINGS means there is no usable benchmark.
     comparable_count: Optional[int] = None
+    # The highest offer a buyer has made, when any has.
+    best_offer: Optional[float] = None
+    # None when the caller did not look: the listing term is then left out
+    # rather than scored as a listing with no photos.
+    photo_count: Optional[int] = None
+    description_chars: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -102,10 +156,52 @@ class SellProbability:
     seller: float
     price_fit: Optional[float]   # None when there is no benchmark
     price_delta_percent: Optional[float]   # + = above category median
+    quality: Optional[float] = None        # None when not measured
+    freshness: float = 1.0                 # 1 = not stale
 
 
 def _views_per_day(s: ListingSignals) -> float:
     return s.views / max(s.days_listed, 1.0)
+
+
+def smoothed_save_rate(s: ListingSignals) -> float:
+    """Saves per view, shrunk toward PRIOR_SAVE_RATE while views are few."""
+    return ((max(s.likes, 0) + PRIOR_SAVE_RATE * PRIOR_VIEWS)
+            / (max(s.views, 0) + PRIOR_VIEWS))
+
+
+def offer_strength(best_offer: Optional[float], price: Optional[float]) -> Optional[float]:
+    """0-1: how close the best offer is to the asking price. None: no offer."""
+    if not best_offer or not price or price <= 0:
+        return None
+    ratio = best_offer / price
+    if ratio >= STRONG_OFFER_RATIO:
+        return 1.0
+    if ratio <= WEAK_OFFER_RATIO:
+        return 0.0
+    return (ratio - WEAK_OFFER_RATIO) / (STRONG_OFFER_RATIO - WEAK_OFFER_RATIO)
+
+
+def listing_quality(photo_count: Optional[int],
+                    description_chars: Optional[int]) -> Optional[float]:
+    """0-1 for the listing itself: photos weigh most, then the words."""
+    if photo_count is None and description_chars is None:
+        return None
+    photos = min(max(photo_count or 0, 0), GOOD_PHOTO_COUNT) / GOOD_PHOTO_COUNT
+    words = min(max(description_chars or 0, 0), GOOD_DESCRIPTION_CHARS) / GOOD_DESCRIPTION_CHARS
+    return 0.7 * photos + 0.3 * words
+
+
+def freshness(s: ListingSignals) -> float:
+    """1.0, falling toward STALE_FLOOR as a listing nobody asks about ages.
+
+    Only when nobody has asked: an old listing with buyers in conversation
+    is not stale, it is being negotiated.
+    """
+    if s.interested_buyers > 0 or s.days_listed <= STALE_AFTER_DAYS:
+        return 1.0
+    over = (s.days_listed - STALE_AFTER_DAYS) / STALE_AFTER_DAYS
+    return max(STALE_FLOOR, 1.0 - (1.0 - STALE_FLOOR) * min(over, 1.0))
 
 
 def has_price_benchmark(s: ListingSignals) -> bool:
@@ -148,11 +244,14 @@ def compute_sell_probability(s: ListingSignals) -> SellProbability:
     vpd = _views_per_day(s)
     demand = vpd / (vpd + VIEWS_PER_DAY_HALF)
 
-    # Like rate only means something once there are views to divide by.
-    like_rate = (s.likes / s.views) if s.views > 0 else 0.0
-    intent = min(1.0, like_rate / GOOD_LIKE_RATE)
+    intent = min(1.0, smoothed_save_rate(s) / GOOD_LIKE_RATE)
 
-    commitment = s.interested_buyers / (s.interested_buyers + INTEREST_HALF)
+    buyers = s.interested_buyers / (s.interested_buyers + INTEREST_HALF)
+    offer = offer_strength(s.best_offer, s.price)
+    # An offer near the price lifts the term; one far below it does not
+    # drag it under what the buyers alone are worth - a lowball is still
+    # a buyer.
+    commitment = buyers if offer is None else max(buyers, 0.5 * buyers + 0.5 * offer)
 
     # Seller term: reuses the rating module's response curve so a seller
     # cannot see one reply-speed story on the dashboard and a different one
@@ -163,25 +262,31 @@ def compute_sell_probability(s: ListingSignals) -> SellProbability:
     seller = 0.5 * min(max(dcr_norm, 0.0), 1.0) + 0.5 * response_score(
         s.seller_response_minutes)
 
-    # Price only enters the score when there is something to compare
-    # against. With no benchmark the weight is REDISTRIBUTED across the
-    # other four terms rather than filled with a neutral guess - a
-    # fabricated 0.6 on 15% of the score is a fabricated 9% of the answer,
-    # and it moves in the direction of "this listing is fine".
+    # Price and the listing term only enter the score when they were
+    # measured. Otherwise their weight is REDISTRIBUTED across the others
+    # rather than filled with a neutral guess - a fabricated 0.6 on 15% of
+    # the score is a fabricated 9% of the answer, and it moves in the
+    # direction of "this listing is fine".
     benchmark = has_price_benchmark(s)
     pfit = price_fit(s.price, s.category_median_price) if benchmark else None
+    quality = listing_quality(s.photo_count, s.description_chars)
 
-    if benchmark:
-        raw = (W_DEMAND * demand + W_INTENT * intent + W_COMMITMENT * commitment
-               + W_SELLER * seller + W_PRICE * pfit)
-    else:
-        scale = 1.0 / (W_DEMAND + W_INTENT + W_COMMITMENT + W_SELLER)
-        raw = (W_DEMAND * demand + W_INTENT * intent + W_COMMITMENT * commitment
-               + W_SELLER * seller) * scale
+    terms = [(W_DEMAND, demand), (W_INTENT, intent), (W_COMMITMENT, commitment),
+             (W_SELLER, seller)]
+    if pfit is not None:
+        terms.append((W_PRICE, pfit))
+    if quality is not None:
+        terms.append((W_QUALITY, quality))
+    raw = sum(w * v for w, v in terms) / sum(w for w, _ in terms)
+
+    fresh = freshness(s)
+    raw *= fresh
 
     base = (s.category_sell_rate if s.category_sell_rate is not None
             else DEFAULT_CATEGORY_SELL_RATE)
-    confidence = min(1.0, s.views / VIEWS_FOR_FULL_CONFIDENCE)
+    evidence = (s.views + EVIDENCE_PER_BUYER * s.interested_buyers
+                + EVIDENCE_PER_SAVE * s.likes)
+    confidence = min(1.0, evidence / VIEWS_FOR_FULL_CONFIDENCE)
     prob = confidence * raw + (1 - confidence) * base
 
     # No benchmark, no delta. The screen shows "not enough comparable
@@ -199,6 +304,8 @@ def compute_sell_probability(s: ListingSignals) -> SellProbability:
         seller=round(seller, 3),
         price_fit=round(pfit, 3) if pfit is not None else None,
         price_delta_percent=delta,
+        quality=round(quality, 3) if quality is not None else None,
+        freshness=round(fresh, 3),
     )
 
 
@@ -252,14 +359,27 @@ def listing_advice(s: ListingSignals, p: SellProbability) -> Dict[str, List[Dict
                       "than any other action on this listing.",
         })
 
-    if s.views >= 20 and s.likes == 0:
+    offer = offer_strength(s.best_offer, s.price)
+    if offer is not None and offer >= 1.0:
+        pos.append({
+            "code": "strong_offer", "severity": 0,
+            "title": "A buyer has offered close to your price",
+            "detail": f"The best offer is KES {s.best_offer:,.0f}, within "
+                      f"{int(round((1 - STRONG_OFFER_RATIO) * 100))}% of what you're "
+                      f"asking. Replying to it is the shortest way to a sale.",
+        })
+
+    # Saves only began to be collected on 2026-10-09, so views from before
+    # then had no chance to become one. A higher bar than one day's traffic
+    # keeps an old listing from being told nobody saved it when nobody could.
+    if s.views >= 40 and s.likes == 0:
         neg.append({
             "code": "views_no_likes", "severity": 4,
-            "title": f"{s.views} views and no saves",
+            "title": f"{s.views} views and no saves yet",
             "detail": "People are finding it and moving on. That usually points "
                       "at the photos or the price rather than demand.",
         })
-    elif s.views > 0 and (s.likes / s.views) >= GOOD_LIKE_RATE:
+    elif s.likes >= 3 and s.views > 0 and (s.likes / s.views) >= GOOD_LIKE_RATE:
         pos.append({
             "code": "strong_interest", "severity": 0,
             "title": "People are saving this listing",
@@ -276,12 +396,40 @@ def listing_advice(s: ListingSignals, p: SellProbability) -> Dict[str, List[Dict
                       f"every listing you have — or boost this one directly.",
         })
 
+    if s.photo_count is not None and s.photo_count < 3:
+        neg.append({
+            "code": "few_photos", "severity": 4,
+            "title": ("No photos" if s.photo_count == 0
+                      else f"Only {s.photo_count} photo{'s' if s.photo_count != 1 else ''}"),
+            "detail": f"Listings with {GOOD_PHOTO_COUNT} or more clear photos - "
+                      f"front, back, close-ups, any flaws - get far more buyers "
+                      f"asking. It is free and takes a minute.",
+        })
+    if s.description_chars is not None and s.description_chars < 40:
+        neg.append({
+            "code": "thin_description", "severity": 2,
+            "title": "Say more about it",
+            "detail": "A line or two on condition, age and what's included "
+                      "answers the questions buyers would otherwise ask - or "
+                      "skip the listing over.",
+        })
+
+    fresh = freshness(s)
+    if fresh < 1.0:
+        neg.append({
+            "code": "going_stale", "severity": 3,
+            "title": f"Listed {s.days_listed:.0f} days and nobody has asked",
+            "detail": "Most buyers who will find a listing have found it by "
+                      "now. A new main photo or a price move puts it in front "
+                      "of them again.",
+        })
+
     if (s.seller_response_minutes is not None
             and s.seller_response_minutes >= 180 and s.interested_buyers > 0):
         neg.append({
             "code": "slow_with_buyers_waiting", "severity": 5,
             "title": "Buyers asked, and you're slow to reply",
-            "detail": "There is interest in this listing and your median reply "
+            "detail": "There is interest in this listing and your average reply "
                       "time is over three hours. This is the most expensive "
                       "gap on the whole screen.",
         })

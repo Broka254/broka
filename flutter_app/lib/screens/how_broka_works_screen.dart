@@ -123,11 +123,12 @@ const List<_Topic> _topics = [
   ),
   _Topic(
     Icons.speed_rounded, BrokaColors.neonBlue,
-    'Response time',
-    'How long buyers wait for you, measured from their message to your reply.',
+    'Average response time',
+    'How long buyers wait for you, on average, from their message to your reply.',
     [
-      'Measured across your recent conversations and reported as a median, '
-      'so one forgotten thread does not define your month.',
+      'The average of every wait across your conversations in the last 30 '
+      'days. A thread left unanswered counts for at most two days, so one '
+      'forgotten conversation can not define your month.',
       'A conversation you never answer counts too. Leaving a buyer on read '
       'is treated as at least as costly as a slow reply — otherwise '
       'ignoring people would look better than being late.',

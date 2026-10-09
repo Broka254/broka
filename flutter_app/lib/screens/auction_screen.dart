@@ -26,6 +26,7 @@ import '../features/auctions/data/repositories/auctions_repository.dart';
 import '../features/auctions/domain/models/auction.dart' as auction_model;
 import '../features/safe_payment/safe_payment.dart';
 import '../widgets/zeno_avatar.dart';
+import '../core/errors/user_facing_error.dart';
 
 class AuctionScreen extends StatefulWidget {
   // Real auction to display. Falls back to a hardcoded demo listing when
@@ -685,7 +686,7 @@ class _AuctionScreenState extends State<AuctionScreen> {
                       } catch (e) {
                         setDlg(() {
                           busy = false;
-                          error = e.toString().replaceAll('Exception: ', '');
+                          error = userFacingError(e);
                         });
                       }
                     },

@@ -2,6 +2,7 @@
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/category.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class CategoriesRepository {
   final ApiClient _client;
@@ -12,9 +13,9 @@ class CategoriesRepository {
       final res = await _client.get('/categories');
       return Success((res as List).map((e) => Category.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -27,9 +28,9 @@ class CategoriesRepository {
           .map((e) => CategoryNode.fromJson(e as Map<String, dynamic>))
           .toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -38,9 +39,9 @@ class CategoriesRepository {
       final res = await _client.get('/categories/$categoryId/subcategories');
       return Success((res as List).map((e) => Category.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -49,9 +50,9 @@ class CategoriesRepository {
       final res = await _client.get('/categories/$categoryId/filters');
       return Success((res as List).map((e) => CategoryFilterField.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

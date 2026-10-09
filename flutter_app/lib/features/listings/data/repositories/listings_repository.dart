@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/listing.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 /// Returned by getListings when withTotal=true - a page of results plus
 /// the true total match count (post-filter), for "128 results" style UI
@@ -63,9 +64,9 @@ class ListingsRepository {
       final data = await _client.get('/listings/', queryParams: params) as List;
       return Success(data.map((e) => BrokaListing.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -104,9 +105,9 @@ class ListingsRepository {
       final items = (data['items'] as List).map((e) => BrokaListing.fromJson(e)).toList();
       return Success(ListingsPage(items: items, total: data['total'] as int));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -151,9 +152,9 @@ class ListingsRepository {
       final data = await _client.get('/listings/$listingId');
       return Success(BrokaListing.fromJson(data));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -163,9 +164,9 @@ class ListingsRepository {
           timeout: const Duration(seconds: 120));
       return Success(BrokaListing.fromJson(data));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -177,9 +178,9 @@ class ListingsRepository {
       await _client.delete('/listings/$listingId');
       return const Success(null);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -188,9 +189,9 @@ class ListingsRepository {
       await _client.post('/listings/$listingId/interest', {'offer_price': offerPrice});
       return const Success(null);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -199,9 +200,9 @@ class ListingsRepository {
       final data = await _client.get('/listings/$listingId/matches') as List;
       return Success(data.cast<Map<String, dynamic>>());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -210,9 +211,9 @@ class ListingsRepository {
       final data = await _client.get('/listings/stats');
       return Success(data as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -223,9 +224,9 @@ class ListingsRepository {
       final data = await _client.post('/listings/$listingId/store', {'store_id': storeId});
       return Success(BrokaListing.fromJson(data));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -251,9 +252,9 @@ class ListingsRepository {
       if (e.code == 'PRICE_RAISE_SHORTENS_PAID_TIME') {
         return Success(PriceChange(confirmMessage: e.message));
       }
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -263,9 +264,51 @@ class ListingsRepository {
       final data = await _client.delete('/listings/$listingId/store');
       return Success(BrokaListing.fromJson(data));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
+    }
+  }
+
+  // ── Saves (the heart on a listing) ───────────────────────────────────────
+
+  /// Whether this user has saved the listing.
+  Future<Result<bool>> isSaved(String listingId) async {
+    try {
+      final data = await _client.get('/listings/$listingId/save') as Map;
+      return Success(data['saved'] == true);
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  /// Saves the listing, or takes the save back. A save is a buyer saying
+  /// "I want this, not today" - it counts toward the listing's chance of
+  /// selling on its seller's dashboard.
+  Future<Result<bool>> setSaved(String listingId, bool saved) async {
+    try {
+      final data = saved
+          ? await _client.post('/listings/$listingId/save', const {})
+          : await _client.delete('/listings/$listingId/save');
+      return Success((data as Map?)?['saved'] == true);
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  /// This user's saved listings still on sale, most recently saved first.
+  Future<Result<List<BrokaListing>>> savedListings() async {
+    try {
+      final data = await _client.get('/listings/saved') as List;
+      return Success(data.map((e) => BrokaListing.fromJson(e)).toList());
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
     }
   }
 }

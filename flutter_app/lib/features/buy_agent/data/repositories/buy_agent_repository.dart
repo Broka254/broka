@@ -2,6 +2,7 @@
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/buy_agent_request.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class BuyAgentRepository {
   final ApiClient _client;
@@ -23,9 +24,9 @@ class BuyAgentRepository {
       // statusCode is preserved so the UI can show the specific "you
       // already have an active request" message on a 409, not a generic
       // failure banner.
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -34,9 +35,9 @@ class BuyAgentRepository {
       final res = await _client.get('/buy-agent-requests/me');
       return Success(res == null ? null : BuyAgentRequest.fromJson(res));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -73,9 +74,9 @@ class BuyAgentRepository {
       });
       return Success(res as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -123,9 +124,9 @@ class BuyAgentRepository {
       final res = await _client.post('/buy-agent-requests/parse-intent', body);
       return Success(res as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -147,9 +148,9 @@ class BuyAgentRepository {
       final res = await _client.post(path, action);
       return Success(res as Map<String, dynamic>);
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 

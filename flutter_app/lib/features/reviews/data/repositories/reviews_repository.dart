@@ -7,6 +7,7 @@
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/review.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class ReviewsRepository {
   final ApiClient _client;
@@ -53,9 +54,9 @@ class ReviewsRepository {
     try {
       return Success(await call());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

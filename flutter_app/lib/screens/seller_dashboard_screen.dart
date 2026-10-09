@@ -389,14 +389,14 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         lineColor: BrokaColors.neonGreen,
       ),
       FactorTrendChart(
-        label: 'Response time',
+        label: 'Avg response time',
         points: _series('response_minutes'),
         currentValue: _live('median_response_minutes'),
         // Lower is better: green sits at the BOTTOM of this one.
         higherIsBetter: false,
         goodThreshold: SellerStanding.responseGood, poorThreshold: SellerStanding.responsePoor,
         format: SellerStanding.formatMinutes,
-        yTitle: 'Reply time',
+        yTitle: 'Avg reply',
         lineColor: BrokaColors.neonBlue,
       ),
       FactorTrendChart(
@@ -1321,19 +1321,42 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
       child: Container(
         padding: const EdgeInsets.fromLTRB(14, 20, 18, 20),
+        // Glass lit from the top-left in the chart's cyan, a violet wash
+        // opposite, and a glow under the card - the premium surface the
+        // rest of the dashboard's charts now sit on too (FactorTrendChart).
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: BrokaColors.cardGradColors,
+          gradient: LinearGradient(colors: [
+            Color.alphaBlend(BrokaColors.neonCyan.withOpacity(0.10), BrokaColors.cardGradColors.first),
+            BrokaColors.cardGradColors.last,
+            Color.alphaBlend(BrokaColors.neonPurple.withOpacity(0.08), BrokaColors.cardGradColors.last),
+          ], stops: const [0.0, 0.55, 1.0],
               begin: Alignment.topLeft, end: Alignment.bottomRight),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.18)),
-          boxShadow: [BoxShadow(
-              color: BrokaColors.neonCyan.withOpacity(0.04), blurRadius: 20)]),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.32)),
+          boxShadow: [
+            BoxShadow(color: BrokaColors.neonCyan.withOpacity(0.14), blurRadius: 26,
+                spreadRadius: -4, offset: const Offset(0, 8)),
+            BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.08), blurRadius: 30, spreadRadius: -6),
+          ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             const SizedBox(width: 6),
-            const Expanded(child: Text('REVENUE OVERVIEW', style: TextStyle(
-                color: BrokaColors.textHigh, fontSize: 12,
-                fontWeight: FontWeight.w800, letterSpacing: 1.0))),
+            Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: BrokaColors.neonCyan,
+                boxShadow: [BoxShadow(color: BrokaColors.neonCyan.withOpacity(0.8), blurRadius: 7)],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: ShaderMask(
+              shaderCallback: (b) => const LinearGradient(
+                  colors: [BrokaColors.neonCyan, BrokaColors.neonBlue, BrokaColors.neonPurple]).createShader(b),
+              child: const Text('REVENUE OVERVIEW', style: TextStyle(
+                  color: Colors.white, fontSize: 12,
+                  fontWeight: FontWeight.w900, letterSpacing: 1.4)),
+            )),
             if (_revenueLoading)
               const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(
                   strokeWidth: 1.6, color: BrokaColors.neonCyan))
@@ -1350,8 +1373,16 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           ]),
           const SizedBox(height: 18),
           SizedBox(height: 190, child: Stack(alignment: Alignment.center, children: [
-            AxisLineChart(
+            TweenAnimationBuilder<double>(
+              // Re-traces when the week/month switch swaps the series.
+              key: ValueKey(_revenueWeekMode),
+              tween: Tween(begin: 0.0, end: 1.0),
+              duration: BrokaMotion.reduced(context) ? Duration.zero : const Duration(milliseconds: 800),
+              curve: BrokaMotion.enter,
+              builder: (_, t, __) => AxisLineChart(
               key: const Key('revenue-chart'),
+              progress: t,
+              showLastValue: !showEmpty,
               values: data,
               positions: [for (var i = 0; i < data.length; i++) i / (data.length - 1)],
               xTicks: [for (var i = 0; i < labels.length; i++) AxisTick(i / (labels.length - 1), labels[i])],
@@ -1363,7 +1394,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
               // not stretched to fill the chart.
               yFloor: 0,
               minStep: 1,
-            ),
+            )),
             if (showEmpty)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),

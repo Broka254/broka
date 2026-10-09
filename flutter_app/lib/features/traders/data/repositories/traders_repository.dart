@@ -2,6 +2,7 @@
 import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../domain/models/trader.dart';
+import '../../../../core/errors/user_facing_error.dart';
 
 class TradersRepository {
   final ApiClient _client;
@@ -31,9 +32,9 @@ class TradersRepository {
       final res = await _client.get('/traders', queryParams: params);
       return Success((res as List).map((e) => Trader.fromJson(e)).toList());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 
@@ -46,9 +47,9 @@ class TradersRepository {
       final res = await _client.get('/traders/$traderId', queryParams: params);
       return Success(Trader.fromJson(res));
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 }

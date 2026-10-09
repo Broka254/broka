@@ -6,9 +6,12 @@
 // on purpose, one section per thing a person comes here to do:
 //
 //   Profile       who you are on BROKA - opens the Profile screen
-//   Selling       Seller Dashboard (or becoming a seller), posting a listing
+//   Dashboard     a seller's Seller Dashboard, as its own card right under
+//                 the profile (2026-10-09): as one row among a dozen, sellers
+//                 didn't find the screen that tells them what is selling
+//   Selling       posting a listing (or becoming a seller)
 //   Online store  the store summary and its actions (MenuStoreSection)
-//   Account       Settings, payment receipts, help
+//   Account       Saved items, Settings, payment receipts, help
 //   Sign out
 //
 // On the constellation, like Home and every screen reached from it.
@@ -177,20 +180,19 @@ class _MenuScreenState extends State<MenuScreen> {
 
   List<Widget> _sections() {
     final account = _account;
+    final isSeller = account?.isSeller ?? ApiService.currentUserAccountType == 'buyer_seller';
     return [
       _profileCard(),
+      if (isSeller) ...[
+        const SizedBox(height: 14),
+        _dashboardCard(),
+      ],
       // Above everything else on the Menu: BROKA holds no payments, so how
       // to pay a stranger safely is the most useful thing on it.
       const EscrowCallout(margin: EdgeInsets.only(top: 14)),
       const MenuSectionLabel('Selling'),
       MenuGroup(children: [
-        if (account?.isSeller ?? ApiService.currentUserAccountType == 'buyer_seller') ...[
-          MenuTile(
-            icon: Icons.dashboard_rounded,
-            title: 'Seller Dashboard',
-            subtitle: 'Sales, listing performance, Zeno tips and boosts',
-            onTap: () => _open('/seller-dashboard'),
-          ),
+        if (isSeller) ...[
           MenuTile(
             icon: Icons.add_circle_outline_rounded,
             tint: BrokaColors.neonGreen,
@@ -213,6 +215,14 @@ class _MenuScreenState extends State<MenuScreen> {
       ),
       const MenuSectionLabel('Account'),
       MenuGroup(children: [
+        MenuTile(
+          key: const Key('menu-saved'),
+          icon: Icons.favorite_rounded,
+          tint: BrokaColors.danger,
+          title: 'Saved items',
+          subtitle: "Listings you've hearted, to come back to",
+          onTap: () => _open('/saved'),
+        ),
         MenuTile(
           icon: Icons.workspace_premium_rounded,
           tint: BrokaColors.gold,
@@ -349,6 +359,98 @@ class _MenuScreenState extends State<MenuScreen> {
               _stat(account.ratingLabel, 'Rating'),
             ]),
           ]),
+        ),
+      ),
+    );
+  }
+
+  /// The way into the Seller Dashboard, as a card of its own under the
+  /// profile - the brand gradient around it and a glow, so it reads as the
+  /// seller's main destination on this screen rather than one more row.
+  Widget _dashboardCard() {
+    final count = _listingCount;
+    return Container(
+      padding: const EdgeInsets.all(1.4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+          colors: [BrokaColors.gold, BrokaColors.neonPurple, BrokaColors.neonBlue],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.28), blurRadius: 22, spreadRadius: -2),
+          BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 30, offset: const Offset(0, 8)),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          key: const Key('menu-seller-dashboard'),
+          borderRadius: BorderRadius.circular(19),
+          onTap: () => _open('/seller-dashboard'),
+          child: Ink(
+            padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(19),
+              gradient: LinearGradient(
+                colors: [
+                  Color.alphaBlend(BrokaColors.neonPurple.withOpacity(0.22), BrokaColors.bgCard),
+                  Color.alphaBlend(BrokaColors.neonBlue.withOpacity(0.10), BrokaColors.bg),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Row(children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(15),
+                  gradient: const LinearGradient(
+                    colors: [BrokaColors.neonPurple, BrokaColors.neonBlue],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.45), blurRadius: 14)],
+                ),
+                child: const Icon(Icons.insights_rounded, color: Colors.white, size: 26),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  ShaderMask(
+                    shaderCallback: (b) => const LinearGradient(
+                        colors: [BrokaColors.gold, BrokaColors.neonBlue]).createShader(b),
+                    child: const Text('Seller Dashboard',
+                        style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900,
+                            letterSpacing: 0.3)),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    count == null
+                        ? 'Sales, how each listing is doing, and Zeno\'s tips'
+                        : '${count == 1 ? '1 active listing' : '$count active listings'} · sales, chance of selling, Zeno\'s tips',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.3),
+                  ),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: BrokaColors.neonBlue.withOpacity(0.16),
+                  border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.5)),
+                ),
+                child: const Icon(Icons.arrow_forward_rounded, color: BrokaColors.neonBlue, size: 18),
+              ),
+            ]),
+          ),
         ),
       ),
     );

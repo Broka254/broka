@@ -17,7 +17,6 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
@@ -39,6 +38,7 @@ import '../services/last_screen_tracker.dart';
 import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
+import '../core/errors/user_facing_error.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
 // Extends the existing Message model with media fields.
@@ -357,22 +357,19 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   Timer? _presenceRefreshTimer;
   Map<String, dynamic>? _counterpartyInfo;
+  /// Zeno's messages to this user that they haven't seen in its room - the
+  /// badge on the Zeno button. From the server (the Inbox's `zeno_unread`):
+  /// it used to be every Zeno message on the thread less a count saved only
+  /// when that button was tapped, so Zeno's room read from the Inbox kept
+  /// its whole history as "unread".
   int _zenoUnreadCount = 0;
 
-  String _zenoSeenKey() => 'zeno_seen_count_${_listing?.id}_${_buyerId ?? ""}';
-
   Future<void> _refreshZenoUnreadCount() async {
-    if (_listing == null) return;
-    try {
-      final history = await ApiService.getNegotiationHistory(
-        _listing!.id, buyerId: _buyerId,
-      );
-      final brokerCount = history.where((m) => m.role == 'broker').length;
-      final prefs = await SharedPreferences.getInstance();
-      final seenCount = prefs.getInt(_zenoSeenKey()) ?? 0;
-      final unread = brokerCount - seenCount;
-      if (mounted) setState(() => _zenoUnreadCount = unread > 0 ? unread : 0);
-    } catch (_) {}
+    final listing = _listing;
+    if (listing == null) return;
+    final counts = await ApiService.getUnreadCounts(listing.id, buyerId: _buyerId);
+    if (counts == null || !mounted) return;
+    setState(() => _zenoUnreadCount = counts.zenoUnread);
   }
 
   /// profile_photo is inline base64, not a URL - see voip_call_screen.
@@ -1162,7 +1159,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not send image: $e')));
+        SnackBar(content: Text('Could not send image. ${userFacingError(e)}')));
       }
     }
   }
@@ -1337,17 +1334,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   Future<void> _openZenoAi() async {
-    if (_listing != null) {
-      try {
-        final history = await ApiService.getNegotiationHistory(
-          _listing!.id, buyerId: _buyerId,
-        );
-        final brokerCount = history.where((m) => m.role == 'broker').length;
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setInt(_zenoSeenKey(), brokerCount);
-      } catch (_) {}
-    }
-    if (!mounted) return;
+    // Zeno's room tells the server it has been seen as it opens.
+    setState(() => _zenoUnreadCount = 0);
     // buyer_id names the thread for a seller. Dropping it here (and on the
     // way back from Zeno's room) left the seller in a chat with no buyer:
     // an empty history, "Buyer" in the header, and every call refused with
@@ -1522,6 +1510,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
           ),
           if (_zenoUnreadCount > 0)
             Positioned(right: -4, top: -4, child: IgnorePointer(child: Container(
+              key: const Key('zeno-unread-badge'),
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: BoxDecoration(
                 color: BrokaColors.danger,

@@ -26,6 +26,7 @@ import '../main.dart';
 import '../services/api_service.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/motion_widgets.dart';
+import '../core/errors/user_facing_error.dart';
 
 class ReceiptHistoryScreen extends StatefulWidget {
   const ReceiptHistoryScreen({super.key, this.loader});
@@ -65,7 +66,7 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
       // Distinguishes "could not load" from "nothing to show". An empty
       // list after a failed request would tell a seller they have never
       // been paid, which is a considerably worse thing to get wrong.
-      if (mounted) setState(() { _loading = false; _error = '$e'; });
+      if (mounted) setState(() { _loading = false; _error = userFacingError(e); });
     }
   }
 

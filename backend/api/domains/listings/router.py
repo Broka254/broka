@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.database import get_db, DealStatus, Listing
 from api.domains.auctions.lifecycle import AuctionError
 from api.domains.auctions.paused import require_auctions
-from api.security import get_current_user
+from api.security import _oauth2_scheme_optional, get_current_user
 from api.core.config import settings
 from api.database import ListingStatus, ListingType
 from api.domains.pricing import service as pricing_service
@@ -179,6 +179,17 @@ class ListingStoreIn(BaseModel):
 async def get_stats(db: AsyncSession = Depends(get_db)):
     svc = ListingService(db)
     return await svc.get_stats()
+
+
+# Before /{listing_id}, which would otherwise take "saved" for an id.
+@router.get("/saved")
+async def saved_listings(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The caller's saved listings that are still on sale."""
+    svc = ListingService(db)
+    return await svc.saved_listings(current_user["id"])
 
 
 @router.get("/")
@@ -605,12 +616,12 @@ async def listing_metrics(
     stock, which is precisely what a rival would price against.
     """
     from datetime import date, datetime, timedelta
-    from api.database import Interest, Listing, ListingMetricSnapshot, SellerMetrics, Wishlist
+    from api.database import Listing, ListingMetricSnapshot, SellerMetrics
     from api.domains.listings.sell_probability import (
         ListingSignals, compute_sell_probability, listing_advice,
     )
+    from api.domains.listings.sell_signals import engagement_signals
     from api.domains.trust.response_time import compute_all_response_times
-    from sqlalchemy import func
 
     listing = await db.get(Listing, listing_id)
     if not listing:
@@ -619,14 +630,9 @@ async def listing_metrics(
         raise HTTPException(status_code=403,
                             detail="You can only view metrics for your own listings.")
 
-    likes_r = await db.execute(
-        select(func.count(Wishlist.id)).where(Wishlist.listing_id == listing_id))
-    likes = int(likes_r.scalar() or 0)
-
-    interest_r = await db.execute(
-        select(func.count(func.distinct(Interest.buyer_id)))
-        .where(Interest.listing_id == listing_id))
-    interested = int(interest_r.scalar() or 0)
+    engagement = (await engagement_signals(db, [listing]))[listing_id]
+    likes = engagement["likes"]
+    interested = engagement["interested_buyers"]
 
     # Category median, from OTHER sellers' active listings in this category.
     #
@@ -672,6 +678,9 @@ async def listing_metrics(
         price=float(listing.price) if listing.price else None,
         category_median_price=category_median,
         comparable_count=comparable_count,
+        best_offer=engagement["best_offer"],
+        photo_count=engagement["photo_count"],
+        description_chars=engagement["description_chars"],
     )
     prob = compute_sell_probability(signals)
 
@@ -720,8 +729,11 @@ async def listing_metrics(
             "components": {
                 "demand": prob.demand, "intent": prob.intent,
                 "commitment": prob.commitment, "seller": prob.seller,
-                "price_fit": prob.price_fit,
+                "price_fit": prob.price_fit, "quality": prob.quality,
             },
+            "best_offer": engagement["best_offer"],
+            "photo_count": engagement["photo_count"],
+            "freshness": prob.freshness,
         },
         "history": history,
         "advice": listing_advice(signals, prob),
@@ -993,12 +1005,63 @@ async def get_own_listing(
     return await svc.get_own_listing(listing_id, current_user["id"])
 
 
+def _viewer_if_signed_in(token: Optional[str] = Depends(_oauth2_scheme_optional)) -> Optional[dict]:
+    """The signed-in caller, or None - and None, not 401, for a token that
+    has expired. The listing is public: an old session must still open it,
+    it just counts as a view."""
+    if not token:
+        return None
+    try:
+        return get_current_user(token)
+    except HTTPException:
+        return None
+
+
 @router.get("/{listing_id}")
-async def get_listing(listing_id: str, db: AsyncSession = Depends(get_db)):
-    """PUBLIC listing detail. No authentication, so no private fields -
-    see ListingService._listing_dict."""
+async def get_listing(
+    listing_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: Optional[dict] = Depends(_viewer_if_signed_in),
+):
+    """PUBLIC listing detail. No private fields - see
+    ListingService._listing_dict. A signed-in caller is read only so the
+    seller opening their own listing is not counted as a view."""
     svc = ListingService(db)
-    return await svc.get_listing(listing_id)
+    return await svc.get_listing(listing_id, viewer_id=viewer["id"] if viewer else None)
+
+
+@router.get("/{listing_id}/save")
+async def get_saved(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether the caller has saved this listing. How many others have is
+    the seller's to know (GET /listings/{id}/metrics), not every buyer's."""
+    svc = ListingService(db)
+    return await svc.is_saved(listing_id, current_user["id"])
+
+
+@router.post("/{listing_id}/save")
+async def save_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save (heart) a listing. Idempotent. Saves feed the listing's sell
+    probability - a save is a buyer saying "I want this, not today"."""
+    svc = ListingService(db)
+    return await svc.save_listing(listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}/save")
+async def unsave_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    return await svc.unsave_listing(listing_id, current_user["id"])
 
 
 @router.delete("/{listing_id}")

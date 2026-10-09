@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../../../core/network/api_client.dart';
 import '../../../core/utils/result.dart';
 import '../domain/listing_fee.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class ListingFeeRepository {
   ListingFeeRepository({ApiClient? client}) : _client = client ?? apiClient;
@@ -18,7 +19,7 @@ class ListingFeeRepository {
     try {
       return Success(await call());
     } on ApiException catch (e) {
-      return Failure(e.message, statusCode: e.statusCode);
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
     } on SocketException {
       return const Failure("You're offline. Check your connection and try again.");
     } on TimeoutException {
@@ -26,7 +27,7 @@ class ListingFeeRepository {
     } on http.ClientException {
       return const Failure("Couldn't reach BROKA. Try again.");
     } catch (e) {
-      return Failure(e.toString());
+      return Failure(userFacingError(e));
     }
   }
 

@@ -64,9 +64,9 @@ class SellerStandingTiles extends StatelessWidget {
       pair(
         _tile(
           key: const Key('standing-response'),
-          label: 'REPLIES IN',
+          label: 'AVG RESPONSE',
           value: reply == null ? '—' : SellerStanding.formatMinutes(reply),
-          sub: reply == null ? 'Not measured yet' : 'typical reply',
+          sub: reply == null ? 'Not measured yet' : 'average reply time',
           band: s.responseBand,
         ),
         _tile(

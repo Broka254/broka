@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../services/api_service.dart';
+import '../core/errors/user_facing_error.dart';
 
 enum _DisputeStep { form, thinking, verdict, executing, resolved }
 
@@ -142,7 +143,7 @@ class _DisputeScreenState extends State<DisputeScreen>
       });
     } catch (e) {
       setState(() {
-        _errorMsg = e.toString().replaceFirst('Exception: ', '');
+        _errorMsg = userFacingError(e);
         _step     = _DisputeStep.form;
       });
     }
@@ -175,7 +176,7 @@ class _DisputeScreenState extends State<DisputeScreen>
     } catch (e) {
       setState(() {
         _zenoChat.add(_ChatMsg(
-          text:   'Error: ${e.toString().replaceFirst("Exception: ", "")}',
+          text:   'Error: ${userFacingError(e)}',
           isUser: false,
           isError: true,
         ));
@@ -215,7 +216,7 @@ class _DisputeScreenState extends State<DisputeScreen>
       HapticFeedback.heavyImpact();
     } catch (e) {
       setState(() {
-        _errorMsg = e.toString().replaceFirst('Exception: ', '');
+        _errorMsg = userFacingError(e);
         _step     = _DisputeStep.verdict;
       });
     }
