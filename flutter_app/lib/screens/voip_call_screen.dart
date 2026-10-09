@@ -23,6 +23,7 @@ import '../widgets/constellation_background.dart';
 import '../services/webrtc_service.dart';
 import '../services/api_service.dart';
 import '../services/ringtone_service.dart';
+import '../services/ringback_service.dart';
 import '../services/notification_service.dart';
 import '../services/call_foreground_service.dart';
 import '../services/callkit_service.dart';
@@ -42,21 +43,32 @@ class VoipCallScreen extends StatefulWidget {
   static bool isPlaceholderName(String name) =>
       _placeholderNames.contains(name.trim().toLowerCase());
 
-  /// How long the caller waits for an answer: as long as the callee's
-  /// phone rings (NotificationService.showIncomingCall's ringFor).
-  static const Duration noAnswerAfter = Duration(seconds: 45);
+  /// How long the caller waits for an answer: the 45 seconds the callee's
+  /// phone rings (NotificationService.showIncomingCall's ringFor), and ten
+  /// more for an Accept pressed as the ring ended to arrive - from a closed
+  /// app, BROKA starts before it can tell the server. The caller used to
+  /// hang up at 45 seconds, just before that Accept landed, and the callee
+  /// opened a call that had ended as "missed". The same as the server's
+  /// no-answer watchdog (CALL_RING_TIMEOUT_SECONDS).
+  static const Duration noAnswerAfter = Duration(seconds: 55);
 
   /// How long the caller waits, once the callee has pressed Accept, for
   /// their phone to join the call. A phone answering from a closed app
   /// starts BROKA first, then opens the microphone - and may ask for it.
   /// Shorter than the server's 120 seconds for an answered call to start.
   static const Duration answeredJoinWindow = Duration(seconds: 60);
+
+  /// Handed each screen's WebRtcService as it is made - for tests, which
+  /// drive the signals a real call would bring.
+  @visibleForTesting
+  static void Function(WebRtcService service)? debugOnService;
+
   @override
   State<VoipCallScreen> createState() => _VoipCallScreenState();
 }
 
 class _VoipCallScreenState extends State<VoipCallScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
 
   late WebRtcService _svc;
   String _peerName    = '';
@@ -114,6 +126,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   // Video-call-only render state.
   bool _localMediaReady   = false; // localRenderer has a live camera feed
   bool _remoteVideoActive = false; // remoteRenderer has a live peer feed
+  // The camera is being opened to turn this voice call into a video call.
+  bool _switchingToVideo  = false;
 
   // ── Animations ────────────────────────────────────────────────────────────
   late AnimationController _ringCtrl;     // ripple rings
@@ -132,6 +146,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   void initState() {
     super.initState();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    WidgetsBinding.instance.addObserver(this);
 
     _ringCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1800))
@@ -176,13 +191,21 @@ class _VoipCallScreenState extends State<VoipCallScreen>
 
     // Whichever path got us here, the ringing notification (if any) has
     // done its job - take it down before anything else so it can't keep
-    // ringing behind the call screen.
-    NotificationService.instance.cancelIncomingCall(roomId);
+    // ringing behind the call screen. Its ring too, unless this screen
+    // rings the call itself: stopping it only to start it again below made
+    // the ringtone stutter back to its start as the screen opened.
+    final ringsHere = !_isCaller && !autoAccept;
+    if (ringsHere) {
+      NotificationService.instance.takeDownCallNotification(roomId);
+    } else {
+      NotificationService.instance.cancelIncomingCall(roomId);
+    }
 
     _svc = WebRtcService(
       roomId: roomId, isCaller: _isCaller, userId: userId,
       callToken: callToken, callType: _callType,
     );
+    VoipCallScreen.debugOnService?.call(_svc);
 
     _svc.onStateChange = (s) {
       // Whatever just happened, any still-ringing tone is no longer needed -
@@ -190,6 +213,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // This call's tone only: a call that ended must not silence another
       // one ringing now.
       RingtoneService.instance.stopFor(roomId);
+      if (s == CallState.connected || s == CallState.ended || s == CallState.failed) {
+        _stopRingback();
+      }
       if (!mounted) return;
       setState(() => _callState = s);
       if (s == CallState.connected) {
@@ -218,9 +244,20 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       if (mounted) setState(() => _errorMsg = msg);
     };
     _svc.onPeerRinging = () {
-      if (mounted) setState(() => _calleeAlerted = true);
+      if (!mounted) return;
+      setState(() => _calleeAlerted = true);
+      // Their phone is ringing: the caller hears it ring, as on a phone
+      // call. Not before - "Calling…" is silent, the call has reached
+      // only the server.
+      if (!_calleeAnswered && !_svc.peerJoined && !_everConnected && !_endingCall &&
+          !_isOver) {
+        _ringbackOn = true;
+        unawaited(RingbackService.instance.start(speakerOn: _speaker));
+      }
     };
+    _svc.onPeerJoined = _stopRingback;
     _svc.onPeerAnswered = () {
+      _stopRingback();
       if (!mounted || _everConnected || _endingCall) return;
       setState(() => _calleeAnswered = true);
       // No longer a question of whether they pick up: they have. The
@@ -252,6 +289,18 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       // Remote media of SOME kind is flowing. Deliberately does NOT flip
       // the video surface on - see onRemoteVideoChanged below.
       if (mounted && !_everConnected) setState(() {});
+    };
+    _svc.onCallTypeChanged = (type) {
+      // A voice call became a video call - this side turned its camera on,
+      // or the other side's picture arrived. The screen becomes the video
+      // call's: their picture full screen when it comes, ours in the
+      // corner once our camera is on, and the video controls.
+      if (!mounted) return;
+      setState(() {
+        _callType = type;
+        _speaker = _svc.speakerOn;
+        _videoOn = _svc.hasCamera && _svc.videoEnabled;
+      });
     };
     _svc.onRemoteVideoChanged = (active) {
       // Fires only when a remote VIDEO track is actually decoding frames
@@ -321,6 +370,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           roomId: roomId, peerName: _peerName, isVideo: _isVideo);
       _svc.start();
     } else {
+      // While it rings, fetch what the call will need from the network (the
+      // relay's credentials), so Accept goes straight to connecting.
+      _svc.prepare();
       // Callee: ring until Accept/Decline (or a safety timeout) - see
       // RingtoneService for why this is centralised rather than duplicated.
       RingtoneService.instance.play(
@@ -362,6 +414,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     if (_accepted || _endingCall || !mounted) return;
     final roomId = _svc.roomId;
     RingtoneService.instance.stopFor(roomId);
+    NotificationService.instance.takeDownCallNotification(roomId);
     setState(() => _accepted = true);
     ActiveCall.instance.markAnswered(roomId);
     // Tell the server now rather than when our connection to the call
@@ -405,7 +458,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     if (_resultLogged) return;
     if (_listingId.isEmpty || _buyerId.isEmpty) return;
     _resultLogged = true;
-    final outcome = _everConnected
+    // A call I accepted was answered, whether or not it then connected:
+    // it was logged as "missed", and the callee who had pressed Accept was
+    // shown a missed call (the server now records it the same way).
+    final outcome = (_everConnected || (!_isCaller && _accepted))
         ? 'completed'
         : (_declinedByMe
             ? 'declined'
@@ -451,13 +507,57 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     return peerIsBuyer ? 'Buyer' : 'Seller';
   }
 
+  bool _ringbackOn = false;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_isIncoming || _endingCall || !_argsLoaded) return;
+    final roomId = _svc.roomId;
+    if (state == AppLifecycleState.paused) {
+      // Left while it rings - the call screen opens by itself when a call
+      // comes in with the app in front, in place of the notification. The
+      // phone rings on; the notification goes up so the call can still be
+      // answered from the shade.
+      unawaited(NotificationService.instance.postRingingCall(
+        roomId: roomId,
+        callerName: _displayName,
+        listingName: _listingName.isEmpty ? 'your listing' : _listingName,
+        isVideo: _isVideo,
+        callerPhoto: _peerPhoto,
+        payload: {
+          'roomId': roomId,
+          'callToken': _callToken,
+          'listingId': _listingId,
+          'buyerId': _buyerId,
+          'callerName': _displayName,
+          'callerId': _peerId,
+          if (_peerPhoto != null) 'callerPhoto': _peerPhoto,
+          'listingName': _listingName,
+          'callType': _callType,
+        },
+      ));
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(NotificationService.instance.takeDownCallNotification(roomId));
+    }
+  }
+
+  void _stopRingback() {
+    if (!_ringbackOn) return;
+    _ringbackOn = false;
+    unawaited(RingbackService.instance.stop());
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopRingback();
     _noAnswerTimer?.cancel();
     _ringEndedSub?.cancel();
     _answerSub?.cancel();
     final roomId = _svc.roomId;
     RingtoneService.instance.stopFor(roomId);
+    // A ringing notification put up when the app went behind another.
+    NotificationService.instance.takeDownCallNotification(roomId);
     if (_ownsCall) {
       CallForegroundService.stop();
       CallKitService.instance.onEndedByNative = null;
@@ -498,10 +598,16 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     if (!mounted) return;
     final route = ModalRoute.of(context);
     if (route == null || !route.isActive) return;
-    if (route.isCurrent) {
-      Navigator.of(context).pop();
+    final nav = Navigator.of(context);
+    if (route.isCurrent && !nav.canPop()) {
+      // The app was started to answer this call, and the call was all it
+      // opened (SplashScreen): Home comes after it, not under it - building
+      // Home first spent seconds, and the network, the call needed.
+      nav.pushReplacementNamed('/home');
+    } else if (route.isCurrent) {
+      nav.pop();
     } else {
-      Navigator.of(context).removeRoute(route);
+      nav.removeRoute(route);
     }
   }
 
@@ -1096,7 +1202,52 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   void _hangUp() {
     if (_endingCall) return;
     _endingCall = true;
+    _stopRingback();
     _svc.hangup();
+  }
+
+  /// Turn the camera on: a voice call becomes a video call (or, on a video
+  /// call whose camera never opened, this side starts sending a picture).
+  Future<void> _switchToVideo() async {
+    if (_switchingToVideo || _isOver) return;
+    if (_callState != CallState.connected) {
+      _tell('You can switch to video once the call has connected.');
+      return;
+    }
+    setState(() => _switchingToVideo = true);
+    final problem = await _svc.upgradeToVideo();
+    if (!mounted) return;
+    setState(() {
+      _switchingToVideo = false;
+      if (problem == null) {
+        _callType = 'video';
+        _videoOn = true;
+        _localMediaReady = true;
+        _speaker = _svc.speakerOn;
+      }
+    });
+    if (problem != null) {
+      _tell(problem);
+      return;
+    }
+    // The camera is in use now: the foreground service claims it too, or
+    // Android cuts the camera off when the app goes behind another.
+    if (_ownsCall) CallForegroundService.start(peerName: _peerName, isVideo: true);
+  }
+
+  void _tell(String message) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _toggleCamera() {
+    // A call that became video from the other side: this side's camera has
+    // never opened - turning it on opens it.
+    if (!_svc.hasCamera) {
+      unawaited(_switchToVideo());
+      return;
+    }
+    _svc.toggleVideo();
+    setState(() => _videoOn = !_videoOn);
   }
 
   void _toggleMute() {
@@ -1155,7 +1306,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
           icon:   Icons.close_rounded,
           color:  BrokaColors.textHigh,
           label:  'Close',
-          onTap:  () => Navigator.pop(context),
+          onTap:  _closeOwnScreen,
         ),
       ));
     }
@@ -1229,7 +1380,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
                 icon:   _videoOn ? Icons.videocam_rounded : Icons.videocam_off_rounded,
                 color:  BrokaColors.warning,
                 label:  _videoOn ? 'Camera' : 'Camera off',
-                onTap:  () { _svc.toggleVideo(); setState(() => _videoOn = !_videoOn); },
+                onTap:  _toggleCamera,
                 active: !_videoOn,
               )),
               Expanded(child: _CallBtn(
@@ -1247,13 +1398,33 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       ));
     }
 
-    // In-call controls for audio: mute · end · speaker
-    return _dock(Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+    // In-call controls for audio: mute · speaker · video, end below. Video
+    // turns the voice call into a video call - it works once the call has
+    // connected, and says so before then.
+    return _dock(Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(child: _muteButton()),
-        Expanded(child: _endButton()),
-        Expanded(child: _speakerButton()),
+        Row(
+          children: [
+            Expanded(child: _muteButton()),
+            Expanded(child: _speakerButton()),
+            Expanded(child: Opacity(
+              opacity: _callState == CallState.connected ? 1.0 : 0.45,
+              child: _CallBtn(
+                key:    const Key('call-switch-to-video'),
+                icon:   _switchingToVideo
+                    ? Icons.hourglass_top_rounded
+                    : Icons.videocam_rounded,
+                color:  BrokaColors.neonGreen,
+                label:  _switchingToVideo ? 'Starting…' : 'Video',
+                onTap:  _switchToVideo,
+                active: _switchingToVideo,
+              ),
+            )),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _endButton(),
       ],
     ));
   }
@@ -1387,6 +1558,7 @@ class _CallBtn extends StatelessWidget {
   final bool     active;
 
   const _CallBtn({
+    super.key,
     required this.icon, required this.color,
     required this.label, required this.onTap,
     this.large = false, this.filled = false, this.active = false,

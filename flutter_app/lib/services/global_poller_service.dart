@@ -141,7 +141,18 @@ class GlobalPollerService {
     _activelyViewedThreads.remove(threadKeyFor(listingId, buyerId));
   }
 
+  /// start(), [delay] from now - for an app started to answer a call
+  /// (SplashScreen.answeringSweepDelay). stop() cancels it.
+  void startAfter(Duration delay) {
+    _deferredStart?.cancel();
+    _deferredStart = Timer(delay, start);
+  }
+
+  Timer? _deferredStart;
+
   void start() {
+    _deferredStart?.cancel();
+    _deferredStart = null;
     _running = true;
     unawaited(_seedUnreadFromCache());
     _startTimer();
@@ -197,6 +208,8 @@ class GlobalPollerService {
   }
 
   void stop() {
+    _deferredStart?.cancel();
+    _deferredStart = null;
     _running = false;
     pushReady = false;
     _timer?.cancel();

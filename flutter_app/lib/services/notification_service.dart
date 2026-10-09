@@ -150,6 +150,25 @@ class NotificationService {
     enableVibration: true,
   );
 
+  // The same call, posted while the app's own ringer is ringing it: a
+  // channel with no sound. The notification's own "no sound" (playSound:
+  // false) is ignored from Android 8 on - only the channel's settings
+  // count - so the call channel played the ringtone on top of the in-app
+  // ring: twice the noise, and, since a ringtone runs for half a minute,
+  // still playing after Accept had stopped the in-app one. Importance max,
+  // so it still pops up over the screen with Accept and Decline.
+  static const String callChannelInAppId = 'broka_calls_in_app_v1';
+
+  static const AndroidNotificationChannel _callChannelInApp =
+      AndroidNotificationChannel(
+    callChannelInAppId,
+    'Incoming Calls (app ringing)',
+    description: 'Incoming BROKA calls while the app itself is ringing',
+    importance: Importance.max,
+    playSound: false,
+    enableVibration: false,
+  );
+
   // Buttons on the incoming-call notification. Without them the only thing
   // the notification could do was open the app, so a call could not be
   // declined from the shade or lock screen at all, and answering meant
@@ -239,6 +258,7 @@ class NotificationService {
       await android?.createNotificationChannel(_messageChannel);
       await android?.createNotificationChannel(_updatesChannel);
       await android?.createNotificationChannel(_callChannel);
+      await android?.createNotificationChannel(_callChannelInApp);
 
       _ready = true;
       debugPrint('[Notifications] Local notifications ready.');
@@ -762,14 +782,15 @@ class NotificationService {
   /// same payload shape, same destinations, one call-routing mechanism.
   /// An incoming call is answered only when `data['answer']` is true: the
   /// user pressed Accept (here or in CallKit).
-  Future<void> navigateFromPayload(Map<String, dynamic> data) async {
+  Future<void> navigateFromPayload(Map<String, dynamic> data,
+      {bool replace = false}) async {
     final nav = navigatorKey?.currentState;
     if (nav == null) return;
     final type = data['type'] as String?;
 
     if (type == 'incoming_call') {
       try {
-        await _openIncomingCall(nav, data);
+        await _openIncomingCall(nav, data, replace: replace);
       } finally {
         // Opened over the lock screen for this call (MainActivity), it
         // stays there only if a call screen is now up.
@@ -800,10 +821,76 @@ class NotificationService {
     }
   }
 
+  /// The call screen's arguments for an incoming call, from a push's or
+  /// the sweep's payload and the call's token.
+  static Map<String, dynamic> callScreenArgs(
+    Map<String, dynamic> data, {
+    required String roomId,
+    required String callToken,
+    required bool autoAccept,
+  }) {
+    final buyerId = data['buyerId'] as String? ?? '';
+    final iAmBuyer = ApiService.currentUserId != null &&
+        ApiService.currentUserId == buyerId;
+    return {
+      'roomId':      roomId,
+      'userId':      ApiService.currentUserId ?? '',
+      'callToken':   callToken,
+      'isCaller':    false,
+      'peerName':    data['callerName'] as String? ?? 'Someone',
+      'peerId':      data['callerId'] as String?,
+      'peerPhoto':   _nonEmpty(data['callerPhoto']),
+      'listingName': data['listingName'] as String? ?? 'your listing',
+      'listingId':   data['listingId'] as String?,
+      'buyerId':     buyerId,
+      'callerRole':  iAmBuyer ? 'seller' : 'buyer',
+      'callType':    data['callType'] as String? ?? 'audio',
+      'autoAccept':  autoAccept,
+    };
+  }
+
+  /// The name of the route on top of [nav] - the screen the user sees.
+  static String? topRouteName(NavigatorState nav) {
+    String? name;
+    nav.popUntil((route) {
+      name = route.settings.name;
+      return true;
+    });
+    return name;
+  }
+
+  /// A call arrived with the app in front: its screen opens at once,
+  /// ringing, with Accept and Decline on it - as a phone call does. It used
+  /// to arrive as a notification over whatever was on screen, and Accept on
+  /// that opened the call screen only after asking the server whether the
+  /// call was still ringing. Returns false where the screen can't open by
+  /// itself (the app behind another, or on the splash or sign-in, another
+  /// call on screen, a payload without the call's token): the notification
+  /// goes up instead.
+  bool openRingingCallScreen(String roomId, Map<String, dynamic>? payload) {
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return false;
+    final nav = navigatorKey?.currentState;
+    if (nav == null || payload == null || ApiService.currentUserId == null) return false;
+    final token = payload['callToken'] as String?;
+    final listingId = payload['listingId'] as String?;
+    if (token == null || token.isEmpty || listingId == null || listingId.isEmpty) return false;
+    if (ActiveCall.instance.onCall) return false;
+    final top = topRouteName(nav);
+    if (top == '/splash' || top == '/auth' || top == '/voip-call') return false;
+    // Taken now, not when the screen builds a frame later: nothing else
+    // rings this call or opens it a second time meanwhile.
+    ActiveCall.instance.begin(roomId, answered: false);
+    nav.pushNamed('/voip-call',
+        arguments: callScreenArgs(payload, roomId: roomId, callToken: token, autoAccept: false));
+    return true;
+  }
+
   /// An incoming call's notification, tapped or answered: its call screen,
-  /// or - the call being over - its chat.
+  /// or - the call being over - its chat. [replace]: the call screen takes
+  /// the place of the route on top (the splash, when Accept started the
+  /// app) instead of opening over it.
   Future<void> _openIncomingCall(
-      NavigatorState nav, Map<String, dynamic> data) async {
+      NavigatorState nav, Map<String, dynamic> data, {bool replace = false}) async {
     final listingId = data['listingId'] as String?;
     final buyerId = data['buyerId'] as String? ?? '';
     final iAmBuyer = ApiService.currentUserId != null &&
@@ -837,21 +924,13 @@ class NotificationService {
       // server refuses the answer for a call that is over, and the
       // screen closes.
       await cancelIncomingCall(tappedRoom);
-      nav.pushNamed('/voip-call', arguments: {
-        'roomId':      tappedRoom,
-        'userId':      ApiService.currentUserId ?? '',
-        'callToken':   pushedToken,
-        'isCaller':    false,
-        'peerName':    data['callerName'] as String? ?? 'Someone',
-        'peerId':      data['callerId'] as String?,
-        'peerPhoto':   _nonEmpty(data['callerPhoto']),
-        'listingName': data['listingName'] as String? ?? 'your listing',
-        'listingId':   listingId,
-        'buyerId':     buyerId,
-        'callerRole':  iAmBuyer ? 'seller' : 'buyer',
-        'callType':    data['callType'] as String? ?? 'audio',
-        'autoAccept':  true,
-      });
+      final args = callScreenArgs(data, roomId: tappedRoom, callToken: pushedToken,
+          autoAccept: true);
+      if (replace) {
+        nav.pushReplacementNamed('/voip-call', arguments: args);
+      } else {
+        nav.pushNamed('/voip-call', arguments: args);
+      }
       return;
     }
     // This may be tapped long after it was posted (app backgrounded or
@@ -1126,12 +1205,27 @@ class NotificationService {
 
     bool ringing = false;
     if (ringInApp) {
-      try {
-        ringing = await RingtoneService.instance
-            .play(autoStopAfter: ringFor, roomId: roomId);
-      } catch (e) {
+      final ring = RingtoneService.instance
+          .play(autoStopAfter: ringFor, roomId: roomId)
+          .catchError((Object e) {
         debugPrint('[Notifications] ringtone start failed: $e');
+        return false;
+      });
+      // The app is in front: the call's own screen, not a notification -
+      // opened as the ring starts, not after it has.
+      if (ActiveCall.instance.shouldRing(roomId) &&
+          openRingingCallScreen(roomId, {
+            ...?payload,
+            'roomId': roomId,
+            'callerName': payload?['callerName'] ?? callerName,
+            'listingName': payload?['listingName'] ?? listingName,
+            if (payload?['callType'] == null) 'callType': isVideo ? 'video' : 'audio',
+            if (payload?['callerPhoto'] == null && callerPhoto != null) 'callerPhoto': callerPhoto,
+          })) {
+        unawaited(ring);
+        return;
       }
+      ringing = await ring;
     }
 
     // Their face, within a short wait: a cached photo is immediate, and a
@@ -1192,18 +1286,21 @@ class NotificationService {
     required bool ringing,
     required Duration ringFor,
     Uint8List? face,
+    bool fullScreen = true,
   }) {
     return NotificationDetails(
       android: AndroidNotificationDetails(
-        callChannelId,
-        'Incoming Calls',
-        channelDescription: 'Incoming BROKA in-app calls',
+        // Silent when the in-app ringer took the call - on a channel without
+        // sound, the only way Android 8+ honours it (see _callChannelInApp).
+        ringing ? callChannelInAppId : callChannelId,
+        ringing ? _callChannelInApp.name : 'Incoming Calls',
+        channelDescription: ringing
+            ? _callChannelInApp.description
+            : 'Incoming BROKA in-app calls',
         importance: Importance.max,
         priority: Priority.max,
         category: AndroidNotificationCategory.call,
-        fullScreenIntent: true,
-        // Silent when the in-app ringer took the call, so the channel's
-        // one-shot sound cannot play over a looping ringtone.
+        fullScreenIntent: fullScreen,
         playSound: !ringing,
         enableVibration: !ringing,
         // FIX (calling audit, 2026-09-14): without this, every poll tick
@@ -1221,7 +1318,7 @@ class NotificationService {
         // Per-notification sound must match the channel's, or Android
         // ignores it and uses the channel's anyway - stated here so the
         // two cannot drift apart silently.
-        sound: const UriAndroidNotificationSound(_systemRingtoneUri),
+        sound: ringing ? null : const UriAndroidNotificationSound(_systemRingtoneUri),
         audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
         // Take the stale entry down by itself if every other teardown path
         // is missed, rather than leaving a dead "Incoming call" in the tray.
@@ -1284,6 +1381,45 @@ class NotificationService {
       await RingtoneService.instance.stopFor(roomId);
     } catch (_) {}
     await _cancelCallNotification(roomId);
+  }
+
+  /// Take down [roomId]'s ringing notification and leave its ring alone -
+  /// for a call screen that rings by itself.
+  Future<void> takeDownCallNotification(String roomId) => _cancelCallNotification(roomId);
+
+  /// The call screen is ringing, and the app went behind another: the
+  /// call's notification goes up, so it can still be answered or declined
+  /// from the shade - the screen opened instead of it while the app was in
+  /// front (openRingingCallScreen). Silent unless nothing in the app rings.
+  Future<void> postRingingCall({
+    required String roomId,
+    required String callerName,
+    required String listingName,
+    required bool isVideo,
+    required Map<String, dynamic> payload,
+    String? callerPhoto,
+    Duration ringFor = const Duration(seconds: 45),
+  }) async {
+    if (!_ready) return;
+    final face = await NotificationAvatar.load(callerPhoto, timeout: callFaceWait);
+    try {
+      await _plugin.show(
+        _idFor('call_$roomId'),
+        isVideo
+            ? '📹 Incoming video call from $callerName'
+            : '📞 Incoming call from $callerName',
+        'About: $listingName',
+        incomingCallDetails(
+            ringing: RingtoneService.instance.isPlaying, ringFor: ringFor, face: face,
+            // Not full-screen: the call's screen is already open. Pressing
+            // the power button on it would otherwise have Android launch it
+            // again over the lock screen and turn the screen back on.
+            fullScreen: false),
+        payload: jsonEncode({...payload, 'type': 'incoming_call', 'roomId': roomId}),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] postRingingCall failed: $e');
+    }
   }
 
   Future<void> _cancelCallNotification(String roomId) async {

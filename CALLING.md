@@ -82,8 +82,10 @@ Messages on `/calls/ws/{room_id}`:
 | `state` | client → server | Client-observed WebRTC peer-connection state (`connected`/`disconnected`/`failed`) — the one thing only the client can see. |
 | `callee_ringing` | server → caller | A phone of the callee's is ringing (`POST /calls/{room_id}/alerted`): "Calling…" becomes "Ringing…". |
 | `callee_answered` | server → caller | The callee pressed Accept (`POST /calls/{room_id}/answer`); their phone is on its way into the call. Re-sent to a caller socket that joins while the call is answered. |
+| `renegotiate` | callee → caller (relayed) | The callee turned its camera on mid-call and needs a fresh offer. Only the caller offers; its offer goes out flagged `restart` (and `renegotiate`), which every build answers mid-call. |
 
-Only `offer`, `answer`, `ice` and `hangup` are ever relayed between peers.
+Only `offer`, `answer`, `ice`, `hangup`, `video_state` and `renegotiate` are
+ever relayed between peers.
 Everything else is server-authored, so a participant can't forge a
 `ready`/`busy`/`hangup` at the other side. Frames above 128KB are dropped
 (the connection survives).
@@ -820,3 +822,112 @@ closed with 4004; the lock screen released when no call screen opened) and
 Kotlin was compiled against the Android framework and Flutter embedding
 classes, but the APK could not be built in the environment this was written
 in, and none of it is device-verified.
+
+
+# Accept that opens at once, a ring that stops, a ring the caller hears, and video (2026-10-09)
+
+Reported from phones: "When I click Accept the app takes long to open, then
+the call gets disconnected and is counted as a missed call - and when I try
+calling back the app says I'm already in a call." "Using the app, after I
+accept, the ringtone continues for some time, and sometimes it shows
+'Connecting…' for 5 to 10 seconds." Asked for: the caller hearing it ring
+while the other phone truly rings, and switching a voice call to video.
+
+**"You're already on a call."** `accepted` can't become `missed`, so when an
+answered call never connected and its outcome was logged as missed or
+cancelled, the session stayed `accepted` - which counts as being on a call
+(`_call_in_progress`) - and the socket heartbeat had renewed it to the
+4-hour connected TTL. Now:
+
+- recording an outcome always ends the session (`ended` when the outcome's
+  own state can't be reached from where it is);
+- the heartbeat gives an `accepted` (answered, not yet joined) call the
+  establishment window from now, never four hours;
+- placing a call proves you are not on one: a call past ringing with no
+  socket of yours in it no longer makes you, or the person you are calling
+  back, busy (`_left` in `_admit_call`) - it is ended, and anyone still in
+  its room gets `hangup` with `reason: superseded`.
+
+**"Counted as a missed call."** The session remembers it was answered
+(`CallSession.answered`, set by `/answer` and by the callee joining). An
+answered call that never connected is recorded as `completed` with no
+duration - "Answered" - by whichever side reports it, and sends no
+missed-call push. The callee's call screen reports it that way too. `/answer`
+also gives the callee the whole establishment window from the moment of
+Accept, not from when the call was placed.
+
+**The call dropped as the app opened.**
+
+- *Resuming swept the call away.* `main.dart`'s "back after five minutes,
+  go Home" guard read the screen on top as `ModalRoute.of(nav.context)` -
+  always null for the navigator's own context - so its "never out of a
+  call" check never matched: Accept on a call to an app that had been in
+  the background for five minutes could reopen the app with the call
+  screen swept away. It is `returnHomeAfterAbsence`, which reads the real
+  top route and never leaves a call.
+- *The caller gave up just before the Accept arrived.* The caller's screen
+  waits 55 seconds (`noAnswerAfter`), the server's no-answer watchdog: the
+  45 seconds the callee's phone rings and ten for an Accept pressed as the
+  ring ended to reach the server from a closed app.
+- *Opening took seconds the call needed.* Accept on a closed app now opens
+  the call screen in the splash screen's place: Home is built when the call
+  closes (`VoipCallScreen._closeOwnScreen`), and the inbox sweep waits
+  eight seconds (`SplashScreen.answeringSweepDelay`). Home's feed, images
+  and the sweep had been competing with the call for the phone and the
+  network in exactly the seconds it was connecting.
+
+**"Connecting…" for 5-10 seconds.** Every step after Accept that could run
+earlier, or alongside another, now does:
+
+- TURN credentials are fetched while the phone rings (`WebRtcService.prepare`),
+  or alongside the microphone opening - not after it - and by the call's own
+  token (`POST /calls/{room}/turn-credentials`), so a closed app's expired
+  access token costs no renewal first;
+- the callee's signalling socket opens while its microphone does (when the
+  permission is already granted); an offer that arrives before the peer
+  connection exists is held (`_offerBeforePc`), and the peer connection is
+  published only once its microphone track is in, so an offer is never
+  answered receive-only;
+- the caller makes its offer while the other phone rings, so ICE gathering -
+  the TURN relay's above all - happens then; its candidates are held until
+  the callee is in the room and sent right after the offer;
+- `bundlePolicy: max-bundle`, `rtcpMuxPolicy: require` and an
+  `iceCandidatePoolSize` of one: one transport to connect, gathering from the
+  moment the peer connection exists.
+
+**The ringtone went on after Accept.** The incoming-call notification is
+posted "without sound" when the app's own ringer is ringing - but Android 8+
+ignores a notification's own sound settings and plays its channel's, so the
+call channel's ringtone played on top of the app's ring, and on after Accept
+stopped the app's (a ringtone runs for half a minute). Those notifications
+now go on `broka_calls_in_app_v1`, a channel with no sound. And with the app
+in front a call no longer arrives as a notification at all: its call screen
+opens at once, ringing, with Accept and Decline on it
+(`NotificationService.openRingingCallScreen`) - no notification to find, no
+`/calls/pending` round trip before the call opens. If the app is left while
+that screen rings, the notification goes up then (not full-screen, so the
+power button doesn't relaunch the call over the lock screen).
+
+**Ringback.** The caller hears "ring-ring" once the callee's phone has
+acknowledged the call (`callee_ringing`) - never during "Calling…" - until
+they answer, join, decline, or the call ends (`RingbackService`,
+`assets/audio/ringback.wav`: 400+450 Hz, 0.4 s on, 0.2 s off, 0.4 s on, 2 s
+off). It plays on the call's own stream and audio mode: audioplayers applies
+a player's mode and speaker flag to the whole phone, and its defaults would
+take the call out of communication mode. Android only; on iOS CallKit and
+WebRTC own the audio session.
+
+**Switching to video.** A voice call has a Video button (it says, before the
+call connects, that it works once it has). It opens the camera, adds it to
+the call and renegotiates: the caller sends a new offer; the callee asks the
+caller for one (`renegotiate`), since two offers crossing would deadlock.
+The other side's screen becomes a video call when the picture arrives, with
+its own camera off until its Camera button turns it on (which opens the
+camera the same way). Turning your own camera on moves your call to the
+speaker; the other side turning theirs on does not. The foreground service
+is restarted with the camera type, so Android doesn't cut the camera off
+behind another app. Older builds answer the renegotiation like an ICE
+restart and simply show no picture.
+
+Tests: `backend/tests/test_answered_call_not_lost.py`;
+`flutter_app/test/call_answer_ring_and_video_test.dart`. Not device-verified.

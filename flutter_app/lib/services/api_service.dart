@@ -1783,7 +1783,35 @@ class ApiService {
   /// configured, network error, non-200) so WebRtcService can fall back to
   /// STUN-only ICE and still attempt a direct P2P connection instead of
   /// failing the call outright.
-  static Future<Map<String, dynamic>?> getTurnCredentials() async {
+  ///
+  /// With [roomId] and [callToken], asks with the call's own token first
+  /// (POST /calls/{room}/turn-credentials). A call answered from a closed
+  /// app starts with an access token that expired while the app was closed:
+  /// asking with it cost a 401, a session renewal and a second request
+  /// before the call could start connecting.
+  static Future<Map<String, dynamic>?> getTurnCredentials({
+    String? roomId,
+    String? callToken,
+  }) async {
+    if (roomId != null && roomId.isNotEmpty &&
+        callToken != null && callToken.isNotEmpty) {
+      try {
+        final res = await http
+            .post(
+              Uri.parse('$baseUrl/calls/${Uri.encodeComponent(roomId)}/turn-credentials'),
+              headers: const {'Content-Type': 'application/json'},
+              body: jsonEncode({'call_token': callToken}),
+            )
+            .timeout(const Duration(seconds: 8));
+        if (res.statusCode == 200) {
+          return jsonDecode(res.body) as Map<String, dynamic>;
+        }
+        // The call is over, or the relay is down: the signed-in route
+        // would say the same.
+        if (res.statusCode == 410 || res.statusCode == 503) return null;
+      } catch (_) {}
+      // An older server without the route: ask the signed-in way.
+    }
     try {
       var response = await http.get(
         Uri.parse('$baseUrl/calls/turn-credentials'),

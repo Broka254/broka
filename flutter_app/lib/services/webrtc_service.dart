@@ -118,17 +118,26 @@ class WebRtcService {
   final String userId;
   final String callToken; // short-lived, room-scoped - see GET /calls/turn-credentials's
                            // sibling auth endpoints and _connectWs() below
-  final String callType; // 'audio' | 'video'
 
   WebRtcService({
     required this.roomId,
     required this.isCaller,
     required this.userId,
     required this.callToken,
-    this.callType = 'audio',
-  });
+    String callType = 'audio',
+  }) : _callType = callType;
 
-  bool get isVideo => callType == 'video';
+  /// 'audio' | 'video'. A voice call becomes a video call when either side
+  /// turns a camera on (upgradeToVideo, or the other side's picture
+  /// arriving) - see [onCallTypeChanged].
+  String get callType => _callType;
+  String _callType;
+
+  bool get isVideo => _callType == 'video';
+
+  /// The call became a video call: this side turned its camera on, or the
+  /// other side's picture arrived on a voice call.
+  ValueChanged<String>?    onCallTypeChanged;
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
   ValueChanged<CallState>? onStateChange;
@@ -147,6 +156,10 @@ class WebRtcService {
 
   /// See [onPeerAnswered].
   bool calleeAnswered = false;
+
+  /// Caller only: the callee's phone joined the call (the server's
+  /// `ready`), and the offer is on its way to it.
+  VoidCallback?            onPeerJoined;
 
   /// Why the other side ended the call, when the server said: "declined",
   /// or "no_answer" when nobody picked up. Set before the `ended` state
@@ -285,6 +298,20 @@ class WebRtcService {
       {'urls': 'stun:stun2.l.google.com:19302'},
     ],
     'sdpSemantics': 'unified-plan',
+    ..._transportPolicy,
+  };
+
+  // One transport for audio and video (max-bundle) with RTCP on it, and
+  // ICE candidates gathered the moment the peer connection exists (a pool
+  // of one) rather than only once an offer or answer is set: fewer
+  // candidates to try, found sooner - most of all the TURN relay's, the
+  // slowest to gather and the one mobile data usually needs. Every
+  // configuration carries the same three, because changing any of them on
+  // a live connection (the ICE-restart refresh) is refused.
+  static const Map<String, dynamic> _transportPolicy = {
+    'bundlePolicy': 'max-bundle',
+    'rtcpMuxPolicy': 'require',
+    'iceCandidatePoolSize': 1,
   };
 
   // Set once ICE configuration is fetched for this call - checked in
@@ -344,6 +371,17 @@ class WebRtcService {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  /// What the call needs from the network, fetched ahead of start() - the
+  /// call screen calls this while the phone rings. Accept used to start the
+  /// TURN credential request only once the microphone was open: a round
+  /// trip (three, with a session that expired while the app was closed)
+  /// added to every answered call's "Connecting".
+  void prepare() {
+    _iceConfigFuture ??= _fetchIceConfiguration();
+  }
+
+  Future<Map<String, dynamic>>? _iceConfigFuture;
+
   /// Start: get mic/camera → open WebSocket → create peer connection.
   /// Caller then sends an offer; callee waits for one.
   Future<void> start() async {
@@ -351,7 +389,20 @@ class WebRtcService {
     _connectingStartedAt = DateTime.now();
     debugPrint('WebRTC: ${isCaller ? "CALL_INITIATED" : "CALL_ACCEPTED"} room=$roomId role=${isCaller ? "caller" : "callee"} type=$callType');
     _setState(CallState.connecting);
+    // The relay credentials come over the network while the microphone
+    // opens, not after it.
+    final iceConfig = _iceConfigFuture ?? _fetchIceConfiguration();
+    _iceConfigFuture = null;
     try {
+      // The callee's way into the call opens while its microphone does:
+      // the caller's offer can then arrive before the peer connection
+      // exists, and waits for it (_offerBeforePc). Not while a permission
+      // dialog is up - the caller's connect timeout would run on it.
+      if (!isCaller && await _mediaPermissionsGranted()) {
+        debugPrint('WebRTC: WEBSOCKET_CONNECTING room=$roomId (with media)');
+        await _connectWs();
+        if (gen != _generation) return;
+      }
       if (isVideo) {
         await localRenderer.initialize();
         await remoteRenderer.initialize();
@@ -362,11 +413,13 @@ class WebRtcService {
       if (gen != _generation) return;
       debugPrint('WebRTC: LOCAL_MEDIA_READY room=$roomId');
       onLocalMediaReady?.call();
-      await _createPc();
+      await _createPc(await iceConfig);
       if (gen != _generation) return;
-      debugPrint('WebRTC: WEBSOCKET_CONNECTING room=$roomId');
-      await _connectWs();
-      if (gen != _generation) return;
+      if (_ws == null) {
+        debugPrint('WebRTC: WEBSOCKET_CONNECTING room=$roomId');
+        await _connectWs();
+        if (gen != _generation) return;
+      }
       // NOTE: the caller must NOT send its SDP offer here - at this point the
       // room may still be empty (the callee hasn't joined). An offer sent now
       // is relayed to nobody and lost, leaving the call stuck on "Calling…".
@@ -375,9 +428,27 @@ class WebRtcService {
       // flip the UI to "calling" so the caller sees feedback immediately.
       if (isCaller) {
         _setState(CallState.calling);
+        // The offer is MADE now, though: their phone rings for seconds, and
+        // that is when this phone gathers its ways to be reached (ICE, the
+        // TURN relay). It used to start on "ready", after they answered, and
+        // every answered call waited for it on "Connecting".
+        unawaited(_localOffer());
+      } else {
+        final early = _offerBeforePc;
+        _offerBeforePc = null;
+        if (early != null) await _handleOffer(early);
       }
     } catch (e) {
       if (gen == _generation) _fail('Could not start call: $e');
+    }
+  }
+
+  Future<bool> _mediaPermissionsGranted() async {
+    try {
+      if (!await Permission.microphone.isGranted) return false;
+      return !isVideo || await Permission.camera.isGranted;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -426,8 +497,165 @@ class WebRtcService {
   void toggleVideo() {
     if (!isVideo) return;
     _videoEnabled = !_videoEnabled;
-    _local?.getVideoTracks().forEach((t) => t.enabled = _videoEnabled);
+    for (final t in _localVideoTracks) {
+      t.enabled = _videoEnabled;
+    }
     _sendVideoState();
+  }
+
+  // The camera's tracks, whether it opened with the call or mid-call.
+  List<MediaStreamTrack> get _localVideoTracks => [
+        ...?_local?.getVideoTracks(),
+        ...?_camera?.getVideoTracks(),
+      ];
+
+  /// Whether this side is sending a picture (its camera is open, even if
+  /// turned off for now).
+  bool get hasCamera => _localVideoTracks.isNotEmpty;
+
+  // ── Switching a voice call to video ───────────────────────────────────────
+
+  // The camera opened mid-call by upgradeToVideo. Its own stream, disposed
+  // with the call: moving its track into the call's stream would leave two
+  // streams disposing one track.
+  MediaStream? _camera;
+  Future<void>? _videoReady;
+  bool _renegotiationQueued = false;
+
+  /// Turn this side's camera on during a call: a voice call becomes a
+  /// video call, as on WhatsApp. Opens the camera, adds it to the call and
+  /// has the call renegotiated so the other side receives it - their call
+  /// screen turns into a video call too, with their own camera off until
+  /// they turn it on.
+  ///
+  /// Returns null when the camera is on, or what to tell the user.
+  Future<String?> upgradeToVideo() async {
+    if (_pc == null || _state != CallState.connected) {
+      return 'You can turn your camera on once the call has connected.';
+    }
+    if (hasCamera) {
+      if (!_videoEnabled) toggleVideo();
+      return null;
+    }
+    final gen = _generation;
+    try {
+      if (!await Permission.camera.request().isGranted) {
+        return 'BROKA needs camera access for video. '
+            'Enable it in Settings > Apps > BROKA > Permissions.';
+      }
+    } catch (_) {
+      // permission_handler misbehaving: getUserMedia will say if it's real.
+    }
+    if (gen != _generation || _pc == null) return null;
+    MediaStream camera;
+    try {
+      camera = await navigator.mediaDevices.getUserMedia(
+          {'audio': false, 'video': _videoConstraints});
+    } catch (e) {
+      debugPrint('WebRTC: camera unavailable mid-call: $e');
+      return "Couldn't open the camera.";
+    }
+    final tracks = camera.getVideoTracks();
+    if (gen != _generation || _pc == null || tracks.isEmpty) {
+      await _disposeStream(camera);
+      return tracks.isEmpty ? "Couldn't open the camera." : null;
+    }
+    _camera = camera;
+    _cameraDenied = false;
+    _videoEnabled = true;
+    await _becomeVideo();
+    if (gen != _generation || _pc == null) return null;
+    // On to the speaker: a picture is watched with the phone held in front,
+    // not at the ear - a call that starts as video starts on speaker too.
+    // Only for this side's own camera: the other side turning theirs on
+    // must not put this phone, maybe at someone's ear, on the loudspeaker.
+    if (!_speaker) {
+      try {
+        await Helper.setSpeakerphoneOn(true);
+        _speaker = true;
+      } catch (e) {
+        debugPrint('WebRTC: speaker on for video failed: $e');
+      }
+    }
+    localRenderer.srcObject = camera;
+    try {
+      // Same stream id as the call's audio, so the other side sees one
+      // stream with both.
+      await _pc!.addTrack(tracks.first, _local ?? camera);
+    } catch (e) {
+      debugPrint('WebRTC: could not add the camera to the call: $e');
+      return "Couldn't start video.";
+    }
+    debugPrint('WebRTC: LOCAL_VIDEO_TRACK_ADDED room=$roomId (mid-call)');
+    _sendVideoState();
+    await _renegotiate();
+    return null;
+  }
+
+  /// The call becomes a video call on this side: renderers up and the
+  /// screen told. Once, whichever of the two ways got here first.
+  Future<void> _becomeVideo() => _videoReady ??= () async {
+        if (!_renderersReady) {
+          await localRenderer.initialize();
+          await remoteRenderer.initialize();
+          _renderersReady = true;
+        }
+        if (_callType == 'video') return;
+        _callType = 'video';
+        debugPrint('WebRTC: CALL_BECAME_VIDEO room=$roomId');
+        onCallTypeChanged?.call('video');
+      }();
+
+  /// A fresh offer for a call already under way: a camera was added.
+  ///
+  /// Only the caller offers. Two offers crossing (both sides turning their
+  /// cameras on at once) would leave each waiting for an answer to its own
+  /// - so the callee asks the caller for one ('renegotiate', relayed by the
+  /// server) and answers it. Sent flagged `restart`, the flag every build,
+  /// this one and those before it, answers mid-call instead of discarding
+  /// as a repeat of the call's first offer.
+  Future<void> _renegotiate() async {
+    if (!isCaller) {
+      try {
+        _ws?.sink.add(jsonEncode({'type': 'renegotiate', 'room_id': roomId}));
+      } catch (_) {}
+      return;
+    }
+    if (_pc == null) return;
+    if (_awaitingRestartAnswer || _iceRestartInProgress) {
+      // One at a time: this runs again once the pending answer is in.
+      _renegotiationQueued = true;
+      return;
+    }
+    final gen = _generation;
+    try {
+      final offer = await _pc!.createOffer(
+          {'offerToReceiveAudio': true, 'offerToReceiveVideo': true});
+      if (gen != _generation || _pc == null) return;
+      final tuned = _tuneSdp(offer);
+      await _pc!.setLocalDescription(tuned);
+      _lastLocalOffer = tuned;
+      _awaitingRestartAnswer = true;
+      if (gen != _generation || _ws == null) return;
+      _ws!.sink.add(jsonEncode({
+        'type': 'offer', 'room_id': roomId, 'sdp': tuned.sdp,
+        'restart': true, 'renegotiate': true,
+      }));
+      debugPrint('WebRTC: RENEGOTIATION_OFFER_SENT room=$roomId');
+    } catch (e, st) {
+      // The call goes on as it was: a camera that couldn't be added is no
+      // reason to end it.
+      debugPrint('WebRTC: renegotiation failed: $e\n$st');
+    }
+  }
+
+  Future<void> _disposeStream(MediaStream stream) async {
+    try {
+      for (final t in stream.getTracks()) {
+        await t.stop();
+      }
+      await stream.dispose();
+    } catch (_) {}
   }
 
   void _sendVideoState() {
@@ -444,8 +672,8 @@ class WebRtcService {
 
   /// Flips between front/back camera mid-call. No-op for audio calls.
   Future<void> switchCamera() async {
-    if (!isVideo || _local == null) return;
-    final tracks = _local!.getVideoTracks();
+    if (!isVideo) return;
+    final tracks = _localVideoTracks;
     if (tracks.isNotEmpty) {
       try { await Helper.switchCamera(tracks.first); } catch (_) {}
     }
@@ -582,21 +810,24 @@ class WebRtcService {
           // was before the drop.
           if (isVideo && !_videoEnabled) _sendVideoState();
           if (isCaller) {
-            if (_lastLocalOffer != null && !_remoteDescriptionSet) {
-              // We already created+sent an offer, but the callee never
-              // answered - most likely it never reached them (the WS
-              // dropped in between). Resend the SAME sdp rather than
-              // creating a fresh one: idempotent, no renegotiation loop.
+            _peerInRoom = true;
+            if (!_remoteDescriptionSet) {
+              // The offer - made while their phone rang, or now - and the
+              // candidates gathered for it. Again after a signalling
+              // reconnect, if the callee never answered (most likely it
+              // never reached them): the SAME sdp, never a fresh one.
+              unawaited(_deliverOffer());
+            } else if (_awaitingRestartAnswer && _lastLocalOffer != null) {
+              // A restart or a camera being added was offered and its answer
+              // never came back - lost with the socket that just reconnected.
               _ws?.sink.add(jsonEncode({
                 'type': 'offer', 'room_id': roomId, 'sdp': _lastLocalOffer!.sdp,
+                'restart': true,
               }));
-              debugPrint('WebRTC: OFFER_SENT room=$roomId (resend after reconnect)');
-            } else if (!_offerSent) {
-              _sendOffer();
+              debugPrint('WebRTC: RESTART_OFFER_SENT room=$roomId (resend after reconnect)');
             }
-            // else: _remoteDescriptionSet is already true - negotiation
-            // finished before this 'ready' arrived (e.g. a late-arriving
-            // duplicate); nothing to resend.
+            // else: negotiation finished before this 'ready' arrived (e.g. a
+            // late-arriving duplicate); nothing to resend.
           } else if (_lastLocalAnswer != null) {
             // Callee side: we already answered once - resend in case it
             // never reached the caller before signaling dropped.
@@ -608,6 +839,11 @@ class WebRtcService {
           break;
         case 'offer':
           _handleOffer(m['sdp'] as String, isRestart: m['restart'] == true);
+          break;
+        case 'renegotiate':
+          // The callee turned its camera on and needs an offer that carries
+          // it - only the caller offers (see _renegotiate).
+          if (isCaller && _remoteDescriptionSet) unawaited(_renegotiate());
           break;
         case 'answer':
           _handleAnswer(m['sdp'] as String, isRestart: m['restart'] == true);
@@ -925,43 +1161,95 @@ class WebRtcService {
 
   // ── SDP exchange ──────────────────────────────────────────────────────────
 
-  Future<void> _sendOffer() async {
+  // The caller's offer, made once: ahead of time while the callee's phone
+  // rings (start), or on 'ready' if that had not finished.
+  Future<RTCSessionDescription?>? _offerFuture;
+
+  Future<RTCSessionDescription?> _localOffer() => _offerFuture ??= _makeOffer();
+
+  Future<RTCSessionDescription?> _makeOffer() async {
     final gen = _generation;
     try {
-      if (_pc == null) return;
-      _offerSent = true;
-      // The callee has joined: from here the connect timeout applies.
-      if (_state == CallState.calling) _armConnectTimeout();
+      if (_pc == null) return null;
       debugPrint('WebRTC: OFFER_CREATED room=$roomId');
       final offer = await _pc!.createOffer(
           {'offerToReceiveAudio': true, 'offerToReceiveVideo': isVideo});
-      if (gen != _generation || _pc == null) return;
+      if (gen != _generation || _pc == null) return null;
       final tuned = _tuneSdp(offer);
+      // Starts ICE gathering: the candidates that come of it wait in
+      // _localIceBeforePeer until the callee is in the room.
       await _pc!.setLocalDescription(tuned);
+      if (gen != _generation) return null;
       _lastLocalOffer = tuned; // cache for resend - see 'ready' handler in _onSignal
       debugPrint('WebRTC: OFFER_SET_LOCAL room=$roomId');
-      if (gen != _generation || _ws == null) return;
-      _ws!.sink.add(jsonEncode({
-        'type': 'offer', 'room_id': roomId, 'sdp': tuned.sdp,
-      }));
-      debugPrint('WebRTC: OFFER_SENT room=$roomId');
+      return tuned;
     } catch (e, st) {
-      // FORENSIC FIX: this used to be called fire-and-forget from
-      // _onSignal's synchronous 'ready' case with no error handling of
-      // its own - Dart's try/catch only guards the synchronous prefix of
-      // an async function up to its first `await`, so any failure in
-      // createOffer()/setLocalDescription() (both very possible on a real
-      // device - codec negotiation, native platform-channel errors, etc.)
-      // became a truly unhandled Future rejection, which is very likely
-      // what was surfacing as "the app closes" on a real device. Now it's
-      // caught, logged with the full stack trace, and fails the call
-      // cleanly instead.
-      if (gen == _generation) {
-        debugPrint('WebRTC: _sendOffer failed: $e\n$st');
-        _fail('Could not create call offer: $e');
-      }
+      // FORENSIC FIX (kept from _sendOffer): a failure in createOffer() or
+      // setLocalDescription() - codec negotiation, a native platform-channel
+      // error - must be caught and logged, never left an unhandled Future
+      // rejection (which surfaced as "the app closes"). Delivery makes one
+      // more attempt, then fails the call cleanly.
+      debugPrint('WebRTC: offer failed: $e\n$st');
+      if (gen == _generation) _offerFuture = null;
+      return null;
     }
   }
+
+  /// The callee is in the room: send the offer and the candidates gathered
+  /// for it while their phone rang.
+  Future<void> _deliverOffer() async {
+    final gen = _generation;
+    final first = !_offerSent;
+    _offerSent = true;
+    // The callee has joined: from here the connect timeout applies.
+    if (first && _state == CallState.calling) _armConnectTimeout();
+    if (first) onPeerJoined?.call();
+    var offer = await _localOffer();
+    if (gen != _generation) return;
+    offer ??= await _localOffer();
+    if (gen != _generation) return;
+    if (offer == null) {
+      _fail('Could not create call offer');
+      return;
+    }
+    if (_ws == null || _remoteDescriptionSet) return;
+    try {
+      _ws!.sink.add(jsonEncode({
+        'type': 'offer', 'room_id': roomId, 'sdp': offer.sdp,
+      }));
+      debugPrint('WebRTC: OFFER_SENT room=$roomId${first ? '' : ' (resend after reconnect)'}');
+      _flushLocalIce();
+    } catch (e) {
+      // The socket is going down; the reconnect's 'ready' sends it again.
+      debugPrint('WebRTC: could not send offer: $e');
+    }
+  }
+
+  // Caller: candidates gathered before the callee joined the room. The
+  // server relays only to who is there, so they are held and sent right
+  // after the offer they belong to.
+  final List<String> _localIceBeforePeer = [];
+  bool _peerInRoom = false;
+
+  void _flushLocalIce() {
+    if (_localIceBeforePeer.isEmpty) return;
+    final held = List<String>.from(_localIceBeforePeer);
+    _localIceBeforePeer.clear();
+    for (final frame in held) {
+      try {
+        _ws?.sink.add(frame);
+      } catch (_) {}
+    }
+    debugPrint('WebRTC: ICE_CANDIDATES_SENT_AFTER_OFFER room=$roomId count=${held.length}');
+  }
+
+  // Callee: an offer that arrived before the peer connection existed (the
+  // socket opens while the microphone does - see start). Answered as soon
+  // as the peer connection is up.
+  String? _offerBeforePc;
+
+  @visibleForTesting
+  String? get debugHeldOffer => _offerBeforePc;
 
   Future<void> _handleOffer(String sdp, {bool isRestart = false}) async {
     final gen = _generation;
@@ -972,6 +1260,12 @@ class WebRtcService {
     // a legitimate renegotiation, not a duplicate, so it's allowed through.
     if (_remoteDescriptionSet && !isRestart) {
       debugPrint('WebRTC: ignoring duplicate offer');
+      return;
+    }
+    if (_pc == null) {
+      // Ahead of our peer connection: answered once it exists (start).
+      if (!isRestart) _offerBeforePc = sdp;
+      debugPrint('WebRTC: OFFER_HELD room=$roomId (peer connection not ready)');
       return;
     }
     try {
@@ -1012,7 +1306,7 @@ class WebRtcService {
       }));
       debugPrint('WebRTC: ANSWER_SENT room=$roomId');
     } catch (e, st) {
-      // Same fix as _sendOffer() above - see that method's comment.
+      // Same fix as _makeOffer() above - see that method's comment.
       if (gen == _generation) {
         debugPrint('WebRTC: _handleOffer failed: $e\n$st');
         _fail('Could not answer the call: $e');
@@ -1047,8 +1341,12 @@ class WebRtcService {
       // moment the video sender has real encodings. See
       // _applyVideoBitrateCap.
       await _applyVideoBitrateCap();
+      if (_renegotiationQueued && gen == _generation) {
+        _renegotiationQueued = false;
+        unawaited(_renegotiate());
+      }
     } catch (e, st) {
-      // Same fix as _sendOffer() above - see that method's comment.
+      // Same fix as _makeOffer() above - see that method's comment.
       if (gen == _generation) {
         debugPrint('WebRTC: _handleAnswer failed: $e\n$st');
         _fail('Could not complete the call connection: $e');
@@ -1249,7 +1547,11 @@ class WebRtcService {
   bool _iceConfigIsFallback = false;
 
   Future<Map<String, dynamic>> _fetchIceConfiguration() async {
-    final creds = await ApiService.getTurnCredentials();
+    Map<String, dynamic>? creds;
+    try {
+      // With this call's own token: no access token, so no renewal first.
+      creds = await ApiService.getTurnCredentials(roomId: roomId, callToken: callToken);
+    } catch (_) {}
     final iceServers = creds?['ice_servers'];
     if (creds == null || iceServers is! List || iceServers.isEmpty) {
       debugPrint('WebRTC: TURN credentials unavailable, using STUN-only ICE');
@@ -1264,16 +1566,19 @@ class WebRtcService {
     return {
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',
+      ..._transportPolicy,
     };
   }
 
-  Future<void> _createPc() async {
+  Future<void> _createPc(Map<String, dynamic> iceConfig) async {
     final gen = _generation;
-    final iceConfig = await _fetchIceConfiguration();
-    if (gen != _generation) return;
-    _pc = await createPeerConnection(iceConfig);
+    // Published as _pc only once its tracks and handlers are in place: the
+    // callee's socket is open while this runs (start), and an offer handled
+    // against a connection with no microphone track yet would be answered
+    // receive-only - a call in which the other side hears nothing.
+    final pc = await createPeerConnection(iceConfig);
     debugPrint('WebRTC: PEER_CONNECTION_CREATED room=$roomId');
-    if (gen != _generation) { try { await _pc?.close(); } catch (_) {} return; }
+    if (gen != _generation) { try { await pc.close(); } catch (_) {} return; }
 
     // Add local audio (+ video, for video calls) tracks. addTrack is async
     // and returns the sender - previously its Future was dropped on the
@@ -1282,17 +1587,17 @@ class WebRtcService {
     // offer with no media in it, and (b) there was no handle on the video
     // sender to apply a send-side bitrate cap to.
     for (final t in (_local?.getTracks() ?? const <MediaStreamTrack>[])) {
-      await _pc!.addTrack(t, _local!);
+      await pc.addTrack(t, _local!);
       debugPrint('WebRTC: ${t.kind == "video" ? "LOCAL_VIDEO_TRACK_ADDED" : "LOCAL_AUDIO_TRACK_ADDED"} room=$roomId');
     }
-    if (gen != _generation) return;
+    if (gen != _generation) { try { await pc.close(); } catch (_) {} return; }
     // NOT capping the bitrate here. Encodings don't exist until the
     // transceiver is negotiated - see _applyVideoBitrateCap's doc comment.
     // It is applied from the two places where negotiation has just
     // completed instead (_handleOffer's answer, _handleAnswer).
 
     // Send ICE candidates to remote peer
-    _pc!.onIceCandidate = (c) {
+    pc.onIceCandidate = (c) {
       // FORENSIC FIX: this callback fires directly from the native
       // flutter_webrtc plugin with no error handling at all - any failure
       // in jsonEncode()/the WS sink's add() (e.g. StateError if the sink
@@ -1304,14 +1609,20 @@ class WebRtcService {
       if (gen != _generation) return;
       if (c.candidate == null) return;
       try {
-        _ws?.sink.add(jsonEncode({
+        final frame = jsonEncode({
           'type': 'ice', 'room_id': roomId,
           'candidate': {
             'candidate':     c.candidate,
             'sdpMid':        c.sdpMid,
             'sdpMLineIndex': c.sdpMLineIndex,
           },
-        }));
+        });
+        if (isCaller && !_peerInRoom) {
+          // Gathered while their phone rings: nobody to relay it to yet.
+          _localIceBeforePeer.add(frame);
+          return;
+        }
+        _ws?.sink.add(frame);
         debugPrint('WebRTC: ICE_CANDIDATE_SENT room=$roomId');
       } catch (e) {
         debugPrint('WebRTC: failed to send local ICE candidate: $e');
@@ -1321,7 +1632,7 @@ class WebRtcService {
     // Connection state machine - the ONLY thing allowed to move CallState
     // to `connected` (Section 13/Phase 10: WS/ICE-gathering/etc. state
     // changes are diagnostic-only below, never call _setState()).
-    _pc!.onConnectionState = (s) {
+    pc.onConnectionState = (s) {
       if (gen != _generation) return; // stale callback from a torn-down call
       try {
         debugPrint('WebRTC: PEER_CONNECTION_STATE room=$roomId state=$s');
@@ -1375,15 +1686,15 @@ class WebRtcService {
     // (the overall peer connection state) is the only thing allowed to
     // move CallState, exactly to avoid the failure mode Section 13/Phase
     // 10 call out explicitly.
-    _pc!.onIceGatheringState = (s) {
+    pc.onIceGatheringState = (s) {
       if (gen != _generation) return;
       debugPrint('WebRTC: ICE_GATHERING_STATE room=$roomId state=$s');
     };
-    _pc!.onIceConnectionState = (s) {
+    pc.onIceConnectionState = (s) {
       if (gen != _generation) return;
       debugPrint('WebRTC: ICE_CONNECTION_STATE room=$roomId state=$s');
     };
-    _pc!.onSignalingState = (s) {
+    pc.onSignalingState = (s) {
       if (gen != _generation) return;
       debugPrint('WebRTC: signaling state = $s');
     };
@@ -1391,7 +1702,7 @@ class WebRtcService {
     // Remote track received. For video calls this stream carries both the
     // audio and video tracks together, so attaching it to the renderer here
     // is correct regardless of which specific track fired the event.
-    _pc!.onTrack = (event) {
+    pc.onTrack = (event) {
       if (gen != _generation) return;
       try {
         final isVideoTrack = event.track.kind == 'video';
@@ -1400,41 +1711,56 @@ class WebRtcService {
         // Any remote media at all means the call is up.
         onRemoteStreamConnected?.call();
 
-        if (!isVideoTrack || !isVideo) return;
-        remoteRenderer.srcObject = event.streams[0];
-
-        // Don't announce remote video until the renderer has actual
-        // dimensions - i.e. a frame has really been decoded. srcObject
-        // being set only means a track was attached; frames can be
-        // seconds behind it, or never arrive if the far camera failed.
-        // Showing the video surface before then is what produced the
-        // black screen described on onRemoteVideoChanged above.
-        if (_remoteVideoEnabled && remoteRenderer.videoWidth > 0) {
-          onRemoteVideoChanged?.call(true);
-        }
-        remoteRenderer.onResize = () {
-          if (gen != _generation) return;
-          // _remoteVideoEnabled, not just dimensions: a peer who muted
-          // their camera before we ever decoded a frame would otherwise
-          // have the surface switched on by the first resize event.
-          onRemoteVideoChanged?.call(
-              _remoteVideoEnabled && remoteRenderer.videoWidth > 0);
-        };
-
-        // A remote track that ends (the peer turned their camera off, or
-        // the track was removed) must take the video surface back down
-        // rather than freezing on the last decoded frame.
-        event.track.onEnded = () {
-          if (gen != _generation) return;
-          debugPrint('WebRTC: REMOTE_VIDEO_TRACK_ENDED room=$roomId');
-          onRemoteVideoChanged?.call(false);
-        };
+        if (!isVideoTrack) return;
+        unawaited(_showRemoteVideo(event, gen));
       } catch (e, st) {
         // Same reasoning as onConnectionState above - never let a native
         // callback propagate an uncaught exception.
         debugPrint('WebRTC: onTrack handler failed: $e\n$st');
       }
     };
+
+    _pc = pc;
+  }
+
+  /// The other side's picture. On a voice call this is them having turned
+  /// their camera on (a renegotiation): this side becomes a video call too.
+  /// It used to be dropped - a voice call had no renderer to show it on.
+  Future<void> _showRemoteVideo(RTCTrackEvent event, int gen) async {
+    try {
+      if (!isVideo) await _becomeVideo();
+      if (gen != _generation) return;
+      remoteRenderer.srcObject = event.streams[0];
+
+      // Don't announce remote video until the renderer has actual
+      // dimensions - i.e. a frame has really been decoded. srcObject
+      // being set only means a track was attached; frames can be
+      // seconds behind it, or never arrive if the far camera failed.
+      // Showing the video surface before then is what produced the
+      // black screen described on onRemoteVideoChanged above.
+      if (_remoteVideoEnabled && remoteRenderer.videoWidth > 0) {
+        onRemoteVideoChanged?.call(true);
+      }
+      remoteRenderer.onResize = () {
+        if (gen != _generation) return;
+        // _remoteVideoEnabled, not just dimensions: a peer who muted
+        // their camera before we ever decoded a frame would otherwise
+        // have the surface switched on by the first resize event.
+        onRemoteVideoChanged?.call(
+            _remoteVideoEnabled && remoteRenderer.videoWidth > 0);
+      };
+
+      // A remote track that ends (the peer turned their camera off, or
+      // the track was removed) must take the video surface back down
+      // rather than freezing on the last decoded frame.
+      event.track.onEnded = () {
+        if (gen != _generation) return;
+        debugPrint('WebRTC: REMOTE_VIDEO_TRACK_ENDED room=$roomId');
+        onRemoteVideoChanged?.call(false);
+      };
+    } catch (e, st) {
+      debugPrint('WebRTC: remote video failed: $e\n$st');
+    }
   }
 
   // Peer's camera state, as last announced by them. Defaults to true: a
@@ -1557,6 +1883,18 @@ class WebRtcService {
 
   bool _cameraDenied = false;
 
+  static const Map<String, dynamic> _videoConstraints = {
+    'facingMode': 'user',
+    'width':  {'ideal': 640},
+    'height': {'ideal': 480},
+    // Capping capture frame rate is the cheapest bandwidth/CPU saving
+    // available for video: 24fps is indistinguishable from 30 for a talking
+    // head, and a budget phone's encoder has 20% less work to do. `ideal`
+    // only - a hard `max` can make some Android camera stacks refuse to
+    // open the device at all.
+    'frameRate': {'ideal': 24},
+  };
+
   /// True when this was started as a video call but the local camera isn't
   /// available, so only audio is being sent. The UI uses this to explain
   /// the missing self-preview instead of showing an empty box.
@@ -1591,19 +1929,7 @@ class WebRtcService {
         'noiseSuppression': true,
         'autoGainControl':  true,
       },
-      'video': wantVideo
-          ? {
-              'facingMode': 'user',
-              'width':  {'ideal': 640},
-              'height': {'ideal': 480},
-              // Capping capture frame rate is the cheapest bandwidth/CPU
-              // saving available for video: 24fps is indistinguishable from
-              // 30 for a talking head, and a budget phone's encoder has 20%
-              // less work to do. `ideal` only - a hard `max` can make some
-              // Android camera stacks refuse to open the device at all.
-              'frameRate': {'ideal': 24},
-            }
-          : false,
+      'video': wantVideo ? _videoConstraints : false,
     });
     if (isVideo && wantVideo) {
       localRenderer.srcObject = _local;
@@ -1879,6 +2205,9 @@ class WebRtcService {
       _local?.getTracks().forEach((t) => t.stop());
       await _local?.dispose();
     } catch (_) {}
+    final camera = _camera;
+    _camera = null;
+    if (camera != null) await _disposeStream(camera);
     try { await _ws?.sink.close(); } catch (_) {}
     // Hand the audio route AND the audio mode back to the platform, so the
     // next media playback (a voice note, the next call's ringtone) isn't
@@ -1888,6 +2217,12 @@ class WebRtcService {
     await _setAudioMode(inCall: false);
     _pc = null; _local = null; _ws = null;
     _iceCredentialsExpireAt = null;
+    _iceConfigFuture = null;
+    _offerFuture = null;
+    _offerBeforePc = null;
+    _peerInRoom = false;
+    _localIceBeforePeer.clear();
+    _renegotiationQueued = false;
     _pendingIce.clear();
     _peerSignalingDown = false;
     _awaitingRestartAnswer = false;
@@ -1917,7 +2252,7 @@ class WebRtcService {
     // 30s connect timeout then cut every call off after 30 seconds of
     // ringing as "Call timed out while connecting", fifteen seconds before
     // the callee's phone stopped ringing. For the caller it starts when the
-    // offer goes out (_sendOffer): the callee has answered and joined, and
+    // offer goes out (_deliverOffer): the callee has answered and joined, and
     // from there 30s really is a stuck negotiation. The no-answer window is
     // the call screen's (and the server's).
     if (s == CallState.ringing || (s == CallState.calling && _offerSent)) {

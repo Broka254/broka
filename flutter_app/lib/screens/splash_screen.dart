@@ -40,6 +40,11 @@ class SplashScreen extends StatefulWidget {
   /// Set once the boot sequence has been shown on this phone.
   static const String introSeenKey = 'splash_intro_seen';
 
+  /// How long the inbox sweep waits when the app was started to answer a
+  /// call: its first pass and the push-token registration are a burst of
+  /// requests, and the call needs the network more for those seconds.
+  static const Duration answeringSweepDelay = Duration(seconds: 8);
+
   /// The logo's size on Android's own splash (the splash_logo drawables:
   /// 160dp in a 288dp canvas).
   static const double systemLogoSize = 160;
@@ -162,7 +167,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // ApiService.loadSavedSession() already ran in main() before runApp,
     // so currentUserId is populated here if a session exists.
     final loggedIn = ApiService.currentUserId != null && ApiService.authToken != null;
-    if (loggedIn) GlobalPollerService.instance.start();
 
     // App was launched cold by tapping one of our notifications (a call, a
     // message, a missed call) - route straight there instead of the normal
@@ -172,6 +176,37 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // simply ignored, falling through to the normal flow below.
     final coldStartCall = pendingColdStartCallData;
     pendingColdStartCallData = null; // consume once, regardless of outcome
+    final answering = coldStartCall?['type'] == 'incoming_call' &&
+        coldStartCall?['answer'] == true;
+    if (loggedIn) {
+      if (answering) {
+        GlobalPollerService.instance.startAfter(SplashScreen.answeringSweepDelay);
+      } else {
+        GlobalPollerService.instance.start();
+      }
+    }
+    if (loggedIn && coldStartCall != null && answering) {
+      // Accept started the app: the call screen, and only it, takes this
+      // screen's place. Home used to be built under it first - its feed,
+      // images and requests competing for the phone and the network in
+      // exactly the seconds the call was trying to connect. Home comes when
+      // the call closes (VoipCallScreen._closeOwnScreen).
+      final nav = Navigator.of(context);
+      final splash = ModalRoute.of(context);
+      await NotificationService.instance.navigateFromPayload(coldStartCall, replace: true);
+      if (splash != null && splash.isActive) {
+        // The call didn't take this screen's place (it was over and its
+        // chat opened, or it is being asked about): Home goes where this
+        // screen was, under whatever opened.
+        if (splash.isCurrent) {
+          nav.pushReplacement(smoothRoute(const HomeScreen()));
+        } else {
+          nav.replace(oldRoute: splash, newRoute: smoothRoute(const HomeScreen()));
+        }
+      }
+      DeepLinkService.instance.appReady(openPending: false);
+      return;
+    }
     if (loggedIn && coldStartCall != null) {
       // Home underneath, so Back from the call or the conversation lands
       // there - not on this splash screen, which has already done its job.

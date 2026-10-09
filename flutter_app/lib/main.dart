@@ -51,6 +51,7 @@ import 'features/zeno_assistant/presentation/zeno_session_host.dart';
 import 'features/zeno_assistant/zeno_session.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
+import 'services/active_call.dart';
 import 'services/callkit_service.dart';
 import 'services/deep_link_service.dart';
 
@@ -83,6 +84,31 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     if (message.notification?.title != null) 'title': message.notification!.title,
     if (message.notification?.body != null) 'body': message.notification!.body,
   });
+}
+
+/// Back from a long time away: Home, rather than a screen whose timers and
+/// sockets went stale meanwhile. Returns whether it went there.
+///
+/// Never over the splash or sign-in, and never out of a call - this
+/// redirect was the other half of the "screen off -> call drops" bug. It
+/// read the screen on top as `ModalRoute.of(nav.context)`, which is always
+/// null (the navigator's own context sits above every route), so the call
+/// check never matched: pressing Accept on a call to an app that had been
+/// in the background over five minutes brought the app back, and when the
+/// call screen had opened first, this swept it away with everything else -
+/// the call dropped as it appeared.
+@visibleForTesting
+bool returnHomeAfterAbsence(NavigatorState nav) {
+  final currentRoute = NotificationService.topRouteName(nav);
+  if (currentRoute == '/splash' || currentRoute == '/auth' ||
+      currentRoute == '/voip-call') {
+    return false;
+  }
+  // A call screen under another screen (a redial's) is a call too.
+  if (ActiveCall.instance.onCall) return false;
+  if (ApiService.currentUserId == null) return false;
+  nav.pushNamedAndRemoveUntil('/home', (_) => false);
+  return true;
 }
 
 /// The session ended (ApiService.onSessionEnded): show sign-in, saying why.
@@ -519,16 +545,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
 
       final nav = navigatorKey.currentState;
       if (nav == null) return;
-      // Don't interrupt the splash/auth flow itself, and never yank the user
-      // out of an active call - this exact redirect was the other half of
-      // the "screen off -> call drops" bug: a call left running with the
-      // screen off for longer than _idleThreshold would resume only to be
-      // immediately torn down and replaced with /home.
-      final currentRoute = ModalRoute.of(nav.context)?.settings.name;
-      if (currentRoute == '/splash' || currentRoute == '/auth' ||
-          currentRoute == '/voip-call') return;
-      if (ApiService.currentUserId == null) return;
-      nav.pushNamedAndRemoveUntil('/home', (_) => false);
+      returnHomeAfterAbsence(nav);
     }
   }
 

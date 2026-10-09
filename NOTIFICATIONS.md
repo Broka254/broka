@@ -301,3 +301,13 @@ notification's large icon, and a message or missed-call push that Android
 drew by itself is drawn again with the face by the background handler,
 which now also receives the push's title and body.
 
+
+
+## Incoming calls with the app in front (2026-10-09)
+
+A call that arrives while BROKA is on screen opens its call screen at once,
+ringing, instead of a notification. Where a call notification is posted
+while the app's own ringer is ringing, it goes on `broka_calls_in_app_v1`,
+a channel with no sound: Android 8+ plays a channel's sound whatever the
+notification asks, and the call channel's ringtone played over the app's
+ring and on after Accept. CALLING.md has the rest.
