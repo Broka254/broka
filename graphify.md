@@ -977,6 +977,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/zeno_autolist_screen.dart` — Zeno listing an item from its photo (2026-10-08) - "I only take the photo; Zeno does the rest." The app's side of backend api/domains/zeno_…
 - `presentation/zeno_describe_screen.dart` — Zeno writing a listing's description with the seller (2026-10-06) opened from the sell wizard's Description step when Zeno's look at the ph…
 - `presentation/zeno_guide_card.dart` — A guide from Zeno - "how do I open a store?", "tips to sell faster" - as steps to follow rather than a paragraph to remember.
+- `presentation/zeno_intro_chat.dart` — Zeno's introduction, on screen (zeno_intro.dart has the conversation): full screen over Home, the first time a new account sees it.
 - `presentation/zeno_launcher.dart` — Zeno's orb, floating at the edge of every screen (2026-10-09).
 - `presentation/zeno_live_overlay.dart` — Voice mode - talking to Zeno the way one talks to Siri.
 - `presentation/zeno_orb.dart` — Zeno's orb - what the user talks to in voice mode.
@@ -985,6 +986,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/zeno_tour_layer.dart` — Zeno's tour of BROKA, on screen (zeno_tour.dart has the script and the moves): drawn by the session host above every screen.
 - `zeno_action_runner.dart` — Doing what Zeno said it would.
 - `zeno_check_ins.dart` — What Zeno says when the user has gone quiet in voice mode (2026-10-09).
+- `zeno_intro.dart` — Zeno introducing itself to a new user - as a conversation (2026-10-10).
 - `zeno_session.dart` — Zeno, staying with the user from screen to screen.
 - `zeno_tour.dart` — Zeno showing a new user around BROKA (2026-10-09).
 
@@ -1252,7 +1254,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno's voice that kept listening, a tour for new users, Zeno on every screen, the Buying Agent's room (2026-10-09)
+- `CHANGES.md` — Zeno introduces itself, sells Premium, and every Zeno screen looks like BROKA (2026-10-10)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
