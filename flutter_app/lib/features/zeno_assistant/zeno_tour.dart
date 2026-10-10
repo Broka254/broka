@@ -20,10 +20,22 @@
 //
 // Offered once per account (ZenoTourStore), and only to accounts made on
 // this phone; "show me around" (or How BROKA works' button) runs it again.
+//
+// 2026-10-10: the offer became a conversation (zeno_intro.dart). Zeno no
+// longer opens with a splash and two buttons: it talks with the user - how
+// BROKA works, what Zeno can do, the Buying Agent hunting and recommending,
+// the watch that never sleeps - and makes the case for Premium, which
+// unlocks most of it. From there the user goes to the plans, tries the
+// Buying Agent for real (the demo below), takes this tour of the screens,
+// or leaves it for later. It is the welcome phase, so it is offered, held
+// and ended exactly as the welcome was. Zeno introduces itself as the
+// user's personal intelligent assistant now, never as a broker.
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'zeno_intro.dart';
 
 /// What the tour needs from Zeno's session (zeno_session.dart), which owns
 /// the Navigator, the voice and the microphone.
@@ -43,6 +55,9 @@ abstract interface class ZenoTourHost {
 
   /// Opens the microphone, docked, for the user to answer out loud.
   Future<void> tourListen();
+
+  /// Opens the Premium plans.
+  Future<void> tourOpenPlans();
 }
 
 /// Where a tour is.
@@ -114,9 +129,9 @@ class ZenoTourScript {
       return ZenoTourScript(
         language: 'swahili',
         welcome: '${n('Habari {name}, karibu BROKA! ', 'Habari, karibu BROKA! ')}'
-            'Mimi ni Zeno, dalali wako binafsi. Ninatafuta unachotaka, ninajadiliana bei kwa '
-                'niaba yako, na ninakuangalilia kisipopatikana bado. Nikuonyeshe mambo yalivyo? '
-                'Ni kama dakika moja tu.',
+            'Mimi ni Zeno, msaidizi wako binafsi mwenye akili. Ninatafuta unachotaka, '
+                'ninakupendekezea dili bora, na ninakuangalilia kisipopatikana bado. Nikuonyeshe '
+                'mambo yalivyo? Ni kama dakika moja tu.',
         steps: const [
           ZenoTourStep(
             id: 'home',
@@ -137,16 +152,16 @@ class ZenoTourScript {
             title: 'Wakala wako wa Kununua',
             destination: 'buying_agent',
             line: 'Hapa ndipo ninapopenda zaidi - Wakala wako wa Kununua. Niambie unachotafuta, '
-                'nitakuuliza swali moja au mawili, nikitafute kote BROKA na nijadiliane na muuzaji '
-                'kwa ajili yako. Hakipo bado? Nitaendelea kukiangalia na kukujulisha kikitokea.',
+                'nitakuuliza swali moja au mawili, nikitafute kote BROKA na nikupendekezee dili bora. '
+                'Hakipo bado? Nitaendelea kukiangalia na kukujulisha kikitokea.',
           ),
           ZenoTourStep(
             id: 'inbox',
             title: 'Inbox',
             destination: 'inbox',
-            line: 'Kila dili iko kwenye Inbox yako. Niko kwenye mazungumzo yako - naweza kupendekeza '
-                'bei nzuri na kujadiliana kwa niaba yako, na unaweza kumpigia muuzaji simu ya sauti '
-                'au video moja kwa moja.',
+            line: 'Kila dili iko kwenye Inbox yako. Niko kwenye mazungumzo yako - naweza kukuambia '
+                'kama bei ni ya haki na kukusaidia kukubaliana, na unaweza kumpigia muuzaji simu ya '
+                'sauti au video moja kwa moja.',
           ),
           ZenoTourStep(
             id: 'sell',
@@ -170,7 +185,7 @@ class ZenoTourScript {
             'Niambie kitu kimoja ungependa kununua - kisha uone nikikiwinda.',
         onIt: 'Sawa - tazama hii.',
         finaleAfterDemo: 'Hivyo ndivyo ninavyofanya kazi. Nitakuuliza swali moja au mawili, kisha '
-            'nikuonyeshe nilichopata.',
+            'nikuonyeshe nilichopata. Unataka nikiangalie mchana na usiku? Hiyo inakuja na Premium.',
         finale: '${n('Uko tayari, {name}! ', 'Uko tayari! ')}'
             'Gusa duara langu wakati wowote ukinihitaji. Biashara njema!',
         declined: 'Sawa. Ukitaka nikutembeze baadaye, sema tu "nitembeze".',
@@ -179,8 +194,8 @@ class ZenoTourScript {
     return ZenoTourScript(
       language: 'english',
       welcome: '${n('Hi {name}, welcome to BROKA! ', 'Hi, welcome to BROKA! ')}'
-          "I'm Zeno, your personal broker. I find what you want, negotiate the price for you, "
-              "and keep watch when it isn't here yet. Can I show you around? It takes about a minute.",
+          "I'm Zeno, your personal intelligent assistant. I find what you want, recommend the best "
+              "deal, and keep watch when it isn't here yet. Can I show you around? It takes about a minute.",
       steps: const [
         ZenoTourStep(
           id: 'home',
@@ -201,15 +216,15 @@ class ZenoTourScript {
           title: 'Your Buying Agent',
           destination: 'buying_agent',
           line: "This is my favourite part - your Buying Agent. Tell me what you're after, I'll ask "
-              "a question or two, hunt it down across BROKA and negotiate with the seller for you. "
+              "a question or two, hunt it down across BROKA and recommend the best deal. "
               "Not here yet? I'll keep watch and tell you the moment it shows up.",
         ),
         ZenoTourStep(
           id: 'inbox',
           title: 'Inbox',
           destination: 'inbox',
-          line: 'Every deal lives in your Inbox. I sit in on your chats - I can suggest a fair price '
-              'and negotiate for you, and you can call or video call the seller right from there.',
+          line: 'Every deal lives in your Inbox. I sit in on your chats - I can tell you whether a price '
+              'is fair and help you agree a deal, and you can call or video call the seller right from there.',
         ),
         ZenoTourStep(
           id: 'sell',
@@ -232,7 +247,8 @@ class ZenoTourScript {
       demo: '${n("Let's try it, {name}. ", "Let's try it. ")}'
           "Tell me one thing you'd love to buy - and watch me hunt it down.",
       onIt: 'On it - watch this.',
-      finaleAfterDemo: "That's me at work. I'll ask you a question or two, then show you what I found.",
+      finaleAfterDemo: "That's me at work. I'll ask you a question or two, then show you what I found. "
+          'Want me to keep watch for it day and night? That comes with Premium.',
       finale: '${n("You're all set, {name}! ", "You're all set! ")}'
           'Tap my orb any time you need me. Happy trading!',
       declined: 'No problem. Whenever you want the tour, just say "show me around".',
@@ -305,9 +321,12 @@ class ZenoTourStore {
 
 /// The tour as it runs: which phase, which step, what Zeno is saying.
 class ZenoTour extends ChangeNotifier {
-  ZenoTour(this._host, {this.settle = const Duration(milliseconds: 650)});
+  ZenoTour(this._host, {this.settle = const Duration(milliseconds: 650), this.introPace = 1.0});
 
   final ZenoTourHost _host;
+
+  /// The introduction's pace (ZenoIntro.pace) - zero in tests.
+  final double introPace;
 
   /// How long a screen is given to open before Zeno talks over it: the
   /// screen it replaces may stop speech as it goes (and the words should
@@ -323,6 +342,7 @@ class ZenoTour extends ChangeNotifier {
 
   ZenoTourPhase _phase = ZenoTourPhase.idle;
   ZenoTourScript? _script;
+  ZenoIntro? _intro;
   int _index = 0;
   String _line = '';
   bool _speaking = false;
@@ -345,6 +365,9 @@ class ZenoTour extends ChangeNotifier {
   ZenoTourPhase get phase => _phase;
   bool get active => _phase != ZenoTourPhase.idle;
   ZenoTourScript? get script => _script;
+
+  /// Zeno's introduction - the welcome phase's conversation.
+  ZenoIntro? get intro => _intro;
   int get index => _index;
   int get stepCount => _script?.steps.length ?? 0;
   ZenoTourStep? get step =>
@@ -360,13 +383,53 @@ class ZenoTour extends ChangeNotifier {
   /// Goes up for each celebration - the finale's confetti.
   int get burst => _burst;
 
-  /// Zeno introducing itself and asking whether to show the user around.
+  /// Zeno introducing itself - a conversation (zeno_intro.dart) that ends
+  /// in the plans, a hunt, the tour, or later.
   void offer({String? firstName, String language = 'english'}) {
-    _script = ZenoTourScript.forUser(firstName: firstName, language: language);
+    final script = _script = ZenoTourScript.forUser(firstName: firstName, language: language);
     _moveTo(ZenoTourPhase.welcome);
-    _line = _script!.welcome;
+    _intro?.dispose();
+    final intro = _intro = ZenoIntro(
+      ZenoIntroScript.forUser(firstName: firstName, language: language),
+      say: (text) => unawaited(_host.tourSay(text, script.language)),
+      stopSaying: _host.tourStopSpeaking,
+      onOutcome: _introOutcome,
+      pace: introPace,
+    );
+    _line = intro.script.opening;
     notifyListeners();
-    unawaited(_say(_line, then: null));
+    intro.start();
+  }
+
+  void _introOutcome(ZenoIntroOutcome outcome, String? query) {
+    if (_phase != ZenoTourPhase.welcome) return;
+    switch (outcome) {
+      case ZenoIntroOutcome.premium:
+        openPlans();
+      case ZenoIntroOutcome.tryAgent:
+        if (query != null) unawaited(tryBuyingAgent(query));
+      case ZenoIntroOutcome.tour:
+        begin();
+      case ZenoIntroOutcome.later:
+        decline();
+    }
+  }
+
+  /// The plans, from the introduction or the finale.
+  void openPlans() {
+    end();
+    unawaited(_host.tourOpenPlans());
+  }
+
+  /// The introduction's "tell me one thing you'd love to buy": hunted with
+  /// the Buying Agent, as the tour's demo is, then the finale.
+  Future<void> tryBuyingAgent(String query) async {
+    if (query.trim().isEmpty || _script == null) return;
+    _moveTo(ZenoTourPhase.demo);
+    _demoQuery = null;
+    _index = stepCount - 1;
+    notifyListeners();
+    await submitDemo(query);
   }
 
   /// Straight into the steps - "show me around".
@@ -411,7 +474,10 @@ class ZenoTour extends ChangeNotifier {
     switch (_phase) {
       case ZenoTourPhase.step:
         unawaited(_playStep());
-      case ZenoTourPhase.welcome || ZenoTourPhase.demo:
+      case ZenoTourPhase.welcome:
+        final beat = _intro?.beat;
+        if (beat != null) unawaited(_host.tourSay(beat.lines.join(' '), _script?.language ?? 'english'));
+      case ZenoTourPhase.demo:
         _epoch++;
         unawaited(_say(_line, then: null));
       case ZenoTourPhase.idle || ZenoTourPhase.finale:
@@ -450,6 +516,10 @@ class ZenoTour extends ChangeNotifier {
   /// Stops the tour wherever it is.
   void end() {
     if (!active) return;
+    // An introduction still talking stops; one that has ended (in the
+    // plans, say) is left to finish its last line.
+    final intro = _intro;
+    if (intro != null && !intro.done) intro.stop();
     _moveTo(ZenoTourPhase.idle);
     if (_speaking) _host.tourStopSpeaking();
     _speaking = false;
@@ -461,6 +531,7 @@ class ZenoTour extends ChangeNotifier {
   void hold() {
     _cancelTimers();
     if (!active) return;
+    if (_phase == ZenoTourPhase.welcome) _intro?.hold();
     _epoch++;
     _waiting = false;
     if (_speaking) _host.tourStopSpeaking();
@@ -476,12 +547,22 @@ class ZenoTour extends ChangeNotifier {
       case ZenoTourPhase.idle:
         return false;
       case ZenoTourPhase.welcome:
-        if (command == ZenoTourCommand.yes || command == ZenoTourCommand.next) {
-          begin();
-          return true;
-        }
+        final intro = _intro;
         if (command == ZenoTourCommand.no || command == ZenoTourCommand.stop) {
           decline();
+          return true;
+        }
+        // Zeno has asked what the user would love to buy: this is it.
+        if (command == null && intro != null && intro.asking) {
+          intro.submit(said);
+          return true;
+        }
+        if (command == ZenoTourCommand.yes || command == ZenoTourCommand.next) {
+          if (intro == null || !intro.choosePrimary()) begin();
+          return true;
+        }
+        if (command == ZenoTourCommand.repeat) {
+          repeat();
           return true;
         }
         end();
@@ -634,6 +715,7 @@ class ZenoTour extends ChangeNotifier {
   @override
   void dispose() {
     _cancelTimers();
+    _intro?.dispose();
     super.dispose();
   }
 }

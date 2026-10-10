@@ -40,8 +40,9 @@
 // Words said while Zeno is still working out its last answer are kept and
 // sent after it, not dropped (they used to be: send() returned early).
 //
-// It also runs Zeno's tour of BROKA (zeno_tour.dart), offered to a new
-// account the first time Home is in front, and tells the floating orb
+// It also runs Zeno's tour of BROKA (zeno_tour.dart) - and Zeno's
+// introduction, the conversation a new account is offered the first time
+// Home is in front (zeno_intro.dart) - and tells the floating orb
 // (zeno_launcher.dart) which screen is showing.
 import 'dart:async';
 
@@ -845,10 +846,18 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
     });
   }
 
-  /// The tour, from anywhere - How BROKA works' button.
+  /// The tour, from anywhere - "show me around".
   void startTour() {
     if (isActive && expanded) dock();
     tour.begin(firstName: _firstName, language: ApiService.currentUserLanguage);
+  }
+
+  /// Zeno's introduction - the conversation a new account is offered -
+  /// from How BROKA works and Settings. The tour of the screens is one of
+  /// the ways out of it.
+  void meetZeno() {
+    if (isActive && expanded) dock();
+    tour.offer(firstName: _firstName, language: ApiService.currentUserLanguage);
   }
 
   // ── ZenoTourHost ──────────────────────────────────────────────────────────
@@ -888,6 +897,14 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
 
   @override
   Future<void> tourListen() => start(docked: true, muted: _muted);
+
+  @override
+  Future<void> tourOpenPlans() async {
+    final nav = routes.navigator;
+    if (nav == null) return;
+    _opened = null;
+    await nav.pushNamed('/premium');
+  }
 
   void _cancelTimers() {
     _beat?.cancel();

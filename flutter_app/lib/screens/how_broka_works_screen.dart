@@ -24,7 +24,9 @@
 //
 // 2026-10-09: it opens with Zeno offering to show the user around - the
 // same tour a new account is offered (zeno_tour.dart), for anyone who
-// would rather be shown than read.
+// would rather be shown than read. Since 2026-10-10 that is Zeno's
+// introduction, a conversation (zeno_intro.dart), with the tour one of the
+// ways out of it.
 
 import 'package:flutter/material.dart';
 
@@ -73,7 +75,7 @@ const _selling = _Journey(Icons.storefront_rounded, BrokaColors.gold, 'Selling o
       'title get you found.'),
   ('Answer fast', 'Buyers rarely message one seller. Whoever answers first is usually who '
       'they buy from.'),
-  ('Agree the deal', 'Zeno brokers the price with the buyer and keeps it civil.'),
+  ('Agree the deal', 'Zeno helps you agree a fair price with the buyer and keeps it civil.'),
   ('Get paid through escrow', 'Wait until the escrow service itself shows the buyer\'s money '
       'is held - never a screenshot or an SMS - then hand it over. The service pays you when '
       'the buyer confirms.'),
@@ -99,7 +101,7 @@ const _sellingDirect = _Journey(Icons.storefront_rounded, BrokaColors.gold, 'Sel
       'title get you found.'),
   ('Answer fast', 'Buyers rarely message one seller. Whoever answers first is usually who '
       'they buy from - and your reply speed counts toward your rating from day one.'),
-  ('Agree the deal', 'Zeno brokers the price with the buyer and keeps it civil.'),
+  ('Agree the deal', 'Zeno helps you agree a fair price with the buyer and keeps it civil.'),
   ('Get paid, then hand it over', 'Check your own M-Pesa or bank for the money - never a '
       'screenshot or an SMS - before the item leaves your hands.'),
   ('Grow', 'An online store gathers your listings behind one link you can share anywhere.'),
@@ -108,7 +110,7 @@ const _sellingDirect = _Journey(Icons.storefront_rounded, BrokaColors.gold, 'Sel
 const _zeno = _Topic(
   Icons.auto_awesome_rounded, BrokaColors.neonPurple,
   'Zeno, on your side',
-  'The AI broker in every deal - and the assistant in the Zeno tab.',
+  'Your personal intelligent assistant - in every deal, and in the Zeno tab.',
   [
     'In a deal room, Zeno negotiates between buyer and seller and keeps both honest: it never '
         'invents what the other side said, and never pushes a price past what the seller set.',
@@ -122,7 +124,7 @@ const _zeno = _Topic(
 const _zenoDirect = _Topic(
   Icons.auto_awesome_rounded, BrokaColors.neonPurple,
   'Zeno, on your side',
-  'The AI broker in every deal - and the assistant in the Zeno tab.',
+  'Your personal intelligent assistant - in every deal, and in the Zeno tab.',
   [
     'In a deal room, Zeno negotiates between buyer and seller and keeps both honest: it never '
         'invents what the other side said, and never pushes a price past what the seller set.',
@@ -394,7 +396,7 @@ class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
       const Padding(
         padding: EdgeInsets.only(bottom: 16),
         child: Text(
-          'BROKA is where you buy and sell with Zeno, an AI broker, on your side. '
+          'BROKA is where you buy and sell with Zeno, your personal intelligent assistant, on your side. '
           'Here is how a deal goes, how to pay safely, and what the numbers on a '
           "seller's dashboard mean.",
           style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
@@ -436,7 +438,8 @@ class _HowBrokaWorksScreenState extends State<HowBrokaWorksScreen> {
   }
 }
 
-/// "Show me around" - Zeno's tour, from here.
+/// "Meet Zeno" - Zeno's introduction, the conversation a new account is
+/// offered, from here; the tour of the screens is one of its ways out.
 class _TourCta extends StatelessWidget {
   const _TourCta({required this.session});
   final ZenoSession session;
@@ -449,7 +452,7 @@ class _TourCta extends StatelessWidget {
           child: InkWell(
             key: const Key('how-broka-works-tour'),
             borderRadius: BorderRadius.circular(16),
-            onTap: session.startTour,
+            onTap: session.meetZeno,
             child: Ink(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -466,10 +469,10 @@ class _TourCta extends StatelessWidget {
                 SizedBox(width: 12),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Let Zeno show you around',
+                    Text('Meet Zeno, your personal assistant',
                         style: TextStyle(color: BrokaColors.textHigh, fontSize: 14.5, fontWeight: FontWeight.w800)),
                     SizedBox(height: 3),
-                    Text('A one-minute tour - Zeno opens each screen and says what it does.',
+                    Text('A quick chat - how BROKA works, and what Zeno can do for you.',
                         style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.35)),
                   ]),
                 ),

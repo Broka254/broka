@@ -13,6 +13,11 @@
 //
 // and [burst] fires a shockwave - an action has been taken.
 //
+// 2026-10-10: with [face], Zeno's own face sits at the heart of it - the
+// avatar Home, the nav bar and every chat show - so voice mode is plainly
+// BROKA's Zeno, not a generic glowing blob. It swells a little with the
+// voice it hears and the words it says.
+//
 // Performance: one Ticker drives a model the painter listens to, so a frame
 // repaints this orb and nothing else - no setState, no rebuild of the
 // captions or the conversation underneath. Glows are gradients rather than
@@ -25,6 +30,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../../../main.dart' show BrokaColors;
 import '../../../theme/motion.dart';
+import '../../../widgets/zeno_avatar.dart';
 
 enum ZenoOrbMode { waking, listening, thinking, speaking, error }
 
@@ -35,6 +41,7 @@ class ZenoOrb extends StatefulWidget {
     this.level = 0,
     this.burst = 0,
     this.size = 280,
+    this.face = false,
   });
 
   final ZenoOrbMode mode;
@@ -45,6 +52,9 @@ class ZenoOrb extends StatefulWidget {
   /// Goes up by one for each shockwave.
   final int burst;
   final double size;
+
+  /// Zeno's face at the centre.
+  final bool face;
 
   @override
   State<ZenoOrb> createState() => _ZenoOrbState();
@@ -104,7 +114,26 @@ class _ZenoOrbState extends State<ZenoOrb> with SingleTickerProviderStateMixin {
         child: RepaintBoundary(
           child: SizedBox.square(
             dimension: widget.size,
-            child: CustomPaint(painter: _OrbPainter(_model)),
+            child: CustomPaint(
+              painter: _OrbPainter(_model),
+              child: widget.face
+                  ? Center(
+                      // Rebuilds only the transform each frame; the image
+                      // is built once.
+                      child: AnimatedBuilder(
+                        animation: _model,
+                        builder: (_, child) => Opacity(
+                          opacity: 1 - 0.45 * _model.mix[ZenoOrbMode.error]!,
+                          child: Transform.scale(
+                            scale: 1 + 0.05 * _model.energy + 0.05 * _model.voice,
+                            child: child,
+                          ),
+                        ),
+                        child: ZenoAvatar(size: widget.size * 0.34, glow: true),
+                      ),
+                    )
+                  : null,
+            ),
           ),
         ),
       );

@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../../../main.dart' show BrokaColors;
 import '../../../services/zeno_voice_controller.dart';
 import '../../../theme/motion.dart';
+import '../../buy_agent/presentation/widgets/agent_hud.dart' show AgentWaves;
 import '../domain/zeno_action.dart';
 import '../zeno_session.dart';
 import '../zeno_tour.dart';
@@ -429,7 +430,7 @@ class _PillState extends State<_Pill> with SingleTickerProviderStateMixin {
                       onTap: () => _s.expand(),
                       child: Opacity(
                         opacity: _s.listening || _s.thinking || _s.typing ? 1 : 0.6,
-                        child: ZenoOrb(mode: _mode(_s, state), level: level, burst: _s.burst, size: 50),
+                        child: ZenoOrb(mode: _mode(_s, state), level: level, burst: _s.burst, size: 50, face: true),
                       ),
                     ),
                   ),
@@ -462,14 +463,24 @@ class _PillState extends State<_Pill> with SingleTickerProviderStateMixin {
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(status,
-                                    maxLines: 1,
-                                    style: TextStyle(
-                                      color: _s.listening || _s.thinking ? BrokaColors.neonCyan : BrokaColors.textMid,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.6,
-                                    )),
+                                Row(children: [
+                                  // Zeno's thinking waves, as in every Zeno chat.
+                                  if (_s.thinking) ...[
+                                    const AgentWaves(width: 30, height: 12),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Flexible(
+                                    child: Text(status,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: _s.listening || _s.thinking ? BrokaColors.neonCyan : BrokaColors.textMid,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: 0.6,
+                                        )),
+                                  ),
+                                ]),
                                 const SizedBox(height: 2),
                                 AnimatedSwitcher(
                                   duration: BrokaMotion.of(context, BrokaMotion.quick),

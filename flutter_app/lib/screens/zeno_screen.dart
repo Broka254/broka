@@ -57,6 +57,16 @@
 // thinking as waves, results locked on with brackets as they are dealt,
 // and a composer whose edge comes alive as the buyer types.
 //
+// 2026-10-10: one look, one voice. The Buying Agent left its holographic
+// room for Home's constellation - the same header, bubbles, chips and
+// composer as the assistant - with a calmer core and a radar scope for the
+// hunt; its steps are Tell me, I hunt, I recommend, and its results carry
+// Zeno's pick and a way to the deal rather than an offer to negotiate each
+// one. "New chat" is a labelled button, not an icon nobody found. And every
+// microphone here opens the full-screen voice mode (zeno_live_overlay.dart):
+// the Buying Agent and a listing's questions used to get a compact card
+// instead, which looked like a second, lesser voice feature.
+//
 // 2026-09-29: a listing's "Ask Zeno" card opens the assistant about that
 // listing (aboutListing): pinned under the header, its id sent with every
 // turn so the server can read it to Zeno, suggestions about it, and its own
@@ -73,7 +83,6 @@ import '../services/photo_capture.dart';
 import '../services/realtime_stt.dart';
 import '../services/zeno_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
-import '../widgets/zeno_voice_card.dart';
 import '../main.dart';
 import '../widgets/broka_image.dart';
 import '../widgets/chat_parts.dart';
@@ -98,6 +107,7 @@ import '../features/zeno_assistant/data/zeno_assistant_repository.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../features/zeno_assistant/domain/zeno_action.dart';
 import '../features/zeno_assistant/presentation/zeno_action_card.dart';
+import '../features/zeno_assistant/presentation/zeno_live_overlay.dart';
 import '../features/zeno_assistant/zeno_action_runner.dart';
 import '../features/zeno_assistant/zeno_session.dart';
 import '../features/zeno_assistant/zeno_tour.dart' show isTourRequest;
@@ -301,8 +311,6 @@ class _ZenoScreenState extends State<ZenoScreen>
   String? _lastVerdict;
   bool _watching = false;
   bool _watchBusy = false;
-  final Set<String> _negotiating = <String>{};
-  final Set<String> _negotiationOpened = <String>{};
 
   // A search is two model round-trips plus a ranked scan, so it is genuinely
   // slower than a reply. Three dots for that long reads as a hang; saying
@@ -322,6 +330,24 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   /// Replies this screen is reading aloud.
   int _saying = 0;
+
+  /// What Zeno last said since voice mode opened - its caption there.
+  String? _voiceSaid;
+
+  /// What to say in voice mode, for the Buying Agent and for a listing.
+  static const _buyingVoiceHints = [
+    '"An iPhone 13 under 60K"',
+    '"A family car for under 1M"',
+    '"A laptop for work, 16GB RAM"',
+    '"A 2 bedroom house in Ruiru"',
+    '"Nataka sofa ya living room"',
+  ];
+  static const _listingVoiceHints = [
+    '"Is this a fair price?"',
+    '"Is this seller reliable?"',
+    '"What should I check before buying?"',
+    '"Find me something similar"',
+  ];
   static const _searchPhases = [
     'Scanning Broka listings…',
     'Matching against your specs…',
@@ -477,7 +503,6 @@ class _ZenoScreenState extends State<ZenoScreen>
         _questionsAsked = saved.questionsAsked;
         _lastVerdict = saved.lastVerdict;
         _watching = saved.watching;
-        _negotiationOpened.addAll(saved.negotiationOpened);
       } else {
         _addWelcome();
       }
@@ -529,7 +554,6 @@ class _ZenoScreenState extends State<ZenoScreen>
         questionsAsked: _questionsAsked,
         lastVerdict: _lastVerdict,
         watching: _watching,
-        negotiationOpened: _negotiationOpened,
         aboutListing: _about?.id,
         savedAt: DateTime.now(),
       ),
@@ -587,7 +611,7 @@ class _ZenoScreenState extends State<ZenoScreen>
       // A reply still on its way belongs to the old conversation; this one
       // can start at once.
       _typing = false;
-      _negotiationOpened.clear();
+      _voiceSaid = null;
       _addWelcome();
     });
   }
@@ -634,11 +658,11 @@ class _ZenoScreenState extends State<ZenoScreen>
     }
 
     final welcomeMsg = switch (_langKey) {
-      'swahili' => 'Habari$greet! Mimi ni Zeno, mshauri wako wa biashara wa BROKA. Ninaweza kukusaidia kutathmini bei, kugundua udanganyifu, au kupanga mkakati wa mazungumzo. Niulize chochote! 🤝',
+      'swahili' => 'Habari$greet! Mimi ni Zeno, msaidizi wako binafsi mwenye akili hapa BROKA. Ninaweza kukutafutia unachotaka, kutathmini bei, kugundua udanganyifu na kukupeleka popote kwenye app. Niulize chochote! ✨',
       'luo'     => 'Misawa$greet! An Zeno, jakony mar ohala mar BROKA. Anyalo konyi nyiso nengo maber, neno wach miriambo, kata loso hera. Penj gimoro amora! 🤝',
       'kikuyu'  => 'Wĩmwega$greet! Nĩ niĩ Zeno, mũteithia waku wa biashara wa BROKA. Ngũkuteithia gũthagania thaara, gwĩkira mahinda ma mũrũgamo, kana gũtheria wĩhĩo. Ĩũlĩria kĩndũ kĩothe! 🤝',
-      _ when paymentsShown => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings and plan your negotiation - and when it\'s time to pay, I\'ll walk you through paying safely with an escrow service, step by step. Ask me anything! 🤝',
-      _         => 'Hello$greet! I\'m Zeno, your BROKA marketplace AI assistant. I can help you evaluate prices, spot suspicious listings and plan your negotiation. Ask me anything! 🤝',
+      _ when paymentsShown => 'Hello$greet! I\'m Zeno, your personal intelligent assistant on BROKA. I can find what you\'re after, tell you whether a price is fair, spot suspicious listings and take you anywhere in the app - and when it\'s time to pay, I\'ll walk you through paying safely with an escrow service, step by step. Ask me anything! ✨',
+      _         => 'Hello$greet! I\'m Zeno, your personal intelligent assistant on BROKA. I can find what you\'re after, tell you whether a price is fair, spot suspicious listings and take you anywhere in the app. Ask me anything! ✨',
     };
     _turns.add(_Turn(Message(role: 'broker', content: welcomeMsg)));
   }
@@ -727,6 +751,7 @@ class _ZenoScreenState extends State<ZenoScreen>
         final turn = _Turn(Message(role: 'broker', content: reply), action: data.action,
             suggestions: data.suggestions, link: data.link);
         setState(() {
+          _voiceSaid = reply;
           // A reply that opens a screen is shown whole, not written out word
           // by word: it is a confirmation, and the screen is what the user
           // is waiting for.
@@ -969,6 +994,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           // A fresh search replaces the old offer to keep watching - the
           // criteria it would have watched for have moved on.
           if (data['phase'] == 'RESULTS') _watching = false;
+          _voiceSaid = reply;
           _addArriving(turn, writing: true);
           if (matches.isNotEmpty) _dealing.add(turn);
           _typing = false;
@@ -1030,16 +1056,60 @@ class _ZenoScreenState extends State<ZenoScreen>
     _voice.setZenoSpeaking(false);
   }
 
-  /// Opens voice: the assistant's full-screen voice mode, which is Zeno's
-  /// session and outlives this screen, or the Buying Agent's card. Guarded
-  /// inside the controllers, so a double tap cannot open two sessions.
+  /// Opens voice mode: the assistant's is Zeno's session, which outlives
+  /// this screen; the Buying Agent's (and a listing's) is this screen's own
+  /// controller, in the same full-screen view. Guarded inside the
+  /// controllers, so a double tap cannot open two sessions.
   void _openVoice() {
     final session = _session;
     if (!_isBuying && session != null) {
       session.start(service: widget.voiceService, muted: !_ttsEnabled);
       return;
     }
+    setState(() => _voiceSaid = null);
     _voice.open();
+  }
+
+  void _toggleTts() {
+    _tts.stop();
+    setState(() => _ttsEnabled = !_ttsEnabled);
+  }
+
+  /// Voice mode's keyboard button: back to the composer.
+  void _typeInstead() {
+    unawaited(_endVoice());
+    _composerFocus.requestFocus();
+  }
+
+  /// Stop Zeno mid-sentence and listen.
+  void _interrupt() {
+    unawaited(_tts.stop());
+    _voice.setZenoSpeaking(false);
+  }
+
+  /// What voice mode shows under Zeno: what it found, or what it is doing
+  /// or offering to do - for the newest reply, once it has arrived.
+  Widget? _voiceCard() {
+    final last = _turns.lastOrNull;
+    if (last == null || !last.message.isBroker || _typing) return null;
+    if (last.matches.isNotEmpty) {
+      final exact = last.matches.where((m) => m is Map && m['match_is_exact'] == true).length;
+      return _VoiceResultsCard(
+        label: AgentMatchCarousel.verdictLabel(last.matches.length, exact),
+        allExact: exact == last.matches.length,
+        onShow: _showResults,
+      );
+    }
+    if (_actionOf(last) != null && (_actionPhase[last] ?? ZenoActionPhase.done) != ZenoActionPhase.dismissed) {
+      return _actionCard(last, large: true);
+    }
+    return null;
+  }
+
+  /// Out of voice mode, to the cards it found.
+  Future<void> _showResults() async {
+    await _endVoice();
+    _scrollDown();
   }
 
   // ── ZenoSessionChat: the session's turns, in this conversation ────────────
@@ -1095,58 +1165,6 @@ class _ZenoScreenState extends State<ZenoScreen>
     if (mounted) _composerFocus.requestFocus();
   }
 
-
-  /// START_NEGOTIATION for one result. The confirmation is required before
-  /// Zeno ever messages a seller (Design v2 §24) - the buyer authorises
-  /// this specific conversation, which is a different moment from
-  /// pre-authorising the standing watch to message on their behalf.
-  Future<void> _startNegotiation(BrokaListing listing) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: BrokaColors.bgCard,
-        title: const Text('Start negotiating?',
-            style: TextStyle(color: BrokaColors.textHigh, fontSize: 16)),
-        content: Text(
-          "I'll reach out to the seller of \"${listing.name}\" on your behalf and open a "
-          "conversation. You'll see everything they say and can take over anytime.",
-          style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Not yet', style: TextStyle(color: BrokaColors.textMid))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Yes, start it',
-                  style: TextStyle(color: BrokaColors.neonBlue))),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _negotiating.add(listing.id));
-    final result = await buyAgentRepository.startNegotiation(listing.id);
-    if (!mounted) return;
-    setState(() => _negotiating.remove(listing.id));
-    result.fold(
-      onSuccess: (data) {
-        if (data['status'] == 'SUCCESS') {
-          setState(() => _negotiationOpened.add(listing.id));
-          _persist();
-          Navigator.pushNamed(context, '/negotiate',
-              arguments: {'listingId': listing.id});
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(data['message'] as String? ??
-                "Couldn't start that negotiation just now."),
-          ));
-        }
-      },
-      // Zeno negotiating for a buyer is part of a plan: the refusal says
-      // which, and the plans are one tap away.
-      onFailure: (msg, code) => isPlanRefusal(code)
-          ? showPremiumUpsell(context, message: msg)
-          : ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg))),
-    );
-  }
 
   /// Turns the criteria gathered in conversation into a standing request.
   ///
@@ -1295,10 +1313,17 @@ class _ZenoScreenState extends State<ZenoScreen>
     });
     // The cards are dealt on the frame they first appear, and only then.
     WidgetsBinding.instance.addPostFrameCallback((_) => _dealing.remove(turn));
-    // Cards, or the offer to keep watching, have just appeared under the
-    // reply - bring them into view.
+    // Cards, the offer to keep watching, an action or replies to tap have
+    // just appeared under the reply - bring them into view. An action card
+    // ("Who should I call?") used to be left below the composer.
     final offersWatch = _isBuying && _lastVerdict == 'EMPTY' && identical(turn, _turns.lastOrNull);
-    if (turn.matches.isNotEmpty || offersWatch) _scrollDown();
+    if (turn.matches.isNotEmpty ||
+        offersWatch ||
+        _actionOf(turn) != null ||
+        turn.suggestions.isNotEmpty ||
+        turn.link != null) {
+      _scrollDown();
+    }
   }
 
   /// Keeps a reply that is being written in view as it grows - unless the
@@ -1347,40 +1372,53 @@ class _ZenoScreenState extends State<ZenoScreen>
             Positioned.fill(child: AgentConfetti(burst: _confetti)),
           ]),
         );
-    // The Buying Agent's own room; the assistant has the constellation of
-    // Home and every screen reached from it.
-    final conversation = _isBuying
-        ? AgentHoloBackdrop(animate: widget.animateBackground, child: content)
-        : ConstellationBackground(
-            animate: widget.animateBackground,
-            child: DecoratedBox(
-              // Zeno's colour washing down from the top, as a category's
-              // does in its Zone - over the constellation, fading out.
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topCenter,
-                  radius: 1.2,
-                  colors: [BrokaColors.neonPurple.withOpacity(0.14), Colors.transparent],
-                  stops: const [0.0, 0.6],
-                ),
-              ),
-              child: content,
-            ),
-          );
+    // Home's constellation, with Zeno's colour washing down from the top as
+    // a category's does in its Zone - the Buying Agent included: it is one
+    // of BROKA's screens, not a room of its own.
+    final conversation = ConstellationBackground(
+      animate: widget.animateBackground,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topCenter,
+            radius: 1.2,
+            colors: [BrokaColors.neonPurple.withOpacity(0.14), Colors.transparent],
+            stops: const [0.0, 0.6],
+          ),
+        ),
+        child: content,
+      ),
+    );
     return Scaffold(
       backgroundColor: BrokaColors.bg,
       // Voice floats OVER the conversation rather than replacing it: the
       // conversation stays mounted, at its scroll position, with its history
       // intact, and closing voice puts the user back exactly where they were
-      // (brief §33). The Buying Agent keeps the compact card; the assistant
-      // gets the full-screen voice mode, where Zeno is talked to rather than
-      // dictated to.
+      // (brief §33).
       //
       // The assistant's voice mode is not mounted here: it is Zeno's
-      // session, over the whole app (ZenoSessionHost). Without one - a
-      // screen tested on its own - the assistant uses the card as well.
-      body: _isBuying || _session == null
-          ? ZenoVoiceOverlay(controller: _voice, child: conversation)
+      // session, over the whole app (ZenoSessionHost). The Buying Agent's,
+      // a listing's - and the assistant's on a screen tested without a
+      // session - is the same full-screen view, on this screen's own
+      // controller, so its turns go through _send like typed ones.
+      body: _session == null
+          ? ZenoLiveOverlay(
+              controller: _voice,
+              zenoSays: _voiceSaid,
+              thinking: _typing,
+              thinkingLabel: _searching ? 'Zeno is hunting' : 'Zeno is thinking',
+              actionCard: _voiceCard(),
+              burst: _confetti,
+              muted: !_ttsEnabled,
+              onToggleMute: _toggleTts,
+              onClose: () => unawaited(_endVoice()),
+              onKeyboard: _typeInstead,
+              onInterrupt: _interrupt,
+              hints: _isBuying
+                  ? _buyingVoiceHints
+                  : (_about != null ? _listingVoiceHints : ZenoLiveOverlay.defaultHints),
+              child: conversation,
+            )
           : conversation,
     );
   }
@@ -1388,35 +1426,32 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// What the header says Zeno is doing, and the colour of its dot.
   (String, Color) get _agentState {
     if (_about != null) return ('Asking about a listing', BrokaColors.neonGreen);
-    if (!_isBuying) return ('AI Market Assistant', BrokaColors.neonGreen);
+    if (!_isBuying) return ('Personal assistant', BrokaColors.neonGreen);
     if (_searching) return ('Hunting…', BrokaColors.neonCyan);
     if (_typing) return ('Thinking…', BrokaColors.neonPurple);
     if (_watching) return ('On watch', BrokaColors.success);
     return ('Buying Agent', BrokaColors.neonGreen);
   }
 
-  /// Home's header language: a bare back chevron, the avatar Home uses for
-  /// Zeno, a glowing title, and square controls on the right.
+  /// Home's header language: a bare back chevron, Zeno's face, a glowing
+  /// title over what Zeno is doing, and controls on the right - "New chat"
+  /// as a lit, labelled button, so starting over is never hunted for.
   Widget _buildHeader() {
     final lang = _langByKey(_langKey);
-    final bar = Container(
+    final mq = MediaQuery.of(context);
+    // The label goes on a narrow phone or at large text, where it would
+    // squeeze Zeno's name out; the button stays lit.
+    final compact = mq.size.width < 360 || mq.textScaler.scale(10) > 11.5;
+    return Container(
       padding: const EdgeInsets.fromLTRB(6, 6, 12, 10),
-      decoration: _isBuying
-          // Glass over the room, and a beam of light for an edge (below).
-          ? BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [BrokaColors.bg.withOpacity(0.85), BrokaColors.bg.withOpacity(0.35)],
-              ),
-            )
-          : BoxDecoration(
-              border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6))),
-            ),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6))),
+      ),
       child: Row(children: [
         IconButton(
           tooltip: 'Back',
           onPressed: () => Navigator.maybePop(context),
+          visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.arrow_back_ios_new_rounded,
               color: BrokaColors.textHigh, size: 19),
         ),
@@ -1447,26 +1482,6 @@ class _ZenoScreenState extends State<ZenoScreen>
             const ZoneGlowText('Zeno',
                 gradient: _zenoGradient, fontSize: 20, maxLines: 1, letterSpacing: 1.6),
             const SizedBox(height: 3),
-            if (_isBuying)
-              // What the agent is doing, as a HUD tag that takes its colour.
-              Row(children: [
-                Flexible(
-                  flex: 3,
-                  child: AnimatedSwitcher(
-                    duration: BrokaMotion.quick,
-                    child: AgentHudTag(_agentState.$1.toUpperCase(),
-                        key: ValueKey(_agentState.$1), color: _agentState.$2),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text('${lang.flag} ${lang.name}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-                ),
-              ])
-            else
             Row(children: [
               // The agent's state, not only that it is online: the dot
               // takes the colour of what it is doing and breathes while it
@@ -1474,7 +1489,7 @@ class _ZenoScreenState extends State<ZenoScreen>
               AnimatedBuilder(
                 animation: _pulseCtrl,
                 builder: (_, __) {
-                  final busy = _isBuying && _typing;
+                  final busy = _typing;
                   return Container(
                     width: 6,
                     height: 6,
@@ -1496,7 +1511,9 @@ class _ZenoScreenState extends State<ZenoScreen>
                       alignment: Alignment.centerLeft,
                       children: [...previous, if (current != null) current]),
                   child: Text(
-                    '${_agentState.$1} · ${lang.flag} ${lang.name}',
+                    // The Buying Agent's line is what it is doing; the
+                    // language is the assistant's to show.
+                    _isBuying ? _agentState.$1 : '${_agentState.$1} · ${lang.flag} ${lang.name}',
                     key: ValueKey(_agentState.$1),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -1507,28 +1524,19 @@ class _ZenoScreenState extends State<ZenoScreen>
             ]),
           ]),
         ),
+        if (_hasConversation) ...[
+          const SizedBox(width: 8),
+          _NewChatButton(compact: compact, onTap: _confirmNewChat),
+        ],
         const SizedBox(width: 8),
         BrokaHeaderButton(
           icon: _ttsEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
           active: _ttsEnabled,
           tooltip: _ttsEnabled ? 'Mute Zeno' : "Read Zeno's replies aloud",
-          onTap: () {
-            _tts.stop();
-            setState(() => _ttsEnabled = !_ttsEnabled);
-          },
+          onTap: _toggleTts,
         ),
-        if (_hasConversation) ...[
-          const SizedBox(width: 8),
-          BrokaHeaderButton(
-            icon: Icons.add_comment_outlined,
-            tooltip: 'New chat',
-            onTap: _confirmNewChat,
-          ),
-        ],
       ]),
     );
-    if (!_isBuying) return bar;
-    return Column(mainAxisSize: MainAxisSize.min, children: [bar, AgentHudBeam(busy: _typing)]);
   }
 
   /// The listing being asked about, pinned under the header: what it is,
@@ -1639,7 +1647,6 @@ class _ZenoScreenState extends State<ZenoScreen>
           child: _ZenoBubble(
             message: turn.message,
             photo: turn.photo,
-            holo: _isBuying,
             stream: writing,
             onStreamed: () => _streamed(turn),
             onGrow: _followStream,
@@ -1677,7 +1684,7 @@ class _ZenoScreenState extends State<ZenoScreen>
               dealIn: _dealing.contains(turn),
               itemBuilder: (_, k) {
                 final match = (turn.matches[k] as Map).cast<String, dynamic>();
-                return _buildMatchCard(match, hero: identical(heroTurn[match['id']], turn));
+                return _buildMatchCard(match, hero: identical(heroTurn[match['id']], turn), pick: k == 0);
               },
             ),
           ),
@@ -1705,11 +1712,10 @@ class _ZenoScreenState extends State<ZenoScreen>
         ),
       ),
       child: show
-          ? AgentCoreHero(
-              key: const ValueKey('core'),
-              orbit: [for (final s in _buyingSuggestions) s.$1],
+          ? const AgentCoreHero(
+              key: ValueKey('core'),
               subtitle: "Tell me what you're after. I'll ask a question or two, "
-                  'hunt it down across BROKA, and negotiate with the seller for you.',
+                  'hunt it down across BROKA and recommend the best deal.',
             )
           : const SizedBox(key: ValueKey('none'), width: double.infinity),
     );
@@ -1735,25 +1741,34 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// ("8GB RAM, you wanted 12GB"), which is a fact about the listing, not a
   /// number about our confidence.
   ///
+  /// [pick]: the first result, the one the search ranked closest - Zeno's
+  /// recommendation. Its rank, not a score: nothing here claims more than
+  /// that it came out on top.
+  ///
+  /// 2026-10-10: the button under each was "Ask Zeno to negotiate this
+  /// one". The agent recommends now; the deal is a tap away, and the buyer
+  /// negotiates from the listing as anywhere else.
+  ///
   /// A page of AgentMatchCarousel: the card takes what the fixed-height
   /// shortfall line and the button leave.
-  Widget _buildMatchCard(Map<String, dynamic> match, {required bool hero}) {
+  Widget _buildMatchCard(Map<String, dynamic> match, {required bool hero, bool pick = false}) {
     final listing = BrokaListing.fromJson(match);
     final misses = (match['match_misses'] as List?) ?? const [];
     final isExact = match['match_is_exact'] == true;
-    final opened = _negotiationOpened.contains(listing.id);
-    final busy = _negotiating.contains(listing.id);
+    void open() => Navigator.pushNamed(context, '/product', arguments: {'listingId': listing.id});
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Expanded(
-        child: HeroMode(
-          enabled: hero,
-          child: ProductCard(
-            item: listing,
-            onTap: () => Navigator.pushNamed(
-                context, '/product', arguments: {'listingId': listing.id}),
+        child: Stack(children: [
+          Positioned.fill(
+            child: HeroMode(
+              enabled: hero,
+              child: ProductCard(item: listing, onTap: open),
+            ),
           ),
-        ),
+          if (pick)
+            const Positioned(top: 8, left: 8, child: IgnorePointer(child: _ZenoPickBadge())),
+        ]),
       ),
       const SizedBox(height: 8),
       SizedBox(
@@ -1785,13 +1800,9 @@ class _ZenoScreenState extends State<ZenoScreen>
       ),
       const SizedBox(height: 8),
       AgentActionButton(
-        label: opened ? 'Zeno reached out — open chat' : 'Ask Zeno to negotiate this one',
-        icon: opened ? Icons.forum_rounded : Icons.handshake_rounded,
-        done: opened,
-        busy: busy,
-        onTap: opened
-            ? () => Navigator.pushNamed(context, '/negotiate', arguments: {'listingId': listing.id})
-            : (busy ? null : () => _startNegotiation(listing)),
+        label: pick ? 'View my top pick' : 'View this deal',
+        icon: pick ? Icons.recommend_rounded : Icons.arrow_forward_rounded,
+        onTap: open,
       ),
     ]);
   }
@@ -1856,12 +1867,13 @@ class _ZenoScreenState extends State<ZenoScreen>
     steps: _searchPhases.length,
   );
 
-  Widget _buildTypingIndicator() => _isBuying
-      ? const AgentEntrance(play: true, fromUser: false, child: AgentThinkingWave())
-      : const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: AgentEntrance(play: true, fromUser: false, child: ZenoTypingBubble()),
-        );
+  /// Zeno's thinking waves, in every mode - the Buying Agent's, which the
+  /// assistant now shares.
+  Widget _buildTypingIndicator() => const AgentEntrance(
+        play: true,
+        fromUser: false,
+        child: AgentThinkingWave(avatar: true),
+      );
 
   /// Under Zeno's newest reply: the link it offers, then the replies the
   /// user can tap - each sent exactly as if typed, so the conversation
@@ -1940,9 +1952,9 @@ class _ZenoScreenState extends State<ZenoScreen>
             ),
             child: Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: _isBuying ? _holoChip(s.$1, s.$2) : Material(
+              child: Material(
                 color: BrokaColors.bgCard.withOpacity(0.86),
-                shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonPurple.withOpacity(0.35))),
+                shape: StadiumBorder(side: BorderSide(color: BrokaColors.neonBlue.withOpacity(0.4))),
                 child: InkWell(
                   customBorder: const StadiumBorder(),
                   onTap: () => _send(s.$2),
@@ -1952,7 +1964,7 @@ class _ZenoScreenState extends State<ZenoScreen>
                       Text(s.$1, style: const TextStyle(fontSize: 14)),
                       const SizedBox(width: 6),
                       Text(s.$2, style: const TextStyle(
-                          color: BrokaColors.textHigh, fontSize: 12.5)),
+                          color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w600)),
                     ]),
                   ),
                 ),
@@ -1963,80 +1975,26 @@ class _ZenoScreenState extends State<ZenoScreen>
     ),
   );
 
-  /// An opener on the Buying Agent: glass with a gradient hairline, its
-  /// emoji in a lit well.
-  Widget _holoChip(String emoji, String text) => DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(22),
-          gradient: LinearGradient(colors: [
-            BrokaColors.neonPurple.withOpacity(0.8),
-            BrokaColors.neonCyan.withOpacity(0.6),
-          ]),
-          boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.25), blurRadius: 10)],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(1),
-          child: Material(
-            color: const Color(0xF20B1022),
-            shape: const StadiumBorder(),
-            child: InkWell(
-              customBorder: const StadiumBorder(),
-              onTap: () => _send(text),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(5, 0, 14, 0),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                    width: 26,
-                    height: 26,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(colors: [
-                        BrokaColors.neonPurple.withOpacity(0.45),
-                        BrokaColors.neonBlue.withOpacity(0.08),
-                      ]),
-                    ),
-                    child: Text(emoji, style: const TextStyle(fontSize: 13)),
-                  ),
-                  const SizedBox(width: 7),
-                  Text(text,
-                      style: const TextStyle(
-                          color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w600)),
-                ]),
-              ),
-            ),
-          ),
-        ),
-      );
-
   /// Home's search pill as the composer: the same fill, outline and focus
-  /// glow, so typing to Zeno looks like typing anywhere else in BROKA. On
-  /// the Buying Agent its edge is a gradient that turns while the buyer
-  /// types or Zeno works.
+  /// glow, so typing to Zeno looks like typing anywhere else in BROKA - the
+  /// Buying Agent included.
   Widget _buildInputBar() => Padding(
     padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(
-          child: AgentHoloBorder(
-            live: _isBuying && (_composerFocused || _typing),
-            borderRadius: BorderRadius.circular(26),
-            width: _isBuying ? (_composerFocused ? 1.6 : 1.2) : 0,
-            glow: _isBuying ? (_composerFocused ? 0.35 : 0.12) : 0,
-            child: AnimatedContainer(
+          child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             constraints: const BoxConstraints(minHeight: 50),
             decoration: BoxDecoration(
-              color: _isBuying ? const Color(0xF00B1022) : BrokaColors.bgCard.withOpacity(0.92),
+              color: BrokaColors.bgCard.withOpacity(0.92),
               borderRadius: BorderRadius.circular(26),
-              // The composer doesn't highlight for listening - the voice
-              // card above owns that state, and a second "recording" outline
-              // down here read as a competing session.
+              // The composer doesn't highlight for listening - voice mode
+              // owns that state, and a second "recording" outline down here
+              // read as a competing session.
               border: Border.all(
-                color: _isBuying
-                    ? Colors.transparent
-                    : BrokaColors.neonBlue.withOpacity(_composerFocused ? 0.85 : 0.45),
+                color: BrokaColors.neonBlue.withOpacity(_composerFocused ? 0.85 : 0.45),
                 width: _composerFocused ? 1.6 : 1.2,
               ),
               boxShadow: _composerFocused
@@ -2095,9 +2053,9 @@ class _ZenoScreenState extends State<ZenoScreen>
                     ),
                   ),
                 ),
-                // Opens the Zeno voice card over this conversation. The
-                // composer stays exactly where it is underneath - voice is
-                // another way in, not a replacement for typing.
+                // Opens voice mode over this conversation. The composer
+                // stays exactly where it is underneath - voice is another
+                // way in, not a replacement for typing.
                 if (!_hasDraft && _photo == null)
                   InkResponse(
                     onTap: _openVoice,
@@ -2120,7 +2078,6 @@ class _ZenoScreenState extends State<ZenoScreen>
               ],
             ),
             ]),
-          ),
           ),
         ),
         ChatSendButton(visible: _hasDraft || _photo != null, busy: _typing, onTap: () => _send()),
@@ -2168,7 +2125,8 @@ class _ZenoScreenState extends State<ZenoScreen>
 // ── Zeno Chat Bubble ─────────────────────────────────────────────────────────
 //
 // Zeno's words on a dark card with a violet edge; yours on the brand
-// gradient, like Home's Zeno CTA and every primary button in the app.
+// gradient, like Home's Zeno CTA and every primary button in the app. The
+// same in the Buying Agent (2026-10-10), which had glass bubbles of its own.
 class _ZenoBubble extends StatelessWidget {
   final Message message;
 
@@ -2180,11 +2138,8 @@ class _ZenoBubble extends StatelessWidget {
   final VoidCallback? onStreamed;
   final VoidCallback? onGrow;
 
-  /// The Buying Agent's glass: a gradient edge that turns while Zeno writes.
-  final bool holo;
   const _ZenoBubble({
     required this.message, this.photo, this.stream = false, this.onStreamed, this.onGrow,
-    this.holo = false,
   });
 
   static const _zenoCorners = BorderRadius.only(
@@ -2203,35 +2158,12 @@ class _ZenoBubble extends StatelessWidget {
         mainAxisAlignment: isAI ? MainAxisAlignment.start : MainAxisAlignment.end,
         children: [
           if (isAI) ...[
-            if (holo)
-              Container(
-                padding: const EdgeInsets.all(1.6),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: const SweepGradient(colors: [
-                    BrokaColors.neonPurple, BrokaColors.neonCyan, BrokaColors.neonBlue, BrokaColors.neonPurple,
-                  ]),
-                  boxShadow: [BoxShadow(color: BrokaColors.neonCyan.withOpacity(0.35), blurRadius: 8)],
-                ),
-                child: const ZenoAvatar(size: 26),
-              )
-            else
-              const ZenoAvatar(size: 28),
+            const ZenoAvatar(size: 28),
             const SizedBox(width: 8),
           ],
           Flexible(
             // A light runs round the edge of a reply while it is written.
-            child: holo
-                ? (isAI
-                    ? AgentHoloBorder(
-                        live: stream,
-                        borderRadius: _zenoCorners,
-                        width: 1.1,
-                        glow: stream ? 0.3 : 0.08,
-                        child: _body(context, isAI),
-                      )
-                    : _body(context, isAI))
-                : AgentLiveEdge(
+            child: AgentLiveEdge(
               active: isAI && stream,
               borderRadius: _zenoCorners,
               child: _body(context, isAI),
@@ -2248,36 +2180,21 @@ class _ZenoBubble extends StatelessWidget {
         topRight: Radius.circular(4),
         bottomLeft: Radius.circular(16),
         bottomRight: Radius.circular(16));
-    final BoxDecoration decoration;
-    if (isAI && holo) {
-      // Glass, tinted with Zeno's violet; the edge is AgentHoloBorder's.
-      decoration = BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [const Color(0xF0161C3C), BrokaColors.bgCard.withOpacity(0.86)],
-        ),
-        borderRadius: _zenoCorners,
-      );
-    } else if (isAI) {
-      decoration = BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.92),
-        borderRadius: _zenoCorners,
-        border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.30)),
-      );
-    } else {
-      decoration = BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: holo
-              ? const [BrokaColors.neonPurple, BrokaColors.neonBlue, Color(0xFF1FA9C9)]
-              : const [BrokaColors.neonPurple, BrokaColors.neonBlue],
-        ),
-        borderRadius: userCorners,
-        boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(holo ? 0.32 : 0.18), blurRadius: holo ? 16 : 10)],
-      );
-    }
+    final decoration = isAI
+        ? BoxDecoration(
+            color: BrokaColors.bgCard.withOpacity(0.92),
+            borderRadius: _zenoCorners,
+            border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.30)),
+          )
+        : BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [BrokaColors.neonPurple, BrokaColors.neonBlue],
+            ),
+            borderRadius: userCorners,
+            boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.18), blurRadius: 10)],
+          );
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
@@ -2314,6 +2231,118 @@ extension on _ZenoBubble {
       ),
       if (message.content.isNotEmpty) ...[const SizedBox(height: 8), text],
     ]);
+  }
+}
+
+// ── Header and results pieces ────────────────────────────────────────────────
+
+/// "New chat", lit in Zeno's gradient: it used to be an outlined icon among
+/// the header's other square controls, and people looked for it. [compact]
+/// keeps the icon only, where the label would squeeze Zeno's name out.
+class _NewChatButton extends StatelessWidget {
+  const _NewChatButton({required this.onTap, this.compact = false});
+
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: 'New chat',
+        child: Semantics(
+          button: true,
+          child: GestureDetector(
+            key: const Key('zeno-new-chat'),
+            onTap: onTap,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              height: CollapsingScreenHeader.control,
+              constraints: const BoxConstraints(minWidth: CollapsingScreenHeader.control),
+              padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                gradient: const LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+                boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.35), blurRadius: 12)],
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.add_comment_rounded, size: 16, color: Colors.white),
+                if (!compact) ...[
+                  const SizedBox(width: 5),
+                  const Text('New chat',
+                      maxLines: 1,
+                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+                ],
+              ]),
+            ),
+          ),
+        ),
+      );
+}
+
+/// On the result the search ranked closest: Zeno recommends it.
+class _ZenoPickBadge extends StatelessWidget {
+  const _ZenoPickBadge();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.fromLTRB(4, 3, 9, 3),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: const LinearGradient(colors: [BrokaColors.neonPurple, BrokaColors.neonBlue]),
+          boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.5), blurRadius: 10)],
+        ),
+        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+          ZenoAvatar(size: 18),
+          SizedBox(width: 5),
+          Text("ZENO'S PICK",
+              style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+        ]),
+      );
+}
+
+/// What voice mode shows when a search comes back: how many, how close,
+/// and the way to them - they are cards in the conversation behind it.
+class _VoiceResultsCard extends StatelessWidget {
+  const _VoiceResultsCard({required this.label, required this.allExact, required this.onShow});
+
+  final String label;
+  final bool allExact;
+  final VoidCallback onShow;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = allExact ? BrokaColors.success : BrokaColors.neonCyan;
+    return Container(
+      key: const Key('zeno-voice-results'),
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: tone.withOpacity(0.55)),
+        boxShadow: [BoxShadow(color: tone.withOpacity(0.2), blurRadius: 16)],
+      ),
+      child: Row(children: [
+        Icon(allExact ? Icons.verified_rounded : Icons.travel_explore_rounded, color: tone, size: 22),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: tone, fontSize: 14, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            const Text("My top pick is first",
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 104,
+          child: AgentActionButton(label: 'See them', icon: Icons.arrow_forward_rounded, onTap: onShow),
+        ),
+      ]),
+    );
   }
 }
 

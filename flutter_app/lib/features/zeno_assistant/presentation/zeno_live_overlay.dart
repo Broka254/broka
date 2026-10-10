@@ -22,6 +22,13 @@
 // (zeno_session_host.dart), so that opening a screen no longer ends the
 // conversation: the view shrinks back into a pill that keeps listening
 // ([expanded] false, the microphone still open) and grows out of it again.
+//
+// 2026-10-10: one voice mode for every Zeno conversation. The Buying Agent
+// and a listing's questions used to open a compact card over the chat
+// instead - the same microphone, looking like a different feature. They
+// mount this with their own controller now, with [hints] of their own. And
+// it is drawn in Home's language: the constellation behind it, Zeno's face
+// in the orb, Home's header and controls, and Zeno's thinking waves.
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -30,6 +37,10 @@ import 'package:flutter/material.dart';
 import '../../../main.dart' show BrokaColors, ZoneGlowText;
 import '../../../services/zeno_voice_controller.dart';
 import '../../../theme/motion.dart';
+import '../../../widgets/collapsing_screen_header.dart' show BrokaHeaderButton;
+import '../../../widgets/constellation_background.dart';
+import '../../../widgets/zeno_avatar.dart';
+import '../../buy_agent/presentation/widgets/agent_hud.dart' show AgentThinkingWave;
 import 'zeno_orb.dart';
 
 class ZenoLiveOverlay extends StatefulWidget {
@@ -49,7 +60,22 @@ class ZenoLiveOverlay extends StatefulWidget {
     this.expanded = true,
     this.origin = const Alignment(0.82, 0.9),
     this.onMinimize,
+    this.hints = defaultHints,
+    this.thinkingLabel = 'Zeno is thinking',
   });
+
+  /// What the assistant can be asked, a new one every few seconds while
+  /// nothing has been said.
+  static const defaultHints = [
+    '"Open my inbox"',
+    '"Search for a Toyota Axio"',
+    '"How do I open a store?"',
+    '"Find me a laptop under 50k"',
+    '"Call Jane"',
+    '"Tips to sell faster"',
+    '"What do you think of my rating?"',
+    '"Take me to Sell"',
+  ];
 
   final ZenoVoiceController controller;
   final Widget child;
@@ -84,6 +110,13 @@ class ZenoLiveOverlay extends StatefulWidget {
   /// The top bar's chevron: keep Zeno on, out of the way. Without it the
   /// chevron closes, as [onClose] does.
   final VoidCallback? onMinimize;
+
+  /// Examples of what to say, for whichever conversation this is.
+  final List<String> hints;
+
+  /// What Zeno is doing while it works on a reply - "Zeno is hunting" while
+  /// the Buying Agent searches.
+  final String thinkingLabel;
 
   @override
   State<ZenoLiveOverlay> createState() => _ZenoLiveOverlayState();
@@ -204,14 +237,19 @@ class _LiveView extends StatelessWidget {
     };
   }
 
-  static String status(VoiceSessionState s, {required bool thinking, required bool hearing}) {
-    if (thinking) return 'Thinking…';
+  static String status(VoiceSessionState s,
+      {required bool thinking, required bool hearing, String thinkingLabel = 'Zeno is thinking'}) {
+    // "Zeno is hunting" -> "Hunting…".
+    final working = thinkingLabel.startsWith('Zeno is ')
+        ? '${thinkingLabel[8].toUpperCase()}${thinkingLabel.substring(9)}…'
+        : 'Thinking…';
+    if (thinking) return working;
     return switch (s) {
       VoiceSessionState.idle || VoiceSessionState.connecting => 'Waking up…',
       VoiceSessionState.reconnecting => 'Reconnecting…',
       VoiceSessionState.listening => hearing ? "I'm listening" : 'Listening…',
       VoiceSessionState.processing || VoiceSessionState.readyToSend => 'Got it…',
-      VoiceSessionState.sendingToZeno => 'Thinking…',
+      VoiceSessionState.sendingToZeno => working,
       VoiceSessionState.speaking => 'Speaking',
       VoiceSessionState.error => 'Voice stopped',
     };
@@ -220,17 +258,20 @@ class _LiveView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = overlay.controller;
+    // Home's sky, opaque: the conversation underneath is kept (closing
+    // voice returns to it) but not read through the captions.
     return Material(
       type: MaterialType.transparency,
-      child: DecoratedBox(
-        decoration: const BoxDecoration(
+      child: ConstellationBackground(
+        animate: !BrokaMotion.reduced(context),
+        child: DecoratedBox(
+        // Zeno's colour washing down from the top, as on Zeno's chat.
+        decoration: BoxDecoration(
           gradient: RadialGradient(
-            center: Alignment(0, -0.2),
-            radius: 1.1,
-            // Near-opaque: the conversation underneath is kept (closing
-            // voice returns to it) but not read through the captions.
-            colors: [Color(0xFC140B33), Color(0xFD070B16), Color(0xFF03040A)],
-            stops: [0.0, 0.55, 1.0],
+            center: const Alignment(0, -0.35),
+            radius: 1.0,
+            colors: [BrokaColors.neonPurple.withOpacity(0.16), Colors.transparent],
+            stops: const [0.0, 0.7],
           ),
         ),
         child: SafeArea(
@@ -247,7 +288,11 @@ class _LiveView extends StatelessWidget {
                 final thinking = overlay.thinking || state == VoiceSessionState.sendingToZeno;
                 return Column(children: [
                   _TopBar(
-                    status: status(state, thinking: overlay.thinking, hearing: heard.isNotEmpty || c.level > 0.2),
+                    status: status(state,
+                        thinking: overlay.thinking,
+                        hearing: heard.isNotEmpty || c.level > 0.2,
+                        thinkingLabel: overlay.thinkingLabel),
+                    live: state == VoiceSessionState.listening || thinking || state == VoiceSessionState.speaking,
                     muted: overlay.muted,
                     onToggleMute: overlay.onToggleMute,
                     onClose: overlay.onMinimize ?? overlay.onClose,
@@ -255,7 +300,12 @@ class _LiveView extends StatelessWidget {
                   ),
                   Expanded(
                     child: LayoutBuilder(builder: (context, room) {
-                      final orb = math.min(room.maxWidth * 0.82, room.maxHeight * 0.96).clamp(64.0, 340.0);
+                      // Never taller than its room: on a short phone at
+                      // large text, with a card up, that is under 64.
+                      final orb = math
+                          .min(room.maxWidth * 0.82, room.maxHeight * 0.96)
+                          .clamp(math.min(64.0, room.maxHeight), 340.0)
+                          .toDouble();
                       // Sits low in its space, close to the captions it
                       // speaks through.
                       return Align(
@@ -266,7 +316,7 @@ class _LiveView extends StatelessWidget {
                             VoiceSessionState.error => c.open,
                             _ => null,
                           },
-                          child: ZenoOrb(mode: _mode(state), level: c.level, burst: overlay.burst, size: orb),
+                          child: ZenoOrb(mode: _mode(state), level: c.level, burst: overlay.burst, size: orb, face: true),
                         ),
                       );
                     }),
@@ -284,6 +334,8 @@ class _LiveView extends StatelessWidget {
                         error: c.errorMessage,
                         errorReference: c.errorReference,
                         languageUnsupported: c.languageUnsupported,
+                        hints: overlay.hints,
+                        thinkingLabel: overlay.thinkingLabel,
                       ),
                     ),
                   ),
@@ -314,56 +366,85 @@ class _LiveView extends StatelessWidget {
             );
           }),
         ),
+        ),
       ),
     );
   }
 }
 
+/// Home's header language: a bare chevron, Zeno's face and glowing name,
+/// what it is doing beside a live dot, and a square control on the right.
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.status,
     required this.muted,
     required this.onClose,
+    this.live = false,
     this.onToggleMute,
     this.minimizes = false,
   });
 
   final String status;
   final bool muted;
+  final bool live;
   final bool minimizes;
   final VoidCallback? onToggleMute;
   final VoidCallback onClose;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.fromLTRB(6, 6, 12, 10),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: BrokaColors.border.withOpacity(0.6))),
+        ),
         child: Row(children: [
           IconButton(
             tooltip: minimizes ? 'Keep Zeno on while you browse' : 'Close voice',
             onPressed: onClose,
             icon: const Icon(Icons.keyboard_arrow_down_rounded, color: BrokaColors.textHigh, size: 30),
           ),
+          const ZenoAvatar(size: 34, glow: true),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(children: [
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               const ZoneGlowText('Zeno',
-                  gradient: [BrokaColors.neonPurple, BrokaColors.neonCyan],
-                  fontSize: 18,
+                  gradient: [BrokaColors.neonPurple, BrokaColors.neonBlue],
+                  fontSize: 19,
                   maxLines: 1,
-                  letterSpacing: 2.4),
-              const SizedBox(height: 2),
-              AnimatedSwitcher(
-                duration: BrokaMotion.quick,
-                child: Text(status,
-                    key: ValueKey(status),
-                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, letterSpacing: 0.4)),
-              ),
+                  letterSpacing: 1.6),
+              const SizedBox(height: 3),
+              Row(children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: live ? BrokaColors.neonGreen : BrokaColors.textMid,
+                    boxShadow: live ? [BoxShadow(color: BrokaColors.neonGreen.withOpacity(0.7), blurRadius: 6)] : null,
+                  ),
+                ),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: AnimatedSwitcher(
+                    duration: BrokaMotion.quick,
+                    layoutBuilder: (current, previous) => Stack(
+                        alignment: Alignment.centerLeft, children: [...previous, if (current != null) current]),
+                    child: Text(status,
+                        key: ValueKey(status),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, letterSpacing: 0.3)),
+                  ),
+                ),
+              ]),
             ]),
           ),
-          IconButton(
+          const SizedBox(width: 8),
+          BrokaHeaderButton(
+            icon: muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+            active: !muted,
             tooltip: muted ? "Read Zeno's replies aloud" : 'Mute Zeno',
-            onPressed: onToggleMute,
-            icon: Icon(muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                color: muted ? BrokaColors.textMid : BrokaColors.textHigh),
+            onTap: onToggleMute ?? () {},
           ),
         ]),
       );
@@ -379,6 +460,8 @@ class _Captions extends StatelessWidget {
     required this.error,
     required this.errorReference,
     required this.languageUnsupported,
+    required this.hints,
+    required this.thinkingLabel,
   });
 
   final VoiceSessionState state;
@@ -389,6 +472,8 @@ class _Captions extends StatelessWidget {
   final String? error;
   final String? errorReference;
   final bool languageUnsupported;
+  final List<String> hints;
+  final String thinkingLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -413,9 +498,15 @@ class _Captions extends StatelessWidget {
       // What Zeno last said stays up, faded, until the user speaks.
       child = _Said(key: ValueKey('last:$zenoSays'), text: zenoSays!, zeno: true, dim: true);
     } else if (thinking) {
-      child = const SizedBox(key: ValueKey('thinking'));
+      // The same waves as every Zeno chat.
+      child = AgentThinkingWave(
+        key: const ValueKey('thinking'),
+        label: thinkingLabel,
+        padding: EdgeInsets.zero,
+        alignment: Alignment.center,
+      );
     } else {
-      child = _Hints(key: const ValueKey('hints'), englishOnly: languageUnsupported);
+      child = _Hints(key: const ValueKey('hints'), examples: hints, englishOnly: languageUnsupported);
     }
     return AnimatedSwitcher(
       duration: BrokaMotion.of(context, const Duration(milliseconds: 320)),
@@ -468,22 +559,12 @@ class _Said extends StatelessWidget {
 }
 
 /// What to say, when nothing has been said yet - a new example every few
-/// seconds.
+/// seconds, in a pill like Home's search bar.
 class _Hints extends StatefulWidget {
-  const _Hints({super.key, this.englishOnly = false});
+  const _Hints({super.key, required this.examples, this.englishOnly = false});
 
+  final List<String> examples;
   final bool englishOnly;
-
-  static const examples = [
-    '"Open my inbox"',
-    '"Search for a Toyota Axio"',
-    '"How do I open a store?"',
-    '"Find me a laptop under 50k"',
-    '"Call Jane"',
-    '"Tips to sell faster"',
-    '"What do you think of my rating?"',
-    '"Take me to Sell"',
-  ];
 
   @override
   State<_Hints> createState() => _HintsState();
@@ -497,7 +578,7 @@ class _HintsState extends State<_Hints> {
   void initState() {
     super.initState();
     _timer = Timer.periodic(const Duration(milliseconds: 2800), (_) {
-      if (mounted) setState(() => _i = (_i + 1) % _Hints.examples.length);
+      if (mounted && widget.examples.isNotEmpty) setState(() => _i = (_i + 1) % widget.examples.length);
     });
   }
 
@@ -508,27 +589,50 @@ class _HintsState extends State<_Hints> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('Try saying',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 13, letterSpacing: 0.6)),
-        const SizedBox(height: 6),
-        AnimatedSwitcher(
-          duration: BrokaMotion.of(context, const Duration(milliseconds: 420)),
-          transitionBuilder: (c, a) => FadeTransition(
-            opacity: a,
-            child: ScaleTransition(scale: Tween(begin: 0.92, end: 1.0).animate(a), child: c),
-          ),
-          child: Text(_Hints.examples[_i],
-              key: ValueKey(_i),
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 21, fontWeight: FontWeight.w700)),
+  Widget build(BuildContext context) {
+    final examples = widget.examples;
+    final example = examples.isEmpty ? '' : examples[_i % examples.length];
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      const Text('Try saying',
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 13, letterSpacing: 0.6)),
+      const SizedBox(height: 6),
+      AnimatedSwitcher(
+        duration: BrokaMotion.of(context, const Duration(milliseconds: 420)),
+        transitionBuilder: (c, a) => FadeTransition(
+          opacity: a,
+          child: ScaleTransition(scale: Tween(begin: 0.92, end: 1.0).animate(a), child: c),
         ),
-        if (widget.englishOnly) ...[
-          const SizedBox(height: 8),
-          const Text('Voice is listening in English for your language',
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
-        ],
-      ]);
+        child: Container(
+          key: ValueKey(example),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: BrokaColors.bgCard.withOpacity(0.86),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.45)),
+            boxShadow: [BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.14), blurRadius: 14)],
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.graphic_eq_rounded, size: 18, color: BrokaColors.neonCyan),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(example,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+        ),
+      ),
+      if (widget.englishOnly) ...[
+        const SizedBox(height: 6),
+        const Text('Voice is listening in English for your language',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+      ],
+    ]);
+  }
 }
 
 class _Controls extends StatelessWidget {

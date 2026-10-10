@@ -3,17 +3,29 @@
 // Each test in the "weak spots" group failed on the code before it (see
 // CHANGES.md).
 //
-// "The agent's room" covers the HUD pass (2026-10-09, agent_hud.dart).
+// "The agent's room" covers the HUD pass (2026-10-09, agent_hud.dart) and
+// the pass that put the agent back on Home's visual system (2026-10-10):
+// the constellation and Home's header, a calmer core, Tell me / I hunt /
+// I recommend, a radar scope for the hunt, Zeno's pick on the results, a
+// lit "New chat", and the microphone opening full-screen voice mode.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/features/buy_agent/presentation/widgets/agent_hud.dart';
+import 'package:broka/features/buy_agent/presentation/widgets/agent_motion.dart';
+import 'package:broka/features/zeno_assistant/presentation/zeno_live_overlay.dart';
+import 'package:broka/features/zeno_assistant/presentation/zeno_orb.dart';
 import 'package:broka/screens/zeno_screen.dart';
+import 'package:broka/services/deepgram_stt_service.dart';
+import 'package:broka/services/realtime_stt.dart';
 import 'package:broka/services/zeno_chat_store.dart';
+import 'package:broka/widgets/constellation_background.dart';
+import 'package:broka/widgets/zeno_voice_card.dart';
 
 import 'support/fake_api.dart';
+import 'support/fake_voice.dart';
 
 void main() {
   setUpAll(() {
@@ -32,8 +44,8 @@ void main() {
 
   tearDown(() => setFakeRoute(null));
 
-  Widget agent({bool still = false}) {
-    const screen = ZenoScreen(mode: ZenoMode.buyingAgent);
+  Widget agent({bool still = false, RealtimeSttProvider? voice}) {
+    final screen = ZenoScreen(mode: ZenoMode.buyingAgent, voiceService: voice);
     return MaterialApp(
       // The real screen's MediaQuery with animations off - a bare
       // MediaQueryData would also make the screen zero pixels wide.
@@ -323,7 +335,10 @@ void main() {
       await tester.pumpWidget(agent());
       await run(tester, const Duration(milliseconds: 1500));
       expect(find.text('Your Buying Agent'), findsOneWidget);
-      expect(find.text('I negotiate'), findsOneWidget);
+      expect(find.text('Tell me'), findsOneWidget);
+      expect(find.text('I hunt'), findsOneWidget);
+      expect(find.text('I recommend'), findsOneWidget);
+      expect(find.text('I negotiate'), findsNothing, reason: 'it recommends; it does not offer to negotiate');
       expect(tester.takeException(), isNull);
 
       await type(tester, 'an iPhone');
@@ -415,21 +430,13 @@ void main() {
   });
 
   group("the agent's room", () {
-    testWidgets('a holographic room of its own, a HUD header, and the agent online', (tester) async {
+    testWidgets("Home's constellation and header - not a room of its own, and no reactor", (tester) async {
       await tester.pumpWidget(agent());
       await run(tester, const Duration(seconds: 2));
-      expect(find.byType(AgentHoloBackdrop), findsOneWidget);
-      expect(find.byType(AgentHudBeam), findsOneWidget);
-      expect(find.text('BUYING AGENT'), findsOneWidget, reason: "the header's state tag");
-      expect(find.text('AGENT ONLINE · READY FOR YOUR BRIEF'), findsOneWidget);
+      expect(find.byType(ConstellationBackground), findsOneWidget);
+      expect(find.text('Buying Agent'), findsOneWidget, reason: "the header's state line");
+      expect(find.text('AGENT ONLINE · READY FOR YOUR BRIEF'), findsNothing);
       expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('the assistant keeps the constellation', (tester) async {
-      await tester.pumpWidget(const MaterialApp(home: ZenoScreen(animateBackground: false)));
-      await run(tester, const Duration(milliseconds: 500));
-      expect(find.byType(AgentHoloBackdrop), findsNothing);
-      expect(find.byType(AgentHudBeam), findsNothing);
     });
 
     testWidgets('while Zeno thinks: waves, and the header says so', (tester) async {
@@ -447,13 +454,37 @@ void main() {
       await run(tester, const Duration(milliseconds: 300));
       expect(find.byType(AgentThinkingWave), findsOneWidget);
       expect(find.text('ZENO IS THINKING'), findsOneWidget);
-      expect(find.text('THINKING…'), findsOneWidget);
+      expect(find.text('Thinking…'), findsOneWidget);
       await run(tester, const Duration(seconds: 2));
       expect(find.byType(AgentThinkingWave), findsNothing);
       expect(find.text('Which storage size?'), findsOneWidget);
     });
 
-    testWidgets('each result is locked on as it is dealt', (tester) async {
+    testWidgets('a long hunt is a radar scope sweeping BROKA', (tester) async {
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? const FakeResponse({
+              'reply': 'Nothing yet.',
+              'phase': 'RESULTS',
+              'verdict': 'EMPTY',
+              'matches': [],
+              'slots': {'query': 'tractor', 'category': 'Agriculture'},
+              'questions_asked': 0,
+            }, delay: Duration(seconds: 5))
+          : null);
+      await tester.pumpWidget(agent());
+      await run(tester, const Duration(milliseconds: 500));
+      await type(tester, 'a tractor');
+      await run(tester, const Duration(seconds: 3));
+      expect(find.byType(AgentScanCard), findsOneWidget);
+      expect(find.text('ZENO IS SCANNING BROKA'), findsOneWidget);
+      expect(find.text('Hunting…'), findsOneWidget);
+      await run(tester, const Duration(seconds: 3));
+      expect(find.byType(AgentScanCard), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets("the results: Zeno's pick first, and a way to each deal - no offer to negotiate",
+        (tester) async {
       setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
           ? {
               'reply': 'Two of them.',
@@ -471,19 +502,98 @@ void main() {
       await type(tester, 'an item');
       await run(tester, const Duration(seconds: 4));
       expect(find.text('2 exact matches'), findsOneWidget);
-      expect(find.byType(AgentLockOn), findsWidgets);
-      expect(tester.takeException(), isNull);
+      expect(find.byType(AgentLockOn), findsWidgets, reason: 'each result is locked on as it is dealt');
+      expect(find.text("ZENO'S PICK"), findsOneWidget);
+      expect(find.textContaining('negotiate'), findsNothing);
+
+      await tester.tap(find.text('View my top pick'));
+      await run(tester, const Duration(seconds: 1));
+      expect(find.text('route /product'), findsOneWidget);
+      expect(fakeRequests.where((r) => r.uri.path.startsWith('/buy-agent-requests/action')), isEmpty,
+          reason: 'nobody was messaged on the buyer\'s behalf');
+    });
+
+    testWidgets('"New chat" is a lit, labelled button once there is a conversation', (tester) async {
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? {'reply': 'Which storage size?', 'phase': 'ASKING', 'slots': {'query': 'iphone'}, 'questions_asked': 1}
+          : null);
+      await tester.pumpWidget(agent());
+      await run(tester, const Duration(milliseconds: 500));
+      expect(find.byKey(const Key('zeno-new-chat')), findsNothing, reason: 'nothing to start over yet');
+      await type(tester, 'an iPhone');
+      await run(tester, const Duration(seconds: 3));
+      expect(find.byKey(const Key('zeno-new-chat')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('zeno-new-chat')), matching: find.text('New chat')),
+          findsOneWidget);
+    });
+
+    testWidgets('the microphone opens full-screen voice mode, and a spoken turn is a buying turn',
+        (tester) async {
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? {
+              'reply': 'Found you two.',
+              'phase': 'RESULTS',
+              'verdict': 'EXACT',
+              'matches': [
+                for (var i = 1; i <= 2; i++) fakeListingJson(i)..['match_is_exact'] = true,
+              ],
+              'slots': {'query': 'iphone 13', 'category': 'Electronics', 'max_price': 60000},
+              'questions_asked': 0,
+            }
+          : null);
+      var socket = FakeSocket();
+      final mic = FakeRecorder();
+      var first = true;
+      final voice = DeepgramSttService(
+        microphone: MicrophoneSource(recorder: mic),
+        fetchToken: () async => 't',
+        connect: (_, __) {
+          if (!first) socket = FakeSocket();
+          first = false;
+          return socket;
+        },
+      );
+      await tester.pumpWidget(agent(voice: voice));
+      await run(tester, const Duration(milliseconds: 500));
+      await tester.tap(find.byTooltip('Mute Zeno'));
+      await tester.tap(find.byIcon(Icons.mic_none_rounded));
+      await run(tester, const Duration(milliseconds: 900));
+
+      expect(find.byType(ZenoLiveOverlay), findsOneWidget);
+      expect(find.byType(ZenoOrb), findsOneWidget, reason: 'the full-screen view, with Zeno in its orb');
+      expect(find.byType(ZenoVoiceCard), findsNothing, reason: 'not the compact card');
+      expect(find.text('Try saying'), findsOneWidget);
+
+      socket.emit(deepgramResults('an iPhone 13 under 60K', isFinal: true, speechFinal: true));
+      await run(tester, const Duration(seconds: 3));
+      expect(lastConverse()['message'], 'an iPhone 13 under 60K');
+      expect(find.byKey(const Key('zeno-voice-results')), findsOneWidget);
+      expect(find.text('2 exact matches'), findsWidgets);
+
+      await tester.tap(find.text('See them'));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+      await run(tester, const Duration(seconds: 2));
+      expect(find.byType(ZenoOrb), findsNothing, reason: 'back to the conversation');
+      expect(mic.running, isFalse);
+      expect(find.text("ZENO'S PICK"), findsOneWidget);
     });
 
     testWidgets('fits a 320dp phone at 1.3x text', (tester) async {
       tester.view.physicalSize = const Size(320, 568);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
+      setFakeRoute((uri) => uri.path.startsWith('/buy-agent-requests/converse')
+          ? {'reply': 'Which storage size?', 'phase': 'ASKING', 'slots': {'query': 'iphone'}, 'questions_asked': 1}
+          : null);
       await tester.pumpWidget(MediaQuery(
         data: const MediaQueryData(size: Size(320, 568), textScaler: TextScaler.linear(1.3)),
         child: agent(),
       ));
       await run(tester, const Duration(seconds: 2));
+      expect(tester.takeException(), isNull);
+      await type(tester, 'an iPhone');
+      await run(tester, const Duration(seconds: 3));
+      expect(find.byKey(const Key('zeno-new-chat')), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

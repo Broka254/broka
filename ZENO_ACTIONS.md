@@ -109,6 +109,21 @@ the thing to hunt; anything else ends the tour and goes to the server as
 usual. "Show me around", "give me a tour", "nitembeze" start it, said or
 typed (`isTourRequest` - not "find me a tour guide").
 
+## Zeno's introduction (2026-10-10)
+
+The tour's offer is a conversation now (`zeno_intro.dart`, drawn by
+`presentation/zeno_intro_chat.dart` in the tour's welcome phase). Beats of
+scripted lines - Zeno thinks, says each, then offers replies - from who
+Zeno is (the user's personal intelligent assistant) through how BROKA
+works, Zeno's powers, the Buying Agent hunting and recommending, the watch,
+to the case for Premium. Its endings are `ZenoIntroOutcome`s the tour acts
+on: `premium` (`ZenoTourHost.tourOpenPlans`, the `/premium` route),
+`tryAgent` (`ZenoTour.tryBuyingAgent` - the tour's demo, whose finale
+offers the plans), `tour` (`begin`), `later` (`decline`). Said out loud,
+"yes"/"next" take the lit reply, "stop" declines, and while Zeno asks what
+to hunt, anything else is the answer. No model call; the price on its
+Premium card comes from `GET /pricing/plans`.
+
 ## Zeno's orb on every screen (2026-10-09)
 
 `zeno_launcher.dart`, drawn by the session host: a signed-in user's way

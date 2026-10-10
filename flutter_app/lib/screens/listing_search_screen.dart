@@ -532,7 +532,7 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
             const SizedBox(width: 10),
             const Expanded(
               child: Text(
-                  'This sounds like a specific request - want Zeno to find and negotiate it for you?',
+                  'This sounds like a specific request - want Zeno to find it and recommend the best deal?',
                   style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5)),
             ),
             const SizedBox(width: 6),

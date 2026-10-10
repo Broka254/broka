@@ -475,7 +475,7 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
                 ),
                 child: ClipOval(
                   child: Image.asset('assets/images/zeno_full.png', fit: BoxFit.cover,
-                      semanticLabel: 'Zeno, the BROKA broker'),
+                      semanticLabel: "Zeno, BROKA's personal assistant"),
                 ),
               ),
             ),

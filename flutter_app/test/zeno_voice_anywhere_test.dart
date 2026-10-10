@@ -11,6 +11,10 @@
 //  - Zeno's orb on every screen, the way into voice from anywhere
 //    (zeno_launcher.dart).
 //
+// And the pass of 2026-10-10: the tour's offer became Zeno's introduction,
+// a conversation that makes the case for Premium (zeno_intro.dart), and
+// Zeno calls itself the user's personal intelligent assistant.
+//
 // The fixes' tests - the microphone's, Deepgram's utterance end, and
 // words said while Zeno is thinking - failed on the code before this pass
 // ("quiet is not a stall" is the guard that keeps the watchdog honest).
@@ -21,11 +25,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/zeno_assistant/presentation/zeno_intro_chat.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_launcher.dart';
 import 'package:broka/features/zeno_assistant/presentation/zeno_session_host.dart';
 import 'package:broka/features/zeno_assistant/zeno_check_ins.dart';
+import 'package:broka/features/zeno_assistant/zeno_intro.dart';
 import 'package:broka/features/zeno_assistant/zeno_session.dart';
 import 'package:broka/features/zeno_assistant/zeno_tour.dart';
+import 'package:broka/features/buy_agent/presentation/widgets/agent_motion.dart' show AgentScanCard;
 import 'package:broka/screens/listing_search_screen.dart';
 import 'package:broka/screens/settings_screen.dart';
 import 'package:broka/screens/zeno_screen.dart';
@@ -53,6 +60,7 @@ class _Host implements ZenoTourHost {
   final opened = <String>[];
   final said = <String>[];
   final hunted = <String>[];
+  var plans = 0;
 
   @override
   Future<void> tourNavigate(String destination) async => opened.add(destination);
@@ -68,7 +76,21 @@ class _Host implements ZenoTourHost {
 
   @override
   Future<void> tourListen() async {}
+
+  @override
+  Future<void> tourOpenPlans() async => plans++;
 }
+
+/// Lets every zero-length timer the introduction sets run.
+Future<void> settle() async {
+  for (var i = 0; i < 40; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// Taps the introduction's reply that reads [label].
+void tapReply(ZenoIntro intro, String label) =>
+    intro.choose(intro.replies.firstWhere((r) => r.label == label));
 
 void main() {
   setUpAll(() {
@@ -468,22 +490,209 @@ void main() {
       tour.dispose();
     });
 
-    testWidgets('a new account: the first time Home is in front, Zeno offers the tour - once', (tester) async {
+    test('Zeno calls itself a personal intelligent assistant - never a broker', () {
+      for (final language in ['english', 'swahili']) {
+        final script = ZenoIntroScript.forUser(firstName: 'Xavier', language: language);
+        final lines = [
+          for (final b in script.beats.values) ...b.lines,
+          for (final b in script.beats.values) for (final r in b.replies) r.label,
+        ];
+        expect(lines.any((l) => l.toLowerCase().contains('broker') || l.contains('dalali')), isFalse);
+        expect(script.opening, contains(language == 'english' ? 'personal intelligent assistant' : 'msaidizi wako binafsi'));
+      }
+      final tour = ZenoTourScript.forUser(firstName: 'Xavier');
+      expect(tour.welcome, contains('personal intelligent assistant'));
+      expect(ZenoTourScript.forUser(language: 'swahili').welcome, isNot(contains('dalali')));
+    });
+
+    test('every way through the introduction leads somewhere, and the case for Premium offers them all', () {
+      for (final language in ['english', 'swahili']) {
+        final script = ZenoIntroScript.forUser(language: language);
+        for (final beat in script.beats.values) {
+          expect(beat.replies.isNotEmpty || beat.asks, isTrue, reason: beat.id);
+          for (final r in beat.replies) {
+            expect(r.outcome != null || script.beats.containsKey(r.next), isTrue, reason: '${beat.id}: ${r.label}');
+          }
+        }
+        final outcomes = {for (final r in script.beats['premium']!.replies) r.outcome};
+        expect(outcomes, containsAll(ZenoIntroOutcome.values.where((o) => o != ZenoIntroOutcome.tryAgent)));
+        expect(script.beats['premium']!.replies.any((r) => r.next == 'try'), isTrue);
+        expect(script.beats['premium']!.card, ZenoIntroCard.premium);
+        expect(script.beats['agent']!.card, ZenoIntroCard.hunt);
+      }
+    });
+
+    test('a conversation: Zeno thinks, says each line, then offers replies; a tap moves it on', () async {
+      final host = _Host();
+      final tour = ZenoTour(host, settle: Duration.zero, introPace: 0);
+      tour.offer(firstName: 'Xavier');
+      final intro = tour.intro!;
+      expect(intro.thinking, isTrue, reason: 'it thinks before it speaks');
+      expect(intro.replies, isEmpty);
+      await settle();
+      expect(intro.messages.map((m) => m.text).first, "Hi Xavier! 👋 I'm Zeno - your personal intelligent assistant.");
+      expect(intro.messages.length, 2);
+      expect(intro.replies.map((r) => r.label), ['How does BROKA work?', 'What can you do?', 'Maybe later']);
+      expect(host.said.first, startsWith("Hi Xavier!"), reason: 'and says it aloud');
+
+      tapReply(intro, 'What can you do?');
+      expect(intro.messages.last.fromZeno, isFalse, reason: "the user's reply is in the conversation");
+      await settle();
+      expect(intro.messages.last.card, ZenoIntroCard.powers);
+
+      // "Yes" said out loud takes the reply Zeno would.
+      expect(tour.handleSpeech('yes'), isTrue);
+      await settle();
+      expect(intro.beat!.id, 'agent');
+      tapReply(intro, "And if it isn't listed yet?");
+      await settle();
+      tapReply(intro, 'How do I get all this?');
+      await settle();
+      expect(intro.messages.last.card, ZenoIntroCard.premium);
+      tapReply(intro, 'Unlock Premium ✨');
+      await settle();
+      expect(intro.messages.last.text, "Great choice - let's get you set up.");
+      expect(host.plans, 1);
+      expect(tour.active, isFalse);
+      tour.dispose();
+    });
+
+    test('"let me try it": what the user would love to buy is hunted, then the finale offers Premium', () async {
+      final host = _Host();
+      final tour = ZenoTour(host, settle: Duration.zero, introPace: 0);
+      tour.offer();
+      final intro = tour.intro!;
+      await settle();
+      tapReply(intro, 'What can you do?');
+      await settle();
+      tapReply(intro, 'Show me the Buying Agent');
+      await settle();
+      tapReply(intro, 'Let me try it');
+      await settle();
+      expect(intro.asking, isTrue);
+      expect(tour.handleSpeech('a PS5 under 50K'), isTrue);
+      await settle();
+      expect(host.hunted, ['a PS5 under 50K']);
+      expect(tour.phase, ZenoTourPhase.finale);
+      expect(tour.demoRan, isTrue);
+      expect(tour.line, contains('Premium'));
+      tour.openPlans();
+      expect(host.plans, 1);
+      expect(tour.active, isFalse);
+      tour.dispose();
+    });
+
+    test('"maybe later" ends it with a word; "show me around" takes the tour', () async {
+      final host = _Host();
+      final tour = ZenoTour(host, settle: Duration.zero, introPace: 0);
+      tour.offer();
+      await settle();
+      tapReply(tour.intro!, 'Maybe later');
+      await settle();
+      expect(tour.active, isFalse);
+      expect(host.said.last, contains('show me around'));
+
+      tour.offer();
+      await settle();
+      tapReply(tour.intro!, 'What can you do?');
+      await settle();
+      tapReply(tour.intro!, 'How does selling work?');
+      await settle();
+      tapReply(tour.intro!, 'What does it cost?');
+      await settle();
+      tapReply(tour.intro!, 'Show me around the app');
+      await settle();
+      expect(tour.phase, ZenoTourPhase.step);
+      expect(host.opened, ['home']);
+      tour.dispose();
+    });
+
+    test('the app going away mid-line: what Zeno had to say is there, and the replies', () async {
+      final host = _Host();
+      final tour = ZenoTour(host, settle: Duration.zero);
+      tour.offer();
+      final intro = tour.intro!;
+      expect(intro.messages, isEmpty);
+      tour.hold();
+      expect(intro.messages.length, 2);
+      expect(intro.thinking, isFalse);
+      expect(intro.replies, isNotEmpty);
+      tour.dispose();
+    });
+
+    testWidgets('a new account: the first time Home is in front, Zeno introduces itself - once', (tester) async {
       ApiService.currentUserId = 'new-1';
       ApiService.currentUserName = 'Xavier Otieno';
       await ZenoTourStore.markNewAccount('new-1');
       await tester.pumpWidget(app());
       await run(tester, const Duration(seconds: 3));
       expect(session.tour.phase, ZenoTourPhase.welcome);
+      expect(find.byType(ZenoIntroChat), findsOneWidget);
       expect(find.text('MEET ZENO'), findsOneWidget);
-      expect(find.byKey(const Key('zeno-tour-start')), findsOneWidget);
-      expect(session.tour.line, startsWith('Hi Xavier, welcome to BROKA!'));
+      expect(session.tour.line, "Hi Xavier! 👋 I'm Zeno - your personal intelligent assistant.");
       expect(await ZenoTourStore.isPending('new-1'), isFalse, reason: 'offered once');
 
-      await tester.tap(find.byKey(const Key('zeno-tour-later')));
+      // A conversation: Zeno's lines arrive after it has thought, then the
+      // replies to tap.
+      await run(tester, const Duration(seconds: 8));
+      expect(find.text("Hi Xavier! 👋 I'm Zeno - your personal intelligent assistant."), findsOneWidget);
+      expect(find.text('How does BROKA work?'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('zeno-intro-close')));
       await run(tester, const Duration(seconds: 1));
       expect(session.tour.active, isFalse);
-      expect(find.text('MEET ZENO'), findsNothing);
+      expect(find.byType(ZenoIntroChat), findsNothing);
+    });
+
+    testWidgets('the introduction makes its case and ends in the plans', (tester) async {
+      ApiService.currentUserId = 'new-4';
+      await ZenoTourStore.markNewAccount('new-4');
+      await tester.pumpWidget(app());
+      await run(tester, const Duration(milliseconds: 300));
+      session.toggleMute();
+      await run(tester, const Duration(seconds: 3));
+      expect(session.tour.phase, ZenoTourPhase.welcome);
+
+      Future<void> reply(String label) async {
+        await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
+        await tester.tap(find.text(label));
+        await run(tester, const Duration(milliseconds: 300));
+      }
+
+      await reply('What can you do?');
+      await reply('Show me the Buying Agent');
+      await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
+      expect(find.byType(AgentScanCard), findsOneWidget, reason: 'the Buying Agent at work');
+      await reply("And if it isn't listed yet?");
+      await reply('How do I get all this?');
+      await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
+      expect(find.byKey(const Key('zeno-intro-premium')), findsOneWidget);
+      expect(find.text('Chatting with Zeno stays free.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.text('Unlock Premium ✨'));
+      await run(tester, const Duration(seconds: 5));
+      expect(session.tour.active, isFalse);
+      expect(find.text('route /premium '), findsOneWidget);
+    });
+
+    testWidgets('fits a 320dp phone at 1.3x text', (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      ApiService.currentUserId = 'new-5';
+      await ZenoTourStore.markNewAccount('new-5');
+      await tester.pumpWidget(MediaQuery(
+        data: const MediaQueryData(size: Size(320, 568), textScaler: TextScaler.linear(1.3)),
+        child: app(),
+      ));
+      await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
+      await tester.tap(find.text('What can you do?'));
+      await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
+      expect(find.text('Show me the Buying Agent'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      session.tour.end();
+      await run(tester, const Duration(seconds: 1));
     });
 
     testWidgets("back closes the welcome, rather than leaving the app from under it", (tester) async {

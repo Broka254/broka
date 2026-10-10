@@ -190,7 +190,7 @@ class StoreDetailsView extends StatelessWidget {
             icon: Icons.chat_bubble_outline_rounded,
             plainValue: true,
             label: 'Asking about a product',
-            value: 'Open the product and tap Start Negotiation. Zeno, BROKA\'s broker, '
+            value: 'Open the product and tap Start Negotiation. Zeno, your personal assistant, '
                 'takes your questions and offers to the seller.',
           ),
         ]),

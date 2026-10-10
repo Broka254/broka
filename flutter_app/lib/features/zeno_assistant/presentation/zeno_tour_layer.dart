@@ -1,26 +1,27 @@
 // Zeno's tour of BROKA, on screen (zeno_tour.dart has the script and the
 // moves): drawn by the session host above every screen.
 //
-//   welcome  full screen: Zeno's orb speaking, what it does, and the
-//            choice - "Show me around" or "Maybe later";
+//   welcome  full screen: Zeno's introduction, a conversation
+//            (zeno_intro_chat.dart) that ends in the plans, a hunt, this
+//            tour, or later;
 //   step     a card over the screen Zeno has just opened: where this is,
 //            what Zeno is saying, how far along the tour is (the current
 //            segment fills while it waits to move on), Back and Next;
 //   demo     the same card asking what the user would love to buy - typed,
 //            tapped from the ideas, or said;
-//   finale   a short card and confetti.
+//   finale   a short card and confetti - and, after a hunt, the way to
+//            Premium, which keeps that hunt going day and night.
 //
 // Every part of it can be done with a tap; voice only makes it quicker.
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
-import '../../../main.dart' show BrokaColors, ZoneGlowText;
+import '../../../main.dart' show BrokaColors;
 import '../../../theme/motion.dart';
 import '../../../widgets/zeno_streaming_text.dart';
 import '../../buy_agent/presentation/widgets/agent_motion.dart' show AgentConfetti, AgentShimmerText;
 import '../zeno_session.dart';
 import '../zeno_tour.dart';
+import 'zeno_intro_chat.dart';
 import 'zeno_orb.dart';
 
 class ZenoTourLayer extends StatelessWidget {
@@ -79,203 +80,16 @@ class ZenoTourLayer extends StatelessWidget {
               ),
             ),
             Positioned.fill(child: AgentConfetti(burst: tour.burst)),
-            if (tour.phase == ZenoTourPhase.welcome)
-              Positioned.fill(child: _Welcome(key: const ValueKey('zeno-tour-welcome'), session: session)),
+            if (tour.phase == ZenoTourPhase.welcome && tour.intro != null)
+              Positioned.fill(
+                child: ZenoIntroChat(
+                  key: const ValueKey('zeno-intro'),
+                  session: session,
+                  intro: tour.intro!,
+                ),
+              ),
           ]);
         },
-      );
-}
-
-// ── Welcome ──────────────────────────────────────────────────────────────────
-
-class _Welcome extends StatefulWidget {
-  const _Welcome({super.key, required this.session});
-
-  final ZenoSession session;
-
-  @override
-  State<_Welcome> createState() => _WelcomeState();
-}
-
-class _WelcomeState extends State<_Welcome> with SingleTickerProviderStateMixin {
-  late final AnimationController _in =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-  late final _reveal = CurvedAnimation(parent: _in, curve: const Interval(0, 0.5, curve: Curves.easeOutCubic));
-  late final _rise = CurvedAnimation(parent: _in, curve: const Interval(0.3, 0.9, curve: Curves.easeOutCubic));
-
-  static const _powers = [
-    (Icons.radar_rounded, 'Finds anything'),
-    (Icons.handshake_rounded, 'Negotiates for you'),
-    (Icons.visibility_rounded, 'Keeps watch'),
-    (Icons.graphic_eq_rounded, 'Talks & takes you there'),
-  ];
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_in.isAnimating || _in.isCompleted) return;
-    if (BrokaMotion.reduced(context)) {
-      _in.value = 1;
-    } else {
-      _in.forward();
-    }
-  }
-
-  @override
-  void dispose() {
-    _reveal.dispose();
-    _rise.dispose();
-    _in.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tour = widget.session.tour;
-    return Material(
-      type: MaterialType.transparency,
-      child: AnimatedBuilder(
-        animation: _in,
-        builder: (context, child) => ClipPath(
-          clipper: _CircleReveal(_reveal.value),
-          child: child,
-        ),
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -0.25),
-              radius: 1.15,
-              colors: [Color(0xFC1A0E40), Color(0xFD070B16), Color(0xFF03040A)],
-              stops: [0.0, 0.55, 1.0],
-            ),
-          ),
-          child: SafeArea(
-            child: LayoutBuilder(builder: (context, box) {
-              final orb = math.min(box.maxWidth * 0.62, box.maxHeight * 0.32).clamp(96.0, 250.0);
-              return SingleChildScrollView(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: box.maxHeight),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
-                    child: Column(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      Column(children: [
-                        const SizedBox(height: 6),
-                        const ZoneGlowText('Meet Zeno',
-                            gradient: [BrokaColors.neonPurple, BrokaColors.neonCyan],
-                            fontSize: 22,
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            letterSpacing: 3),
-                        const SizedBox(height: 4),
-                        const Text('YOUR PERSONAL AI BROKER',
-                            style: TextStyle(
-                                color: BrokaColors.textMid,
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 2.2)),
-                        const SizedBox(height: 14),
-                        ZenoOrb(
-                          mode: tour.speaking ? ZenoOrbMode.speaking : ZenoOrbMode.listening,
-                          level: tour.speaking ? 0.35 : 0.1,
-                          size: orb,
-                        ),
-                      ]),
-                      FadeTransition(
-                        opacity: _rise,
-                        child: SlideTransition(
-                          position: Tween(begin: const Offset(0, 0.25), end: Offset.zero).animate(_rise),
-                          child: Column(children: [
-                            const SizedBox(height: 12),
-                            ZenoStreamingText(
-                              tour.line,
-                              key: ValueKey(tour.line),
-                              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16.5, height: 1.45),
-                            ),
-                            const SizedBox(height: 16),
-                            Wrap(
-                              alignment: WrapAlignment.center,
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                for (final (i, p) in _powers.indexed) _Power(icon: p.$1, label: p.$2, index: i),
-                              ],
-                            ),
-                            const SizedBox(height: 22),
-                            _GlowButton(
-                              key: const Key('zeno-tour-start'),
-                              label: 'Show me around',
-                              icon: Icons.auto_awesome_rounded,
-                              onTap: tour.begin,
-                            ),
-                            const SizedBox(height: 6),
-                            TextButton(
-                              key: const Key('zeno-tour-later'),
-                              onPressed: tour.decline,
-                              child: const Text('Maybe later',
-                                  style: TextStyle(color: BrokaColors.textMid, fontWeight: FontWeight.w700)),
-                            ),
-                          ]),
-                        ),
-                      ),
-                    ]),
-                  ),
-                ),
-              );
-            }),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CircleReveal extends CustomClipper<Path> {
-  _CircleReveal(this.t);
-  final double t;
-
-  @override
-  Path getClip(Size size) {
-    final c = size.center(Offset.zero);
-    final far = math.sqrt(c.dx * c.dx + c.dy * c.dy);
-    return Path()..addOval(Rect.fromCircle(center: c, radius: 24 + (far - 24) * t));
-  }
-
-  @override
-  bool shouldReclip(_CircleReveal old) => old.t != t;
-}
-
-/// One thing Zeno does, popping in after the one before.
-class _Power extends StatelessWidget {
-  const _Power({required this.icon, required this.label, required this.index});
-
-  final IconData icon;
-  final String label;
-  final int index;
-
-  @override
-  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0, end: 1),
-        duration: BrokaMotion.of(context, Duration(milliseconds: 700 + 140 * index)),
-        curve: Interval((0.3 + 0.12 * index).clamp(0.0, 0.8), 1, curve: Curves.easeOutBack),
-        builder: (_, v, child) => Opacity(
-          opacity: v.clamp(0.0, 1.0),
-          child: Transform.scale(scale: 0.6 + 0.4 * v, child: child),
-        ),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            color: BrokaColors.bgCard.withOpacity(0.75),
-            border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.35)),
-            boxShadow: [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.18), blurRadius: 12)],
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 14, color: BrokaColors.neonCyan),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12, fontWeight: FontWeight.w700)),
-          ]),
-        ),
       );
 }
 
@@ -353,6 +167,7 @@ class _TourCardState extends State<_TourCard> with SingleTickerProviderStateMixi
                 mode: tour.speaking ? ZenoOrbMode.speaking : ZenoOrbMode.listening,
                 level: tour.speaking ? 0.3 : 0.05,
                 size: 42,
+                face: true,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -439,18 +254,27 @@ class _TourCardState extends State<_TourCard> with SingleTickerProviderStateMixi
                 ),
               ),
             ] else if (phase == ZenoTourPhase.finale)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: _GlowButton(
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Row(children: [
+                  // After a hunt: what keeps it hunting.
+                  if (tour.demoRan)
+                    TextButton.icon(
+                      key: const Key('zeno-tour-premium'),
+                      onPressed: tour.openPlans,
+                      icon: const Icon(Icons.workspace_premium_rounded, size: 17),
+                      label: const Text('See Premium'),
+                      style: TextButton.styleFrom(foregroundColor: BrokaColors.neonCyan),
+                    ),
+                  const Spacer(),
+                  _GlowButton(
                     key: const Key('zeno-tour-done'),
                     label: tour.demoRan ? 'Got it' : 'Start exploring',
                     icon: Icons.check_rounded,
                     compact: true,
                     onTap: tour.end,
                   ),
-                ),
+                ]),
               ),
           ]),
         ),

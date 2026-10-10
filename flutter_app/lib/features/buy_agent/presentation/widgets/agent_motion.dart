@@ -8,8 +8,8 @@
 // the pieces that make the work visible:
 //
 //   AgentOrb            Zeno inside a turning ring: the agent is on.
-//   AgentCoreHero       the empty state - Zeno at the centre of the market.
-//   AgentScanCard       a radar sweep while a search is running.
+//   AgentCoreHero       the empty state - Zeno, its light, and how it works.
+//   AgentScanCard       a radar scope sweeping the market while it searches.
 //   AgentBriefStrip     what Zeno has understood so far, chip by chip.
 //   AgentMatchCarousel  the results, dealt in like cards and swiped through.
 //   AgentWatchOffer     "keep watching", and the watch once it is on.
@@ -20,6 +20,11 @@
 // 2026-10-09: the HUD pass (agent_hud.dart) gave the agent a room of its
 // own and redrew the core as a reactor; the hunt card's edge turns, its
 // radar locks on to blips, and results are locked on as they are dealt.
+//
+// 2026-10-10: back on Home's constellation, with the core calmed down to
+// Zeno, its light and one ring; the hunt became a full radar scope; and the
+// agent's three steps are Tell me, I hunt, I recommend - it recommends the
+// best deal rather than offering to negotiate each result.
 //
 // Every one honours the OS reduce-motion setting (BrokaMotion.reduced): the
 // layout is identical, the motion is not there. The looping ones drive a
@@ -274,27 +279,29 @@ class _SlideGradient extends GradientTransform {
 
 // ── AgentCoreHero ────────────────────────────────────────────────────────────
 
-/// The Buying Agent before anyone has asked it anything: Zeno at the centre
-/// of the market, the market's categories orbiting it, radar rings going
-/// out - and, under it, what it does, in three steps. It bursts open once,
-/// on arrival, and then drifts.
+/// The Buying Agent before anyone has asked it anything: Zeno in a soft
+/// glow with one ring turning round it, what it does, and how - Tell me,
+/// I hunt, I recommend. It bursts open once, on arrival, and then breathes.
+///
+/// 2026-10-10: this was a reactor - a dial of ticks, gauge arcs, a dashed
+/// orbit, a comet, bearing marks, six emoji chips circling and a status line
+/// typing itself out. With all of it moving at once nothing read as the
+/// point, and the screen looked busier than Home rather than of a piece with
+/// it. What is left is what says "the agent is on": Zeno, its light, a ring.
 class AgentCoreHero extends StatefulWidget {
   const AgentCoreHero({
     super.key,
-    required this.orbit,
     required this.subtitle,
     this.title = 'Your Buying Agent',
   });
 
-  /// What circles Zeno - the categories a buyer can send it after.
-  final List<String> orbit;
   final String title;
   final String subtitle;
 
   static const steps = [
     (Icons.chat_bubble_rounded, 'Tell me'),
     (Icons.radar_rounded, 'I hunt'),
-    (Icons.handshake_rounded, 'I negotiate'),
+    (Icons.recommend_rounded, 'I recommend'),
   ];
 
   @override
@@ -337,126 +344,65 @@ class _AgentCoreHeroState extends State<AgentCoreHero> with TickerProviderStateM
     final core = _core;
     final text = _text;
     return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 18),
+      padding: const EdgeInsets.only(top: 10, bottom: 18),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
-          width: 236,
-          height: 236,
+          width: 188,
+          height: 188,
           child: RepaintBoundary(
             child: Stack(alignment: Alignment.center, children: [
               Positioned.fill(child: CustomPaint(painter: _CorePainter(_loop, _enter))),
-              Positioned.fill(
-                child: Flow(
-                  delegate: _OrbitDelegate(_loop, _enter),
-                  children: [for (final e in widget.orbit) _OrbitChip(e)],
-                ),
-              ),
               AnimatedBuilder(
                 animation: Listenable.merge([_loop, core]),
                 builder: (_, child) {
-                  final breathe = 1 + 0.035 * math.sin(_loop.value * 2 * math.pi * 6);
+                  final breathe = 1 + 0.03 * math.sin(_loop.value * 2 * math.pi * 6);
                   return Transform.scale(scale: core.value * breathe, child: child);
                 },
-                child: const ZenoAvatar(size: 84, glow: true),
+                child: const ZenoAvatar(size: 92, glow: true),
               ),
             ]),
           ),
         ),
+        const SizedBox(height: 6),
         FadeTransition(
           opacity: text,
           child: SlideTransition(
             position: Tween(begin: const Offset(0, 0.4), end: Offset.zero).animate(text),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              AgentShimmerText(widget.title,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 0.4)),
-              const SizedBox(height: 6),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Text(widget.subtitle,
+              ShaderMask(
+                blendMode: BlendMode.srcIn,
+                shaderCallback: (r) => const LinearGradient(colors: BrokaColors.brandGradient)
+                    .createShader(r),
+                child: Text(widget.title,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
+                        color: Colors.white, fontSize: 23, fontWeight: FontWeight.w900, letterSpacing: 0.3)),
               ),
-              const SizedBox(height: 10),
-              _BootLine(loop: _loop, enter: _enter),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: Text(widget.subtitle,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 13.5, height: 1.45)),
+              ),
             ]),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 22),
         _StepsRow(loop: _loop, enter: _enter),
       ]),
     );
   }
 }
 
-class _OrbitChip extends StatelessWidget {
-  const _OrbitChip(this.emoji);
-  final String emoji;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: BrokaColors.bgCard.withOpacity(0.92),
-          border: Border.all(color: _violet.withOpacity(0.45)),
-          boxShadow: [BoxShadow(color: _blue.withOpacity(0.25), blurRadius: 10)],
-        ),
-        child: Text(emoji, style: const TextStyle(fontSize: 17)),
-      );
-}
-
-/// Places the orbiting chips. A Flow, so turning them is a repaint with new
-/// transforms - no layout, no rebuild.
-class _OrbitDelegate extends FlowDelegate {
-  _OrbitDelegate(this.loop, this.enter) : super(repaint: Listenable.merge([loop, enter]));
-
-  final Animation<double> loop;
-  final Animation<double> enter;
-
-  @override
-  BoxConstraints getConstraintsForChild(int i, BoxConstraints constraints) => constraints.loosen();
-
-  @override
-  void paintChildren(FlowPaintingContext context) {
-    final n = context.childCount;
-    if (n == 0) return;
-    final c = context.size.center(Offset.zero);
-    // They burst out from behind Zeno on arrival, overshooting a little.
-    final out = Curves.easeOutBack.transform(
-        const Interval(0.15, 0.85).transform(enter.value.clamp(0.0, 1.0)));
-    final radius = context.size.shortestSide * 0.40 * out;
-    for (var i = 0; i < n; i++) {
-      final child = context.getChildSize(i)!;
-      final angle = 2 * math.pi * (i / n + loop.value) - math.pi / 2;
-      final bob = math.sin(2 * math.pi * (loop.value * 8 + i / n)) * 3.5;
-      final p = c +
-          Offset(math.cos(angle), math.sin(angle)) * radius -
-          Offset(child.width / 2, child.height / 2 - bob);
-      context.paintChild(i,
-          transform: Matrix4.translationValues(p.dx, p.dy, 0),
-          opacity: out.clamp(0.0, 1.0));
-    }
-  }
-
-  @override
-  bool shouldRepaint(_OrbitDelegate old) => old.loop != loop || old.enter != enter;
-}
-
+/// Behind Zeno: a breathing glow, two slow ripples going out, and one thin
+/// ring with a light running round it.
 class _CorePainter extends CustomPainter {
   _CorePainter(this.loop, this.enter) : super(repaint: Listenable.merge([loop, enter]));
 
   final Animation<double> loop;
   final Animation<double> enter;
 
-  // 2026-10-09: the core became a reactor - a HUD of rings around Zeno,
-  // each turning at its own whole multiple of the loop: a glow, a radar
-  // sweep, a ring of ticks, gauge arcs, a dashed orbit and a comet, with
-  // radar rings going out behind them all.
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
@@ -465,114 +411,45 @@ class _CorePainter extends CustomPainter {
     final maxR = size.shortestSide / 2;
     const tau = 2 * math.pi;
 
-    // A glow behind Zeno, breathing.
     final breathe = 0.5 + 0.5 * math.sin(t * tau * 6);
     canvas.drawCircle(
       c,
-      maxR * 0.6,
+      maxR * 0.8,
       Paint()
         ..shader = RadialGradient(colors: [
-          _violet.withOpacity((0.30 + 0.08 * breathe) * e),
+          _violet.withOpacity((0.32 + 0.08 * breathe) * e),
           _blue.withOpacity(0.12 * e),
           Colors.transparent,
         ], stops: const [0.0, 0.55, 1.0])
-            .createShader(Rect.fromCircle(center: c, radius: maxR * 0.6)),
+            .createShader(Rect.fromCircle(center: c, radius: maxR * 0.8)),
     );
 
-    // Radar rings going out, one every four seconds.
-    for (var i = 0; i < 3; i++) {
-      final p = (t * 3 + i / 3) % 1.0;
+    // Two ripples, one every three seconds, quiet.
+    for (var i = 0; i < 2; i++) {
+      final p = (t * 2 + i / 2) % 1.0;
       canvas.drawCircle(
         c,
-        46 + p * (maxR - 46),
+        maxR * 0.55 + p * maxR * 0.45,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..color = _cyan.withOpacity((1 - p) * 0.28 * e),
+          ..strokeWidth = 1.1
+          ..color = _cyan.withOpacity((1 - p) * 0.22 * e),
       );
     }
 
-    // A radar sweep turning round the core.
-    final sweepR = maxR * 0.5;
-    final sweepAt = (t * 4 % 1.0) * tau;
-    final sweepRect = Rect.fromCircle(center: c, radius: sweepR);
-    canvas.drawArc(
-      sweepRect,
-      sweepAt - 0.9,
-      0.9,
-      true,
-      Paint()
-        ..shader = SweepGradient(
-          colors: [_cyan.withOpacity(0), _cyan.withOpacity(0.22 * e)],
-          stops: const [0.0, 0.9 / (2 * math.pi)],
-          transform: GradientRotation(sweepAt - 0.9),
-        ).createShader(sweepRect),
-    );
-
-    // A ring of ticks, every fifth one longer - a dial, turning slowly.
-    final tickR = maxR * 0.5;
-    final tick = Paint()
-      ..strokeWidth = 1.1
-      ..strokeCap = StrokeCap.round;
-    const ticks = 72;
-    final dial = t * tau;
-    for (var k = 0; k < ticks; k++) {
-      final ang = dial + k * tau / ticks;
-      final long = k % 6 == 0;
-      tick.color = (long ? _cyan : _violet).withOpacity((long ? 0.7 : 0.35) * e);
-      final dir = Offset(math.cos(ang), math.sin(ang));
-      canvas.drawLine(c + dir * tickR, c + dir * (tickR + (long ? 7 : 3.5)), tick);
-    }
-
-    // Gauge arcs on a ring between, turning the other way.
-    final gaugeR = maxR * 0.62;
-    final gaugeRect = Rect.fromCircle(center: c, radius: gaugeR);
-    final back = -t * tau * 2;
-    for (final (start, sweep, color) in [
-      (0.0, 1.1, _violet),
-      (2.2, 0.55, _cyan),
-      (3.4, 1.5, _blue),
-      (5.3, 0.4, _cyan),
-    ]) {
-      canvas.drawArc(
-        gaugeRect,
-        back + start,
-        sweep,
-        false,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3
-          ..strokeCap = StrokeCap.round
-          ..color = color.withOpacity(0.55 * e),
-      );
-    }
-
-    // A dashed orbit...
-    final r1 = maxR * 0.72;
-    final dash = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1
-      ..strokeCap = StrokeCap.round
-      ..color = _violet.withOpacity(0.32 * e);
-    const dashes = 48;
-    final rot = t * tau;
-    for (var k = 0; k < dashes; k++) {
-      canvas.drawArc(Rect.fromCircle(center: c, radius: r1), rot + k * tau / dashes, math.pi / dashes, false, dash);
-    }
-
-    // ...and a comet on the outer ring, twice as fast the other way.
-    final r2 = maxR * 0.86;
-    final rect = Rect.fromCircle(center: c, radius: r2);
+    // The ring, and a light running round it.
+    final r = maxR * 0.66;
+    final rect = Rect.fromCircle(center: c, radius: r);
     canvas.drawCircle(
       c,
-      r2,
+      r,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = _blue.withOpacity(0.16 * e),
+        ..strokeWidth = 1.2
+        ..color = _violet.withOpacity(0.3 * e),
     );
-    final start = (t * 2 % 1.0) * tau;
-    const sweep = math.pi * 0.9;
+    final start = (t * 3 % 1.0) * tau - math.pi / 2;
+    const sweep = math.pi * 1.1;
     canvas.drawArc(
       rect,
       start,
@@ -583,84 +460,22 @@ class _CorePainter extends CustomPainter {
         ..strokeWidth = 2.4
         ..strokeCap = StrokeCap.round
         ..shader = SweepGradient(
-          colors: [_blue.withOpacity(0), _cyan.withOpacity(0.9 * e)],
-          stops: const [0.0, sweep / (2 * math.pi)],
+          colors: [_violet.withOpacity(0), _violet.withOpacity(0.9 * e), _cyan.withOpacity(e)],
+          stops: const [0.0, 0.45, sweep / tau],
           transform: GradientRotation(start),
         ).createShader(rect),
     );
-    final head = c + Offset(math.cos(start + sweep), math.sin(start + sweep)) * r2;
-    canvas.drawCircle(head, 6,
+    final head = c + Offset(math.cos(start + sweep), math.sin(start + sweep)) * r;
+    canvas.drawCircle(head, 5,
         Paint()..color = _cyan.withOpacity(0.5 * e)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
-    canvas.drawCircle(head, 2.2, Paint()..color = Colors.white.withOpacity(e));
-
-    // Four bearing marks on the outermost ring, like a sight.
-    final mark = Paint()
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..color = _cyan.withOpacity(0.6 * e);
-    for (var k = 0; k < 4; k++) {
-      final ang = k * math.pi / 2 + math.pi / 4;
-      final dir = Offset(math.cos(ang), math.sin(ang));
-      canvas.drawLine(c + dir * (maxR - 8), c + dir * (maxR - 1), mark);
-    }
+    canvas.drawCircle(head, 2, Paint()..color = Colors.white.withOpacity(e));
   }
 
   @override
   bool shouldRepaint(_CorePainter old) => old.loop != loop || old.enter != enter;
 }
 
-/// "AGENT ONLINE", typed out as the core arrives, with a caret blinking
-/// after it - the agent saying it is ready. States a fact, no number.
-class _BootLine extends StatelessWidget {
-  const _BootLine({required this.loop, required this.enter});
-
-  final Animation<double> loop;
-  final Animation<double> enter;
-
-  static const text = 'AGENT ONLINE · READY FOR YOUR BRIEF';
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        label: 'Agent online, ready for your brief',
-        excludeSemantics: true,
-        child: AnimatedBuilder(
-          animation: Listenable.merge([loop, enter]),
-          builder: (_, __) {
-            final typed = const Interval(0.5, 1.0).transform(enter.value.clamp(0.0, 1.0));
-            final shown = (text.length * typed).round().clamp(0, text.length);
-            final caretOn = loop.value * 24 % 1.0 < 0.5;
-            // One line, smaller on a narrow phone rather than cut off.
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: BrokaColors.success,
-                  boxShadow: [BoxShadow(color: BrokaColors.success.withOpacity(0.8), blurRadius: 6)],
-                ),
-              ),
-              const SizedBox(width: 7),
-              Text(text.substring(0, shown),
-                  style: const TextStyle(
-                      color: _cyan, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 1.8)),
-              Opacity(
-                opacity: caretOn ? 1 : 0,
-                child: Container(width: 7, height: 12, margin: const EdgeInsets.only(left: 2), color: _cyan),
-              ),
-            ]),
-              ),
-            );
-          },
-        ),
-      );
-}
-
-/// Tell me -> I hunt -> I negotiate, with a light travelling along the line
+/// Tell me -> I hunt -> I recommend, with a light travelling along the line
 /// between them that lights each step as it passes.
 class _StepsRow extends StatelessWidget {
   const _StepsRow({required this.loop, required this.enter});
@@ -805,16 +620,30 @@ class _ConnectorPainter extends CustomPainter {
 
 // ── AgentScanCard ────────────────────────────────────────────────────────────
 
-/// A search in progress: a radar sweeping with blips lighting up as the
-/// beam passes them, what Zeno is doing, and a beam of light running along
-/// the bottom. Purely a show of work - [step] is a timer's, and the card
-/// never marks a step as done, because nothing here knows that it is.
+/// A search in progress, as a radar scope: a beam sweeping the market with
+/// a trail of light behind it, rings pulsing out from Zeno at the centre,
+/// listings lighting up as the beam passes and brackets locking on to them,
+/// a bezel of ticks turning - and under it, what Zeno is doing.
+///
+/// Purely a show of work - [step] is a timer's, and the card never marks a
+/// step as done, because nothing here knows that it is. The blips are not
+/// listings it has found, and nothing on the scope is a count.
+///
+/// 2026-10-10: the scope is the card now, centred and sized to the phone,
+/// rather than a thumbnail beside a caption.
 class AgentScanCard extends StatefulWidget {
-  const AgentScanCard({super.key, required this.caption, required this.step, required this.steps});
+  const AgentScanCard({
+    super.key,
+    required this.caption,
+    required this.step,
+    required this.steps,
+    this.padding = const EdgeInsets.fromLTRB(16, 4, 16, 8),
+  });
 
   final String caption;
   final int step;
   final int steps;
+  final EdgeInsetsGeometry padding;
 
   @override
   State<AgentScanCard> createState() => _AgentScanCardState();
@@ -822,9 +651,9 @@ class AgentScanCard extends StatefulWidget {
 
 class _AgentScanCardState extends State<AgentScanCard> with TickerProviderStateMixin {
   late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 4000));
   late final AnimationController _enter =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 520));
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 620));
   late final _pop = CurvedAnimation(parent: _enter, curve: Curves.easeOutBack);
 
   @override
@@ -844,61 +673,57 @@ class _AgentScanCardState extends State<AgentScanCard> with TickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    final enter = _pop;
+    // The scope is the point of the card: as large as a short phone can
+    // spare beside the conversation and the composer.
+    final scope = (MediaQuery.sizeOf(context).height * 0.19).clamp(104.0, 168.0);
     return Semantics(
       liveRegion: true,
       label: widget.caption,
       child: FadeTransition(
         opacity: _enter,
         child: ScaleTransition(
-          scale: Tween(begin: 0.85, end: 1.0).animate(enter),
-          alignment: Alignment.centerLeft,
+          scale: Tween(begin: 0.85, end: 1.0).animate(_pop),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+            padding: widget.padding,
             // The edge turns while the hunt is on.
             child: AgentHoloBorder(
               live: true,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(22),
               glow: 0.3,
               child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 10, 14, 10),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [BrokaColors.bgCard.withOpacity(0.96), const Color(0xF20A0F1F)],
-              ),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [BoxShadow(color: _cyan.withOpacity(0.16), blurRadius: 22)],
-            ),
-            child: Row(children: [
-              SizedBox(
-                width: 74,
-                height: 74,
-                child: Stack(alignment: Alignment.center, children: [
-                  Positioned.fill(
-                      child: RepaintBoundary(child: CustomPaint(painter: _RadarPainter(_c)))),
-                  const ZenoAvatar(size: 26),
-                ]),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [BrokaColors.bgCard.withOpacity(0.96), const Color(0xF2070B16)],
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: [BoxShadow(color: _cyan.withOpacity(0.16), blurRadius: 24)],
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
                   const Row(children: [
-                    Flexible(
-                      child: Text('ZENO IS HUNTING',
+                    Icon(Icons.radar_rounded, size: 14, color: _cyan),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text('ZENO IS SCANNING BROKA',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              color: _cyan,
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.6)),
+                              color: _cyan, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.6)),
                     ),
                     SizedBox(width: 8),
                     AgentHudTag('LIVE', color: BrokaColors.success),
                   ]),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 10),
+                  SizedBox.square(
+                    dimension: scope,
+                    child: Stack(alignment: Alignment.center, children: [
+                      Positioned.fill(child: RepaintBoundary(child: CustomPaint(painter: _ScopePainter(_c)))),
+                      ZenoAvatar(size: scope * 0.2, glow: true),
+                    ]),
+                  ),
+                  const SizedBox(height: 10),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 380),
                     transitionBuilder: (child, a) => FadeTransition(
@@ -910,44 +735,34 @@ class _AgentScanCardState extends State<AgentScanCard> with TickerProviderStateM
                       ),
                     ),
                     layoutBuilder: (current, previous) => Stack(
-                        alignment: Alignment.centerLeft,
-                        children: [...previous, if (current != null) current]),
+                        alignment: Alignment.center, children: [...previous, if (current != null) current]),
                     child: AgentShimmerText(
                       widget.caption,
                       key: ValueKey(widget.caption),
                       maxLines: 1,
+                      textAlign: TextAlign.center,
                       colors: const [BrokaColors.textHigh, _cyan, Colors.white, _cyan, BrokaColors.textHigh],
                       style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
                     ),
                   ),
-                  const SizedBox(height: 9),
-                  SizedBox(
-                    height: 3,
-                    width: double.infinity,
-                    child: RepaintBoundary(child: CustomPaint(painter: _BeamPainter(_c))),
-                  ),
-                  const SizedBox(height: 7),
-                  Row(children: [
+                  const SizedBox(height: 8),
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     for (var i = 0; i < widget.steps; i++)
                       AnimatedContainer(
                         duration: BrokaMotion.standard,
                         curve: Curves.easeOutCubic,
-                        margin: const EdgeInsets.only(right: 5),
+                        margin: const EdgeInsets.symmetric(horizontal: 2.5),
                         width: i == widget.step ? 18 : 6,
                         height: 6,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
-                          gradient: i == widget.step
-                              ? const LinearGradient(colors: [_violet, _cyan])
-                              : null,
+                          gradient: i == widget.step ? const LinearGradient(colors: [_violet, _cyan]) : null,
                           color: i == widget.step ? null : BrokaColors.border,
                         ),
                       ),
                   ]),
                 ]),
               ),
-            ]),
-          ),
             ),
           ),
         ),
@@ -956,39 +771,74 @@ class _AgentScanCardState extends State<AgentScanCard> with TickerProviderStateM
   }
 }
 
-class _RadarPainter extends CustomPainter {
-  _RadarPainter(this.a) : super(repaint: a);
+/// The scope. One loop is two turns of the beam, two pulses out from the
+/// centre and a quarter turn of the bezel the other way.
+class _ScopePainter extends CustomPainter {
+  _ScopePainter(this.a) : super(repaint: a);
   final Animation<double> a;
 
-  // Fixed "listings" on the scope: (angle, distance from the centre as a
-  // fraction of the radius).
-  static const _blips = [(0.5, 0.72), (1.9, 0.48), (2.9, 0.86), (4.1, 0.34), (5.3, 0.64)];
+  // Fixed points on the scope: (angle, distance from the centre as a
+  // fraction of the radius). Decoration, not listings.
+  static const _blips = [(0.55, 0.74), (1.8, 0.47), (2.75, 0.86), (3.7, 0.32), (4.45, 0.63), (5.5, 0.82)];
 
   @override
   void paint(Canvas canvas, Size size) {
+    const tau = 2 * math.pi;
     final c = size.center(Offset.zero);
-    final r = size.shortestSide / 2 - 1;
+    final outer = size.shortestSide / 2 - 1;
+    final r = outer * 0.84;
     final rect = Rect.fromCircle(center: c, radius: r);
+    final t = a.value;
 
+    // The glass: deep at the rim, lit at the centre.
     canvas.drawCircle(
-        c,
-        r,
-        Paint()
-          ..shader = RadialGradient(colors: [_cyan.withOpacity(0.16), _blue.withOpacity(0.04)])
-              .createShader(rect));
-    final line = Paint()
+      c,
+      r,
+      Paint()
+        ..shader = RadialGradient(colors: [
+          _cyan.withOpacity(0.18),
+          _blue.withOpacity(0.07),
+          const Color(0xFF03040A).withOpacity(0.6),
+        ], stops: const [0.0, 0.6, 1.0])
+            .createShader(rect),
+    );
+
+    // Range rings, the crosshair and the diagonals.
+    final grid = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.8
-      ..color = _cyan.withOpacity(0.22);
-    for (var i = 1; i <= 3; i++) {
-      canvas.drawCircle(c, r * i / 3, line);
+      ..color = _cyan.withOpacity(0.18);
+    for (var i = 1; i <= 4; i++) {
+      canvas.drawCircle(c, r * i / 4, grid);
     }
-    canvas.drawLine(c.translate(-r, 0), c.translate(r, 0), line);
-    canvas.drawLine(c.translate(0, -r), c.translate(0, r), line);
+    canvas.drawLine(c.translate(-r, 0), c.translate(r, 0), grid);
+    canvas.drawLine(c.translate(0, -r), c.translate(0, r), grid);
+    final faint = Paint()
+      ..strokeWidth = 0.6
+      ..color = _cyan.withOpacity(0.08);
+    for (final k in [1, 3, 5, 7]) {
+      final dir = Offset(math.cos(k * math.pi / 4), math.sin(k * math.pi / 4));
+      canvas.drawLine(c + dir * r * 0.25, c + dir * r, faint);
+    }
 
-    // Two turns per loop.
-    final angle = (a.value * 2 % 1.0) * 2 * math.pi;
-    const wedge = math.pi * 0.55;
+    // A pulse going out from Zeno, twice a loop.
+    for (var i = 0; i < 2; i++) {
+      final p = (t * 2 + i / 2) % 1.0;
+      canvas.drawCircle(
+        c,
+        r * (0.2 + 0.8 * Curves.easeOutCubic.transform(p)),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6 * (1 - p) + 0.4
+          ..color = _violet.withOpacity(0.45 * (1 - p)),
+      );
+    }
+
+    // The beam: a wedge of light trailing a bright edge.
+    final angle = (t * 2 % 1.0) * tau - math.pi / 2;
+    const wedge = math.pi * 0.42;
+    canvas.save();
+    canvas.clipPath(Path()..addOval(rect));
     canvas.drawArc(
       rect,
       angle - wedge,
@@ -996,35 +846,46 @@ class _RadarPainter extends CustomPainter {
       true,
       Paint()
         ..shader = SweepGradient(
-          colors: [_cyan.withOpacity(0), _cyan.withOpacity(0.55)],
-          stops: const [0.0, wedge / (2 * math.pi)],
+          colors: [_cyan.withOpacity(0), _cyan.withOpacity(0.12), _cyan.withOpacity(0.5)],
+          stops: const [0.0, 0.6, wedge / tau],
           transform: GradientRotation(angle - wedge),
         ).createShader(rect),
     );
+    canvas.restore();
+    final tip = c + Offset(math.cos(angle), math.sin(angle)) * r;
     canvas.drawLine(
         c,
-        c + Offset(math.cos(angle), math.sin(angle)) * r,
+        tip,
         Paint()
-          ..color = _cyan.withOpacity(0.9)
-          ..strokeWidth = 1.2);
+          ..color = _cyan.withOpacity(0.6)
+          ..strokeWidth = 4
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+    canvas.drawLine(c, tip, Paint()..color = Colors.white.withOpacity(0.9)..strokeWidth = 1.3);
 
+    // What the beam has just passed lights up, pings, and is locked on to.
     for (final (at, dist) in _blips) {
-      // Brightest just after the beam passes, fading over most of a turn.
-      final behind = (angle - at) % (2 * math.pi);
-      final glow = (1 - behind / (2 * math.pi * 0.7)).clamp(0.0, 1.0);
+      final behind = (angle - (at - math.pi / 2)) % tau;
+      final glow = (1 - behind / (tau * 0.75)).clamp(0.0, 1.0);
       if (glow <= 0) continue;
-      final p = c + Offset(math.cos(at), math.sin(at)) * r * dist;
-      canvas.drawCircle(p, 4.5,
-          Paint()..color = _cyan.withOpacity(0.45 * glow)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-      canvas.drawCircle(p, 1.8, Paint()..color = Colors.white.withOpacity(glow));
-      // Just swept: brackets lock on to it.
-      if (glow > 0.75) {
-        final k = (glow - 0.75) / 0.25;
-        final s = 7.0 - 2.5 * k;
+      final p = c + Offset(math.cos(at - math.pi / 2), math.sin(at - math.pi / 2)) * r * dist;
+      canvas.drawCircle(p, 5,
+          Paint()..color = _cyan.withOpacity(0.5 * glow)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+      canvas.drawCircle(p, 1.9, Paint()..color = Colors.white.withOpacity(glow));
+      if (glow > 0.7) {
+        final k = (glow - 0.7) / 0.3;
+        canvas.drawCircle(
+          p,
+          4 + 10 * (1 - k),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1
+            ..color = _cyan.withOpacity(0.7 * k),
+        );
+        final s = 8.0 - 3 * k;
         final bracket = Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.white.withOpacity(0.8 * k);
+          ..strokeWidth = 1.1
+          ..color = Colors.white.withOpacity(0.85 * k);
         for (final (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]) {
           final corner = p + Offset(dx * s, dy * s);
           canvas.drawLine(corner, corner - Offset(dx * 3, 0), bracket);
@@ -1033,46 +894,49 @@ class _RadarPainter extends CustomPainter {
       }
     }
 
-    // Ticks round the rim, like a scope's bezel.
-    final tick = Paint()
-      ..strokeWidth = 1
-      ..color = _cyan.withOpacity(0.4);
-    for (var k = 0; k < 36; k++) {
-      final ang = k * math.pi / 18;
+    // The rim, and a bezel of ticks turning slowly the other way.
+    canvas.drawCircle(
+      c,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = _cyan.withOpacity(0.45),
+    );
+    final turn = -t * tau / 4;
+    final tick = Paint()..strokeCap = StrokeCap.round;
+    for (var k = 0; k < 72; k++) {
+      final ang = turn + k * tau / 72;
+      final long = k % 6 == 0;
+      tick
+        ..strokeWidth = long ? 1.4 : 0.9
+        ..color = (long ? _cyan : _violet).withOpacity(long ? 0.75 : 0.4);
       final dir = Offset(math.cos(ang), math.sin(ang));
-      canvas.drawLine(c + dir * (r - (k % 3 == 0 ? 4 : 2)), c + dir * r, tick);
+      canvas.drawLine(c + dir * (outer - (long ? 7 : 4)), c + dir * outer, tick);
+    }
+
+    // Two arcs of the HUD between the scope and the bezel, turning apart.
+    final hud = Rect.fromCircle(center: c, radius: (r + outer - 8) / 2 + 1);
+    for (final (start, sweep, color, speed) in [
+      (0.3, 0.9, _violet, 1.0),
+      (3.4, 0.6, _cyan, -1.0),
+    ]) {
+      canvas.drawArc(
+        hud,
+        start + speed * t * tau,
+        sweep,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2
+          ..strokeCap = StrokeCap.round
+          ..color = color.withOpacity(0.7),
+      );
     }
   }
 
   @override
-  bool shouldRepaint(_RadarPainter old) => old.a != a;
-}
-
-class _BeamPainter extends CustomPainter {
-  _BeamPainter(this.a) : super(repaint: a);
-  final Animation<double> a;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rr = RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(size.height / 2));
-    canvas.drawRRect(rr, Paint()..color = BrokaColors.border);
-    // Two passes per loop, easing in and out at the ends.
-    final p = Curves.easeInOut.transform((a.value * 2) % 1.0);
-    final w = size.width * 0.35;
-    final x = -w + (size.width + w) * p;
-    canvas.save();
-    canvas.clipRRect(rr);
-    canvas.drawRect(
-      Rect.fromLTWH(x, 0, w, size.height),
-      Paint()
-        ..shader = LinearGradient(colors: [_violet.withOpacity(0), _violet, _cyan, _cyan.withOpacity(0)])
-            .createShader(Rect.fromLTWH(x, 0, w, size.height)),
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_BeamPainter old) => old.a != a;
+  bool shouldRepaint(_ScopePainter old) => old.a != a;
 }
 
 // ── AgentBriefStrip ──────────────────────────────────────────────────────────

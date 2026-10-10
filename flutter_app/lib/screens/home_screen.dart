@@ -2317,7 +2317,7 @@ class _ZenoCompactCtaState extends State<_ZenoCompactCta>
                                 height: 1.2,
                                 fontWeight: FontWeight.w700)),
                         const SizedBox(height: 1),
-                        Text('Ask Zeno to find and negotiate it',
+                        Text('Ask Zeno to find it and pick the best deal',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(

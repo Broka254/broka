@@ -6,12 +6,10 @@
 // composing..." in italic gold on the third. These are the Zeno screen's
 // versions (Home's search pill, the brand gradient), shared, so the three
 // read as one app.
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
+import '../features/buy_agent/presentation/widgets/agent_hud.dart' show AgentThinkingWave;
 import '../main.dart' show BrokaColors;
-import 'zeno_avatar.dart';
 
 /// Zeno's colours - the brand gradient Home's Zeno CTA and the splash use.
 const List<Color> kChatGradient = [BrokaColors.neonPurple, BrokaColors.neonBlue];
@@ -160,73 +158,19 @@ class ChatSendButton extends StatelessWidget {
   }
 }
 
-/// Three dots rising and falling in turn while Zeno thinks.
+/// Zeno's avatar and its thinking waves: Zeno is working on a reply.
 ///
-/// The old dots were three one-shot fades that finished after 600ms and
-/// then sat still, so a slow reply looked like a frozen one.
-class ChatTypingDots extends StatefulWidget {
-  const ChatTypingDots({super.key});
-
-  @override
-  State<ChatTypingDots> createState() => _ChatTypingDotsState();
-}
-
-class _ChatTypingDotsState extends State<ChatTypingDots>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-        ..repeat();
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _c,
-    builder: (_, __) => Row(mainAxisSize: MainAxisSize.min, children: [
-      for (var i = 0; i < 3; i++) ...[
-        if (i > 0) const SizedBox(width: 5),
-        Opacity(
-          opacity: 0.35 +
-              0.65 * (0.5 + 0.5 * math.sin(2 * math.pi * (_c.value - i * 0.18))),
-          child: Container(
-            width: 7,
-            height: 7,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(colors: kChatGradient),
-            ),
-          ),
-        ),
-      ],
-    ]),
-  );
-}
-
-/// Zeno's avatar and a bubble of typing dots: Zeno is working on a reply.
+/// 2026-10-10: the Buying Agent's "Zeno is thinking", on every screen this
+/// is used on (the negotiation room, the sell wizard's helpers), instead of
+/// three dots - one way of showing Zeno at work, wherever Zeno is.
 class ZenoTypingBubble extends StatelessWidget {
-  const ZenoTypingBubble({super.key});
+  const ZenoTypingBubble({super.key, this.label = 'Zeno is thinking'});
+
+  final String label;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: 'Zeno is typing',
-    child: Row(children: [
-      const ZenoAvatar(size: 28),
-      const SizedBox(width: 8),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: BrokaColors.bgCard.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.30)),
-        ),
-        child: const ChatTypingDots(),
-      ),
-    ]),
-  );
+  Widget build(BuildContext context) =>
+      AgentThinkingWave(label: label, avatar: true, padding: EdgeInsets.zero);
 }
 
 /// The frame of one of Zeno's messages: a dark card with a violet edge,

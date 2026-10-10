@@ -1,3 +1,69 @@
+# Zeno introduces itself, sells Premium, and every Zeno screen looks like BROKA (2026-10-10)
+
+Raised by the owner with three screenshots: the Buying Agent didn't match
+Home; its microphone opened a compact listening card instead of the
+full-screen voice mode; voice mode itself didn't look like BROKA; the
+Buying Agent's screen had so much going on that it didn't feel premium;
+"New chat" couldn't be found; and the new-user tour wasn't the
+conversation they wanted - one where Zeno shows how BROKA works, shows off
+what it can do (the Buying Agent above all) and makes the case for
+Premium. Zeno should also stop presenting itself as a broker.
+
+**Zeno's introduction is a conversation** (`zeno_intro.dart`,
+`presentation/zeno_intro_chat.dart`). A new account no longer gets a
+splash with "Show me around" / "Maybe later": Zeno talks with the user, on
+Home's constellation, in Zeno's bubbles, thinking before each line, with
+replies to tap (the one Zeno would take lit in its gradient). It goes from
+"I'm Zeno - your personal intelligent assistant" through how BROKA works,
+what Zeno can do (a card of its powers), the Buying Agent at work (its
+radar sweeping), the watch that never sleeps, to Premium: what it unlocks,
+the cheapest plan's price read from `GET /pricing/plans` (never typed into
+the app), and that chatting with Zeno stays free. It ends where the user
+takes it: the plans, a real hunt with the Buying Agent (whose finale now
+offers "See Premium"), the tour of the screens, or later. Scripted in
+English and Swahili; no model call. It is the tour's welcome phase, so it is
+offered once, held when the app goes away, and closed by Back exactly as
+before. How BROKA works and Settings open it ("Meet Zeno"); "show me
+around" still starts the tour of the screens.
+
+**Zeno is the user's personal intelligent assistant**, not their broker:
+the introduction, the tour, the assistant's greeting, How BROKA works, the
+store page's help line, and the assistant's and the Buying Agent's prompts
+(`ai_broker/service.py`), which now also say so if asked. The negotiation
+room's own prompt is unchanged: there Zeno does mediate between two people.
+
+**The Buying Agent is one of BROKA's screens again.** It sits on Home's
+constellation, not its holographic room (`AgentHoloBackdrop` and the
+header's beam are gone), with the assistant's header, bubbles, chips and
+Home's search-pill composer. The core is Zeno, its glow and one ring - the
+dial, gauges, orbiting emoji and the typed "AGENT ONLINE" line are gone.
+Its steps are **Tell me, I hunt, I recommend**: the first result carries
+"Zeno's pick" and each card's button opens the deal, where "Ask Zeno to
+negotiate this one" used to be. A search shows a **radar scope** - a beam
+sweeping with its trail, pulses going out from Zeno, blips lighting up and
+locked on, a turning bezel - sized to the phone, under "ZENO IS SCANNING
+BROKA". **"New chat"** is a lit, labelled button in the header (icon only
+on a narrow phone or at large text).
+
+**One voice mode.** The Buying Agent's microphone - and a listing's
+questions' - opens the full-screen voice mode on the screen's own
+controller, with hints for what to say there; a search that comes back is a
+card in voice mode ("2 exact matches · See them"). Voice mode is drawn in
+Home's language: the constellation, Zeno's face at the heart of the orb,
+Home's header and square controls, a "Try saying" pill.
+
+**Zeno's thinking waves on every Zeno screen**: the assistant, voice mode,
+the docked pill, the negotiation room and the sell wizard's helpers (via
+`ZenoTypingBubble`), and the introduction - instead of three dots.
+
+Fixed on the way: an action card that appeared under a reply once it had
+finished writing ("Who should I call?") was left below the composer; the
+reply now scrolls it into view. Voice mode's "Try saying" overflowed a
+320dp phone at 1.3x text.
+
+Tests: `test/buy_agent_ui_test.dart` ("the agent's room", rewritten),
+`test/zeno_voice_anywhere_test.dart` (the introduction, unit and widget).
+
 # Zeno's voice that kept listening, a tour for new users, Zeno on every screen, the Buying Agent's room (2026-10-09)
 
 Raised by the owner: voice mode stopped capturing what was said after a
