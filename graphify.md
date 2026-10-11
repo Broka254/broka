@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-222 endpoints served by `backend/main.py`. **Auth** is read from each
+224 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 60, token 4, user 136.
+Counts: admin 20, optional 2, public 60, token 4, user 138.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -180,7 +180,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 | POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1143) |
 | POST | `/listings/{listing_id}/like` | user | `like_listing` (backend/api/domains/listings/router.py:1086) |
 | DELETE | `/listings/{listing_id}/like` | user | `unlike_listing` (backend/api/domains/listings/router.py:1098) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1154) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1177) |
 | GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:606) |
 | GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:996) |
 | GET | `/listings/{listing_id}/save` | user | `get_saved` (backend/api/domains/listings/router.py:1039) |
@@ -189,6 +189,8 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
+| POST | `/listings/{listing_id}/sold-out` | user | `report_sold_out` (backend/api/domains/listings/router.py:1154) |
+| DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1166) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1120) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1132) |
 | GET | `/live` | public | `live` (backend/main.py:550) |
@@ -228,17 +230,17 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
 | GET | `/premium/payments/{payment_id}` | user | `premium_payment_status` (backend/api/domains/premium/router.py:61) |
 | POST | `/premium/subscribe` | user | `subscribe` (backend/api/domains/premium/router.py:43) |
-| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:165) |
-| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:125) |
-| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:135) |
+| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:167) |
+| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:127) |
+| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:137) |
 | GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:56) |
-| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:106) |
-| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:75) |
-| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:97) |
+| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:108) |
+| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:77) |
+| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:99) |
 | GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:38) |
-| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:142) |
-| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:171) |
-| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:148) |
+| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:144) |
+| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:173) |
+| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:150) |
 | GET | `/ready` | public | `ready` (backend/main.py:500) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:30) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:64) |
@@ -269,8 +271,8 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 | GET | `/traders` | public | `list_traders` (backend/api/domains/traders/router.py:15) |
 | GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:32) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
-| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:101) |
-| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:190) |
+| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:107) |
+| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:201) |
 | POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:315) |
 | POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:338) |
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:131) |
@@ -356,6 +358,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 - `sell_probability.py` — Probability that a listing sells — and what is holding it back.
 - `sell_signals.py` — The measured inputs to the sell probability, read for many listings at once.
 - `service.py` — Listings Service v3.0
+- `sold_out.py` — Buyers reporting a listing sold out, and its seller saying it isn't.
 - `stock.py` — How many of a listing's units are left, and whether buyers still see it.
 - `validation.py` — What a listing may contain - the checks behind POST /listings, PATCH /listings/{id} and POST /listings/{id}/interest.
 
@@ -385,7 +388,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 - `__init__.py` — Pricing: listing fees, premium plans, store plans and the costs behind them.
 - `categories.py` — Per-category pricing parameters - BROKA's starting guesses, to be replaced by data.
 - `costs.py` — What it costs BROKA to run things - the floor every price is built on.
-- `engine.py` — The monthly listing fee: f = C x R.
+- `engine.py` — The listing fee: f = C x R, for two months at a time.
 - `payments.py` — Paying for a listing: the M-Pesa prompt, its result, and what a paid month buys.
 - `plans.py` — Premium plans, store plans and commission - the prices, and the costs they cover.
 - `receipts.py` — What a user has paid BROKA: listing fees and premium plans, for the Payment Receipts screen.
@@ -518,6 +521,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 - `payment.py` — FeaturedPayment and VerificationPayment models — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `push_device.py` — Push devices - every phone a user is signed in on.
 - `review.py` — Review model — re-exported from api.database (duplicate-table fix, see models/user.py).
+- `sold_out_report.py` — SoldOutReport - a buyer saying a listing is no longer available.
 - `store.py` — BROKA - Store Model
 - `subscription.py` — Premium subscriptions: who has which plan until when, what they paid, and how much of each monthly allowance they have used.
 - `user.py` — User model — re-exported from api.database (the single source of truth).
@@ -540,56 +544,57 @@ Counts: admin 20, optional 2, public 60, token 4, user 136.
 - `reviews.py` — ⚠️ NOT MOUNTED — LEGACY / DEAD CODE (verified during Store hardening pass, 2026-09: never imported in main.py).
 - `sms.py` — BROKA - Mobitech SMS Router (Delivery Report webhook)
 - `stt.py` — BROKA - Speech-to-Text Router
-- `tts.py` — BROKA - TTS Router (Hybrid) English → Microsoft Edge TTS (en-US-AriaNeural) - English text only Swahili → Microsoft Edge TTS (sw-KE-ZuriNeu…
+- `tts.py` — BROKA - TTS Router (Hybrid) English → Microsoft Edge TTS (en-US-AvaMultilingualNeural, falling back to en-US-AriaNeural) - English text onl…
 - `verify.py` — BROKA - Seller Verification Router Sellers pay via M-Pesa STK Push to receive a BROKA Verified badge.
 
 ## Data model
 
 | Table | Model | Defined at |
 |---|---|---|
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:554 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1124 |
-| `bids` | `Bid` | backend/api/database.py:543 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:683 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:558 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1128 |
+| `bids` | `Bid` | backend/api/database.py:547 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:687 |
 | `categories` | `Category` | backend/api/database.py:287 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:295 |
-| `deals` | `Deal` | backend/api/database.py:735 |
+| `deals` | `Deal` | backend/api/database.py:739 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1050 |
+| `disputes` | `Dispute` | backend/api/database.py:1054 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:264 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:74 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1085 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1143 |
-| `interests` | `Interest` | backend/api/database.py:431 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1089 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1147 |
+| `interests` | `Interest` | backend/api/database.py:435 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:653 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:969 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:657 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:973 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:945 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:949 |
 | `listings` | `Listing` | backend/api/database.py:304 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:66 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:100 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1004 |
-| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:454 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1008 |
+| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:458 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:245 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1024 |
-| `reviews` | `Review` | backend/api/database.py:1065 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:895 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:874 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1028 |
+| `reviews` | `Review` | backend/api/database.py:1069 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:899 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:878 |
+| `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:508 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:668 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:512 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:672 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1104 |
-| `wishlists` | `Wishlist` | backend/api/database.py:641 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1108 |
+| `wishlists` | `Wishlist` | backend/api/database.py:645 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:51 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:80 |
 
@@ -610,7 +615,7 @@ of a change.
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, gemini, ledger, workers; database, security
 - **escrow** — domains: listings, pricing; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
-- **listings** — domains: auctions, categories, escrow, media, premium, pricing, trust; core: audit, config, events, geo, rate_limit, text_search, timeutil; database, security
+- **listings** — domains: auctions, categories, escrow, media, premium, pricing, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — domains: premium, pricing; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
@@ -664,7 +669,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-107 files in `backend/tests/`.
+108 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -756,6 +761,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_settlement_sweeps.py` — The two automatic settlement sweeps must move money once, only where BROKA holds it, and tell the ledger.
 - `test_showcase.py` — BROKA - AI Showcase/Cover Image Tests Covers: location_name derivation from county/subcounty, ownership checks, AI covers as a premium allo…
 - `test_sms.py` — BROKA - SMS Provider Tests (v6.2) Run: pytest backend/tests/test_sms.py -v
+- `test_sold_out_reports.py` — Sold out with payments outside BROKA: agreed deals no longer take a listing off sale (listings/stock.py), buyers report an item gone and it…
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
 - `test_stores.py` — BROKA - Store Feature Tests Run: pytest backend/tests/test_stores.py -v
 - `test_stores_hardening.py` — Regression tests for the Store implementation audit (2026-09-14).
