@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.database import Listing, Interest, Category, User
+from api.database import Listing, ListingStatus, Interest, Category, User
 from api.domains.listings.paid import live_clause
 from api.domains.listings.service import ListingService
 
@@ -33,8 +33,14 @@ class TrendingService:
         )
         interest_counts = dict(interest_rows.all())
 
-        # Unpaid listings are not there for buyers (listings/paid.py).
-        query = select(Listing).where(Listing.created_at >= cutoff, live_clause())
+        # Unpaid listings are not there for buyers (listings/paid.py), and
+        # nor are deleted or sold ones: with no status filter here a listing
+        # its seller deleted kept trending on its views and opened on
+        # "Deleted by the seller".
+        query = select(Listing).where(
+            Listing.created_at >= cutoff, live_clause(),
+            Listing.status == ListingStatus.active,
+        )
         if category_id:
             # Match the Phase 1 category system (Listing.subcategory_id,
             # which may point at this category or one of its children) -

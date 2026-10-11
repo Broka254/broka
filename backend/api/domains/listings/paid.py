@@ -38,6 +38,9 @@ def live_clause(now: Optional[datetime] = None):
 
     now = now or datetime.utcnow()
     paid = or_(Listing.paid_until.is_(None), Listing.paid_until > now)
+    # Reported sold out by a buyer (listings/sold_out.py) rides here for the
+    # same reason: out of every list until its seller says it is still there.
+    paid = and_(paid, Listing.sold_out_reported_at.is_(None))
     if settings.auctions_enabled:
         return paid
     # IS NULL kept: the column is nullable, NULL != 'auction' is NULL in

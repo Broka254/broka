@@ -146,12 +146,14 @@ class TestListPrice:
         assert engine.list_price(ELECTRONICS, 1_000, 5_000) > engine.list_price(ELECTRONICS, 1_000, 1_000)
 
     def test_cheap_items_pay_ten_shillings_or_the_cost_of_serving_them(self):
-        """KES 10 is the least f gives; where serving the listing costs more
-        than that (Zeno answers more buyers for cars and property), the cost."""
-        assert engine.list_price(FASHION, 100) == engine.MIN_MONTHLY_FEE
-        assert engine.list_price(FASHION, 300) == pytest.approx(engine.value_fee(300))
+        """KES 10 is the least f gives; where serving the listing for its
+        two months costs more than that, the cost."""
+        assert engine.value_fee(100) == engine.MIN_MONTHLY_FEE
+        fashion_cost = costs.with_vat(engine.period_cost(FASHION))
+        assert engine.list_price(FASHION, 100) == pytest.approx(max(fashion_cost, engine.MIN_MONTHLY_FEE))
+        assert engine.list_price(FASHION, 1_500) == pytest.approx(engine.value_fee(1_500))
         cars = CATEGORIES["Automobiles"]
-        cost = costs.with_vat(costs.listing_month_cost(cars.chats_per_month))
+        cost = costs.with_vat(engine.period_cost(cars))
         assert cost > engine.MIN_MONTHLY_FEE
         assert engine.list_price(cars, 100) == pytest.approx(cost)
 
@@ -183,12 +185,20 @@ class TestListPrice:
 # ── Months, the launch offer, the recommendation ─────────────────────────────
 
 class TestPeriods:
+    def test_a_1500_dress_pays_60_for_two_months(self):
+        """The founder, 2026-10-11: the fee that bought one month buys two."""
+        q = engine.quote(FASHION, 1_500, 1, NEW, 10_000, discounts_apply=False)
+        assert q["options"][0] == {**q["options"][0], "months": 2, "total": 60}
+
     def test_longer_is_cheaper_per_month_in_the_shape_asked_for(self):
-        """'If one month is 100, two might be 180 and three 250.'"""
+        """'If one period is 100, two might be 180 and three 250' - two
+        months at a time: 2, 4 or 6."""
         q = _fee(NEW, LAND, 1_500_000)
-        monthly = q["monthly_fee"]
+        monthly = q["period_fee"]
+        assert q["period_months"] == 2 and q["monthly_fee"] == monthly
         totals = [o["total"] for o in q["options"]]
-        assert [o["months"] for o in q["options"]] == [1, 2, 3, 4, 5, 6]
+        assert [o["months"] for o in q["options"]] == [2, 4, 6]
+        assert totals[0] == monthly
         assert all(a < b for a, b in zip(totals, totals[1:]))
         per_month = [o["per_month"] for o in q["options"]]
         assert all(a > b for a, b in zip(per_month, per_month[1:]))
@@ -208,7 +218,7 @@ class TestPeriods:
         land = _fee(NEW, LAND, 1_500_000)["recommendation"]
         phone = _fee(NEW, ELECTRONICS, 20_000)["recommendation"]
         assert land["months"] >= 4 and land["strength"] == "strong"
-        assert phone["months"] == 1 and phone["strength"] == "none"
+        assert phone["months"] == 2 and phone["strength"] == "none"
         recommended = [o for o in _fee(NEW, LAND, 1_500_000)["options"] if o["recommended"]]
         assert [o["months"] for o in recommended] == [land["months"]]
 
@@ -417,7 +427,7 @@ class TestQuoteEndpoint:
         assert proven_q["risk"]["completed_deals"] == 30
         assert proven_q["monthly_fee"] < new_q["monthly_fee"]
         assert proven_q["discount_percent"] > new_q["discount_percent"]
-        assert [o["months"] for o in new_q["options"]] == [1, 2, 3, 4, 5, 6]
+        assert [o["months"] for o in new_q["options"]] == [2, 4, 6]
 
     @pytest.mark.asyncio
     async def test_leaked_deals_raise_it(self, client):

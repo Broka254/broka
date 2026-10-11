@@ -225,6 +225,8 @@ describe('StoreDetails', () => {
     expect(screen.queryByText('5.0')).toBeNull()
     expect(within(screen.getByText('On BROKA since').parentElement!).getByText('–')).toBeTruthy()
     expect(screen.getByText('Not verified yet')).toBeTruthy()
+    // No logo uploaded: BROKA's stands in for it.
+    expect(document.querySelector('img[src="/store-assets/logo.png"]')).not.toBeNull()
     // An API from before the owner's name was sent.
     expect(screen.getByText('The owner of Clanix')).toBeTruthy()
     expect(screen.getByText('Taking a break')).toBeTruthy()

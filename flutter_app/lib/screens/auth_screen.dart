@@ -1,5 +1,5 @@
 // BROKA - Auth Screen
-// Login: phone + password, optional biometric unlock.
+// Login: phone + password (biometric unlock is switched off for now).
 // Register: 6-step wizard (v6.1 phone-first onboarding rework)
 //   Step 1 - Phone number -> requests an SMS code
 //   Step 2 - Verify code (autofilled via the OS, manual entry as fallback)
@@ -123,7 +123,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   // Selfie (step 4)
   String? _capturedPhoto; // base64
 
-  // Biometrics (step 5)
+  // Biometrics (step 5). Off for now (2026-10-11): neither the sign-in
+  // button nor the signup step is shown. The code stays for when it returns.
+  static const bool _biometricsOffered = false;
   final LocalAuthentication _localAuth = LocalAuthentication();
   bool   _biometricAvailable  = false;
   bool   _biometricEnrolled   = false;  // device has biometrics set up
@@ -143,7 +145,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         duration: const Duration(milliseconds: 350))..forward();
     _fade     = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _stepFade = CurvedAnimation(parent: _stepAnim, curve: Curves.easeOut);
-    _checkBiometrics();
+    if (_biometricsOffered) _checkBiometrics();
     _prefetchAppSignature();
   }
 
@@ -928,7 +930,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                 Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20),
               ]),
       ),
-      if (_biometricAvailable) ...[
+      if (_biometricsOffered && _biometricAvailable) ...[
         const SizedBox(height: 12),
         _buildBiometricLoginButton(),
       ],
@@ -1018,7 +1020,9 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     if (_isLongTermSeller) ...[
       _sBizName, _sBizCategory, _sBizLocation, _sBizDescription, _sBizPreview,
     ],
-    _sPhoto, _sBiometrics, _sConfirm,
+    _sPhoto,
+    if (_biometricsOffered) _sBiometrics,
+    _sConfirm,
   ];
 
   bool get _wantsToSell => _accountType == 'buyer_seller';

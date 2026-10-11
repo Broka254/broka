@@ -146,9 +146,10 @@ async def test_the_offer_ends_and_cannot_be_bought_past_its_end(client, monkeypa
         await db.commit()
     assert (await _founding(seller_id, listing["id"])).percent == 80
     q = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
-    assert [o["months"] for o in q["options"]] == [1]
+    # Sold two months at a time: the offer's last ten days buy one period.
+    assert [o["months"] for o in q["options"]] == [2]
     r = await client.post("/pricing/listing-fee/pay", headers={**h, "X-Idempotency-Key": uuid.uuid4().hex},
-                          json={"listing_id": listing["id"], "months": 3, "phone_number": "0712345678"})
+                          json={"listing_id": listing["id"], "months": 4, "phone_number": "0712345678"})
     assert r.status_code == 409 and "founding" in r.text
 
     async with AsyncSessionLocal() as db:

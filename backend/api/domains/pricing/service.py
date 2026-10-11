@@ -221,7 +221,9 @@ async def listing_fee_quote(
     if 0 < founding.percent:
         # Discounted time can't run past the offer's end: six months bought
         # on its last day would otherwise be six months at founding prices.
-        left = max(1, math.ceil((founding.ends_at - start) / timedelta(days=30)))
+        # Rounded up to a whole period: listing time is sold two months at a time.
+        period = timedelta(days=30 * engine.PERIOD_MONTHS)
+        left = engine.PERIOD_MONTHS * max(1, math.ceil((founding.ends_at - start) / period))
         result["options"] = [o for o in result["options"] if o["months"] <= left]
     result["founding"] = {
         "rank": founding.rank, "percent": founding.percent,

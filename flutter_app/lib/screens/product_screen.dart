@@ -32,6 +32,7 @@ import 'package:flutter/material.dart';
 import '../features/categories/domain/category_visual.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/domain/models/listing_engagement.dart';
+import '../core/network/api_client.dart';
 import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
@@ -97,12 +98,13 @@ class _ProductScreenState extends State<ProductScreen> {
         LastScreenTracker.save('/product', {'listingId': args.id});
       } else if (args is Map && args['listingId'] is String) {
         // Restored from a relaunch - we only persisted the ID, fetch fresh.
-        _loadListingById(args['listingId'] as String);
+        // A store link's "Chat with the seller" (?chat=1) opens the chat too.
+        _loadListingById(args['listingId'] as String, openChat: args['openChat'] == true);
       }
     }
   }
 
-  Future<void> _loadListingById(String listingId) async {
+  Future<void> _loadListingById(String listingId, {bool openChat = false}) async {
     try {
       final listing = await ApiService.getListing(listingId);
       if (!mounted) return;
@@ -110,6 +112,7 @@ class _ProductScreenState extends State<ProductScreen> {
       _loadSeller();
       _loadEngagement();
       LastScreenTracker.save('/product', {'listingId': listingId});
+      if (openChat && !_isAuction && !_unavailable) _startChat(listing);
     } catch (_) {
       // Listing may have been deleted/sold since the app was last open.
       if (mounted) Navigator.pushReplacementNamed(context, '/home');
@@ -313,6 +316,7 @@ class _ProductScreenState extends State<ProductScreen> {
     final sections = <Widget>[
       _buildMediaSection(l),
       _buildInfoSection(l),
+      if (_detailRows(l).isNotEmpty) _buildDetailsCard(l),
       _buildDealTerms(l),
       // Where a buyer decides how to pay, before the seller and the
       // description: BROKA holds no payments, and escrow is how a buyer
@@ -364,7 +368,9 @@ class _ProductScreenState extends State<ProductScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: _isMine ? null : (_unavailable ? _buildUnavailableBar() : _buildCTA(l)),
+      bottomNavigationBar: _isMine
+          ? (l.reportedSoldOut ? _buildReportedToSellerBar(l) : null)
+          : (_unavailable ? _buildUnavailableBar() : _buildCTA(l)),
     );
   }
 
@@ -705,6 +711,67 @@ class _ProductScreenState extends State<ProductScreen> {
       Flexible(
         child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
             style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+      ),
+    ]),
+  );
+
+  // ── Details ───────────────────────────────────────────────────────────────
+
+  /// What the seller filled in about the item - condition, then the
+  /// category's own fields (brand, model, storage, size...) in the order
+  /// they were given. The screen used to show none of it: a buyer had to
+  /// ask in the chat what the sell wizard had already been told.
+  List<(String, String)> _detailRows(Listing l) {
+    final rows = <(String, String)>[];
+    final condition = (l.condition ?? '').trim();
+    if (condition.isNotEmpty) rows.add(('Condition', _humanize(condition)));
+    final land = LandSize.describe(l.attributes);
+    if (land != null) rows.add(('Size', land));
+    l.attributes?.forEach((key, value) {
+      if (LandSize.fieldNames.contains(key) || key == 'acreage') return;
+      final text = switch (value) {
+        null => '',
+        bool b => b ? 'Yes' : 'No',
+        List v => v.map((e) => '$e').where((e) => e.trim().isNotEmpty).join(', '),
+        Map _ => '',
+        _ => '$value'.trim(),
+      };
+      if (text.isNotEmpty) rows.add((_humanize(key), text));
+    });
+    return rows;
+  }
+
+  /// "storage_gb" -> "Storage gb", "like_new" -> "Like new".
+  static String _humanize(String raw) {
+    final t = raw.replaceAll('_', ' ').trim();
+    return t.isEmpty ? t : '${t[0].toUpperCase()}${t.substring(1)}';
+  }
+
+  Widget _buildDetailsCard(Listing l) => Padding(
+    key: const Key('listing-details-card'),
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _secLabel('DETAILS'),
+      const SizedBox(height: 10),
+      _edgedCard(
+        padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+        child: Column(children: [
+          for (final (i, (label, value)) in _detailRows(l).indexed) ...[
+            if (i > 0) const Divider(height: 1, color: BrokaColors.border),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SizedBox(
+                  width: 120,
+                  child: Text(label, style: const TextStyle(
+                      color: BrokaColors.textMid, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                ),
+                Expanded(child: Text(value, style: const TextStyle(
+                    color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w700))),
+              ]),
+            ),
+          ],
+        ]),
       ),
     ]),
   );
@@ -1350,14 +1417,17 @@ class _ProductScreenState extends State<ProductScreen> {
         Expanded(child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min, children: [
-          Text(_removed ? 'Removed by the seller' : 'Sold out',
+          Text(_removed ? 'Removed by the seller'
+                  : (_listing?.reportedSoldOut ?? false) ? 'Reported sold out' : 'Sold out',
               style: const TextStyle(color: BrokaColors.textHigh,
                   fontSize: 16, fontWeight: FontWeight.w800)),
           const SizedBox(height: 2),
           Text(
             _removed
                 ? 'This listing is no longer on BROKA.'
-                : "Every unit is sold or in a deal. It comes back if one falls through.",
+                : (_listing?.reportedSoldOut ?? false)
+                    ? "A buyer said it has sold. It comes back if the seller says it's still available."
+                    : "Every unit is sold. It comes back if a sale falls through.",
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.35)),
         ])),
       ]),
@@ -1367,31 +1437,125 @@ class _ProductScreenState extends State<ProductScreen> {
   Widget _buildCTA(Listing l) => SafeArea(
     top: false,
     child: Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       decoration: BoxDecoration(
         color: BrokaColors.bgMid.withOpacity(0.97),
         border: const Border(top: BorderSide(color: BrokaColors.border)),
       ),
-      // A store product is bought like one in a shop: Add to cart beside
-      // the main action, the price above both. Everything else keeps the
-      // one-row bar.
-      child: _sellsFromStore(l)
-          ? Column(mainAxisSize: MainAxisSize.min, children: [
-              _ctaPrice(l),
-              const SizedBox(height: 10),
-              Row(children: [
-                Expanded(child: _addToCartButton(l)),
-                const SizedBox(width: 10),
-                Expanded(child: _ctaButton(l)),
-              ]),
-            ])
-          : Row(children: [
-              Expanded(child: _ctaPrice(l)),
-              const SizedBox(width: 12),
-              _ctaButton(l),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // A store product is bought like one in a shop: Add to cart beside
+        // the main action, the price above both. Everything else keeps the
+        // one-row bar.
+        if (_sellsFromStore(l))
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            _ctaPrice(l),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: _addToCartButton(l)),
+              const SizedBox(width: 10),
+              Expanded(child: _ctaButton(l)),
             ]),
+          ])
+        else
+          Row(children: [
+            Expanded(child: _ctaPrice(l)),
+            const SizedBox(width: 12),
+            _ctaButton(l),
+          ]),
+        if (!_isAuction)
+          TextButton(
+            key: const Key('product-report-sold-out'),
+            onPressed: _reportingSoldOut ? null : () => _reportSoldOut(l),
+            style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(vertical: 2)),
+            child: const Text('No longer available? Mark it sold out',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+          ),
+      ]),
     ),
   );
+
+  bool _reportingSoldOut = false;
+
+  /// Payments happen outside BROKA, so the app never learns an item sold;
+  /// a buyer who hears "it's gone" says so. The seller is told and can put
+  /// it back (DELETE /listings/{id}/sold-out).
+  Future<void> _reportSoldOut(Listing l) async {
+    final authed = await requireAuth(context, reason: 'to report this listing');
+    if (!authed || !mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: BrokaColors.bgMid,
+        title: const Text('Mark it sold out?', style: TextStyle(color: BrokaColors.textHigh)),
+        content: const Text(
+            "Only if the seller told you it's gone. It's hidden from buyers until "
+            "the seller says it's still available.",
+            style: TextStyle(color: BrokaColors.textMid)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Mark sold out')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _reportingSoldOut = true);
+    String message = 'Thanks - marked sold out. The seller has been told.';
+    try {
+      await apiClient.post('/listings/${l.id}/sold-out', const <String, dynamic>{});
+      await _refreshListing(l.id);
+    } on ApiException catch (e) {
+      message = e.message;
+    } catch (_) {
+      message = "Couldn't send that. Check your connection and try again.";
+    }
+    if (!mounted) return;
+    setState(() => _reportingSoldOut = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// The seller's own listing, reported sold out by a buyer.
+  Widget _buildReportedToSellerBar(Listing l) => SafeArea(
+    top: false,
+    child: Container(
+      key: const Key('product-reported-sold-out'),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      decoration: const BoxDecoration(
+        color: BrokaColors.bgMid,
+        border: Border(top: BorderSide(color: BrokaColors.border)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.inventory_2_outlined, color: BrokaColors.warning, size: 22),
+        const SizedBox(width: 12),
+        const Expanded(child: Text(
+            'A buyer said this has sold, so buyers can\'t see it. Still have it?',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.35))),
+        const SizedBox(width: 8),
+        FilledButton(
+          key: const Key('product-still-available'),
+          onPressed: _reportingSoldOut ? null : () => _revokeSoldOut(l),
+          child: const Text('Still available'),
+        ),
+      ]),
+    ),
+  );
+
+  Future<void> _revokeSoldOut(Listing l) async {
+    setState(() => _reportingSoldOut = true);
+    String message = 'Back on sale - buyers can see it again.';
+    try {
+      await apiClient.delete('/listings/${l.id}/sold-out');
+      await _refreshListing(l.id);
+    } on ApiException catch (e) {
+      message = e.message;
+    } catch (_) {
+      message = "Couldn't send that. Check your connection and try again.";
+    }
+    if (!mounted) return;
+    setState(() => _reportingSoldOut = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   /// Direct sales from a store go in its cart; auctions have their own way.
   bool _sellsFromStore(Listing l) => l.storeId != null && !_isAuction;
@@ -1425,12 +1589,7 @@ class _ProductScreenState extends State<ProductScreen> {
     button: true,
     child: GestureDetector(
       key: const Key('product-cta'),
-      onTap: () async {
-        final authed = await requireAuth(context, reason: 'to start negotiating');
-        if (!authed || !mounted) return;
-        Navigator.pushNamed(context, '/negotiate',
-            arguments: {'listing': l, 'role': 'buyer'});
-      },
+      onTap: () => _startChat(l),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 15),
         alignment: _sellsFromStore(l) ? Alignment.center : null,
@@ -1451,6 +1610,14 @@ class _ProductScreenState extends State<ProductScreen> {
       ),
     ),
   );
+
+  /// The buyer's conversation with the seller (Zeno brokers it), for a
+  /// store product as for any other listing.
+  Future<void> _startChat(Listing l) async {
+    final authed = await requireAuth(context, reason: 'to start negotiating');
+    if (!authed || !mounted) return;
+    Navigator.pushNamed(context, '/negotiate', arguments: {'listing': l, 'role': 'buyer'});
+  }
 
   /// Add to cart, or - once it's in - how many and the way to the cart.
   Widget _addToCartButton(Listing l) {

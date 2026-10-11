@@ -401,14 +401,15 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
     ]);
   }
 
-  /// "Listing fee from KES 84 a month" - so the price is no surprise.
+  /// "Listing fee KES 60 for 2 months" - so the price is no surprise.
   Widget _feeTeaser(ListingFeeQuote fee) => Padding(
         key: const Key('sell-fee-teaser'),
         padding: const EdgeInsets.only(top: 10),
         child: Text(
-          'Listing fee KES ${formatKesAmount(fee.monthlyFee)} a month'
+          'Listing fee KES ${formatKesAmount(fee.monthlyFee)} for '
+          '${fee.periodMonths == 1 ? 'a month' : '${fee.periodMonths} months'}'
           '${fee.discountPercent > 0 ? ' (${fee.discountPercent}% off)' : ''}'
-          ' - choose 1 to 6 months next.',
+          ' - choose ${fee.periodMonths == 1 ? '1 to 6' : '2, 4 or 6'} months next.',
           textAlign: TextAlign.center,
           style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5),
         ),

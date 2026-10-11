@@ -11,7 +11,7 @@ import '../../../utils/price_format.dart';
 int _int(Object? v) => (v as num?)?.toInt() ?? 0;
 double _double(Object? v) => (v as num?)?.toDouble() ?? 0;
 
-/// One of the 1-6 month choices.
+/// One of the 2, 4 or 6 month choices.
 class FeeOption {
   const FeeOption({
     required this.months,
@@ -100,11 +100,19 @@ class ListingFeeQuote {
     this.listingValue = 0,
     this.monthsAvailable,
     this.state,
+    this.periodMonths = 2,
   });
 
   final String category;
   final int listPrice;
+
+  /// The fee for one period of [periodMonths] (the server's `monthly_fee`,
+  /// a name kept from when it bought one month).
   final int monthlyFee;
+
+  /// How many months one fee buys: 2 (PRICING.md); listing time is sold in
+  /// 2, 4 or 6 months.
+  final int periodMonths;
   final int discountPercent;
   final int recordPercent;
   final int launchPercent;
@@ -146,7 +154,8 @@ class ListingFeeQuote {
     return ListingFeeQuote(
       category: j['category'] as String? ?? '',
       listPrice: _int(j['list_price']),
-      monthlyFee: _int(j['monthly_fee']),
+      monthlyFee: _int(j['period_fee'] ?? j['monthly_fee']),
+      periodMonths: j['period_months'] == null ? 1 : _int(j['period_months']),
       discountPercent: _int(j['discount_percent']),
       recordPercent: _int(discounts['record_percent']),
       launchPercent: _int(discounts['launch_percent']),
@@ -299,9 +308,9 @@ String roughDuration(int days) {
   return 'about ${(days / 30).round()} months';
 }
 
-/// The recommendation, or null when one month is enough.
+/// The recommendation, or null when the shortest period is enough.
 String? recommendationText(ListingFeeQuote q) {
-  if (q.strength == 'none' || q.recommendedMonths <= 1) return null;
+  if (q.strength == 'none' || q.recommendedMonths <= q.periodMonths) return null;
   final option = q.option(q.recommendedMonths);
   final saving = option != null && option.savingPercent > 0
       ? ', and costs ${option.savingPercent}% less a month than renewing'

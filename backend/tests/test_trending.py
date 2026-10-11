@@ -138,3 +138,22 @@ class TestTrending:
         assert len(data) >= 1
         for field in ("id", "name", "price", "category", "location_name", "verified_photos", "seller_id"):
             assert field in data[0]
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_listing_leaves_trending(self, client, seller_token):
+        # It used to keep trending on its views and open on "Deleted by the
+        # seller": the query had no status filter.
+        h = {"Authorization": f"Bearer {seller_token}"}
+        made = await client.post("/listings/", json={
+            "description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": "Deleted Trending Chair", "category": "furniture", "price": 9000,
+            "lat": -1.286, "lng": 36.817,
+        }, headers=h)
+        lid = made.json()["id"]
+        async with AsyncSessionLocal() as db:
+            listing = (await db.execute(select(Listing).where(Listing.id == lid))).scalar_one()
+            listing.views = 500
+            await db.commit()
+        assert lid in [i["id"] for i in (await client.get("/trending?limit=100")).json()]
+        assert (await client.delete(f"/listings/{lid}", headers=h)).status_code in (200, 204)
+        assert lid not in [i["id"] for i in (await client.get("/trending?limit=100")).json()]

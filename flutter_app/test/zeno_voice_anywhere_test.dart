@@ -557,6 +557,32 @@ void main() {
       tour.dispose();
     });
 
+    test('a new account picks English or Kiswahili first; Kiswahili is text only', () async {
+      final host = _Host();
+      final chosen = <String>[];
+      final tour = ZenoTour(host, settle: Duration.zero, introPace: 0, onLanguage: chosen.add);
+      tour.offer(askLanguage: true);
+      expect(tour.phase, ZenoTourPhase.language);
+      await settle();
+      expect(host.said, isEmpty, reason: 'nothing is said before the language is picked');
+
+      tour.chooseLanguage('swahili');
+      expect(chosen, ['swahili']);
+      expect(tour.phase, ZenoTourPhase.welcome);
+      expect(tour.voiced, isFalse);
+      await settle();
+      expect(tour.intro!.messages, isNotEmpty, reason: 'the introduction runs, in text');
+      expect(host.said, isEmpty, reason: 'no voice mode in Kiswahili');
+      tour.end();
+
+      tour.offer(askLanguage: true);
+      tour.chooseLanguage('english');
+      expect(tour.voiced, isTrue);
+      await settle();
+      expect(host.said, isNotEmpty);
+      tour.dispose();
+    });
+
     test('"let me try it": what the user would love to buy is hunted, then the finale offers Premium', () async {
       final host = _Host();
       final tour = ZenoTour(host, settle: Duration.zero, introPace: 0);
@@ -626,6 +652,11 @@ void main() {
       await ZenoTourStore.markNewAccount('new-1');
       await tester.pumpWidget(app());
       await run(tester, const Duration(seconds: 3));
+      // English or Kiswahili first - before Zeno says a word.
+      expect(session.tour.phase, ZenoTourPhase.language);
+      expect(find.byKey(const Key('zeno-language-swahili')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('zeno-language-english')));
+      await run(tester, const Duration(milliseconds: 300));
       expect(session.tour.phase, ZenoTourPhase.welcome);
       expect(find.byType(ZenoIntroChat), findsOneWidget);
       expect(find.text('MEET ZENO'), findsOneWidget);
@@ -651,6 +682,8 @@ void main() {
       await run(tester, const Duration(milliseconds: 300));
       session.toggleMute();
       await run(tester, const Duration(seconds: 3));
+      session.tour.chooseLanguage('english');
+      await run(tester, const Duration(milliseconds: 300));
       expect(session.tour.phase, ZenoTourPhase.welcome);
 
       Future<void> reply(String label) async {
@@ -686,6 +719,8 @@ void main() {
         data: const MediaQueryData(size: Size(320, 568), textScaler: TextScaler.linear(1.3)),
         child: app(),
       ));
+      await run(tester, const Duration(seconds: 3));
+      await tester.tap(find.byKey(const Key('zeno-language-english')));
       await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
       await tester.tap(find.text('What can you do?'));
       await run(tester, const Duration(seconds: 12), step: const Duration(milliseconds: 100));
@@ -700,6 +735,8 @@ void main() {
       await ZenoTourStore.markNewAccount('new-3');
       await tester.pumpWidget(app());
       await run(tester, const Duration(seconds: 3));
+      session.tour.chooseLanguage('english');
+      await run(tester, const Duration(milliseconds: 300));
       expect(session.tour.phase, ZenoTourPhase.welcome);
       final handled = await tester.binding.handlePopRoute();
       await run(tester, const Duration(seconds: 1));
@@ -719,7 +756,7 @@ void main() {
       expect(session.tour.active, isFalse);
       nav.pop();
       await run(tester, const Duration(seconds: 3));
-      expect(session.tour.phase, ZenoTourPhase.welcome);
+      expect(session.tour.phase, ZenoTourPhase.language);
     });
 
     testWidgets('the tour opens each screen as Zeno talks about it, then asks what to hunt', (tester) async {

@@ -122,7 +122,7 @@ async def _listing(client, headers, **extra) -> dict:
     return r.json()
 
 
-async def _pay(client, headers, listing_id, months=1, **extra):
+async def _pay(client, headers, listing_id, months=2, **extra):
     return await client.post("/pricing/listing-fee/pay", headers=headers, json={
         "listing_id": listing_id, "months": months, "phone_number": "0712345678", **extra})
 
@@ -145,7 +145,7 @@ async def _in_feed(client, listing_id) -> bool:
     return any(i["id"] == listing_id for i in items)
 
 
-async def _paid_listing(client, headers, months=1):
+async def _paid_listing(client, headers, months=2):
     listing = await _listing(client, headers)
     paid = (await _pay(client, headers, listing["id"], months)).json()
     await client.post(f"/pricing/listing-fee/callback/{SECRET}",
@@ -281,17 +281,48 @@ class TestPaying:
         listing = await _listing(client, h)
         q = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
         assert q["months_available"] == 6
-        assert [o["months"] for o in q["options"]] == [1, 2, 3, 4, 5, 6]
+        # Two months at a time: 2, 4 or 6.
+        assert [o["months"] for o in q["options"]] == [2, 4, 6]
         assert q["listing_fee"]["status"] == "unpaid" and q["fees_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_going_back_and_changing_the_price_changes_the_fee(self, client, fees_on, mpesa):
+        # Go live created the listing; the seller backed out of the Listing
+        # fee screen, changed the price and how many, and pressed Go live
+        # again with the same draft key. The key replayed the first listing
+        # as it was, so the fee stayed the old one.
+        _, h = await _user()
+        key = {**h, "X-Idempotency-Key": uuid.uuid4().hex}
+        first = await _listing(client, key, price=1500, quantity=1)
+        before = (await client.get(f"/pricing/listing-fee/listings/{first['id']}/quote", headers=h)).json()
+        again = await _listing(client, key, price=20000, quantity=10, name=first["name"])
+        assert again["id"] == first["id"], "still one listing"
+        assert again["price"] == 20000 and again["quantity"] == 10
+        after = (await client.get(f"/pricing/listing-fee/listings/{first['id']}/quote", headers=h)).json()
+        assert after["listing_value"] == 200000
+        assert after["period_fee"] > before["period_fee"]
+        r = await _pay(client, h, first["id"], months=2)
+        assert r.json()["amount"] == after["options"][0]["total"]
+
+    @pytest.mark.asyncio
+    async def test_a_paid_listing_is_not_changed_by_a_replay(self, client, fees_on, mpesa):
+        _, h = await _user()
+        key = {**h, "X-Idempotency-Key": uuid.uuid4().hex}
+        listing = await _listing(client, key, price=1500)
+        paid = (await _pay(client, h, listing["id"])).json()
+        await client.post(f"/pricing/listing-fee/callback/{SECRET}",
+                          json=_callback(await _checkout_id(paid["payment_id"]), paid["amount"]))
+        again = await _listing(client, key, price=90000)
+        assert again["price"] == 1500, "buyers have seen it: only PATCH and its rules change it"
 
     @pytest.mark.asyncio
     async def test_the_prompt_asks_for_the_quoted_amount(self, client, fees_on, mpesa):
         _, h = await _user()
         listing = await _listing(client, h)
         q = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
-        r = await _pay(client, h, listing["id"], months=3)
+        r = await _pay(client, h, listing["id"], months=4)
         assert r.status_code == 200, r.text
-        expected = next(o["total"] for o in q["options"] if o["months"] == 3)
+        expected = next(o["total"] for o in q["options"] if o["months"] == 4)
         assert r.json()["amount"] == expected == mpesa.prompts[0]["amount"]
         assert mpesa.prompts[0]["phone"] == "254712345678"
         assert mpesa.prompts[0]["callback_url"].endswith(f"/pricing/listing-fee/callback/{SECRET}")
@@ -378,7 +409,7 @@ class TestPaying:
         _, h = await _user()
         listing = await _listing(client, h)
         r = await client.post("/pricing/listing-fee/pay", headers=h, json={
-            "listing_id": listing["id"], "months": 1, "phone_number": phone})
+            "listing_id": listing["id"], "months": 2, "phone_number": phone})
         assert r.status_code == 400
         assert mpesa.prompts == []
 
@@ -401,27 +432,27 @@ class TestRenewing:
     @pytest.mark.asyncio
     async def test_extends_from_the_end_of_the_paid_time_up_to_six_months(self, client, fees_on, mpesa):
         _, h = await _user()
-        listing, first = await _paid_listing(client, h, months=5)
+        listing, first = await _paid_listing(client, h, months=4)
         q = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
-        assert q["months_available"] == 1
-        assert [o["months"] for o in q["options"]] == [1]
+        assert q["months_available"] == 2
+        assert [o["months"] for o in q["options"]] == [2]
 
-        too_many = await _pay(client, h, listing["id"], months=2)
+        too_many = await _pay(client, h, listing["id"], months=4)
         assert too_many.status_code == 409 and "6 months" in too_many.json()["detail"]
 
-        second = (await _pay(client, h, listing["id"], months=1)).json()
+        second = (await _pay(client, h, listing["id"], months=2)).json()
         await client.post(f"/pricing/listing-fee/callback/{SECRET}",
                           json=_callback(await _checkout_id(second["payment_id"]), second["amount"]))
         until = {}
         for name, p in (("first", first), ("second", second)):
             status = (await client.get(f"/pricing/listing-fee/payments/{p['payment_id']}", headers=h)).json()
             until[name] = datetime.fromisoformat(status["paid_until"])
-        assert until["second"] - until["first"] == MONTH
+        assert until["second"] - until["first"] == 2 * MONTH
 
     @pytest.mark.asyncio
     async def test_a_listing_ending_soon_asks_for_renewal(self, client, fees_on, mpesa):
         _, h = await _user()
-        listing, _ = await _paid_listing(client, h, months=1)
+        listing, _ = await _paid_listing(client, h, months=2)
         async with AsyncSessionLocal() as db:
             row = await db.get(Listing, listing["id"])
             row.paid_until = datetime.utcnow() + timedelta(days=3)

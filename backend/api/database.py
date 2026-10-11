@@ -419,6 +419,10 @@ class Listing(Base):
     # migrations cannot run safely. It also keeps "sold" and "unpaid" apart -
     # a listing can be paid for and sold, or unsold and unpaid.
     paid_until         = Column(DateTime, nullable=True)
+    # A buyer reported it no longer available (models/sold_out_report.py):
+    # out of every list buyers browse until its seller says it is still
+    # there. A column, not a ListingStatus, for the reason above.
+    sold_out_reported_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("uq_listings_seller_client_ref", "seller_id", "client_ref", unique=True),
@@ -1237,6 +1241,7 @@ async def init_db():
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.push_device", ("PushDevice",)),
+        ("api.models.sold_out_report", ("SoldOutReport",)),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))
@@ -1429,6 +1434,8 @@ async def init_db():
             # PostgreSQL has no DATETIME, and a failure here is swallowed.
             # NULL on every existing row: listings from before fees are free.
             "ALTER TABLE listings ADD COLUMN paid_until TIMESTAMP",
+            # Reported sold out by a buyer (Listing.sold_out_reported_at).
+            "ALTER TABLE listings ADD COLUMN sold_out_reported_at TIMESTAMP",
             # Units per deal (Deal.quantity). NULL on every existing deal:
             # each was for one unit.
             "ALTER TABLE deals ADD COLUMN quantity INTEGER",

@@ -146,7 +146,8 @@ class _ZenoLauncherState extends State<ZenoLauncher> with SingleTickerProviderSt
 
   bool _shown(BuildContext context) {
     if (ApiService.currentUserId == null || !ZenoLauncherPrefs.enabled.value) return false;
-    if (_s.isActive || _s.tour.phase == ZenoTourPhase.welcome) return false;
+    if (_s.isActive || _s.tour.phase == ZenoTourPhase.welcome ||
+        _s.tour.phase == ZenoTourPhase.language) return false;
     if (MediaQuery.viewInsetsOf(context).bottom > 0) return false;
     return ZenoLauncher.allowedOver(_s.routes.top);
   }

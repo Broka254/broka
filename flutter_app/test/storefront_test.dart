@@ -729,6 +729,9 @@ void main() {
           const StoreLinkTarget(slug: 'clanix', via: 'tiktok'));
       expect(StoreLinkTarget.parse('https://broka.co.ke/store/clanix/p/abc-123?via=qr'),
           const StoreLinkTarget(slug: 'clanix', listingId: 'abc-123', via: 'qr'));
+      // The web's "Chat with the seller": the product, and its chat on top.
+      expect(StoreLinkTarget.parse('https://broka.co.ke/store/clanix/p/abc-123?chat=1'),
+          const StoreLinkTarget(slug: 'clanix', listingId: 'abc-123', chat: true));
       // The web's Store details page.
       expect(StoreLinkTarget.parse('https://broka.co.ke/store/clanix/about?via=whatsapp'),
           const StoreLinkTarget(slug: 'clanix', via: 'whatsapp', details: true));

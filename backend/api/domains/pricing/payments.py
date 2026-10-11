@@ -1,6 +1,6 @@
 """Paying for a listing: the M-Pesa prompt, its result, and what a paid month buys.
 
-A seller pays 1-6 months of a listing at once (PRICING.md). The price comes
+A seller pays 2, 4 or 6 months of a listing at once (PRICING.md). The price comes
 from the engine on the server, never from the app. A successful payment
 moves Listing.paid_until forward by that many 30-day months - from the end
 of the time already paid, so renewing early never loses days - and a
@@ -75,10 +75,12 @@ def callback_url() -> str:
 
 
 def months_available(listing: Listing, now: Optional[datetime] = None) -> int:
-    """Whole months that can still be paid for without going past MAX_AHEAD."""
+    """Whole periods (in months: 0, 2, 4 or 6) that can still be paid for
+    without going past MAX_AHEAD."""
     now = now or datetime.utcnow()
     paid_ahead = max(listing.paid_until - now, timedelta(0)) if listing.paid_until else timedelta(0)
-    return max(0, min(engine.MAX_MONTHS, math.floor((MAX_AHEAD - paid_ahead) / MONTH)))
+    whole = max(0, min(engine.MAX_MONTHS, math.floor((MAX_AHEAD - paid_ahead) / MONTH)))
+    return engine.whole_periods(whole)
 
 
 async def _owned_listing(db: AsyncSession, user_id: str, listing_id: str) -> Listing:
@@ -158,8 +160,9 @@ async def start_payment(
     if option is None:
         # The founding offer sells discounted time only up to its end.
         raise HTTPException(status_code=409, detail=(
-            f"Your founding-seller price covers up to {len(quote['options'])} "
-            f"month{'s' if len(quote['options']) != 1 else ''} from now. Choose fewer months."
+            f"Your founding-seller price covers up to "
+            f"{max((o['months'] for o in quote['options']), default=0)} months from now. "
+            f"Choose fewer months."
         ))
 
     featured_amount = 0

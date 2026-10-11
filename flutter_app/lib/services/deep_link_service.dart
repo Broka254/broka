@@ -3,6 +3,7 @@
 // https://broka.co.ke/store/<name>            -> the store's home
 // https://broka.co.ke/store/<name>/about      -> its Store details
 // https://broka.co.ke/store/<name>/p/<id>     -> one of its products
+//   ...?chat=1                                 -> and the chat with its seller
 // (www.broka.co.ke too; a ?via= tag is kept for the owner's visit stats.)
 //
 // Android hands these links to MainActivity (intent filters in
@@ -32,6 +33,7 @@ class StoreLinkTarget {
     this.via,
     this.details = false,
     this.cart,
+    this.chat = false,
   });
 
   final String slug;
@@ -53,6 +55,11 @@ class StoreLinkTarget {
   final Map<String, int>? cart;
 
   bool get isProduct => listingId != null;
+
+  /// A product link with ?chat=1: the web storefront's "Chat with the
+  /// seller" - the product opens with its negotiation room on top, the
+  /// conversation any listing outside a store has.
+  final bool chat;
 
   /// At most this many products come in through one link.
   static const maxCartItems = 30;
@@ -81,7 +88,8 @@ class StoreLinkTarget {
       return StoreLinkTarget(slug: slug, via: via, cart: _cartItems(uri.queryParameters['items']));
     }
     if (parts.length == 4 && parts[2] == 'p' && _idPattern.hasMatch(parts[3])) {
-      return StoreLinkTarget(slug: slug, listingId: parts[3], via: via);
+      return StoreLinkTarget(slug: slug, listingId: parts[3], via: via,
+          chat: uri.queryParameters['chat'] == '1');
     }
     return null;
   }
@@ -108,6 +116,7 @@ class StoreLinkTarget {
       other.listingId == listingId &&
       other.via == via &&
       other.details == details &&
+      other.chat == chat &&
       mapEquals(other.cart, cart);
 
   @override
@@ -189,7 +198,10 @@ class DeepLinkService {
       return;
     }
     if (target.isProduct) {
-      nav.pushNamed('/product', arguments: {'listingId': target.listingId});
+      nav.pushNamed('/product', arguments: {
+        'listingId': target.listingId,
+        if (target.chat) 'openChat': true,
+      });
       _countProductVisit(target);
     } else {
       // The store screen counts its own visit, with the link's tag, and

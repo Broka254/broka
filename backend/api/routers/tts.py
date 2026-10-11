@@ -1,6 +1,7 @@
 """
 BROKA - TTS Router (Hybrid)
-  English  → Microsoft Edge TTS (en-US-AriaNeural) - English text only
+  English  → Microsoft Edge TTS (en-US-AvaMultilingualNeural, falling back
+             to en-US-AriaNeural) - English text only
   Swahili  → Microsoft Edge TTS (sw-KE-ZuriNeural)
   Sheng    → Kokoro on Hugging Face Space (Xxavierxxbo/broka-tts)
   Luo      → Kokoro on Hugging Face Space
@@ -35,10 +36,15 @@ router = APIRouter()
 
 MAX_CHARS = 500
 
-# Edge TTS voices (free, no key needed)
+# Edge TTS voices (free, no key needed). English is Ava (2026-10-11), one of
+# Microsoft's newer conversational voices: Aria read Zeno's replies like an
+# announcement. Aria stays as the fallback if Ava ever stops answering.
 EDGE_VOICES = {
-    "english": "en-US-AriaNeural",
+    "english": "en-US-AvaMultilingualNeural",
     "swahili": "sw-KE-ZuriNeural",
+}
+EDGE_FALLBACK_VOICES = {
+    "english": "en-US-AriaNeural",
 }
 
 # Languages routed to HF Space Kokoro
@@ -117,26 +123,31 @@ async def speak(
     return await _speak_edge(text, spoken)
 
 
+async def _edge_audio(text: str, voice: str) -> bytes:
+    communicate = edge_tts.Communicate(text, voice)
+    audio_buffer = io.BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_buffer.write(chunk["data"])
+    return audio_buffer.getvalue()
+
+
 async def _speak_edge(text: str, language: str) -> Response:
     """Microsoft Edge TTS for English and Swahili - each in its own voice."""
-    voice = EDGE_VOICES[language]
-    logger.info("Edge TTS - voice=%s lang=%s", voice, language)
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        audio_buffer = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_buffer.write(chunk["data"])
-        audio_buffer.seek(0)
-        audio_bytes = audio_buffer.read()
-        if not audio_bytes:
-            raise HTTPException(status_code=502, detail="Edge TTS returned no audio")
-        return Response(content=audio_bytes, media_type="audio/mpeg")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Edge TTS error: %s", e)
-        raise HTTPException(status_code=500, detail="Voice service unavailable")
+    voices = [EDGE_VOICES[language]]
+    if language in EDGE_FALLBACK_VOICES:
+        voices.append(EDGE_FALLBACK_VOICES[language])
+    for voice in voices:
+        logger.info("Edge TTS - voice=%s lang=%s", voice, language)
+        try:
+            audio_bytes = await _edge_audio(text, voice)
+        except Exception as e:
+            logger.exception("Edge TTS error (voice=%s): %s", voice, e)
+            continue
+        if audio_bytes:
+            return Response(content=audio_bytes, media_type="audio/mpeg")
+        logger.warning("Edge TTS returned no audio (voice=%s)", voice)
+    raise HTTPException(status_code=500, detail="Voice service unavailable")
 
 
 async def _speak_kokoro(text: str, language: str) -> Response:

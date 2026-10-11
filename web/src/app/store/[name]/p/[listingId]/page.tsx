@@ -167,7 +167,9 @@ export default async function ProductPage({ params, searchParams }: Props) {
             )}
 
             <div className={styles.cta}>
-              {view.available && <AppButton label="Make an offer in the BROKA app" className={shopStyles.offerLink} />}
+              {view.available && (
+                <AppButton chat label="Chat with the seller or make an offer in the BROKA app" className={shopStyles.offerLink} />
+              )}
               <ShareButtons storeId={store.id} url={view.url} title={listing.name} />
             </div>
 

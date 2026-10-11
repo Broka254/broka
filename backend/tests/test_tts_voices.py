@@ -76,7 +76,7 @@ async def _speak(client, auth, text, language):
 async def test_english_text_gets_the_english_voice(client, auth, voices_used):
     res = await _speak(client, auth, "Here are three phones under your budget.", "english")
     assert res.status_code == 200
-    assert voices_used == ["en-US-AriaNeural"]
+    assert voices_used == ["en-US-AvaMultilingualNeural"]
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,7 @@ async def test_swahili_text_is_never_read_by_the_english_voice(client, auth, voi
 async def test_a_borrowed_greeting_does_not_make_english_swahili(client, auth, voices_used):
     res = await _speak(client, auth, "Karibu! I found two laptops that match what you asked for.", "english")
     assert res.status_code == 200
-    assert voices_used == ["en-US-AriaNeural"]
+    assert voices_used == ["en-US-AvaMultilingualNeural"]
 
 
 @pytest.mark.asyncio
@@ -114,3 +114,21 @@ def test_marker_words_need_weight_not_one_hit():
     assert not tts._reads_as_swahili("Sawa, that works for me.")
     assert tts._reads_as_swahili("Nataka gari nzuri kwa bei rahisi")
     assert not tts._reads_as_swahili("")
+
+
+class TestEnglishVoice:
+    @pytest.mark.asyncio
+    async def test_ava_speaks_and_aria_stands_in_when_ava_fails(self, monkeypatch):
+        from api.routers import tts
+        tried = []
+
+        async def fake_audio(text, voice):
+            tried.append(voice)
+            if voice == "en-US-AvaMultilingualNeural":
+                raise RuntimeError("voice gone")
+            return b"mp3"
+
+        monkeypatch.setattr(tts, "_edge_audio", fake_audio)
+        r = await tts._speak_edge("Hello there", "english")
+        assert r.body == b"mp3"
+        assert tried == ["en-US-AvaMultilingualNeural", "en-US-AriaNeural"]

@@ -21,7 +21,7 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 |---|---|
 | **Buyer-to-seller payments** | **Paused** (`IN_APP_PAYMENTS_ENABLED=false`): buyers pay sellers directly, so BROKA charges **no commission** for now. The app advises meeting to inspect first, and lists independent escrow services for deals at a distance (`GET /pricing/safe-payment`). See "While BROKA handles no payments" below |
 | **Commission**, when payments return | Negotiated deal: buyer pays **4.49%** (BROKA 3.49%, never under KES 20, + E-Confirm 1%). Auction: **5%** (BROKA 4% + E-Confirm 1%) |
-| **Listing fee** | Monthly, per listing, a cube root of its **value - price × quantity**: **f = 8.91822 × ∛value − 42.1011, between KES 10 and 2,000** (set 2026-10-09), never under what the listing costs to serve. A KES 1,500 dress pays KES 60 a month, a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M of value (200 KES 180,000 iPhones, a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). 1 to 6 months at a time; longer is cheaper per month |
+| **Listing fee** | Per listing, **for two months at a time** (2026-10-11), a cube root of its **value - price × quantity**: **f = 8.91822 × ∛value − 42.1011, between KES 10 and 2,000** (set 2026-10-09), never under what the listing costs to serve for those two months. A KES 1,500 dress pays KES 60 for two months, a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M of value (200 KES 180,000 iPhones, a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). 2, 4 or 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
 | **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
@@ -177,8 +177,9 @@ runs when payments are on.
 
 ## 2. The listing fee: f = C × R
 
-A seller pays per listing, per month, for 1 to 6 months at a time. The
-monthly price is **C** (a cube root of the listing's value) times **R** (the
+A seller pays per listing for **2, 4 or 6 months** at a time (since
+2026-10-11; it was 1 to 6, monthly). The fee for one two-month period is
+**C** (a cube root of the listing's value) times **R** (the
 seller's risk coefficient, 0.4 to 1.0, only while payments run through
 BROKA), less the founding-seller offer below.
 
@@ -224,7 +225,7 @@ curve runs through round fees:
 
 | Listing value, KES | 200 | 1,500 | 10,000 | 20,000 | 1M | 12M and up |
 |---|---|---|---|---|---|---|
-| One month, KES | 10 | 60 | 150 | 200 | 850 | 2,000 |
+| Two months, KES | 10 | 60 | 150 | 200 | 850 | 2,000 |
 
 **It replaced the value bands** (0.50% of the first KES 20,000, 0.20% to
 200,000, 0.11% to 2M, 0.03% above, capped at 15,000; 2026-10-06 to
@@ -696,7 +697,7 @@ them the fee is most of what BROKA earns from the listing.
 
 | Endpoint | Auth | What |
 |---|---|---|
-| `GET /pricing/listing-fee/quote?category=&price=&quantity=` | signed in | The caller's monthly fee for a listing not yet made: list price, discount (record and launch parts), R and what went into it, 1-6 month options with the recommended one marked, featured options for short-term sellers, and `fees_enabled` |
+| `GET /pricing/listing-fee/quote?category=&price=&quantity=` | signed in | The caller's fee for two months (`period_fee`, `period_months`; `monthly_fee` is the same number under its old name) for a listing not yet made: list price, discount (record and launch parts), R and what went into it, 2, 4 and 6 month options with the recommended one marked, featured options for short-term sellers, and `fees_enabled` |
 | `GET /pricing/listing-fee/listings/{id}/quote` | owner | The same for one of the caller's listings, with only the months that still fit under six ahead (`months_available`) and where its paid time stands (`listing_fee`) |
 | `POST /pricing/listing-fee/pay` | owner | `{listing_id, months, phone_number, featured_plan?}`: sends the M-Pesa prompt for the server's total. Takes `X-Idempotency-Key` |
 | `GET /pricing/listing-fee/payments/{id}` | owner | pending / success / failed; asks Safaricom itself when the callback is late |
@@ -748,6 +749,10 @@ same rules - [ZETUPAY.md](ZETUPAY.md)):
 
 - The amount is the server's quote at the moment of paying, never the app's.
   Featured placement (short-term sellers only) can ride on the same prompt.
+- **Going back and changing the price or quantity** after Go live created
+  the listing (before it is paid) changes the listing and the fee: the
+  draft's key, sent again, brings the unpaid listing up to date instead of
+  replaying it as first posted.
 - Paid months are added **from the end of the time already paid**, so
   renewing early loses nothing - and never past six months ahead.
 - A new listing is announced to the Buying Agent (`ListingCreated`) when it

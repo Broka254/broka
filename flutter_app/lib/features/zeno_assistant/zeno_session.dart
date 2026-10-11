@@ -148,7 +148,9 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
   final RealtimeSttProvider Function()? voiceService;
 
   /// Zeno showing the user around (zeno_tour.dart).
-  late final ZenoTour tour = ZenoTour(this);
+  late final ZenoTour tour = ZenoTour(this,
+      // The guide's language becomes Zeno's (Settings shows and changes it).
+      onLanguage: (language) => unawaited(ApiService.setLanguage(language)));
 
   /// Goes up each time the screen in front changes - for what is drawn
   /// over it (the floating orb), told after the frame that changed it.
@@ -842,7 +844,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
       if (_disposed || ApiService.currentUserId != user || tour.active || isActive) return;
       if (!_isHome(routes.top)) return;
       unawaited(ZenoTourStore.markOffered(user));
-      tour.offer(firstName: _firstName, language: ApiService.currentUserLanguage);
+      tour.offer(firstName: _firstName, language: ApiService.currentUserLanguage, askLanguage: true);
     });
   }
 
@@ -857,7 +859,20 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
   /// the ways out of it.
   void meetZeno() {
     if (isActive && expanded) dock();
-    tour.offer(firstName: _firstName, language: ApiService.currentUserLanguage);
+    tour.offer(firstName: _firstName, language: ApiService.currentUserLanguage, askLanguage: true);
+  }
+
+  /// A question asked during the guide, typed into its card: the guide
+  /// ends and Zeno answers it like any other turn. Typed, so the
+  /// microphone stays shut; in Kiswahili Zeno answers in text only.
+  Future<void> askFromTour(String text) async {
+    final q = text.trim();
+    if (q.isEmpty) return;
+    final voiced = tour.voiced;
+    tour.end();
+    if (!isActive) await start(docked: true, muted: _muted || !voiced);
+    typeInstead();
+    await send(q);
   }
 
   // ── ZenoTourHost ──────────────────────────────────────────────────────────

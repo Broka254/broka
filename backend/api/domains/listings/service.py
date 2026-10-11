@@ -217,6 +217,7 @@ class ListingService:
         # A repeat of a create that already happened. Before the rate limit,
         # so the retry of a listing that exists is never refused for it.
         if client_ref:
+            await self._refresh_unpaid_draft(seller_id, client_ref, data)
             replay = await self._created_with_ref(seller_id, client_ref)
             if replay is not None:
                 return replay
@@ -452,6 +453,50 @@ class ListingService:
         assets = await load_listing_media(self.db, [listing], [seller])
         return self._owner_listing_dict(listing, seller=seller, store=store, assets=assets)
 
+    # What a seller may still change on a listing created but never paid
+    # for: Go live created it, the seller backed out of the Listing fee
+    # screen, changed the price or how many, and pressed Go live again.
+    # The draft's key replayed the first listing as it was, so the fee was
+    # still quoted on the old price and quantity.
+    _DRAFT_TERMS = (
+        "name", "description", "condition", "price", "price_unit", "quantity",
+        "price_negotiable", "delivery_available", "delivery_note", "sms_alerts",
+    )
+
+    async def _refresh_unpaid_draft(self, seller_id: str, client_ref: str, data: dict) -> None:
+        """Bring the listing this key created up to date with `data` - only
+        while buyers have never seen it (never paid: paid_until ==
+        created_at), so a published listing's terms change only through
+        PATCH and its price rules."""
+        listing = (await self.db.execute(
+            select(Listing)
+            .where(Listing.seller_id == seller_id, Listing.client_ref == client_ref)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if (listing is None or listing.status != ListingStatus.active
+                or not fee_applies(listing) or listing.paid_until is None
+                or listing.paid_until != listing.created_at):
+            return
+        changed = False
+        for field in self._DRAFT_TERMS:
+            if field not in data or data[field] is None and field in ("name", "price"):
+                continue
+            value = data[field]
+            if field == "price_negotiable":
+                value = value is not False
+            elif field == "sms_alerts":
+                value = value is not False
+            elif field in ("delivery_available", "delivery_note") and not is_deliverable(listing.category):
+                continue
+            elif field == "delivery_note":
+                value = (value or None) if data.get("delivery_available") else None
+            if getattr(listing, field) != value:
+                setattr(listing, field, value)
+                changed = True
+        if changed:
+            await self.db.commit()
+
     async def _created_with_ref(self, seller_id: str, client_ref: str) -> Optional[dict]:
         """The owner view of the listing `seller_id` created with this
         X-Idempotency-Key, or None. Read fresh - it's also called after a
@@ -613,10 +658,14 @@ class ListingService:
         if is_stocked(listing):
             taken, _ = await units_taken(self.db, listing.id)
             left = max(units_total(listing) - taken, 0)
-        sold_out = status in (ListingStatus.pending.value, ListingStatus.completed.value) or left == 0
+        reported = getattr(listing, "sold_out_reported_at", None)
+        sold_out = (status in (ListingStatus.pending.value, ListingStatus.completed.value)
+                    or left == 0 or reported is not None)
         return {
             "units_left": left,
             "sold_out": sold_out,
+            # A buyer said it's gone (sold_out.py); its seller can revoke it.
+            "reported_sold_out": reported is not None,
             "available": status == ListingStatus.active.value and not sold_out,
         }
 
@@ -1315,6 +1364,10 @@ class ListingService:
             # Whether buyers can see it, and whether it is waiting for its
             # fee - what the app needs to offer "Pay to publish" or "Renew".
             "listing_fee": fee_state(listing),
+            # A buyer reported it sold out: hidden until the seller revokes it
+            # (DELETE /listings/{id}/sold-out).
+            "sold_out_reported_at": (listing.sold_out_reported_at.isoformat()
+                                     if listing.sold_out_reported_at else None),
         }
 
     @staticmethod

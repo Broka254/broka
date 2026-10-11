@@ -7,7 +7,7 @@
 //   * "Renew" on a listing whose paid time is ending or over.
 //
 // What the seller sees is PRICING.md's sell screen: the list price crossed
-// out and their price, why it is that price, 1-6 months with the recommended
+// out and their price, why it is that price, 2, 4 or 6 months with the recommended
 // one picked, and - for short-term sellers only - featured placement in the
 // same payment. Every amount is the server's; Pay asks M-Pesa for exactly
 // the total shown, because the server works it out the same way.
@@ -65,7 +65,7 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
 
   _Stage _stage = _Stage.loading;
   ListingFeeQuote? _quote;
-  int _months = 1;
+  int _months = 2;
   String? _featured;
   String? _error;
 
@@ -328,9 +328,9 @@ class _PriceHero extends StatelessWidget {
                   TextSpan(
                       text: 'KES ${formatKesAmount(quote.monthlyFee)}',
                       style: const TextStyle(color: BrokaColors.textHigh, fontSize: 30, fontWeight: FontWeight.w900)),
-                  const TextSpan(
-                      text: ' / month',
-                      style: TextStyle(color: BrokaColors.textMid, fontSize: 14, fontWeight: FontWeight.w600)),
+                  TextSpan(
+                      text: quote.periodMonths == 1 ? ' / month' : ' / ${quote.periodMonths} months',
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 14, fontWeight: FontWeight.w600)),
                 ]),
                 key: const Key('fee-monthly')),
           ]),

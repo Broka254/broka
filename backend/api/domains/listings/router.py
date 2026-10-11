@@ -1150,6 +1150,29 @@ async def express_interest(
     return await svc.express_interest(listing_id, current_user["id"], body.offer_price)
 
 
+@router.post("/{listing_id}/sold-out")
+async def report_sold_out(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A buyer found the item gone: the listing is marked sold out and taken
+    out of every list until its seller says otherwise (sold_out.py)."""
+    from . import sold_out
+    return await sold_out.report(db, listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}/sold-out")
+async def revoke_sold_out(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller: the item is still available - back on sale."""
+    from . import sold_out
+    return await sold_out.revoke(db, listing_id, current_user["id"])
+
+
 @router.get("/{listing_id}/matches")
 async def get_matches(
     listing_id: str,

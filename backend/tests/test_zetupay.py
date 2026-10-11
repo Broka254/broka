@@ -198,7 +198,7 @@ async def _listing(client, headers) -> dict:
     return r.json()
 
 
-async def _pay_fee(client, headers, listing_id, months=1):
+async def _pay_fee(client, headers, listing_id, months=2):
     return await client.post("/pricing/listing-fee/pay", headers=headers, json={
         "listing_id": listing_id, "months": months, "phone_number": "0712345678"})
 
@@ -296,9 +296,9 @@ class TestListingFee:
         seller, h = await _user()
         listing = await _listing(client, h)
         quote = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
-        r = await _pay_fee(client, h, listing["id"], months=3)
+        r = await _pay_fee(client, h, listing["id"], months=4)
         assert r.status_code == 200, r.text
-        expected = next(o["total"] for o in quote["options"] if o["months"] == 3)
+        expected = next(o["total"] for o in quote["options"] if o["months"] == 4)
         assert r.json()["amount"] == expected
 
         charge = await _charge(Purpose.LISTING_FEE, r.json()["payment_id"])
@@ -895,7 +895,7 @@ class TestConcurrentDelivery:
         assert hook.status_code == 200 and poll["status"] in ("pending", "success")
         status = await _fee_status(client, h, paid["payment_id"])
         until = datetime.fromisoformat(status["paid_until"])
-        assert abs((until - datetime.utcnow()) - MONTH) < timedelta(minutes=1)
+        assert abs((until - datetime.utcnow()) - 2 * MONTH) < timedelta(minutes=1)
         assert len(announced) == 1
         assert [r.outcome for r in await _ledger(charge.wave_transaction_id)] == ["applied"]
 

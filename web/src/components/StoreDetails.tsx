@@ -9,6 +9,7 @@
 // Its own page (/store/<name>/about), linked from "More details" under the
 // store's name, so the store's home is left to its products.
 import { monthYearOf, placeLine, plural, yearOf } from '@/lib/format'
+import { asset } from '@/lib/links'
 import { PAYING_SAFELY } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
@@ -33,14 +34,12 @@ export function StoreDetails({ view }: { view: StoreView }) {
   return (
     <div className={styles.storeDetails}>
       <div className={`card ${styles.detailsCard} ${styles.summary}`}>
-        {/* The store's own logo when it has one - never an initial in a
-            box standing in for it, which read as a missing picture. */}
-        {view.logo && (
-          <div className={styles.summaryLogo}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={view.logo} alt="" />
-          </div>
-        )}
+        {/* The store's own logo, or BROKA's when it uploaded none - never
+            an initial in a box, which read as a missing picture. */}
+        <div className={styles.summaryLogo}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={view.logo ?? asset('/logo.png')} alt="" />
+        </div>
         <div>
           <p className={styles.ownerName}>{store.name}</p>
           {summaryLine && <p className={styles.mutedLine}>{summaryLine}</p>}

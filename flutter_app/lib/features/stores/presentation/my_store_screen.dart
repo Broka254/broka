@@ -492,6 +492,19 @@ class _PillTabs extends StatelessWidget {
 }
 
 /// A store's logo, or its initial on the brand gradient.
+/// BROKA's logo, standing in for a store that has not uploaded its own.
+class BrokaDefaultLogo extends StatelessWidget {
+  const BrokaDefaultLogo({super.key});
+  static const asset = 'assets/images/broka_icon.png';
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const Key('store-default-logo'),
+        color: Colors.white,
+        child: Image.asset(asset, fit: BoxFit.cover),
+      );
+}
+
 class StoreLogo extends StatelessWidget {
   const StoreLogo({super.key, required this.store, this.size = 48});
   final Store store;
@@ -512,14 +525,9 @@ class StoreLogo extends StatelessWidget {
         borderRadius: radius,
         child: source != null
             ? BrokaImage(source, fit: BoxFit.cover)
-            // A shop mark, not the store's initial: a letter in a box read
-            // as a missing profile picture ("the C").
-            : Container(
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                    gradient: LinearGradient(colors: kWizardCtaGradient)),
-                child: Icon(Icons.storefront_rounded, color: Colors.white, size: size * 0.5),
-              ),
+            // No logo uploaded: BROKA's own, not the store's initial (a
+            // letter in a box read as a missing profile picture).
+            : const BrokaDefaultLogo(),
       ),
     );
   }
@@ -2086,7 +2094,7 @@ class _SettingsTab extends StatelessWidget {
                 .join(' · '),
             StoreSetupStep.category),
         row(Icons.account_circle_outlined, 'Logo',
-            store.logoSource != null ? 'Added' : 'None - your initial is shown',
+            store.logoSource != null ? 'Added' : "None - BROKA's logo is shown",
             StoreSetupStep.logo),
         row(Icons.photo_library_outlined, 'Photos of the shop',
             '${store.cover != null ? 'Cover photo' : 'No cover'}, '

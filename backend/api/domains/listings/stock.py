@@ -36,9 +36,31 @@ from typing import Optional
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.database import Deal, DealStatus, Listing, ListingStatus, ListingType
 
 logger = logging.getLogger(__name__)
+
+
+def deals_hold_stock() -> bool:
+    """Whether an agreed deal takes units off sale.
+
+    Only while buyers pay through BROKA (IN_APP_PAYMENTS_ENABLED). With
+    payments off, a deal agreed with Zeno is a price, not a sale: nobody pays
+    in the app, so nothing ever released those units, and the listing went
+    "Sold out" - hidden from every buyer - on the first agreement and stayed
+    that way. Now only units actually paid out count as sold; a buyer who
+    finds an item gone reports it (POST /listings/{id}/sold-out) and the
+    seller can say it is still there.
+    """
+    return settings.in_app_payments_enabled
+
+
+def _holding_deal():
+    """SQL: a deal whose units are off sale."""
+    if deals_hold_stock():
+        return Deal.status.not_in(_RELEASING_STATUSES)
+    return Deal.status == DealStatus.released
 
 # A deal in one of these holds its units. Refunded and cancelled deals gave
 # them back; "negotiating" is not an agreement (every Deal row is created at
@@ -72,7 +94,7 @@ async def units_taken(db: AsyncSession, listing_id: str) -> tuple[int, int]:
                 case((Deal.status == DealStatus.released, units), else_=0)), 0),
         ).where(
             Deal.listing_id == listing_id,
-            Deal.status.not_in(_RELEASING_STATUSES),
+            _holding_deal(),
         )
     )).one()
     return int(row[0] or 0), int(row[1] or 0)
@@ -109,7 +131,7 @@ async def sync_listing_stock(db: AsyncSession, now=None) -> int:
     taken_q = (
         select(Deal.listing_id.label("listing_id"),
                func.sum(units).label("taken"))
-        .where(Deal.status.not_in(_RELEASING_STATUSES))
+        .where(_holding_deal())
         .group_by(Deal.listing_id)
         .subquery()
     )

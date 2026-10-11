@@ -1,6 +1,7 @@
-"""The monthly listing fee: f = C x R.
+"""The listing fee: f = C x R, for two months at a time.
 
-  C  what the listing costs to list for a month at full price: a cube root
+  C  what the listing costs to list for one period (PERIOD_MONTHS, two
+     months) at full price: a cube root
      of its value - price x quantity - held between KES 10 and 2,000, and
      never under the cost of serving it (costs.listing_month_cost). This is
      the "list price" a seller sees crossed out.
@@ -52,7 +53,15 @@ from api.domains.pricing.categories import CategoryPricing
 FEE_SCALE = 8.91822
 FEE_OFFSET = -42.1011
 
-# The least and the most one listing pays for a month, however little or
+# A listing is paid for two months at a time (the founder, 2026-10-11): the
+# cube-root fee buys two months, not one - a KES 1,500 dress pays KES 60 for
+# two months - and a seller chooses 2, 4 or 6. Every "monthly" name below
+# (monthly_fee, MIN/MAX_MONTHLY_FEE, the quote's "monthly_fee") is the fee
+# for one such period; the names predate it and are kept because payment
+# records and older app builds read them.
+PERIOD_MONTHS = 2
+
+# The least and the most one listing pays for a period, however little or
 # much it offers. The ceiling is reached at about KES 12M of value; a seller
 # listing more than that wants a store.
 MIN_MONTHLY_FEE = 10
@@ -80,15 +89,20 @@ def value_fee(value: float) -> float:
 
 
 def list_price(category: CategoryPricing, unit_price: float, quantity: int = 1) -> float:
-    """C for the whole listing: the full monthly fee before any discount.
+    """C for the whole listing: the full fee for a period before any discount.
 
     Never under what serving the listing costs (with the VAT on it): KES 10
     is under that for the categories whose buyers keep Zeno busiest (KES
     10.91-13.18 for electronics, vehicles, property and land), so a listing
     there worth under about KES 240 pays the cost instead.
     """
-    cost = costs.listing_month_cost(category.chats_per_month)
+    cost = period_cost(category)
     return max(costs.with_vat(cost), value_fee(listing_value(unit_price, quantity)))
+
+
+def period_cost(category: CategoryPricing) -> float:
+    """What serving the listing costs for one period: the fee's floor."""
+    return PERIOD_MONTHS * costs.listing_month_cost(category.chats_per_month)
 
 
 # ── R: the risk coefficient ──────────────────────────────────────────────────
@@ -195,18 +209,29 @@ def monthly_fee(list_price_: float, risk: float, launch: float, cost: float) -> 
     return min(fee, max(round_kes(list_price_), math.ceil(costs.with_vat(cost))))
 
 
-# Paying for months together: the total grows as months^0.83, so 2 months
-# cost 1.78x one month, 3 cost 2.49x and 6 cost 4.42x - the "100 for one,
+# Paying for periods together: the total grows as periods^0.83, so 4 months
+# (two periods) cost 1.78x two months and 6 months 2.49x - the "100 for one,
 # 180 for two, 250 for three" shape, which makes the longer option the
 # easier yes. Never below the cost of serving the listing that long.
 MAX_MONTHS = 6
 BUNDLE_EXPONENT = 0.83
 
 
-def bundle_total(monthly: int, months: int, cost: float) -> int:
-    total = round_kes(monthly * months ** BUNDLE_EXPONENT)
-    floor = math.ceil(costs.with_vat(months * cost + costs.mpesa_collection_cost(total)))
+def bundle_total(period_fee: int, periods: int, cost: float) -> int:
+    """`periods` periods at `period_fee`; `cost` is one period's cost."""
+    total = round_kes(period_fee * periods ** BUNDLE_EXPONENT)
+    floor = math.ceil(costs.with_vat(periods * cost + costs.mpesa_collection_cost(total)))
     return max(total, floor)
+
+
+def month_options() -> range:
+    """The lengths a listing can be paid for: 2, 4 or 6 months."""
+    return range(PERIOD_MONTHS, MAX_MONTHS + 1, PERIOD_MONTHS)
+
+
+def whole_periods(months: int) -> int:
+    """`months` rounded down to whole periods, in months (5 -> 4)."""
+    return max(0, months - months % PERIOD_MONTHS)
 
 
 # ── How long to list ─────────────────────────────────────────────────────────
@@ -234,10 +259,11 @@ def recommend_months(category: CategoryPricing, unit_price: float, quantity: int
     price_ratio = max(unit_price, 1.0) / max(category.typical_price, 1)
     q = min(max(int(quantity or 1), 1), QUANTITY_CAP)
     days = category.days_to_sell * price_ratio ** PRICE_ELASTICITY * q ** QUANTITY_ELASTICITY
-    months = min(MAX_MONTHS, max(1, math.ceil(days * SAFETY_MARGIN / 30)))
-    if months == 1:
+    periods = max(1, math.ceil(days * SAFETY_MARGIN / (30 * PERIOD_MONTHS)))
+    months = min(MAX_MONTHS, periods * PERIOD_MONTHS)
+    if months == PERIOD_MONTHS:
         strength = "none"
-    elif months >= 3 and unit_price * q >= STRONG_RECOMMENDATION_VALUE:
+    elif unit_price * q >= STRONG_RECOMMENDATION_VALUE:
         strength = "strong"
     else:
         strength = "suggested"
@@ -262,7 +288,7 @@ def quote(
     discounts_apply: bool = True,
     seller_launch: float = 0.0,
 ) -> dict:
-    """Everything the sell screen shows: list price, today's price, why, and 1-6 months.
+    """Everything the sell screen shows: list price, today's price, why, and 2, 4 or 6 months.
 
     `discounts_apply` is False while buyers pay sellers outside BROKA
     (IN_APP_PAYMENTS_ENABLED off): R and the launch offer are both measured
@@ -276,7 +302,7 @@ def quote(
     of serving the listing - but posted free by the caller.
     """
     quantity = max(int(quantity or 1), 1)
-    cost = costs.listing_month_cost(category.chats_per_month)
+    cost = period_cost(category)
     full = list_price(category, unit_price, quantity)
     list_kes = max(round_kes(full), math.ceil(costs.with_vat(cost)))
 
@@ -289,13 +315,14 @@ def quote(
 
     advice = recommend_months(category, unit_price, quantity)
     options = []
-    for months in range(1, MAX_MONTHS + 1):
-        total = fee if months == 1 else bundle_total(fee, months, cost)
+    for months in month_options():
+        periods = months // PERIOD_MONTHS
+        total = fee if periods == 1 else bundle_total(fee, periods, cost)
         options.append({
             "months": months,
             "total": total,
             "per_month": round(total / months, 2),
-            "saving_percent": max(0, round(100 * (1 - total / (fee * months)))),
+            "saving_percent": max(0, round(100 * (1 - total / (fee * periods)))),
             "recommended": months == advice.months,
         })
 
@@ -307,7 +334,10 @@ def quote(
         "currency": "KES",
         "list_price": list_kes,
         "max_monthly_fee": MAX_MONTHLY_FEE,
+        # The fee for one period of `period_months` (see PERIOD_MONTHS).
         "monthly_fee": fee,
+        "period_fee": fee,
+        "period_months": PERIOD_MONTHS,
         "discount_percent": max(0, round(100 * (1 - fee / list_kes))) if list_kes else 0,
         "discounts": {
             "apply": discounts_apply,

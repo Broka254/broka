@@ -48,7 +48,7 @@ from api.core.econfirm_client import EConfirmError, EConfirmConnectionError, ECo
 from api.core.secrets_crypto import encrypt_secret, decrypt_secret, SecretCryptoError
 from api.models.external_escrow import ExternalEscrow, EConfirmEscrowStatus
 from .repository import DealRepository, MpesaRepository, ExternalEscrowRepository
-from api.domains.listings.stock import is_stocked, status_for, units_taken, units_total
+from api.domains.listings.stock import deals_hold_stock, is_stocked, status_for, units_taken, units_total
 from .providers import get_escrow_provider
 from . import policy
 
@@ -389,7 +389,10 @@ class EscrowService:
         # the first agreement, whatever the quantity (listings/stock.py).
         # An auction's one item is in this deal.
         if stocked:
-            listing.status = status_for(listing, taken + units, sold) or listing.status
+            # With payments off an agreement takes nothing off sale
+            # (stock.deals_hold_stock): the price was agreed, nothing paid.
+            held = units if deals_hold_stock() else 0
+            listing.status = status_for(listing, taken + held, sold) or listing.status
         else:
             listing.status = "pending"
         await self.db.commit()

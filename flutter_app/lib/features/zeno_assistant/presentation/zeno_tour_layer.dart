@@ -43,6 +43,7 @@ class ZenoTourLayer extends StatelessWidget {
           final card = switch (tour.phase) {
             ZenoTourPhase.step || ZenoTourPhase.demo || ZenoTourPhase.finale =>
               _TourCard(key: const ValueKey('zeno-tour-card'), session: session),
+            ZenoTourPhase.language => _LanguageCard(key: const ValueKey('zeno-language'), tour: tour),
             _ => null,
           };
           // After the demo the Buying Agent is hunting below: its composer
@@ -226,6 +227,11 @@ class _TourCardState extends State<_TourCard> with SingleTickerProviderStateMixi
                 ),
                 const SizedBox(width: 6),
               ]),
+              // A question of the user's own, typed or said.
+              Padding(
+                padding: const EdgeInsets.only(right: 6, top: 4),
+                child: ZenoAskField(session: widget.session),
+              ),
             ] else if (phase == ZenoTourPhase.demo && tour.demoQuery == null) ...[
               _demoInput(),
               const SizedBox(height: 8),
@@ -310,17 +316,78 @@ class _TourCardState extends State<_TourCard> with SingleTickerProviderStateMixi
               ),
             ),
           ),
-          IconButton(
-            tooltip: 'Say it',
-            onPressed: _tour.listen,
-            icon: const Icon(Icons.mic_rounded, color: BrokaColors.neonCyan, size: 20),
-          ),
+          if (_tour.voiced)
+            IconButton(
+              tooltip: 'Say it',
+              onPressed: _tour.listen,
+              icon: const Icon(Icons.mic_rounded, color: BrokaColors.neonCyan, size: 20),
+            ),
           IconButton(
             tooltip: 'Find it',
             onPressed: _submit,
             icon: const Icon(Icons.travel_explore_rounded, color: BrokaColors.textHigh, size: 20),
           ),
         ]),
+      );
+}
+
+/// Before Zeno says a word to a new account: which language. Kiswahili is
+/// text only - BROKA has no Swahili voice mode yet - and the card says so.
+class _LanguageCard extends StatelessWidget {
+  const _LanguageCard({super.key, required this.tour});
+
+  final ZenoTour tour;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        type: MaterialType.transparency,
+        child: _HoloFrame(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 8, 14),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                const ZenoOrb(mode: ZenoOrbMode.listening, level: 0.05, size: 42, face: true),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('Which language should Zeno use?\nZeno atumie lugha gani?',
+                      style: TextStyle(color: BrokaColors.textHigh, fontSize: 15,
+                          fontWeight: FontWeight.w800, height: 1.3)),
+                ),
+                IconButton(
+                  tooltip: 'Maybe later',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: tour.decline,
+                  icon: const Icon(Icons.close_rounded, color: BrokaColors.textMid, size: 20),
+                ),
+              ]),
+              const SizedBox(height: 12),
+              // One under the other: side by side they don't fit a small
+              // phone at large text.
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
+                  _GlowButton(
+                    key: const Key('zeno-language-english'),
+                    label: 'English',
+                    icon: Icons.record_voice_over_rounded,
+                    compact: true,
+                    onTap: () => tour.chooseLanguage('english'),
+                  ),
+                  _GlowButton(
+                    key: const Key('zeno-language-swahili'),
+                    label: 'Kiswahili',
+                    icon: Icons.chat_rounded,
+                    compact: true,
+                    onTap: () => tour.chooseLanguage('swahili'),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 8),
+              const Text('English: voice and text. Kiswahili: text only (maandishi tu) for now.',
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+            ]),
+          ),
+        ),
       );
 }
 

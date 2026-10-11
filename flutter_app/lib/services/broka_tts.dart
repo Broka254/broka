@@ -1,7 +1,7 @@
 // BROKA TTS Service
 // ─────────────────────────────────────────────────────────────────────────────
 // Zeno's voice comes from the BROKA backend (/tts/speak) and nowhere else:
-//   English  → Microsoft Edge TTS  en-US-AriaNeural   (English text only)
+//   English  → Microsoft Edge TTS  en-US-AvaMultilingualNeural (English text only)
 //   Swahili  → Microsoft Edge TTS  sw-KE-ZuriNeural   (Kenyan Swahili)
 //   Sheng, Luo, Kikuyu, Luganda → Kokoro on the HF Space (Broka custom voice)
 // The backend picks the voice from the text as well as the language asked
@@ -51,6 +51,13 @@ class BrokaTts {
   bool _initialised = false;
   bool _speaking = false;
 
+  /// Bumped by every [speak] and [stop]. A reply's audio is fetched before
+  /// it plays, and the fetch can take seconds: Zeno's next reply (or a
+  /// stop) used to be overtaken by the earlier one's audio arriving late,
+  /// so Zeno started saying the last thing after it had moved on to the
+  /// next. Audio that comes back for a superseded request is now dropped.
+  int _generation = 0;
+
   VoidCallback? onStart;
   VoidCallback? onDone;
 
@@ -90,8 +97,11 @@ class BrokaTts {
     final clean = _clean(text);
     if (clean.isEmpty) return;
     await stop();
-    await _speakCloud(clean, language);
+    await _speakCloud(clean, language, ++_generation);
   }
+
+  @visibleForTesting
+  int get generation => _generation;
 
   /// Like [speak], but finishes when Zeno has finished talking - or was
   /// stopped, or could not speak at all - rather than when playback starts.
@@ -118,6 +128,7 @@ class BrokaTts {
   }
 
   Future<void> stop() async {
+    _generation++;
     try {
       await _player.stop();
     } catch (_) {}
@@ -134,7 +145,7 @@ class BrokaTts {
     if (_reported.add(reason)) onUnavailable?.call(reason);
   }
 
-  Future<void> _speakCloud(String text, String language) async {
+  Future<void> _speakCloud(String text, String language, int generation) async {
     final cacheKey = '$language:$text';
     Uint8List? bytes = _cache[cacheKey];
 
@@ -179,6 +190,8 @@ class BrokaTts {
       }
     }
 
+    // Something else was said, or Zeno was stopped, while this downloaded.
+    if (generation != _generation) return;
     try {
       await _player.play(BytesSource(bytes));
     } catch (e) {

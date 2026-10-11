@@ -174,6 +174,13 @@ class _ZenoIntroChatState extends State<ZenoIntroChat> with SingleTickerProvider
                   ),
                 ),
                 _Answers(intro: _intro, field: _field, onSubmit: _submit),
+                // Any question of the user's own, typed or said - not only
+                // the replies Zeno offers. In Kiswahili, typed only.
+                if (!_intro.asking)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: ZenoAskField(session: session),
+                  ),
               ]),
             ),
           ),
@@ -245,6 +252,8 @@ class _Header extends StatelessWidget {
                   ]),
                 ]),
               ),
+              // No voice in Kiswahili yet: nothing to mute.
+              if (!swahili) ...[
               const SizedBox(width: 8),
               BrokaHeaderButton(
                 icon: muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
@@ -255,6 +264,7 @@ class _Header extends StatelessWidget {
                   session.toggleMute();
                 },
               ),
+              ],
               const SizedBox(width: 8),
               BrokaHeaderButton(
                 key: const Key('zeno-intro-close'),
@@ -671,4 +681,84 @@ class _Chip extends StatelessWidget {
           ),
         ),
       );
+}
+
+
+/// "Ask Zeno anything": a question of the user's own during the guide,
+/// typed (sent as a turn, the guide ends) or said (the microphone opens;
+/// English only - there is no voice mode in Kiswahili yet).
+class ZenoAskField extends StatefulWidget {
+  const ZenoAskField({super.key, required this.session});
+
+  final ZenoSession session;
+
+  @override
+  State<ZenoAskField> createState() => _ZenoAskFieldState();
+}
+
+class _ZenoAskFieldState extends State<ZenoAskField> {
+  final _field = TextEditingController();
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final q = _field.text.trim();
+    if (q.isEmpty) return;
+    FocusScope.of(context).unfocus();
+    _field.clear();
+    widget.session.askFromTour(q);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tour = widget.session.tour;
+    final swahili = tour.script?.language == 'swahili';
+    return Container(
+      key: const Key('zeno-ask-field'),
+      padding: const EdgeInsets.only(left: 14, right: 2),
+      decoration: BoxDecoration(
+        color: BrokaColors.bg.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.5)),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: TextField(
+            key: const Key('zeno-ask-input'),
+            controller: _field,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => _send(),
+            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14),
+            cursorColor: BrokaColors.neonCyan,
+            decoration: InputDecoration(
+              hintText: swahili ? 'Uliza Zeno swali lolote' : 'Ask Zeno anything',
+              hintStyle: const TextStyle(color: BrokaColors.textMid),
+              filled: false,
+              isDense: true,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+            ),
+          ),
+        ),
+        if (tour.voiced)
+          IconButton(
+            key: const Key('zeno-ask-mic'),
+            tooltip: 'Ask out loud',
+            onPressed: tour.listen,
+            icon: const Icon(Icons.mic_rounded, color: BrokaColors.neonCyan, size: 20),
+          ),
+        IconButton(
+          key: const Key('zeno-ask-send'),
+          tooltip: 'Send',
+          onPressed: _send,
+          icon: const Icon(Icons.send_rounded, color: BrokaColors.textHigh, size: 19),
+        ),
+      ]),
+    );
+  }
 }

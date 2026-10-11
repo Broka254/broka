@@ -42,7 +42,7 @@ async def listing_fee_quote(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """The monthly listing fee for the signed-in seller, and 1-6 month options.
+    """The listing fee (for two months) for the signed-in seller, and 2, 4 and 6 month options.
 
     Priced on the caller's own completion record, so it needs sign-in; the
     category table (GET /pricing/categories) shows everyone the new-seller
@@ -65,7 +65,9 @@ async def listing_quote(
 
 class PayIn(BaseModel):
     listing_id: str = Field(..., max_length=64)
-    months: int = Field(..., ge=1, le=engine.MAX_MONTHS)
+    # 2, 4 or 6: listing time is sold two months at a time (engine.PERIOD_MONTHS).
+    months: int = Field(..., ge=engine.PERIOD_MONTHS, le=engine.MAX_MONTHS,
+                        multiple_of=engine.PERIOD_MONTHS)
     phone_number: str = Field(..., max_length=20)
     # Featured placement with the listing, short-term sellers only.
     featured_plan: Optional[Literal["week", "month"]] = None

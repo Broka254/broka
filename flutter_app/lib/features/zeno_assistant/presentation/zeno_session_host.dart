@@ -67,7 +67,7 @@ class _ZenoSessionHostState extends State<ZenoSessionHost> with WidgetsBindingOb
   @override
   Future<bool> didPopRoute() async {
     final tour = widget.session.tour;
-    if (tour.phase == ZenoTourPhase.welcome) {
+    if (tour.phase == ZenoTourPhase.welcome || tour.phase == ZenoTourPhase.language) {
       tour.decline();
       return true;
     }

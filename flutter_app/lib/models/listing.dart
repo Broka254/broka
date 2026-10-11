@@ -31,6 +31,9 @@ class Listing {
   /// Every unit sold or in a deal under way. Lists only ever hold listings
   /// on sale, so this is only ever true from the single-listing read.
   final bool    soldOut;
+  /// A buyer reported it sold out (POST /listings/{id}/sold-out): hidden
+  /// from buyers until its seller says it's still available.
+  final bool    reportedSoldOut;
   // Media
   final String? verifiedPhotos;  // comma-separated base64 or URLs
   // AI Showcase/Cover Image (2026-08-29) - optional, homescreen-only.
@@ -95,6 +98,7 @@ class Listing {
     required this.views,
     this.unitsLeft,
     this.soldOut = false,
+    this.reportedSoldOut = false,
     this.verifiedPhotos,
     this.showcaseImageUrl,
     this.showcaseImageSource,
@@ -146,6 +150,8 @@ class Listing {
         views:                ((j['views'] ?? 0) as num).toInt(),
         unitsLeft:            (j['units_left'] as num?)?.toInt(),
         soldOut:              j['sold_out'] as bool? ?? false,
+        reportedSoldOut:      j['reported_sold_out'] as bool? ??
+                              (j['sold_out_reported_at'] != null),
         verifiedPhotos:       j['verified_photos'] as String?,
         showcaseImageUrl:     j['showcase_image_url'] as String?,
         showcaseImageSource:  j['showcase_image_source'] as String?,

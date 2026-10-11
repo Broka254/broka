@@ -290,12 +290,9 @@ class _Summary extends StatelessWidget {
     return _card(
       key: const Key('store-details-summary'),
       child: Row(children: [
-        // The store's own logo when it has one; no placeholder square
-        // standing in for it.
-        if (store.logoSource != null) ...[
-          StoreLogo(store: store, size: 60),
-          const SizedBox(width: 14),
-        ],
+        // The store's own logo, or BROKA's when it has none (StoreLogo).
+        StoreLogo(store: store, size: 60),
+        const SizedBox(width: 14),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(store.name, maxLines: 2, overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: BrokaColors.textHigh, fontSize: 18,

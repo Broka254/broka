@@ -60,8 +60,9 @@ abstract interface class ZenoTourHost {
   Future<void> tourOpenPlans();
 }
 
-/// Where a tour is.
-enum ZenoTourPhase { idle, welcome, step, demo, finale }
+/// Where a tour is. `language` comes first for a new account: the user
+/// picks English or Kiswahili before Zeno says anything.
+enum ZenoTourPhase { idle, language, welcome, step, demo, finale }
 
 /// One stop on the tour.
 @immutable
@@ -321,9 +322,13 @@ class ZenoTourStore {
 
 /// The tour as it runs: which phase, which step, what Zeno is saying.
 class ZenoTour extends ChangeNotifier {
-  ZenoTour(this._host, {this.settle = const Duration(milliseconds: 650), this.introPace = 1.0});
+  ZenoTour(this._host,
+      {this.settle = const Duration(milliseconds: 650), this.introPace = 1.0, this.onLanguage});
 
   final ZenoTourHost _host;
+
+  /// The language the user picked for Zeno before the guide began.
+  final void Function(String language)? onLanguage;
 
   /// The introduction's pace (ZenoIntro.pace) - zero in tests.
   final double introPace;
@@ -342,6 +347,12 @@ class ZenoTour extends ChangeNotifier {
 
   ZenoTourPhase _phase = ZenoTourPhase.idle;
   ZenoTourScript? _script;
+  String? _firstName;
+
+  // Whether Zeno speaks the guide and listens for answers. Off in
+  // Kiswahili (2026-10-11): BROKA has no Swahili voice mode yet, so the
+  // guide is text - read, tapped and typed.
+  bool _voiced = true;
   ZenoIntro? _intro;
   int _index = 0;
   String _line = '';
@@ -366,6 +377,9 @@ class ZenoTour extends ChangeNotifier {
   bool get active => _phase != ZenoTourPhase.idle;
   ZenoTourScript? get script => _script;
 
+  /// Zeno speaks and listens in this guide (English); Kiswahili is text only.
+  bool get voiced => _voiced;
+
   /// Zeno's introduction - the welcome phase's conversation.
   ZenoIntro? get intro => _intro;
   int get index => _index;
@@ -384,14 +398,38 @@ class ZenoTour extends ChangeNotifier {
   int get burst => _burst;
 
   /// Zeno introducing itself - a conversation (zeno_intro.dart) that ends
-  /// in the plans, a hunt, the tour, or later.
-  void offer({String? firstName, String language = 'english'}) {
+  /// in the plans, a hunt, the tour, or later. With [askLanguage], the user
+  /// first chooses English or Kiswahili ([chooseLanguage]).
+  void offer({String? firstName, String language = 'english', bool askLanguage = false}) {
+    if (askLanguage) {
+      _firstName = firstName;
+      _moveTo(ZenoTourPhase.language);
+      _line = '';
+      notifyListeners();
+      return;
+    }
+    _introduce(firstName, language);
+  }
+
+  /// English or Kiswahili, picked before the guide starts. Kiswahili is
+  /// text only - no voice mode in it yet.
+  void chooseLanguage(String language) {
+    if (_phase != ZenoTourPhase.language) return;
+    final chosen = language == 'swahili' ? 'swahili' : 'english';
+    onLanguage?.call(chosen);
+    _introduce(_firstName, chosen);
+  }
+
+  void _introduce(String? firstName, String language) {
     final script = _script = ZenoTourScript.forUser(firstName: firstName, language: language);
+    _voiced = script.language == 'english';
     _moveTo(ZenoTourPhase.welcome);
     _intro?.dispose();
     final intro = _intro = ZenoIntro(
       ZenoIntroScript.forUser(firstName: firstName, language: language),
-      say: (text) => unawaited(_host.tourSay(text, script.language)),
+      say: (text) {
+        if (_voiced) unawaited(_host.tourSay(text, script.language));
+      },
       stopSaying: _host.tourStopSpeaking,
       onOutcome: _introOutcome,
       pace: introPace,
@@ -435,6 +473,7 @@ class ZenoTour extends ChangeNotifier {
   /// Straight into the steps - "show me around".
   void begin({String? firstName, String language = 'english'}) {
     _script ??= ZenoTourScript.forUser(firstName: firstName, language: language);
+    _voiced = _script!.language == 'english';
     _index = 0;
     _demoRan = false;
     _demoQuery = null;
@@ -445,7 +484,7 @@ class ZenoTour extends ChangeNotifier {
   void decline() {
     final said = _script?.declined;
     end();
-    if (said != null) unawaited(_host.tourSay(said, _script!.language));
+    if (said != null && _voiced) unawaited(_host.tourSay(said, _script!.language));
   }
 
   void next() {
@@ -476,11 +515,13 @@ class ZenoTour extends ChangeNotifier {
         unawaited(_playStep());
       case ZenoTourPhase.welcome:
         final beat = _intro?.beat;
-        if (beat != null) unawaited(_host.tourSay(beat.lines.join(' '), _script?.language ?? 'english'));
+        if (beat != null && _voiced) {
+          unawaited(_host.tourSay(beat.lines.join(' '), _script?.language ?? 'english'));
+        }
       case ZenoTourPhase.demo:
         _epoch++;
         unawaited(_say(_line, then: null));
-      case ZenoTourPhase.idle || ZenoTourPhase.finale:
+      case ZenoTourPhase.idle || ZenoTourPhase.language || ZenoTourPhase.finale:
         break;
     }
   }
@@ -510,8 +551,11 @@ class ZenoTour extends ChangeNotifier {
     _finish(script.finale, speak: true);
   }
 
-  /// Opens the microphone for the demo's answer.
-  Future<void> listen() => _host.tourListen();
+  /// Opens the microphone for the demo's answer - or a question. Never in
+  /// Kiswahili, which has no voice mode yet.
+  Future<void> listen() async {
+    if (_voiced) await _host.tourListen();
+  }
 
   /// Stops the tour wherever it is.
   void end() {
@@ -545,6 +589,18 @@ class ZenoTour extends ChangeNotifier {
     final command = parseTourCommand(said);
     switch (_phase) {
       case ZenoTourPhase.idle:
+        return false;
+      case ZenoTourPhase.language:
+        final t = said.toLowerCase();
+        if (t.contains('swahili')) {
+          chooseLanguage('swahili');
+          return true;
+        }
+        if (t.contains('english')) {
+          chooseLanguage('english');
+          return true;
+        }
+        end();
         return false;
       case ZenoTourPhase.welcome:
         final intro = _intro;
@@ -700,7 +756,7 @@ class ZenoTour extends ChangeNotifier {
         maybeMoveOn();
       });
     }
-    await _host.tourSay(text, _script?.language ?? 'english');
+    if (_voiced) await _host.tourSay(text, _script?.language ?? 'english');
     if (epoch != _epoch) return;
     _speaking = false;
     notifyListeners();
