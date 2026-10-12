@@ -22,7 +22,6 @@
 // GET /traders?search=, which matches names and returns only what a trader
 // card shows.
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import '../../../main.dart';
@@ -288,24 +287,35 @@ class _TraderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final photo = traderPhoto(trader.profilePhoto);
+    final cover = trader.coverUrl;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.all(cover != null ? 16 : 14),
         decoration: BoxDecoration(
           color: BrokaColors.bgCard,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: BrokaColors.border),
+          border: Border.all(
+              color: cover != null ? BrokaColors.neonBlue.withOpacity(0.45) : BrokaColors.border),
+          // The trader's own background (POST /traders/me/cover), darkened
+          // so the name and numbers stay readable on any picture.
+          image: cover == null
+              ? null
+              : DecorationImage(
+                  image: NetworkImage(cover),
+                  fit: BoxFit.cover,
+                  onError: (_, __) {},
+                  colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.58), BlendMode.darken),
+                ),
         ),
         child: Row(children: [
           CircleAvatar(
             radius: 26,
             backgroundColor: BrokaColors.gold.withOpacity(0.15),
-            backgroundImage: (trader.profilePhoto?.isNotEmpty ?? false)
-                ? MemoryImage(base64Decode(trader.profilePhoto!))
-                : null,
-            child: (trader.profilePhoto?.isNotEmpty ?? false)
+            backgroundImage: photo,
+            child: photo != null
                 ? null
                 : Text(
                     trader.businessName.isNotEmpty ? trader.businessName[0].toUpperCase() : '?',

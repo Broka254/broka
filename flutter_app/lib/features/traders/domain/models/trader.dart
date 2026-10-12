@@ -30,6 +30,21 @@ class Trader {
   final String? locationName;
   final double? distanceKm;
 
+  /// The card's optional background image (POST /traders/me/cover), its
+  /// medium size; null for the card's own gradient.
+  final String? coverUrl;
+
+  // The trader's own page only (GET /traders/{id}); defaults on a list card.
+  final String? about;
+  final DateTime? memberSince;
+  final int? activeListings;
+  final int reviewCount;
+  final double? reviewAvg;
+  final double? medianResponseMinutes;
+  final bool isOnline;
+  final DateTime? lastSeen;
+  final List<TraderStore> stores;
+
   Trader({
     required this.id,
     required this.businessName,
@@ -41,6 +56,16 @@ class Trader {
     this.profilePhoto,
     this.locationName,
     this.distanceKm,
+    this.coverUrl,
+    this.about,
+    this.memberSince,
+    this.activeListings,
+    this.reviewCount = 0,
+    this.reviewAvg,
+    this.medianResponseMinutes,
+    this.isOnline = false,
+    this.lastSeen,
+    this.stores = const [],
   });
 
   factory Trader.fromJson(Map<String, dynamic> json) => Trader(
@@ -56,5 +81,30 @@ class Trader {
         profilePhoto: json['profile_photo'] as String?,
         locationName: json['location_name'] as String?,
         distanceKm: (json['distance_km'] as num?)?.toDouble(),
+        coverUrl: (json['cover'] as Map?)?['medium'] as String?,
+        about: json['about'] as String?,
+        memberSince: DateTime.tryParse(json['member_since'] as String? ?? ''),
+        activeListings: (json['active_listings'] as num?)?.toInt(),
+        reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
+        reviewAvg: (json['review_avg'] as num?)?.toDouble(),
+        medianResponseMinutes: (json['median_response_minutes'] as num?)?.toDouble(),
+        isOnline: json['is_online'] as bool? ?? false,
+        lastSeen: DateTime.tryParse(json['last_seen'] as String? ?? ''),
+        stores: [
+          for (final s in (json['stores'] as List? ?? const []))
+            TraderStore.fromJson(s as Map<String, dynamic>),
+        ],
+      );
+}
+
+class TraderStore {
+  final String id;
+  final String name;
+  final String? slug;
+  const TraderStore({required this.id, required this.name, this.slug});
+  factory TraderStore.fromJson(Map<String, dynamic> json) => TraderStore(
+        id: json['id'] as String,
+        name: json['name'] as String? ?? 'Store',
+        slug: json['slug'] as String?,
       );
 }

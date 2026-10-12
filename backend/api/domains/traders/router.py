@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
+from api.security import get_current_user
 from .service import TradersService
 
 router = APIRouter()
@@ -26,6 +28,22 @@ async def list_traders(
     # every other location-aware endpoint (listings, buy-agent action).
     return await TradersService(db).list_traders(
         category_id=category_id, search=search, viewer_lat=lat, viewer_lng=lng)
+
+
+class TraderCoverIn(BaseModel):
+    # An image uploaded through POST /media/images (purpose trader_cover, or
+    # a store cover or photo); null removes the background.
+    asset_id: Optional[str] = Field(None, max_length=64)
+
+
+@router.post("/me/cover")
+async def set_trader_cover(
+    body: TraderCoverIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The signed-in trader's optional card background."""
+    return await TradersService(db).set_cover(current_user["id"], body.asset_id)
 
 
 @router.get("/{trader_id}")

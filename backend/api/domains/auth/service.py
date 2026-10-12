@@ -750,7 +750,9 @@ class AuthService:
         # not a public figure.
         metrics = await self.db.get(SellerMetrics, user_id) if own else None
         if metrics:
-            d["dcr_score"]  = metrics.dcr_score
+            # None while DCR is off (DCR_ENABLED): an 80% every seller has
+            # is not a figure to show anyone.
+            d["dcr_score"]  = metrics.dcr_score if settings.dcr_enabled else None
             d["rank_score"] = metrics.rank_score
         # What a buyer is shown of the same numbers on a listing's screen:
         # rating, completion rate and response time, from last night's

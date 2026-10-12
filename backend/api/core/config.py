@@ -414,6 +414,25 @@ class Settings:
         "ESCROW_GUIDANCE_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
 
+    # ── Reviews (domains/reviews/service.py) ─────────────────────────────────
+    # Off (2026-10-12): buyers pay sellers outside BROKA, so no deal ever
+    # reaches "released" and nobody could review anyone. A buyer who agreed
+    # a deal with the seller, or talked with them about one of their
+    # listings, may review them. On: only after a released (paid out) deal.
+    reviews_require_completed_deal: bool = field(default_factory=lambda: os.getenv(
+        "REVIEWS_REQUIRE_COMPLETED_DEAL", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+
+    # ── Deal completion rate (domains/trust/completion_rate.py) ──────────────
+    # Off (2026-10-12): with payments made outside BROKA there is no telling
+    # a completed deal from an abandoned one, so DCR measured nothing real
+    # while counting for 30% of a seller's rank. Off, every seller scores the
+    # neutral prior (80%) and nothing is flagged as leaked; rank still
+    # follows trust and response time. Turn on with in-app payments.
+    dcr_enabled: bool = field(default_factory=lambda: os.getenv(
+        "DCR_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+
     # ── Verified badge (routers/verify.py) ───────────────────────────────────
     # Off for now (2026-10-09): the badge isn't sold. POST /verify/purchase
     # answers 409 VERIFIED_BADGE_OFF, with a message an older app build

@@ -24,6 +24,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.database import SellerMetricSnapshot
 
 STALE_AFTER_DAYS = 7
@@ -65,8 +66,10 @@ async def public_seller_standing(db: AsyncSession, seller_id: str) -> Optional[d
         # never completed a deal would show 80% - to a buyer, a track record
         # that does not exist. Withheld until the first funded deal, as the
         # dashboard withholds it from the seller.
-        "dcr": round(row.dcr_score, 1) if completed > 0 and row.dcr_score is not None else None,
-        "dcr_provisional": 0 < completed < SETTLED_DEALS,
+        # And withheld entirely while DCR is off (DCR_ENABLED).
+        "dcr": (round(row.dcr_score, 1)
+                if settings.dcr_enabled and completed > 0 and row.dcr_score is not None else None),
+        "dcr_provisional": settings.dcr_enabled and 0 < completed < SETTLED_DEALS,
         # None when there were too few threads to measure: "unmeasured" is
         # not "fast", and the app must not show it as a time.
         "median_response_minutes": (

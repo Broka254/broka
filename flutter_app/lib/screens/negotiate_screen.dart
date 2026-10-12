@@ -106,8 +106,14 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       final has = _msgCtrl.text.trim().isNotEmpty;
       if (has != _hasDraft) setState(() => _hasDraft = has);
     });
-    _composerFocus.addListener(
-        () => setState(() => _composerFocused = _composerFocus.hasFocus));
+    _composerFocus.addListener(() {
+      setState(() => _composerFocused = _composerFocus.hasFocus);
+      // The keyboard shrinks the list from the bottom; without this the
+      // last replies sat under the composer while the user typed an answer.
+      if (_composerFocus.hasFocus) {
+        Future.delayed(const Duration(milliseconds: 350), _scrollDown);
+      }
+    });
   }
 
   @override
@@ -355,6 +361,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   /// Going to the direct chat, which marks what's there read as it opens.
   void _markDirectChatSeen() {
     if (mounted) setState(() => _directChatUnreadCount = 0);
+  }
+
+  void _openDirectChat() {
+    _markDirectChatSeen();
+    Navigator.pushReplacementNamed(context, '/direct-chat',
+        arguments: {'listing': _listing, 'role': _role, 'buyer_id': _buyerId});
   }
 
   /// Zeno's messages in this room are on screen. The Inbox stops counting
@@ -1313,6 +1325,12 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           ),
           child: SafeArea(child: Column(children: [
             _buildHeader(),
+            if (_listing != null)
+              ChatModeSwitch(
+                zenoActive: true,
+                unread: _directChatUnreadCount,
+                onSwitch: _openDirectChat,
+              ),
             if (_listing != null) _buildInfoStrip(),
             Expanded(child: _buildChat()),
             // Escrow, where the deal is struck: BROKA holds no payments, so
@@ -1381,11 +1399,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
         BrokaHeaderButton(
           icon: Icons.chat_bubble_outline_rounded,
           tooltip: 'Chat directly',
-          onTap: () {
-            _markDirectChatSeen();
-            Navigator.pushReplacementNamed(context, '/direct-chat',
-                arguments: {'listing': _listing, 'role': _role, 'buyer_id': _buyerId});
-          },
+          onTap: _openDirectChat,
         ),
         if (_directChatUnreadCount > 0)
           Positioned(right: -4, top: -4, child: IgnorePointer(child: Container(

@@ -25,7 +25,7 @@ void main() {
   });
 
   testWidgets('the screen shows the Terms', (tester) async {
-    await tester.pumpWidget(const MaterialApp(home: TermsScreen()));
+    await tester.pumpWidget(const MaterialApp(home: TermsScreen(animateBackground: false)));
     await tester.pumpAndSettle();
     expect(find.text('Terms of Use and Service'), findsOneWidget);
   });

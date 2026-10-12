@@ -228,6 +228,9 @@ class User(Base):
     business_category      = Column(String, nullable=True)   # e.g. "Wholesale", "Electronics"
     business_location      = Column(String, nullable=True)   # immediate locality, e.g. "Sira"
     business_description   = Column(Text, nullable=True)     # free text — this is what Zeno reads
+    # Optional background image for the trader's card and profile header: a
+    # media asset id (POST /traders/me/cover). None: the card's own gradient.
+    trader_cover_id        = Column(String, nullable=True)
     # Auto-generated from the three structured fields above at upgrade time,
     # e.g. "Clanix · Wholesale · Sira" — never free-typed by the seller, so it
     # can't drift into "Clanix-Ugunja" / "Clanix ugunja" / "CLANIX" variants
@@ -1067,10 +1070,12 @@ class Dispute(Base):
     resolved_at     = Column(DateTime, nullable=True)
 
 class Review(Base):
-    """Buyer review of a seller after a completed deal."""
+    """Buyer review of a seller: after a deal, or - while reviews don't
+    require a completed deal - after talking with them (no deal_id; see
+    domains/reviews/service.py)."""
     __tablename__ = "reviews"
     id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    deal_id     = Column(String, ForeignKey("deals.id"), nullable=False, index=True)
+    deal_id     = Column(String, ForeignKey("deals.id"), nullable=True, index=True)
     reviewer_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     seller_id   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     rating      = Column(Integer, nullable=False)          # 1-5 stars
@@ -1083,6 +1088,10 @@ class Review(Base):
     # twice.
     __table_args__ = (
         Index("uq_reviews_deal_reviewer", "deal_id", "reviewer_id", unique=True),
+        # A review without a deal is one per seller per reviewer. NULL deal
+        # ids are all distinct to the index above, so it can't hold this.
+        Index("uq_reviews_seller_reviewer_nodeal", "seller_id", "reviewer_id", unique=True,
+              postgresql_where=text("deal_id IS NULL"), sqlite_where=text("deal_id IS NULL")),
     )
 
 
@@ -1597,6 +1606,13 @@ async def init_db():
             # only guard, on a database already holding a duplicate.
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_deal_reviewer "
             "ON reviews (deal_id, reviewer_id)",
+            # Reviews without a deal (domains/reviews/service.py,
+            # 2026-10-12). PostgreSQL only: SQLite can't alter a column, and
+            # its tables come from create_all with the column nullable.
+            "ALTER TABLE reviews ALTER COLUMN deal_id DROP NOT NULL",
+            "ALTER TABLE users ADD COLUMN trader_cover_id VARCHAR",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_seller_reviewer_nodeal "
+            "ON reviews (seller_id, reviewer_id) WHERE deal_id IS NULL",
             # Partial payments (ExternalEscrow.payment_no): a deal may now
             # have several escrow rows, so the old one-per-deal unique index
             # goes, and (deal_id, payment_no) takes over both its lookups and

@@ -65,6 +65,8 @@ def voices_used(monkeypatch):
             yield {"type": "audio", "data": b"ID3fake-mp3"}
 
     monkeypatch.setattr(tts.edge_tts, "Communicate", FakeCommunicate)
+    # AssemblyAI speaks English ahead of Edge; without its key it steps aside.
+    monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
     return used
 
 
@@ -128,14 +130,18 @@ class TestEnglishVoice:
                 raise RuntimeError("voice gone")
             return b"mp3"
 
+        async def no_assemblyai(text):
+            return None
+
         monkeypatch.setattr(tts, "_edge_audio", fake_audio)
+        monkeypatch.setattr(tts, "_assemblyai_audio", no_assemblyai)
         r = await tts._speak_edge("Hello there", "english")
         assert r.body == b"mp3"
         assert tried == ["en-US-AvaMultilingualNeural", "en-US-AriaNeural"]
 
 
 class TestFallbackChain:
-    """Edge -> Deepgram -> AssemblyAI -> a graceful 503 (2026-10-12)."""
+    """AssemblyAI -> Edge -> Deepgram -> a graceful 503 (2026-10-12)."""
 
     @pytest.fixture
     def edge_down(self, monkeypatch):
@@ -144,8 +150,12 @@ class TestFallbackChain:
         monkeypatch.setattr(tts, "_edge_audio", broken)
 
     @pytest.mark.asyncio
-    async def test_deepgram_speaks_when_edge_fails(self, monkeypatch, edge_down):
+    async def test_assemblyai_speaks_first(self, monkeypatch):
         tried = []
+
+        async def edge(text, voice):
+            tried.append("edge")
+            return b"edge-mp3"
 
         async def deepgram(text):
             tried.append("deepgram")
@@ -155,25 +165,31 @@ class TestFallbackChain:
             tried.append("assemblyai")
             return b"aai-wav", "audio/wav"
 
-        monkeypatch.setattr(tts, "_deepgram_audio", deepgram)
-        monkeypatch.setattr(tts, "_assemblyai_audio", assemblyai)
-        r = await tts._speak_edge("Hello there", "english")
-        assert r.body == b"dg-mp3"
-        assert tried == ["deepgram"]
-
-    @pytest.mark.asyncio
-    async def test_assemblyai_speaks_when_deepgram_fails_too(self, monkeypatch, edge_down):
-        async def deepgram(text):
-            raise httpx_error()
-
-        async def assemblyai(text):
-            return b"aai-wav", "audio/wav"
-
+        monkeypatch.setattr(tts, "_edge_audio", edge)
         monkeypatch.setattr(tts, "_deepgram_audio", deepgram)
         monkeypatch.setattr(tts, "_assemblyai_audio", assemblyai)
         r = await tts._speak_edge("Hello there", "english")
         assert r.body == b"aai-wav"
         assert r.media_type == "audio/wav"
+        assert tried == ["assemblyai"]
+
+    @pytest.mark.asyncio
+    async def test_deepgram_speaks_when_assemblyai_and_edge_fail(self, monkeypatch, edge_down):
+        tried = []
+
+        async def deepgram(text):
+            tried.append("deepgram")
+            return b"dg-mp3", "audio/mpeg"
+
+        async def assemblyai(text):
+            tried.append("assemblyai")
+            raise RuntimeError("agent down")
+
+        monkeypatch.setattr(tts, "_deepgram_audio", deepgram)
+        monkeypatch.setattr(tts, "_assemblyai_audio", assemblyai)
+        r = await tts._speak_edge("Hello there", "english")
+        assert r.body == b"dg-mp3"
+        assert tried == ["assemblyai", "deepgram"]
 
     @pytest.mark.asyncio
     async def test_every_voice_down_is_a_graceful_503(self, monkeypatch, edge_down):

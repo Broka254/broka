@@ -18,6 +18,12 @@
 // BROKA's Zeno, not a generic glowing blob. It swells a little with the
 // voice it hears and the words it says.
 //
+// 2026-10-12: with [hologram], voice mode's centre is a wireframe globe
+// turning inside three gyroscope rings, a scan line sweeping it - in place
+// of the face, which made the full-screen assistant look like a toy. The
+// globe spins faster as Zeno thinks, the rings widen with the voice, and the
+// scan line runs while it listens.
+//
 // Performance: one Ticker drives a model the painter listens to, so a frame
 // repaints this orb and nothing else - no setState, no rebuild of the
 // captions or the conversation underneath. Glows are gradients rather than
@@ -42,6 +48,7 @@ class ZenoOrb extends StatefulWidget {
     this.burst = 0,
     this.size = 280,
     this.face = false,
+    this.hologram = false,
   });
 
   final ZenoOrbMode mode;
@@ -55,6 +62,10 @@ class ZenoOrb extends StatefulWidget {
 
   /// Zeno's face at the centre.
   final bool face;
+
+  /// A turning wireframe globe and gyroscope rings at the centre, in place
+  /// of the plasma (voice mode).
+  final bool hologram;
 
   @override
   State<ZenoOrb> createState() => _ZenoOrbState();
@@ -115,7 +126,7 @@ class _ZenoOrbState extends State<ZenoOrb> with SingleTickerProviderStateMixin {
           child: SizedBox.square(
             dimension: widget.size,
             child: CustomPaint(
-              painter: _OrbPainter(_model),
+              painter: _OrbPainter(_model, hologram: widget.hologram),
               child: widget.face
                   ? Center(
                       // Rebuilds only the transform each frame; the image
@@ -315,8 +326,9 @@ const _palettes = <ZenoOrbMode, _Palette>{
 };
 
 class _OrbPainter extends CustomPainter {
-  _OrbPainter(this.m) : super(repaint: m);
+  _OrbPainter(this.m, {this.hologram = false}) : super(repaint: m);
   final _OrbModel m;
+  final bool hologram;
 
   _Palette get _palette {
     var p = _palettes[ZenoOrbMode.waking]!;
@@ -342,8 +354,12 @@ class _OrbPainter extends CustomPainter {
     _ripples(canvas, c, r, pal);
     _spectrum(canvas, c, r, pal);
     _particles(canvas, c, r, pal);
-    _plasma(canvas, c, r, pal);
-    _core(canvas, c, r, pal);
+    if (hologram) {
+      _hologram(canvas, c, r, pal);
+    } else {
+      _plasma(canvas, c, r, pal);
+    }
+    _core(canvas, c, r * (hologram ? 0.55 : 1.0), pal);
     _comet(canvas, c, r, pal);
     _waking(canvas, c, r, full, pal);
     _shockwaves(canvas, c, r, full, pal);
@@ -418,6 +434,151 @@ class _OrbPainter extends CustomPainter {
           transform: GradientRotation(phase * 2),
         ).createShader(Rect.fromCircle(center: c, radius: r * 1.3)),
     );
+  }
+
+  // ── Hologram ───────────────────────────────────────────────────────────────
+
+  /// A point on a sphere of the globe's frame, turned by [spin] about the
+  /// vertical axis and tipped towards the viewer, projected flat. z > 0 is
+  /// the near side.
+  static (Offset, double) _project(Offset c, double x, double y, double z, double spin) {
+    const tilt = 0.42;
+    final cs = math.cos(spin), sn = math.sin(spin);
+    final x1 = x * cs + z * sn;
+    final z1 = -x * sn + z * cs;
+    final y2 = y * math.cos(tilt) - z1 * math.sin(tilt);
+    final z2 = y * math.sin(tilt) + z1 * math.cos(tilt);
+    return (c + Offset(x1, y2), z2);
+  }
+
+  /// Draws a closed 3D curve, the near half bright and the far half faint,
+  /// as two paths.
+  void _curve(Canvas canvas, List<(Offset, double)> pts, Paint near, Paint far) {
+    final front = Path(), back = Path();
+    bool? wasFront;
+    for (var i = 0; i < pts.length; i++) {
+      final (p, z) = pts[i];
+      final isFront = z >= 0;
+      final path = isFront ? front : back;
+      if (wasFront != isFront || i == 0) {
+        // Join the seam from the previous point so the curve stays whole.
+        final prev = i == 0 ? p : pts[i - 1].$1;
+        path.moveTo(prev.dx, prev.dy);
+      }
+      path.lineTo(p.dx, p.dy);
+      wasFront = isFront;
+    }
+    canvas.drawPath(back, far);
+    canvas.drawPath(front, near);
+  }
+
+  void _hologram(Canvas canvas, Offset c, double r, _Palette pal) {
+    final think = m.mix[ZenoOrbMode.thinking]!;
+    final listen = m.mix[ZenoOrbMode.listening]!;
+    final speak = m.mix[ZenoOrbMode.speaking]!;
+    final radius = r * (0.95 + 0.05 * m.energy + 0.06 * speak * m.voice);
+    final spin = m.t * (0.35 + 0.9 * think + 0.25 * m.energy);
+
+    // The glass of the globe: a soft light inside it.
+    canvas.drawCircle(
+      c,
+      radius * 1.05,
+      Paint()
+        ..blendMode = BlendMode.plus
+        ..shader = RadialGradient(colors: [
+          pal.b.withOpacity(0.22 + 0.2 * m.energy),
+          pal.a.withOpacity(0.08),
+          Colors.transparent,
+        ], stops: const [0.0, 0.7, 1.0])
+            .createShader(Rect.fromCircle(center: c, radius: radius * 1.05)),
+    );
+
+    final near = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1
+      ..color = pal.core.withOpacity(0.38 + 0.32 * m.energy);
+    final far = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = pal.b.withOpacity(0.13);
+
+    const steps = 56;
+    // Meridians.
+    for (var k = 0; k < 8; k++) {
+      final phi = k * math.pi / 8;
+      _curve(canvas, [
+        for (var i = 0; i <= steps; i++)
+          () {
+            final th = i / steps * math.pi * 2;
+            return _project(c, radius * math.cos(th) * math.cos(phi), radius * math.sin(th),
+                radius * math.cos(th) * math.sin(phi), spin);
+          }(),
+      ], near, far);
+    }
+    // Parallels.
+    for (final lat in const [-1.05, -0.52, 0.0, 0.52, 1.05]) {
+      final y = radius * math.sin(lat), rho = radius * math.cos(lat);
+      _curve(canvas, [
+        for (var i = 0; i <= steps; i++)
+          _project(c, rho * math.cos(i / steps * math.pi * 2), y,
+              rho * math.sin(i / steps * math.pi * 2), spin),
+      ], near, far);
+    }
+
+    // The scan line, sweeping pole to pole - bright while it listens.
+    final scanLat = math.sin(m.t * 1.3) * 1.25;
+    final scanY = radius * math.sin(scanLat), scanRho = radius * math.cos(scanLat);
+    final scan = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..blendMode = BlendMode.plus
+      ..color = pal.c.withOpacity(0.25 + 0.6 * listen + 0.3 * think);
+    _curve(canvas, [
+      for (var i = 0; i <= steps; i++)
+        _project(c, scanRho * math.cos(i / steps * math.pi * 2), scanY,
+            scanRho * math.sin(i / steps * math.pi * 2), spin),
+    ], scan, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = pal.c.withOpacity(0.1 + 0.2 * listen));
+
+    // Three gyroscope rings, each on its own axis, a satellite riding each.
+    final ringR = radius * (1.3 + 0.08 * m.energy + 0.1 * speak * m.voice);
+    const tips = [1.15, -0.85, 0.3];
+    for (var k = 0; k < 3; k++) {
+      final turn = m.t * (0.5 + 0.28 * k + 0.6 * think) * (k.isOdd ? -1 : 1);
+      final tip = tips[k];
+      (Offset, double) at(double a) {
+        // A level circle, tipped about x by [tip], turned about y by [turn].
+        final x = ringR * math.cos(a), z0 = ringR * math.sin(a);
+        final y = -z0 * math.sin(tip), z = z0 * math.cos(tip);
+        return _project(c, x, y, z, turn + spin * 0.3);
+      }
+      final ringNear = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..shader = SweepGradient(
+          colors: [pal.a.withOpacity(0.25), pal.core.withOpacity(0.85), pal.a.withOpacity(0.25)],
+          transform: GradientRotation(turn * 2),
+        ).createShader(Rect.fromCircle(center: c, radius: ringR));
+      final ringFar = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = pal.a.withOpacity(0.14);
+      _curve(canvas, [for (var i = 0; i <= 72; i++) at(i / 72 * math.pi * 2)], ringNear, ringFar);
+
+      final (sat, z) = at(m.t * (1.4 + 0.5 * k));
+      final lit = z >= 0 ? 1.0 : 0.35;
+      canvas.drawCircle(
+        sat,
+        7 + 4 * m.energy,
+        Paint()
+          ..blendMode = BlendMode.plus
+          ..shader = RadialGradient(colors: [pal.core.withOpacity(0.7 * lit), Colors.transparent])
+              .createShader(Rect.fromCircle(center: sat, radius: 7 + 4 * m.energy)),
+      );
+      canvas.drawCircle(sat, 2.2 + m.energy, Paint()..color = Colors.white.withOpacity(0.9 * lit));
+    }
   }
 
   void _core(Canvas canvas, Offset c, double r, _Palette pal) {
@@ -560,5 +721,5 @@ class _OrbPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_OrbPainter old) => old.m != m;
+  bool shouldRepaint(_OrbPainter old) => old.m != m || old.hologram != hologram;
 }

@@ -67,14 +67,19 @@ class ZenoLiveOverlay extends StatefulWidget {
   /// What the assistant can be asked, a new one every few seconds while
   /// nothing has been said.
   static const defaultHints = [
-    '"Open my inbox"',
-    '"Search for a Toyota Axio"',
-    '"How do I open a store?"',
-    '"Find me a laptop under 50k"',
-    '"Call Jane"',
-    '"Tips to sell faster"',
-    '"What do you think of my rating?"',
-    '"Take me to Sell"',
+    // Things people would really say, each one a thing Zeno does (search,
+    // the Buying Agent, guides, navigation, calls) - "Open my inbox" taught
+    // nobody what an assistant is for.
+    '"Find me a clean iPhone 13 under 45k near Westlands"',
+    '"What should I ask for my 2016 Vitz?"',
+    '"Hunt down a PS5 and tell me when one drops"',
+    '"Who sells the cheapest solar panels in Nakuru?"',
+    '"Show me laptops a student can afford"',
+    '"How do I get my store on the web?"',
+    '"Why isn\'t my sofa selling?"',
+    '"Call the seller of that fridge"',
+    '"Is a 20k deposit on a car a scam?"',
+    '"Take me to my deals"',
   ];
 
   final ZenoVoiceController controller;
@@ -316,7 +321,9 @@ class _LiveView extends StatelessWidget {
                             VoiceSessionState.error => c.open,
                             _ => null,
                           },
-                          child: ZenoOrb(mode: _mode(state), level: c.level, burst: overlay.burst, size: orb, face: true),
+                          // A hologram at the heart, not Zeno's face: voice mode is the
+                          // assistant at work, and a mascot in the middle read as a toy.
+                          child: ZenoOrb(mode: _mode(state), level: c.level, burst: overlay.burst, size: orb, hologram: true),
                         ),
                       );
                     }),

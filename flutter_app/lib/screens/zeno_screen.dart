@@ -334,6 +334,18 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// What Zeno last said since voice mode opened - its caption there.
   String? _voiceSaid;
 
+  /// Voice mode's caption waits for the voice that says it (2026-10-12),
+  /// as on Zeno's session (zeno_session.dart, _holdReply): shown when the
+  /// audio starts, on a voice failure, or after 3.5 s at most.
+  bool _voiceHeld = false;
+  Timer? _voiceHoldCap;
+
+  void _releaseVoiceSaid() {
+    _voiceHoldCap?.cancel();
+    if (!_voiceHeld || !mounted) return;
+    setState(() => _voiceHeld = false);
+  }
+
   /// What to say in voice mode, for the Buying Agent and for a listing.
   static const _buyingVoiceHints = [
     '"An iPhone 13 under 60K"',
@@ -470,6 +482,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     _searchTicker?.cancel();
     _searchDelay?.cancel();
     _speakCap?.cancel();
+    _voiceHoldCap?.cancel();
     // Only this screen's own reply: Zeno's tour narrates over the Buying
     // Agent and moves on, and closing the screen under it must not cut
     // the next line off.
@@ -752,6 +765,7 @@ class _ZenoScreenState extends State<ZenoScreen>
             suggestions: data.suggestions, link: data.link);
         setState(() {
           _voiceSaid = reply;
+          _voiceHeld = _ttsEnabled && _voice.isOpen && reply.isNotEmpty;
           // A reply that opens a screen is shown whole, not written out word
           // by word: it is a confirmation, and the screen is what the user
           // is waiting for.
@@ -995,6 +1009,7 @@ class _ZenoScreenState extends State<ZenoScreen>
           // criteria it would have watched for have moved on.
           if (data['phase'] == 'RESULTS') _watching = false;
           _voiceSaid = reply;
+          _voiceHeld = _ttsEnabled && _voice.isOpen && reply.isNotEmpty;
           _addArriving(turn, writing: true);
           if (matches.isNotEmpty) _dealing.add(turn);
           _typing = false;
@@ -1062,7 +1077,22 @@ class _ZenoScreenState extends State<ZenoScreen>
     _speakCap?.cancel();
     _speakCap = Timer(Duration(milliseconds: (6000 + 450 * words).clamp(6000, 60000)), finish);
     _saying++;
-    unawaited(_tts.speakToEnd(text, language: _langKey).whenComplete(finish));
+    if (_voiceHeld) {
+      _voiceHoldCap?.cancel();
+      _voiceHoldCap = Timer(const Duration(milliseconds: 3500), _releaseVoiceSaid);
+      void started() {
+        if (_tts.playing.value) {
+          _tts.playing.removeListener(started);
+          _releaseVoiceSaid();
+        }
+      }
+      _tts.playing.addListener(started);
+      unawaited(done.future.whenComplete(() => _tts.playing.removeListener(started)));
+    }
+    unawaited(_tts.speakToEnd(text, language: _langKey).whenComplete(() {
+      _releaseVoiceSaid();
+      finish();
+    }));
     await done.future;
     _saying--;
     _speakCap?.cancel();
@@ -1097,6 +1127,7 @@ class _ZenoScreenState extends State<ZenoScreen>
 
   /// Stop Zeno mid-sentence and listen.
   void _interrupt() {
+    _releaseVoiceSaid();
     unawaited(_tts.stop());
     _voice.setZenoSpeaking(false);
   }
@@ -1418,8 +1449,8 @@ class _ZenoScreenState extends State<ZenoScreen>
       body: _session == null
           ? ZenoLiveOverlay(
               controller: _voice,
-              zenoSays: _voiceSaid,
-              thinking: _typing,
+              zenoSays: _voiceHeld ? null : _voiceSaid,
+              thinking: _typing || _voiceHeld,
               thinkingLabel: _searching ? 'Zeno is hunting' : 'Zeno is thinking',
               actionCard: _voiceCard(),
               burst: _confetti,

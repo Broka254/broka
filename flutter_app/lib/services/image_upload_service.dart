@@ -17,6 +17,7 @@ class ImagePurpose {
   static const storeLogo = 'store_logo';
   static const storeCover = 'store_cover';
   static const storePhoto = 'store_photo';
+  static const traderCover = 'trader_cover';
 }
 
 class UploadedImage {

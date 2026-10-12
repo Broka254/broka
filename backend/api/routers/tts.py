@@ -17,14 +17,17 @@ Zeno's Swahili reply in an American accent. Now:
   * text sent as "english" that reads as Swahili (or Swahili-based Sheng)
     is spoken by the Swahili voice (_reads_as_swahili).
 
-If Microsoft's voice fails for English (it is a free, unofficial endpoint
-that can go away), two paid voices stand in, in order (2026-10-12):
-  Edge TTS -> Deepgram Aura -> AssemblyAI (its Voice Agent's voice) -> 503
-Both are English voices, so they stand in for English only: Swahili with no
-Edge voice is silence, never Swahili in an American accent (the rule above).
-Each is skipped when its key (DEEPGRAM_API_KEY, ASSEMBLYAI_API_KEY - the
-ones speech-to-text already uses) is unset. When every voice fails the
-answer is a 503 the app treats as "voice down": the reply stays on screen.
+English is tried in this order (2026-10-12):
+  AssemblyAI (its Voice Agent's voice) -> Edge TTS -> Deepgram Aura -> 503
+AssemblyAI leads because it is the voice that answers in production: Edge
+(a free, unofficial endpoint) and Deepgram were failing, and with AssemblyAI
+last every spoken reply waited out both of them first - the voice came
+seconds after the text. AssemblyAI and Deepgram are English voices, so they
+speak English only: Swahili with no Edge voice is silence, never Swahili in
+an American accent (the rule above). Each is skipped when its key
+(ASSEMBLYAI_API_KEY, DEEPGRAM_API_KEY - the ones speech-to-text already
+uses) is unset. When every voice fails the answer is a 503 the app treats
+as "voice down": the reply stays on screen.
 """
 
 import asyncio
@@ -60,7 +63,8 @@ EDGE_FALLBACK_VOICES = {
     "english": "en-US-AriaNeural",
 }
 
-# The paid stand-ins for Edge, English only (see the module docstring).
+# The paid English voices: AssemblyAI ahead of Edge, Deepgram after it
+# (see the module docstring).
 DEEPGRAM_SPEAK_URL = "https://api.deepgram.com/v1/speak"
 DEEPGRAM_TTS_MODEL = "aura-2-thalia-en"
 ASSEMBLYAI_AGENT_URL = "wss://agents.assemblyai.com/v1/ws"
@@ -156,9 +160,25 @@ async def _edge_audio(text: str, voice: str) -> bytes:
     return audio_buffer.getvalue()
 
 
+async def _paid_voice(name: str, provider, text: str) -> Response | None:
+    try:
+        spoken = await asyncio.wait_for(provider(text), FALLBACK_TIMEOUT_SECONDS)
+    except Exception as e:
+        logger.warning("TTS %s failed: %s", name, e)
+        return None
+    if spoken is None:
+        return None
+    logger.info("TTS %s spoke", name)
+    return Response(content=spoken[0], media_type=spoken[1])
+
+
 async def _speak_edge(text: str, language: str) -> Response:
-    """Microsoft Edge TTS for English and Swahili - each in its own voice.
-    English falls back to Deepgram, then AssemblyAI, when Edge fails."""
+    """English: AssemblyAI first, then Microsoft Edge, then Deepgram (see the
+    module docstring). Swahili: Edge's Swahili voice only."""
+    if language == "english":
+        spoken = await _paid_voice("assemblyai", _assemblyai_audio, text)
+        if spoken is not None:
+            return spoken
     voices = [EDGE_VOICES[language]]
     if language in EDGE_FALLBACK_VOICES:
         voices.append(EDGE_FALLBACK_VOICES[language])
@@ -173,15 +193,9 @@ async def _speak_edge(text: str, language: str) -> Response:
             return Response(content=audio_bytes, media_type="audio/mpeg")
         logger.warning("Edge TTS returned no audio (voice=%s)", voice)
     if language == "english":
-        for name, provider in (("deepgram", _deepgram_audio), ("assemblyai", _assemblyai_audio)):
-            try:
-                spoken = await asyncio.wait_for(provider(text), FALLBACK_TIMEOUT_SECONDS)
-            except Exception as e:
-                logger.warning("TTS fallback %s failed: %s", name, e)
-                continue
-            if spoken is not None:
-                logger.info("TTS fallback %s spoke for Edge", name)
-                return Response(content=spoken[0], media_type=spoken[1])
+        spoken = await _paid_voice("deepgram", _deepgram_audio, text)
+        if spoken is not None:
+            return spoken
     # Graceful: the app shows the reply and stays silent (broka_tts.dart).
     raise HTTPException(status_code=503, detail="voice_unavailable")
 

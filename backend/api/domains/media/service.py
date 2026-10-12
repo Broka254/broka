@@ -265,6 +265,9 @@ COMPATIBLE_PURPOSES: dict[str, frozenset[str]] = {
     MediaPurpose.LISTING_PHOTO:    frozenset({MediaPurpose.LISTING_PHOTO}),
     MediaPurpose.LISTING_SHOWCASE: frozenset({MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO}),
     MediaPurpose.AVATAR:           frozenset({MediaPurpose.AVATAR}),
+    # A store's cover makes a trader's card background as well.
+    MediaPurpose.TRADER_COVER:     frozenset({MediaPurpose.TRADER_COVER, MediaPurpose.STORE_COVER,
+                                              MediaPurpose.STORE_PHOTO}),
 }
 
 _OWN_KEY_RE = re.compile(

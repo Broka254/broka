@@ -170,7 +170,7 @@ async def flag_leaked_deals(db: AsyncSession) -> int:
     # every honest deal looks, not a leak. Flagging them would sink every
     # seller's completion rate - and their rank - for paying the only way
     # left.
-    if not settings.in_app_payments_enabled:
+    if not settings.in_app_payments_enabled or not settings.dcr_enabled:
         return 0
 
     now = datetime.utcnow()
@@ -361,10 +361,13 @@ async def recompute_all_dcr(db: AsyncSession) -> int:
 
     processed = 0
     for user_id, trust_score in sellers:
+        # DCR off (DCR_ENABLED): every seller gets the neutral prior, so the
+        # term ranks no one above anyone else - a completed deal can't be
+        # told from an abandoned one while buyers pay outside BROKA.
         dcr = _compute_dcr_from_ages(
             completed_ages_by_seller.get(user_id, []),
             leaked_ages_by_seller.get(user_id, []),
-        )
+        ) if settings.dcr_enabled else round(PRIOR_MEAN * 100, 2)
 
         trust_norm = (trust_score if trust_score is not None else 100) / 100.0
         dcr_norm = dcr / 100.0

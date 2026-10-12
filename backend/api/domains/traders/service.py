@@ -6,10 +6,18 @@ from __future__ import annotations
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import HTTPException
+
 from api.core.geo import haversine_km
 from api.core.text_search import matches_all_terms, search_terms
-from api.database import User, UserSpecialization, Listing, Category
+from api.database import ListingStatus, Review, User, UserSpecialization, Listing, Category
+from api.domains.listings.paid import live_clause
+from api.domains.media.service import asset_urls, load_assets, require_owned_assets
+from api.models.media import MediaPurpose
 from api.models.store import Store
+
+# A trader seen within this long is shown as active now.
+ONLINE_WINDOW_SECONDS = 5 * 60
 
 
 class TradersService:
@@ -83,6 +91,7 @@ class TradersService:
             cat_rows = (await self.db.execute(select(Category).where(Category.id.in_(cat_ids)))).scalars().all()
             cat_names = {c.id: c.name for c in cat_rows}
 
+        covers = await self._covers(users)
         result = []
         for u in users:
             top_spec = top_spec_by_user.get(u.id)
@@ -94,8 +103,36 @@ class TradersService:
                 u, listing_count=listing_counts.get(u.id, 0),
                 specializations=specializations,
                 viewer_lat=viewer_lat, viewer_lng=viewer_lng,
+                cover=covers.get(u.id),
             ))
         return result
+
+    async def _covers(self, users) -> dict[str, dict]:
+        """Each trader's card background, {user_id: asset urls}, in one query."""
+        ids = {u.trader_cover_id for u in users if getattr(u, "trader_cover_id", None)}
+        assets = await load_assets(self.db, ids)
+        out = {}
+        for u in users:
+            urls = asset_urls(assets.get(u.trader_cover_id)) if u.trader_cover_id else None
+            if urls:
+                out[u.id] = urls
+        return out
+
+    async def set_cover(self, user_id: str, asset_id: str | None) -> dict:
+        """The trader's card background: an image they uploaded (as a
+        trader cover, or one of their store's covers or photos), or None to
+        go back to the card's own gradient."""
+        user = await self.db.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        if asset_id:
+            await require_owned_assets(
+                self.db, user_id, [asset_id],
+                {MediaPurpose.TRADER_COVER, MediaPurpose.STORE_COVER, MediaPurpose.STORE_PHOTO})
+        user.trader_cover_id = asset_id or None
+        await self.db.commit()
+        covers = await self._covers([user])
+        return {"cover": covers.get(user.id)}
 
     async def get_trader(
         self, user_id: str,
@@ -124,14 +161,53 @@ class TradersService:
             {"id": s.category_id, "name": categories.get(s.category_id, "Unknown")} for s in specs
         ]
 
-        return self._trader_dict(
+        out = self._trader_dict(
             user, listing_count=listing_count, specializations=specializations,
             viewer_lat=viewer_lat, viewer_lng=viewer_lng,
+            cover=(await self._covers([user])).get(user.id),
         )
+        out.update(await self._profile_details(user))
+        return out
+
+    async def _profile_details(self, user: User) -> dict:
+        """What the trader's own page adds to the card: who they are, how
+        long they've sold here, what buyers say, how fast they answer, their
+        stores, and what is on sale now."""
+        from datetime import datetime
+        from api.domains.trust.public_standing import public_seller_standing
+
+        active = (await self.db.execute(
+            select(func.count(Listing.id)).where(
+                Listing.seller_id == user.id,
+                Listing.status == ListingStatus.active,
+                live_clause())
+        )).scalar_one()
+        review_avg, review_count = (await self.db.execute(
+            select(func.avg(Review.rating), func.count(Review.id))
+            .where(Review.seller_id == user.id)
+        )).one()
+        stores = (await self.db.execute(
+            select(Store.id, Store.name, Store.slug).where(Store.owner_id == user.id)
+        )).all()
+        standing = await public_seller_standing(self.db, user.id) or {}
+        seen = user.last_seen
+        return {
+            "about": (user.business_description or "").strip() or None,
+            "member_since": user.created_at.isoformat() if user.created_at else None,
+            "active_listings": int(active or 0),
+            "review_count": int(review_count or 0),
+            # None, not 0, with no reviews: no average is not a bad one.
+            "review_avg": round(float(review_avg), 1) if review_count else None,
+            "median_response_minutes": standing.get("median_response_minutes"),
+            "is_online": bool(seen and (datetime.utcnow() - seen).total_seconds() < ONLINE_WINDOW_SECONDS),
+            "last_seen": seen.isoformat() if seen else None,
+            "stores": [{"id": sid, "name": name, "slug": slug} for sid, name, slug in stores],
+        }
 
     def _trader_dict(
         self, u: User, listing_count: int, specializations: list[dict],
         viewer_lat: float | None = None, viewer_lng: float | None = None,
+        cover: dict | None = None,
     ) -> dict:
         out = {
             "id": u.id, "business_name": u.business_name or u.name,
@@ -153,6 +229,9 @@ class TradersService:
             # just because Design v2 §30 lists "location"/"distance" as card
             # elements.
             "location_name": (u.business_location or None) if u.location_visible else None,
+            # The card's optional background image (POST /traders/me/cover):
+            # {id, thumb, medium, large}, or None for the card's gradient.
+            "cover": cover,
         }
         if (
             viewer_lat is not None and viewer_lng is not None

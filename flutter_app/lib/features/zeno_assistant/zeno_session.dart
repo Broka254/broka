@@ -237,6 +237,25 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
   Timer? _quiet;
   Timer? _speakCap;
 
+  /// A reply's words wait for its voice (2026-10-12). The text went up the
+  /// moment it arrived and the audio seconds later, once fetched, so the
+  /// captions had moved on while Zeno was still saying something else - or
+  /// read ahead of it. Now, in voice mode with sound on, the reply shows as
+  /// it starts playing (orb still "thinking" until then), or after
+  /// [_holdLimit] or a voice failure, so the words never wait for long.
+  bool _holdReply = false;
+  Timer? _holdCap;
+  static const _holdLimit = Duration(milliseconds: 3500);
+
+  bool _shouldHold(String text) => !_muted && text.isNotEmpty && (_voice?.isOpen ?? false);
+
+  void _releaseReply() {
+    _holdCap?.cancel();
+    if (!_holdReply) return;
+    _holdReply = false;
+    notifyListeners();
+  }
+
   ZenoSessionView get view => _view;
   bool get isActive => _view != ZenoSessionView.closed;
   bool get expanded => _view == ZenoSessionView.expanded;
@@ -244,8 +263,8 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
   ZenoVoiceController? get voice => _voice;
   bool get listening => _voice?.isOpen ?? false;
   String? get heard => _heard;
-  String? get reply => _reply;
-  bool get thinking => _thinking;
+  String? get reply => _holdReply ? null : _reply;
+  bool get thinking => _thinking || _holdReply;
   ZenoAction? get action => _action;
   ZenoActionPhase? get phase => _phase;
   int get burst => _burst;
@@ -286,6 +305,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
     _epoch++;
     _heard = null;
     _reply = null;
+    _holdReply = false;
     _answered = null;
     _queued = null;
     _nudges = 0;
@@ -425,6 +445,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
 
   /// Stop Zeno mid-sentence and listen.
   void interrupt() {
+    _releaseReply();
     unawaited(_tts.stop());
     _voice?.setZenoSpeaking(false);
   }
@@ -464,6 +485,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
     _beat?.cancel();
     _heard = text;
     _reply = null;
+    _holdReply = false;
     _action = null;
     _phase = null;
     _thinking = true;
@@ -498,6 +520,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
         if (epoch != _epoch) return;
         _thinking = false;
         _reply = reply;
+        _holdReply = _shouldHold(reply);
         _answered = reply;
         _action = data.action;
         _phase = data.action == null ? null : ZenoActionPhase.pending;
@@ -683,9 +706,17 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
 
     _speakCap?.cancel();
     _speakCap = Timer(Duration(milliseconds: (6000 + 450 * words).clamp(6000, 60000)), finish);
+    if (_holdReply) {
+      _holdCap?.cancel();
+      _holdCap = Timer(_holdLimit, _releaseReply);
+    }
     unawaited(_tts
         .speakToEnd(text, language: language ?? ApiService.currentUserLanguage)
-        .whenComplete(finish));
+        .whenComplete(() {
+      // No voice came (none for the language, the service down): the words.
+      _releaseReply();
+      finish();
+    }));
     await done.future;
     _speakCap?.cancel();
     _speakingSelf = false;
@@ -696,6 +727,8 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
   /// Anything read aloud anywhere in the app - the negotiation room's
   /// replies, the Buying Agent's - is not the user talking.
   void _onTtsPlaying() {
+    // The voice has started: its words go up with it.
+    if (_tts.playing.value && _speakingSelf) _releaseReply();
     final voice = _voice;
     if (voice == null || !voice.isOpen || _speakingSelf) return;
     voice.setZenoSpeaking(_tts.playing.value);
@@ -769,6 +802,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
     );
     _nudges++;
     _reply = line.text;
+    _holdReply = _shouldHold(line.text);
     notifyListeners();
     if (_muted) {
       _touch();
@@ -782,6 +816,7 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
     final epoch = _epoch;
     final line = _checkIns.resting(firstName: _firstName, language: ApiService.currentUserLanguage);
     _reply = line.text;
+    _holdReply = _shouldHold(line.text);
     notifyListeners();
     if (!_muted) await _speak(line.text, language: line.language);
     if (epoch != _epoch || !isActive) return;
@@ -925,6 +960,8 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
     _beat?.cancel();
     _quiet?.cancel();
     _speakCap?.cancel();
+    _holdCap?.cancel();
+    _holdReply = false;
     _queueTimer?.cancel();
   }
 

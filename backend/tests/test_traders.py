@@ -142,3 +142,89 @@ class TestTraders:
         # only be populated by the subscriber reacting to the listing above.
         spec_ids = [s["id"] for s in profile.json()["specializations"]]
         assert "cat-electronics-2" in spec_ids
+
+
+def _jpeg(size=(1200, 600)) -> bytes:
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, (30, 60, 160)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+async def _upload(client, token, purpose="trader_cover") -> str:
+    r = await client.post(
+        "/media/images", headers={"Authorization": f"Bearer {token}"}, data={"purpose": purpose},
+        files={"file": ("bg.jpg", _jpeg(), "image/jpeg")},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+class TestTraderCardBackground:
+    """The optional background a trader sets for their card (2026-10-12)."""
+
+    @pytest.fixture(autouse=True)
+    def _database_storage(self):
+        from api.core.media_storage import use_storage
+        use_storage(None)
+        yield
+        use_storage(None)
+
+    @pytest.mark.asyncio
+    async def test_a_trader_sets_and_removes_their_card_background(self, client):
+        user_id, token = await _register(client, "0744001400", "Cover Trader", "cover.t@test.ke")
+        async with AsyncSessionLocal() as db:
+            (await db.get(User, user_id)).completed_deals = 1
+            await db.commit()
+        auth = {"Authorization": f"Bearer {token}"}
+        assert (await client.get(f"/traders/{user_id}")).json()["cover"] is None
+
+        asset_id = await _upload(client, token)
+        res = await client.post("/traders/me/cover", json={"asset_id": asset_id}, headers=auth)
+        assert res.status_code == 200, res.text
+        assert res.json()["cover"]["id"] == asset_id
+
+        profile = (await client.get(f"/traders/{user_id}")).json()
+        assert profile["cover"]["id"] == asset_id and profile["cover"]["medium"]
+        [card] = [t for t in (await client.get("/traders")).json() if t["id"] == user_id]
+        assert card["cover"]["id"] == asset_id
+
+        res = await client.post("/traders/me/cover", json={"asset_id": None}, headers=auth)
+        assert res.json() == {"cover": None}
+        assert (await client.get(f"/traders/{user_id}")).json()["cover"] is None
+
+    @pytest.mark.asyncio
+    async def test_someone_elses_image_is_refused(self, client):
+        _, owner_token = await _register(client, "0744001500", "Image Owner", "img.owner@test.ke")
+        _, other_token = await _register(client, "0744001600", "Image Taker", "img.taker@test.ke")
+        asset_id = await _upload(client, owner_token)
+        res = await client.post("/traders/me/cover", json={"asset_id": asset_id},
+                                headers={"Authorization": f"Bearer {other_token}"})
+        assert res.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_needs_a_signed_in_trader(self, client):
+        res = await client.post("/traders/me/cover", json={"asset_id": None})
+        assert res.status_code in (401, 403)
+
+
+class TestTraderPage:
+    @pytest.mark.asyncio
+    async def test_the_page_says_more_than_the_card(self, client):
+        user_id, _ = await _register(client, "0744001700", "Detail Trader", "detail.t@test.ke")
+        async with AsyncSessionLocal() as db:
+            u = await db.get(User, user_id)
+            u.completed_deals = 2
+            u.business_description = "  Phones and accessories, Nairobi CBD.  "
+            from datetime import datetime, timedelta
+            u.last_seen = datetime.utcnow() - timedelta(hours=3)
+            await db.commit()
+        page = (await client.get(f"/traders/{user_id}")).json()
+        assert page["about"] == "Phones and accessories, Nairobi CBD."
+        assert page["member_since"]
+        assert page["active_listings"] == 0
+        # No reviews is no average, not 0.
+        assert page["review_count"] == 0 and page["review_avg"] is None
+        assert page["stores"] == []
+        assert page["is_online"] is False and page["last_seen"]

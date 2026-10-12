@@ -400,8 +400,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
                         fontWeight: FontWeight.w700, fontSize: 13)),
                     Text(listing, style: const TextStyle(color: BrokaColors.textMid,
                         fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
-                    Text('KES ${price.toStringAsFixed(0)} · $dateStr',
-                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+                    // A conversation with no deal (reviews/service.py) has
+                    // no price or date to show.
+                    if (price > 0 || dateStr.isNotEmpty)
+                      Text(price > 0 ? 'KES ${price.toStringAsFixed(0)}${dateStr.isEmpty ? '' : ' · $dateStr'}' : dateStr,
+                          style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
                   ])),
                   if (picked)
                     const Icon(Icons.check_circle_rounded,

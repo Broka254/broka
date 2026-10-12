@@ -52,6 +52,19 @@ class TradersRepository {
       return Failure(userFacingError(e));
     }
   }
+
+  /// Sets the signed-in trader's card background to an uploaded image
+  /// (purpose trader_cover), or removes it with null.
+  Future<Result<void>> setCover(String? assetId) async {
+    try {
+      await _client.post('/traders/me/cover', {'asset_id': assetId});
+      return const Success(null);
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
 }
 
 final tradersRepository = TradersRepository();

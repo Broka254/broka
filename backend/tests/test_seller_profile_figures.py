@@ -179,6 +179,16 @@ async def market():
     }
 
 
+@pytest.fixture
+def strict_reviews():
+    """REVIEWS_REQUIRE_COMPLETED_DEAL on: only a paid-out deal is reviewed."""
+    from api.core.config import settings
+    before = settings.reviews_require_completed_deal
+    object.__setattr__(settings, "reviews_require_completed_deal", True)
+    yield
+    object.__setattr__(settings, "reviews_require_completed_deal", before)
+
+
 class TestWhoMayReview:
     @pytest.mark.asyncio
     async def test_the_buyer_of_a_completed_deal_has_it_to_review(self, client, market):
@@ -194,7 +204,7 @@ class TestWhoMayReview:
         assert deal["already_reviewed"] is False
 
     @pytest.mark.asyncio
-    async def test_no_one_else_has_anything_to_review(self, client, market):
+    async def test_no_one_else_has_anything_to_review(self, client, market, strict_reviews):
         seller_id, as_seller = market["seller"]
         for who in ("waiting", "stranger"):
             _, headers = market[who]
@@ -225,7 +235,7 @@ class TestWhoMayReview:
         assert res.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_not_before_delivery_is_confirmed(self, client, market):
+    async def test_not_before_delivery_is_confirmed(self, client, market, strict_reviews):
         _, as_waiting = market["waiting"]
         res = await client.post("/reviews/", json={"deal_id": market["in_escrow"], "rating": 5},
                                 headers=as_waiting)
@@ -239,6 +249,102 @@ class TestWhoMayReview:
         assert res.status_code == 403
         res = await client.get("/reviews/my-deals", headers=as_self)
         assert res.json() == {"deals": []}
+
+
+async def _talk(seller_id: str, buyer_id: str, listing_name: str = "Sofa") -> str:
+    """The buyer writes to the seller about one of their listings."""
+    from api.database import NegotiationMessage
+    async with AsyncSessionLocal() as db:
+        listing = Listing(seller_id=seller_id, name=listing_name, category="furniture",
+                          price=9_000.0, lat=-1.28, lng=36.82)
+        db.add(listing)
+        await db.flush()
+        db.add(NegotiationMessage(listing_id=listing.id, sender_id=buyer_id, role="buyer",
+                                  content="Is it still available?", buyer_id=buyer_id))
+        await db.commit()
+        return listing.id
+
+
+class TestReviewsWithoutACompletedDeal:
+    """REVIEWS_REQUIRE_COMPLETED_DEAL off (the default, 2026-10-12): buyers pay
+    sellers outside BROKA, so no deal ever completes here and nobody could
+    review. A deal that was agreed, or a conversation, is enough."""
+
+    @pytest.mark.asyncio
+    async def test_an_agreed_deal_can_be_reviewed(self, client):
+        seller_id, _ = await _user("Agreed Seller")
+        buyer_id, as_buyer = await _user("Agreed Buyer")
+        deal = await _deal(seller_id, buyer_id, DealStatus.agreed)
+        [offered] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                      headers=as_buyer)).json()["deals"]
+        assert offered["deal_id"] == deal
+        res = await client.post("/reviews/", json={"deal_id": deal, "rating": 5},
+                                headers=as_buyer)
+        assert res.status_code == 201
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_deal_is_not_a_purchase(self, client):
+        seller_id, _ = await _user("Cancel Seller")
+        buyer_id, as_buyer = await _user("Cancel Buyer")
+        deal = await _deal(seller_id, buyer_id, DealStatus.cancelled)
+        res = await client.post("/reviews/", json={"deal_id": deal, "rating": 1},
+                                headers=as_buyer)
+        assert res.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_a_buyer_who_talked_with_the_seller_reviews_them_once(self, client):
+        seller_id, _ = await _user("Chatty Seller")
+        buyer_id, as_buyer = await _user("Chatty Buyer")
+        await _talk(seller_id, buyer_id, "Sofa")
+        await _talk(seller_id, buyer_id, "Table")
+        [offered] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                      headers=as_buyer)).json()["deals"]
+        assert offered["deal_id"] == f"chat:{seller_id}"
+        assert offered["already_reviewed"] is False
+
+        res = await client.post("/reviews/", json={
+            "deal_id": offered["deal_id"], "rating": 4, "comment": "Quick replies."},
+            headers=as_buyer)
+        assert res.status_code == 201
+        assert res.json()["deal_id"] is None
+        again = await client.post("/reviews/", json={"deal_id": offered["deal_id"], "rating": 5},
+                                  headers=as_buyer)
+        assert again.status_code == 409
+        [after] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                    headers=as_buyer)).json()["deals"]
+        assert after["already_reviewed"] is True
+        summary = (await client.get(f"/reviews/summary/{seller_id}")).json()
+        assert summary["count"] == 1 and summary["avg"] == 4.0
+
+    @pytest.mark.asyncio
+    async def test_a_stranger_who_never_talked_cannot_review(self, client):
+        seller_id, _ = await _user("Quiet Seller")
+        _, as_stranger = await _user("Drive By")
+        res = await client.post("/reviews/", json={"deal_id": f"chat:{seller_id}", "rating": 1},
+                                headers=as_stranger)
+        assert res.status_code == 403
+        assert (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                 headers=as_stranger)).json() == {"deals": []}
+
+    @pytest.mark.asyncio
+    async def test_no_one_reviews_themselves_through_a_chat(self, client):
+        self_id, as_self = await _user("Own Chat")
+        await _talk(self_id, self_id)
+        res = await client.post("/reviews/", json={"deal_id": f"chat:{self_id}", "rating": 5},
+                                headers=as_self)
+        assert res.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_a_chat_is_not_enough_when_completed_deals_are_required(
+            self, client, strict_reviews):
+        seller_id, _ = await _user("Strict Seller")
+        buyer_id, as_buyer = await _user("Strict Buyer")
+        await _talk(seller_id, buyer_id)
+        assert (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                 headers=as_buyer)).json() == {"deals": []}
+        res = await client.post("/reviews/", json={"deal_id": f"chat:{seller_id}", "rating": 5},
+                                headers=as_buyer)
+        assert res.status_code == 400
 
 
 class TestReviewing:
@@ -294,3 +400,33 @@ class TestReviewing:
                                  params={"limit": 2, "offset": 2})).json()
         assert len(first) == 2 and len(rest) == 1
         assert not {r["id"] for r in first} & {r["id"] for r in rest}
+
+
+class TestDealCompletionRateOff:
+    """DCR_ENABLED off (the default, 2026-10-12): with payments made outside
+    BROKA a completed deal can't be told from an abandoned one, so every
+    seller scores the neutral prior and buyers are shown no rate."""
+
+    @pytest.mark.asyncio
+    async def test_every_seller_scores_the_neutral_prior(self):
+        from api.database import SellerMetrics
+        from api.domains.trust.completion_rate import PRIOR_MEAN, recompute_all_dcr
+        seller_id, _ = await _user("Ranked Seller")
+        buyer_id, _ = await _user("Ranked Buyer")
+        for _ in range(3):
+            await _deal(seller_id, buyer_id, DealStatus.released, took=timedelta(hours=1))
+        async with AsyncSessionLocal() as db:
+            await recompute_all_dcr(db)
+            metrics = await db.get(SellerMetrics, seller_id)
+            assert metrics.dcr_score == round(PRIOR_MEAN * 100, 2)
+
+    @pytest.mark.asyncio
+    async def test_buyers_and_the_seller_are_shown_no_rate(self, client):
+        seller_id, as_seller = await _user("Unrated Seller")
+        buyer_id, as_buyer = await _user("Unrated Buyer")
+        await _deal(seller_id, buyer_id, DealStatus.released, took=timedelta(hours=1))
+        from api.domains.trust.completion_rate import recompute_all_dcr
+        async with AsyncSessionLocal() as db:
+            await recompute_all_dcr(db)
+        own = (await client.get(f"/auth/user/{seller_id}", headers=as_seller)).json()
+        assert own.get("dcr_score") is None

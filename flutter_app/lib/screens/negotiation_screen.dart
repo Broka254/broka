@@ -1325,8 +1325,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   void _scrollDown() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
+        // The list is reversed (_buildMessages): its newest end is 0.
         _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent + 80,
+          0,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -1384,6 +1385,11 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       animate: widget.animateBackground,
       child: Column(children: [
         _buildHeader(),
+        ChatModeSwitch(
+          zenoActive: false,
+          unread: _zenoUnreadCount,
+          onSwitch: _openZenoAi,
+        ),
         // Every buyer can pay from here: there is no "finalize" step before
         // it any more (auctions are paid from the auction screen).
         // Nothing at all while payments are hidden (payments_shown.dart).
@@ -1665,12 +1671,20 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         ),
       );
     }
+    // Reversed, so the list is anchored at its newest message: opening the
+    // keyboard shrinks the list from the top and the latest messages stay in
+    // view. Anchored at the top, the keyboard and composer slid up over the
+    // last bubbles and hid what was being answered while typing.
+    final n = _messages.length;
     return ListView.builder(
       controller: _scrollCtrl,
+      reverse: true,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      itemCount: _messages.length,
-      itemBuilder: (_, i) => _ChatBubble(
+      itemCount: n,
+      itemBuilder: (_, j) {
+        final i = n - 1 - j;
+        return _ChatBubble(
         message:    _messages[i],
         userRole:   _role,
         isPlaying:  _isPlaying && _playingUrl == _messages[i].mediaUrl,
@@ -1679,7 +1693,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         onUnsentTap: _onUnsentTap,
         counterpartLastRead: _counterpartLastRead,
         counterpartLastDelivered: _counterpartLastDelivered,
-      ),
+      );
+      },
     );
   }
 

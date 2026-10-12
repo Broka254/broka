@@ -33,9 +33,13 @@ class MediaPurpose:
     STORE_COVER      = "store_cover"
     STORE_PHOTO      = "store_photo"
     AVATAR           = "avatar"
+    # The optional background of a trader's card and profile header
+    # (POST /traders/me/cover).
+    TRADER_COVER     = "trader_cover"
 
     ALL = frozenset({
         LISTING_PHOTO, LISTING_SHOWCASE, STORE_LOGO, STORE_COVER, STORE_PHOTO, AVATAR,
+        TRADER_COVER,
     })
     # What a client may upload directly. Avatars are converted server-side
     # from the profile photo the signup and profile flows already send.
