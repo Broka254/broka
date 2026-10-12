@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-225 endpoints served by `backend/main.py`. **Auth** is read from each
+226 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 60, token 4, user 139.
+Counts: admin 20, optional 2, public 60, token 4, user 140.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -269,11 +269,12 @@ Counts: admin 20, optional 2, public 60, token 4, user 139.
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
-| GET | `/traders` | public | `list_traders` (backend/api/domains/traders/router.py:15) |
-| GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:32) |
+| GET | `/traders` | public | `list_traders` (backend/api/domains/traders/router.py:17) |
+| POST | `/traders/me/cover` | user | `set_trader_cover` (backend/api/domains/traders/router.py:40) |
+| GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:50) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
-| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:131) |
-| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:297) |
+| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:135) |
+| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:311) |
 | POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:315) |
 | POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:338) |
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:131) |
@@ -552,50 +553,50 @@ Counts: admin 20, optional 2, public 60, token 4, user 139.
 
 | Table | Model | Defined at |
 |---|---|---|
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:558 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1128 |
-| `bids` | `Bid` | backend/api/database.py:547 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:687 |
-| `categories` | `Category` | backend/api/database.py:287 |
-| `category_filters` | `CategoryFilter` | backend/api/database.py:295 |
-| `deals` | `Deal` | backend/api/database.py:739 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:561 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1137 |
+| `bids` | `Bid` | backend/api/database.py:550 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:690 |
+| `categories` | `Category` | backend/api/database.py:290 |
+| `category_filters` | `CategoryFilter` | backend/api/database.py:298 |
+| `deals` | `Deal` | backend/api/database.py:742 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1054 |
-| `email_otps` | `EmailOtp` | backend/api/database.py:264 |
+| `disputes` | `Dispute` | backend/api/database.py:1057 |
+| `email_otps` | `EmailOtp` | backend/api/database.py:267 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:74 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1089 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1147 |
-| `interests` | `Interest` | backend/api/database.py:435 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1098 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1156 |
+| `interests` | `Interest` | backend/api/database.py:438 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:657 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:973 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:660 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:976 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:949 |
-| `listings` | `Listing` | backend/api/database.py:304 |
-| `media_assets` | `MediaAsset` | backend/api/models/media.py:66 |
-| `media_blobs` | `MediaBlob` | backend/api/models/media.py:100 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1008 |
-| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:458 |
-| `phone_otps` | `PhoneOtp` | backend/api/database.py:245 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:952 |
+| `listings` | `Listing` | backend/api/database.py:307 |
+| `media_assets` | `MediaAsset` | backend/api/models/media.py:70 |
+| `media_blobs` | `MediaBlob` | backend/api/models/media.py:104 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1011 |
+| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:461 |
+| `phone_otps` | `PhoneOtp` | backend/api/database.py:248 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1028 |
-| `reviews` | `Review` | backend/api/database.py:1069 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:899 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:878 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1031 |
+| `reviews` | `Review` | backend/api/database.py:1072 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:902 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:881 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:512 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:672 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:515 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:675 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1108 |
-| `wishlists` | `Wishlist` | backend/api/database.py:645 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1117 |
+| `wishlists` | `Wishlist` | backend/api/database.py:648 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:51 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:80 |
 
@@ -622,10 +623,10 @@ of a change.
 - **payments** — domains: premium, pricing; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **premium** — domains: buy_agent, payments, pricing; core: audit, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **pricing** — domains: listings, payments, trust; core: audit, config, events, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
-- **reviews** — core: audit, events; database, security
+- **reviews** — core: audit, config, events; database, security
 - **showcase** — domains: media, premium; core: hf_image_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media; core: client_ip, config, presence, rate_limit, text_search; database, security
-- **traders** — core: geo, text_search; database
+- **traders** — domains: listings, media, trust; core: geo, text_search; database, security
 - **trending** — domains: listings; database
 - **trust** — domains: listings; core: config; database
 - **users** — nothing outside itself
@@ -666,7 +667,7 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `REVIEWS_REQUIRE_COMPLETED_DEAL`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
 
 ## Backend tests
 
@@ -966,7 +967,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/repositories/traders_repository.dart` — lib/features/traders/data/repositories/traders_repository.dart
 - `domain/models/trader.dart` — lib/features/traders/domain/models/trader.dart Trader is a display-side view over an existing User (Design Journal Volume 6, Ch.5) - not a…
 - `presentation/trader_list_screen.dart` — lib/features/traders/presentation/trader_list_screen.dart Wide, 1-column trader cards (Design Journal Volume 6, Ch.5/Ch.26, external spec S…
-- `presentation/trader_profile_screen.dart` — lib/features/traders/presentation/trader_profile_screen.dart Header / reputation / top-categories / all-products (Design Journal Volume 6,…
+- `presentation/trader_profile_screen.dart` — lib/features/traders/presentation/trader_profile_screen.dart A trader's page, in Home's language (2026-10-12): the constellation behind it,…
 
 ### `flutter_app/lib/features/trending/`
 
