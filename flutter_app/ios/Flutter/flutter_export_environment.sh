@@ -1,6 +1,6 @@
 #!/bin/sh
 # This is a generated file; do not edit or check into version control.
-export "FLUTTER_ROOT=/tmp/claude-0/-home-user-broka/2491e5c0-7274-5c42-9871-7c827910a6d9/scratchpad/fl/flutter"
+export "FLUTTER_ROOT=/tmp/claude-0/-home-user-broka/95e7bce5-a302-57ab-943f-da692015a128/scratchpad/flutter"
 export "FLUTTER_APPLICATION_PATH=/home/user/broka/flutter_app"
 export "COCOAPODS_PARALLEL_CODE_SIGN=true"
 export "FLUTTER_TARGET=lib/main.dart"
