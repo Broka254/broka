@@ -132,3 +132,88 @@ class TestEnglishVoice:
         r = await tts._speak_edge("Hello there", "english")
         assert r.body == b"mp3"
         assert tried == ["en-US-AvaMultilingualNeural", "en-US-AriaNeural"]
+
+
+class TestFallbackChain:
+    """Edge -> Deepgram -> AssemblyAI -> a graceful 503 (2026-10-12)."""
+
+    @pytest.fixture
+    def edge_down(self, monkeypatch):
+        async def broken(text, voice):
+            raise RuntimeError("edge gone")
+        monkeypatch.setattr(tts, "_edge_audio", broken)
+
+    @pytest.mark.asyncio
+    async def test_deepgram_speaks_when_edge_fails(self, monkeypatch, edge_down):
+        tried = []
+
+        async def deepgram(text):
+            tried.append("deepgram")
+            return b"dg-mp3", "audio/mpeg"
+
+        async def assemblyai(text):
+            tried.append("assemblyai")
+            return b"aai-wav", "audio/wav"
+
+        monkeypatch.setattr(tts, "_deepgram_audio", deepgram)
+        monkeypatch.setattr(tts, "_assemblyai_audio", assemblyai)
+        r = await tts._speak_edge("Hello there", "english")
+        assert r.body == b"dg-mp3"
+        assert tried == ["deepgram"]
+
+    @pytest.mark.asyncio
+    async def test_assemblyai_speaks_when_deepgram_fails_too(self, monkeypatch, edge_down):
+        async def deepgram(text):
+            raise httpx_error()
+
+        async def assemblyai(text):
+            return b"aai-wav", "audio/wav"
+
+        monkeypatch.setattr(tts, "_deepgram_audio", deepgram)
+        monkeypatch.setattr(tts, "_assemblyai_audio", assemblyai)
+        r = await tts._speak_edge("Hello there", "english")
+        assert r.body == b"aai-wav"
+        assert r.media_type == "audio/wav"
+
+    @pytest.mark.asyncio
+    async def test_every_voice_down_is_a_graceful_503(self, monkeypatch, edge_down):
+        async def nothing(text):
+            return None
+
+        monkeypatch.setattr(tts, "_deepgram_audio", nothing)
+        monkeypatch.setattr(tts, "_assemblyai_audio", nothing)
+        with pytest.raises(tts.HTTPException) as err:
+            await tts._speak_edge("Hello there", "english")
+        assert err.value.status_code == 503
+        assert err.value.detail == "voice_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_swahili_never_falls_back_to_an_english_voice(self, monkeypatch, edge_down):
+        tried = []
+
+        async def english_voice(text):
+            tried.append(text)
+            return b"x", "audio/mpeg"
+
+        monkeypatch.setattr(tts, "_deepgram_audio", english_voice)
+        monkeypatch.setattr(tts, "_assemblyai_audio", english_voice)
+        with pytest.raises(tts.HTTPException):
+            await tts._speak_edge("Habari yako", "swahili")
+        assert tried == []
+
+    @pytest.mark.asyncio
+    async def test_unset_keys_skip_the_fallbacks(self, monkeypatch):
+        monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+        monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
+        assert await tts._deepgram_audio("Hello") is None
+        assert await tts._assemblyai_audio("Hello") is None
+
+    def test_wav_header_matches_the_pcm(self):
+        wav = tts._wav(b"\x00\x01" * 10, 24000)
+        assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"
+        assert len(wav) == 44 + 20
+
+
+def httpx_error():
+    import httpx
+    return httpx.ConnectError("deepgram unreachable")

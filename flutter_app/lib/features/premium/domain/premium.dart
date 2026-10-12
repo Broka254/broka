@@ -27,10 +27,11 @@ class PremiumFeature {
         if (kAuctionsEnabled) auctions,
       ];
 
-  /// "20 AI cover tries", "90 voice requests to Zeno"...
+  /// "20 AI cover tries", "15 voice requests to Zeno every day"...
   static String describe(String feature, int n) => switch (feature) {
         aiCovers => '$n AI cover tries',
-        voice => '$n voice requests to Zeno',
+        // A daily allowance since 2026-10-12: renews every day at midnight.
+        voice => '$n voice requests to Zeno every day',
         sms => '$n texts from Zeno',
         watches => n == 1 ? '1 Buying Agent watch' : '$n Buying Agent watches',
         negotiations => '$n negotiations by Zeno',

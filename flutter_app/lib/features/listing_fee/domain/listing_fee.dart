@@ -36,23 +36,6 @@ class FeeOption {
       );
 }
 
-/// Featured placement, offered with the fee to short-term sellers.
-class FeaturedPlan {
-  const FeaturedPlan({required this.id, required this.label, required this.days, required this.price});
-
-  final String id;
-  final String label;
-  final int days;
-  final int price;
-
-  factory FeaturedPlan.fromJson(Map<String, dynamic> j) => FeaturedPlan(
-        id: j['id'] as String? ?? '',
-        label: j['label'] as String? ?? '',
-        days: _int(j['days']),
-        price: _int(j['price']),
-      );
-}
-
 /// Where a listing's paid time stands (listings/paid.py fee_state).
 class FeeState {
   const FeeState({required this.status, required this.live, required this.paidUntil});
@@ -93,8 +76,6 @@ class ListingFeeQuote {
     required this.recommendedMonths,
     required this.expectedDaysToSell,
     required this.strength,
-    required this.featuredAvailable,
-    required this.featuredPlans,
     required this.feesEnabled,
     this.discountsApply = true,
     this.listingValue = 0,
@@ -128,8 +109,6 @@ class ListingFeeQuote {
 
   /// none | suggested | strong
   final String strength;
-  final bool featuredAvailable;
-  final List<FeaturedPlan> featuredPlans;
 
   /// False: listing is free right now and there is nothing to pay.
   final bool feesEnabled;
@@ -150,7 +129,6 @@ class ListingFeeQuote {
     final risk = (j['risk'] as Map?)?.cast<String, dynamic>() ?? const {};
     final discounts = (j['discounts'] as Map?)?.cast<String, dynamic>() ?? const {};
     final rec = (j['recommendation'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final featured = (j['featured'] as Map?)?.cast<String, dynamic>() ?? const {};
     return ListingFeeQuote(
       category: j['category'] as String? ?? '',
       listPrice: _int(j['list_price']),
@@ -170,11 +148,6 @@ class ListingFeeQuote {
       recommendedMonths: _int(rec['months']),
       expectedDaysToSell: _int(rec['expected_days_to_sell']),
       strength: rec['strength'] as String? ?? 'none',
-      featuredAvailable: featured['available'] == true,
-      featuredPlans: [
-        for (final p in (featured['plans'] as List? ?? const []))
-          FeaturedPlan.fromJson((p as Map).cast<String, dynamic>()),
-      ],
       feesEnabled: j['fees_enabled'] != false,
       // Absent from older servers, which always applied the discounts.
       discountsApply: discounts['apply'] != false,

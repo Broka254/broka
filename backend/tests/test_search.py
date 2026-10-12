@@ -172,11 +172,41 @@ class TestTraderSearch:
         return ids
 
     @pytest.mark.asyncio
-    async def test_finds_by_business_or_personal_name(self, client, traders):
+    async def test_finds_by_business_name_else_personal_name(self, client, traders):
         res = await client.get("/traders", params={"search": "electronics clanix"})
         assert [t["id"] for t in res.json()] == [traders["Grace Akinyi"]]
         res = await client.get("/traders", params={"search": "mwangi"})
         assert [t["business_name"] for t in res.json()] == ["Peter Mwangi"]
+
+    @pytest.mark.asyncio
+    async def test_finds_a_new_business_before_its_first_deal(self, client, traders):
+        # It used to search only traders with a completed deal, so a new
+        # business could not be found by its own name.
+        uid = await _register(client, "0745552203", "Amina Hassan", "amina.h@test.ke")
+        async with AsyncSessionLocal() as db:
+            user = (await db.execute(select(User).where(User.id == uid))).scalar_one()
+            user.business_name = "Pwani Fresh Produce"
+            await db.commit()
+        res = await client.get("/traders", params={"search": "pwani fresh"})
+        assert [t["id"] for t in res.json()] == [uid]
+        # Browsing without a search still lists proven traders only.
+        assert uid not in {t["id"] for t in (await client.get("/traders")).json()}
+
+    @pytest.mark.asyncio
+    async def test_business_name_wins_over_the_owners_name(self, client, traders):
+        # Grace trades as Clanix Electronics: her own name is not the card's.
+        res = await client.get("/traders", params={"search": "akinyi"})
+        assert res.json() == []
+
+    @pytest.mark.asyncio
+    async def test_finds_a_trader_by_store_name(self, client, traders):
+        from api.models.store import Store
+        async with AsyncSessionLocal() as db:
+            db.add(Store(owner_id=traders["Peter Mwangi"], name="Mwangi Hardware Depot",
+                         slug="mwangi-hardware-depot"))
+            await db.commit()
+        res = await client.get("/traders", params={"search": "hardware depot"})
+        assert [t["id"] for t in res.json()] == [traders["Peter Mwangi"]]
 
     @pytest.mark.asyncio
     async def test_never_matches_email(self, client, traders):

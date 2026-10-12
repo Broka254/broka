@@ -40,7 +40,7 @@ from api.core.audit import record_audit
 from api.core.config import settings
 from api.core.events import ListingCreated, publish
 from api.core.zetupay import ZetuPayUnavailable
-from api.database import Listing, ListingStatus, SellerTier, User
+from api.database import Listing, ListingStatus, User
 from api.domains.listings.paid import ENDING_SOON, MONTH, fee_applies, fee_state
 from api.domains.payments import service as zetupay_charges
 from api.domains.pricing import engine, service
@@ -165,16 +165,11 @@ async def start_payment(
             f"Choose fewer months."
         ))
 
-    featured_amount = 0
+    # Featured placement is no longer sold (service.FEATURED_NOT_SOLD):
+    # refused before the prompt, so an older app build never pays for it.
     if featured_plan:
-        from api.routers.featured import BOOST_PLANS
-        tier = (await db.execute(select(User.seller_tier).where(User.id == user_id))).scalar()
-        if tier == SellerTier.long_term:
-            raise HTTPException(status_code=403, detail=service.FEATURED_NOT_FOR_LONG_TERM)
-        plan = BOOST_PLANS.get(featured_plan)
-        if plan is None:
-            raise HTTPException(status_code=400, detail="Unknown featured plan.")
-        featured_amount = int(plan["price"])
+        raise HTTPException(status_code=410, detail=service.FEATURED_NOT_SOLD)
+    featured_amount = 0
 
     payment = ListingPayment(
         user_id=user_id, listing_id=listing.id, months=months,

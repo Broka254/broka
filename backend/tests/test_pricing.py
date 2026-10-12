@@ -441,12 +441,13 @@ class TestQuoteEndpoint:
         assert leaky_q["monthly_fee"] > clean_q["monthly_fee"]
 
     @pytest.mark.asyncio
-    async def test_featured_is_offered_to_short_term_sellers_only(self, client):
-        _, short = await _user(SellerTier.short_term)
-        _, long_ = await _user(SellerTier.long_term)
-        assert (await client.get(QUOTE, headers=short)).json()["featured"]["available"] is True
-        long_q = (await client.get(QUOTE, headers=long_)).json()["featured"]
-        assert long_q["available"] is False and long_q["plans"] == []
+    async def test_featured_is_offered_to_nobody(self, client):
+        # Featured placement is no longer sold (2026-10-12): the listing fee
+        # is the only charge on a listing.
+        for tier in (SellerTier.short_term, SellerTier.long_term):
+            _, headers = await _user(tier)
+            featured = (await client.get(QUOTE, headers=headers)).json()["featured"]
+            assert featured["available"] is False and featured["plans"] == []
 
 
 class TestPublicEndpoints:
@@ -486,18 +487,13 @@ class TestPublicEndpoints:
         assert land["new_seller_risk_coefficient"] > phones["new_seller_risk_coefficient"]
 
 
-# ── Featured boosts: short-term sellers only ─────────────────────────────────
+# ── Featured boosts: no longer sold ──────────────────────────────────────────
 
 class TestBoostGate:
     @pytest.mark.asyncio
-    async def test_a_long_term_seller_is_refused_before_any_payment_prompt(self, client, monkeypatch):
-        from api.routers import featured
-
-        async def must_not_run(*_a, **_k):
-            raise AssertionError("the M-Pesa prompt must not be sent")
-
-        monkeypatch.setattr(featured, "_get_token", must_not_run)
-        seller, headers = await _user(SellerTier.long_term)
+    @pytest.mark.parametrize("tier", [SellerTier.short_term, SellerTier.long_term])
+    async def test_every_seller_is_refused_before_any_payment_prompt(self, client, tier):
+        seller, headers = await _user(tier)
         async with AsyncSessionLocal() as db:
             listing = Listing(seller_id=seller.id, name="Sofa", category="Home & Furniture",
                               price=30_000, lat=-1.28, lng=36.82)
@@ -506,33 +502,9 @@ class TestBoostGate:
             listing_id = listing.id
         r = await client.post("/featured/boost", headers=headers, json={
             "listing_id": listing_id, "plan": "week", "phone_number": "0712345678"})
-        assert r.status_code == 403
-        assert "occasional sellers" in r.json()["detail"]
-
-    @pytest.mark.asyncio
-    async def test_a_short_term_seller_still_gets_the_prompt(self, client, monkeypatch):
-        from api.routers import featured
-
-        async def token():
-            return "t"
-
-        async def send(_token, _phone, amount, _name):
-            return {"CheckoutRequestID": f"ws_{uuid.uuid4().hex}", "MerchantRequestID": "m",
-                    "ResponseCode": "0"}
-
-        monkeypatch.setattr(featured, "_get_token", token)
-        monkeypatch.setattr(featured, "_send_stk", send)
-        seller, headers = await _user(SellerTier.short_term)
-        async with AsyncSessionLocal() as db:
-            listing = Listing(seller_id=seller.id, name="Phone", category="Electronics",
-                              price=20_000, lat=-1.28, lng=36.82)
-            db.add(listing)
-            await db.commit()
-            listing_id = listing.id
-        r = await client.post("/featured/boost", headers=headers, json={
-            "listing_id": listing_id, "plan": "week", "phone_number": "0712345678"})
-        assert r.status_code == 200, r.text
-        assert r.json()["amount"] == 99
+        assert r.status_code == 410
+        assert "no longer sold" in r.json()["detail"]
+        assert (await client.get("/featured/plans")).json() == {"plans": {}}
 
 
 # ── Commission on a deal ─────────────────────────────────────────────────────

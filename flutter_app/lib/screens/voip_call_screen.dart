@@ -216,6 +216,12 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       if (s == CallState.connected || s == CallState.ended || s == CallState.failed) {
         _stopRingback();
       }
+      // The call is placed: the caller hears it ring, voice and video
+      // alike, from now until it is answered or ends (2026-10-12). It used
+      // to wait for the callee's phone to confirm it was ringing, which a
+      // phone answering from a closed app often never sent - the caller
+      // held a silent phone through the whole ring.
+      if (s == CallState.calling && _isCaller) _startRingback();
       if (!mounted) return;
       setState(() => _callState = s);
       if (s == CallState.connected) {
@@ -246,14 +252,9 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _svc.onPeerRinging = () {
       if (!mounted) return;
       setState(() => _calleeAlerted = true);
-      // Their phone is ringing: the caller hears it ring, as on a phone
-      // call. Not before - "Calling…" is silent, the call has reached
-      // only the server.
-      if (!_calleeAnswered && !_svc.peerJoined && !_everConnected && !_endingCall &&
-          !_isOver) {
-        _ringbackOn = true;
-        unawaited(RingbackService.instance.start(speakerOn: _speaker));
-      }
+      // Already ringing since the call was placed; this starts it if the
+      // placing didn't (a ringback that failed to load).
+      _startRingback();
     };
     _svc.onPeerJoined = _stopRingback;
     _svc.onPeerAnswered = () {
@@ -539,6 +540,15 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     } else if (state == AppLifecycleState.resumed) {
       unawaited(NotificationService.instance.takeDownCallNotification(roomId));
     }
+  }
+
+  void _startRingback() {
+    if (_ringbackOn || _calleeAnswered || _svc.peerJoined || _everConnected || _endingCall ||
+        _isOver) {
+      return;
+    }
+    _ringbackOn = true;
+    unawaited(RingbackService.instance.start(speakerOn: _speaker));
   }
 
   void _stopRingback() {

@@ -669,37 +669,15 @@ class TestSubscription:
 
 class TestBoostAndBadge:
     @pytest.mark.asyncio
-    async def test_a_boost_is_paid_through_zetupay(self, client, zetupay_on, zp):
+    async def test_a_boost_is_no_longer_sold(self, client, zetupay_on, zp):
+        # Featured placement stopped being sold (2026-10-12): no prompt.
         _, h = await _user(SellerTier.short_term)
         listing = await _listing(client, h)
+        sent = len(zp.prompts)
         r = await client.post("/featured/boost", headers=h, json={
             "listing_id": listing["id"], "plan": "week", "phone_number": "0712345678"})
-        assert r.status_code == 200, r.text
-        reference = r.json()["checkout_request_id"]
-        assert reference.startswith("BS") and zp.prompts[-1]["amount"] == 99
-
-        async with AsyncSessionLocal() as db:
-            assert not (await db.get(Listing, listing["id"])).is_featured, "a 202 features nothing"
-        wave = zp.prompt_for(reference)["wave"]
-        assert (await _webhook(client, _txn(reference, 99, wave))).json()["outcome"] == "applied"
-        status = (await client.get(f"/featured/status/{listing['id']}", headers=h)).json()
-        assert status["payment_status"] == "success" and status["is_featured"] is True
-        until = datetime.fromisoformat(status["featured_until"])
-        assert until > datetime.utcnow() + timedelta(days=6)
-
-    @pytest.mark.asyncio
-    async def test_the_daraja_callback_cannot_settle_a_zetupay_boost(self, client, zetupay_on, zp, monkeypatch):
-        monkeypatch.setattr("api.routers.featured.CALLBACK_SECRET", MPESA_SECRET)
-        _, h = await _user(SellerTier.short_term)
-        listing = await _listing(client, h)
-        reference = (await client.post("/featured/boost", headers=h, json={
-            "listing_id": listing["id"], "plan": "week", "phone_number": "0712345678"})).json()["checkout_request_id"]
-        forged = {"Body": {"stkCallback": {"CheckoutRequestID": reference, "ResultCode": 0,
-                                           "CallbackMetadata": {"Item": [
-                                               {"Name": "MpesaReceiptNumber", "Value": "X"}]}}}}
-        await client.post(f"/featured/callback/{MPESA_SECRET}", json=forged)
-        async with AsyncSessionLocal() as db:
-            assert not (await db.get(Listing, listing["id"])).is_featured
+        assert r.status_code == 410
+        assert len(zp.prompts) == sent
 
     @pytest.mark.asyncio
     async def test_a_badge_is_paid_through_zetupay(self, client, zetupay_on, zp):

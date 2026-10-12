@@ -17,14 +17,27 @@ Zeno's Swahili reply in an American accent. Now:
   * text sent as "english" that reads as Swahili (or Swahili-based Sheng)
     is spoken by the Swahili voice (_reads_as_swahili).
 
-No API keys needed - both services are free.
+If Microsoft's voice fails for English (it is a free, unofficial endpoint
+that can go away), two paid voices stand in, in order (2026-10-12):
+  Edge TTS -> Deepgram Aura -> AssemblyAI (its Voice Agent's voice) -> 503
+Both are English voices, so they stand in for English only: Swahili with no
+Edge voice is silence, never Swahili in an American accent (the rule above).
+Each is skipped when its key (DEEPGRAM_API_KEY, ASSEMBLYAI_API_KEY - the
+ones speech-to-text already uses) is unset. When every voice fails the
+answer is a 503 the app treats as "voice down": the reply stays on screen.
 """
 
+import asyncio
+import base64
 import io
+import json
 import logging
+import os
 import re
+import struct
 import httpx
 import edge_tts
+import websockets
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -46,6 +59,17 @@ EDGE_VOICES = {
 EDGE_FALLBACK_VOICES = {
     "english": "en-US-AriaNeural",
 }
+
+# The paid stand-ins for Edge, English only (see the module docstring).
+DEEPGRAM_SPEAK_URL = "https://api.deepgram.com/v1/speak"
+DEEPGRAM_TTS_MODEL = "aura-2-thalia-en"
+ASSEMBLYAI_AGENT_URL = "wss://agents.assemblyai.com/v1/ws"
+ASSEMBLYAI_VOICE = "ivy"
+# The Voice Agent sends its speech as raw 16-bit mono PCM; wrapped in a WAV
+# header here so the app plays it like any other reply.
+ASSEMBLYAI_SAMPLE_RATE = 24000
+# A fallback that hangs is worse than silence: the app is waiting to speak.
+FALLBACK_TIMEOUT_SECONDS = 15
 
 # Languages routed to HF Space Kokoro
 KOKORO_LANGUAGES = {"sheng", "luo", "kikuyu", "luganda"}
@@ -133,7 +157,8 @@ async def _edge_audio(text: str, voice: str) -> bytes:
 
 
 async def _speak_edge(text: str, language: str) -> Response:
-    """Microsoft Edge TTS for English and Swahili - each in its own voice."""
+    """Microsoft Edge TTS for English and Swahili - each in its own voice.
+    English falls back to Deepgram, then AssemblyAI, when Edge fails."""
     voices = [EDGE_VOICES[language]]
     if language in EDGE_FALLBACK_VOICES:
         voices.append(EDGE_FALLBACK_VOICES[language])
@@ -147,7 +172,78 @@ async def _speak_edge(text: str, language: str) -> Response:
         if audio_bytes:
             return Response(content=audio_bytes, media_type="audio/mpeg")
         logger.warning("Edge TTS returned no audio (voice=%s)", voice)
-    raise HTTPException(status_code=500, detail="Voice service unavailable")
+    if language == "english":
+        for name, provider in (("deepgram", _deepgram_audio), ("assemblyai", _assemblyai_audio)):
+            try:
+                spoken = await asyncio.wait_for(provider(text), FALLBACK_TIMEOUT_SECONDS)
+            except Exception as e:
+                logger.warning("TTS fallback %s failed: %s", name, e)
+                continue
+            if spoken is not None:
+                logger.info("TTS fallback %s spoke for Edge", name)
+                return Response(content=spoken[0], media_type=spoken[1])
+    # Graceful: the app shows the reply and stays silent (broka_tts.dart).
+    raise HTTPException(status_code=503, detail="voice_unavailable")
+
+
+async def _deepgram_audio(text: str) -> tuple[bytes, str] | None:
+    """Deepgram Aura - None when no key is set or no audio came back."""
+    key = os.getenv("DEEPGRAM_API_KEY", "")
+    if not key:
+        return None
+    async with httpx.AsyncClient(timeout=FALLBACK_TIMEOUT_SECONDS) as client:
+        resp = await client.post(
+            DEEPGRAM_SPEAK_URL,
+            params={"model": DEEPGRAM_TTS_MODEL, "encoding": "mp3"},
+            headers={"Authorization": f"Token {key}"},
+            json={"text": text},
+        )
+    if resp.status_code != 200 or not resp.content:
+        logger.warning("Deepgram TTS %s: %s", resp.status_code, resp.text[:200])
+        return None
+    return resp.content, "audio/mpeg"
+
+
+async def _assemblyai_audio(text: str) -> tuple[bytes, str] | None:
+    """AssemblyAI has no plain text-to-speech endpoint; its Voice Agent
+    speaks a session's greeting word for word, so the reply is sent as the
+    greeting and the audio collected until the agent's reply is done.
+    None when no key is set or no audio came back."""
+    key = os.getenv("ASSEMBLYAI_API_KEY", "")
+    if not key:
+        return None
+    pcm = bytearray()
+    async with websockets.connect(
+        ASSEMBLYAI_AGENT_URL, additional_headers={"Authorization": f"Bearer {key}"},
+    ) as ws:
+        await ws.send(json.dumps({"type": "session.update", "session": {
+            "system_prompt": "Say the greeting exactly as written, then nothing else.",
+            "greeting": text,
+            "output": {"voice": ASSEMBLYAI_VOICE},
+        }}))
+        async for raw in ws:
+            if isinstance(raw, bytes):
+                continue
+            event = json.loads(raw)
+            kind = event.get("type")
+            if kind == "reply.audio":
+                pcm.extend(base64.b64decode(event.get("data") or ""))
+            elif kind == "reply.done" or kind == "error":
+                if kind == "error":
+                    logger.warning("AssemblyAI TTS error: %s", str(event)[:200])
+                break
+    if not pcm:
+        return None
+    return _wav(bytes(pcm), ASSEMBLYAI_SAMPLE_RATE), "audio/wav"
+
+
+def _wav(pcm: bytes, sample_rate: int) -> bytes:
+    """16-bit mono PCM with the 44-byte RIFF header a player needs."""
+    return b"".join((
+        b"RIFF", struct.pack("<I", 36 + len(pcm)), b"WAVE",
+        b"fmt ", struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16),
+        b"data", struct.pack("<I", len(pcm)), pcm,
+    ))
 
 
 async def _speak_kokoro(text: str, language: str) -> Response:

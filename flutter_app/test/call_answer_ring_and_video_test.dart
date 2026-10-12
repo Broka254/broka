@@ -280,7 +280,7 @@ void main() {
       permissions = (_) => Completer<Object?>().future; // still setting up
       final svc = await open(tester, {'isCaller': true, 'callerRole': 'seller'});
       expect(RingbackService.instance.isPlaying, isFalse,
-          reason: '"Calling…" is silent - the call has reached only the server');
+          reason: 'still setting up - the call is not placed yet');
 
       svc.onPeerRinging!();
       await tester.pump();
@@ -302,6 +302,22 @@ void main() {
       await close(tester);
       // The mock player never reports the sound loaded: let audioplayers'
       // own 30-second wait for it run out.
+      await tester.pump(const Duration(seconds: 31));
+    });
+
+    testWidgets('the caller hears it ring as soon as the call is placed', (tester) async {
+      // A phone answering from a closed app often never says it is ringing
+      // (callee_ringing): the caller used to hold a silent phone throughout.
+      RingbackService.debugSupported = true;
+      permissions = (_) => Completer<Object?>().future;
+      final svc = await open(tester, {'isCaller': true, 'callerRole': 'seller'});
+      svc.onStateChange!(CallState.calling);
+      await tester.pump();
+      expect(RingbackService.instance.isPlaying, isTrue);
+      svc.onPeerAnswered!();
+      await tester.pump();
+      expect(RingbackService.instance.isPlaying, isFalse, reason: 'they answered');
+      await close(tester);
       await tester.pump(const Duration(seconds: 31));
     });
   });

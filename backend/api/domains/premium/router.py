@@ -39,6 +39,17 @@ class SubscribeIn(BaseModel):
     phone_number: str = Field(..., max_length=20)
 
 
+@router.post("/insights")
+async def open_zeno_insights(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Opening Zeno's insights: one of three free looks without a plan,
+    free with one. A 402 when the free looks are spent."""
+    await entitlements.consume(db, current_user["id"], entitlements.Feature.INSIGHTS)
+    return {"ok": True}
+
+
 @router.post("/subscribe")
 async def subscribe(
     body: SubscribeIn,

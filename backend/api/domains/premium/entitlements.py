@@ -6,8 +6,16 @@ Every premium feature asks here before it does the thing that costs money
 counted: the features stay free, as they were before plans existed.
 
 Allowances are per plan month (models/subscription.py): month n of a plan
-runs from its start + n x 30 days. Someone without a plan has only
-FREE_TRIAL - one AI cover, once.
+runs from its start + n x 30 days - except voice requests, which are a
+daily allowance renewing at midnight in Kenya (2026-10-12: "90 a month"
+read as too little for KES 199; "15 every day" is what a user can plan
+around). Someone without a plan has only FREE_TRIAL, once: one AI cover,
+one description, and three each of voice requests, Buying Agent tries and
+Zeno insights.
+
+The Buying Agent and Zeno insights are TRIAL_ONLY: counted for someone
+without a plan (three tries, then a plan), never for a plan holder - a
+Buying Agent watch is still capped at once by the plan (watch_cap).
 
 A refusal is a 402 whose detail the app reads: {"code", "message",
 "feature", "plan", "upgrade_to"}. PREMIUM_REQUIRED means the user has no
@@ -45,6 +53,16 @@ class Feature:
     COUNTED = (VOICE, SMS, AUTO_NEGOTIATION, AI_COVER, AUCTION, AI_DESCRIPTION, PRICE_CHECK)
     # Not counted per month but held at once: watches running now.
     WATCHES = "agent_watches"
+    # Free tries without a plan, uncounted with one (module docstring).
+    AGENT_TRY = "agent_tries"
+    INSIGHTS = "zeno_insights"
+    TRIAL_ONLY = (AGENT_TRY, INSIGHTS)
+    # Renew every day, not every plan month.
+    DAILY = (VOICE,)
+
+
+# Kenya is UTC+3 all year: a day's voice requests renew at its midnight.
+_KENYA = timedelta(hours=3)
 
 
 # How each feature is named to a user, singular and plural.
@@ -58,6 +76,8 @@ _NAMES = {
                              "Zeno writing your description from your photo"),
     Feature.PRICE_CHECK: ("price check", "price checks", "Pricing your listing with Zeno"),
     Feature.WATCHES: ("Buying Agent watch", "Buying Agent watches", "The Buying Agent"),
+    Feature.AGENT_TRY: ("Buying Agent try", "Buying Agent tries", "The Buying Agent"),
+    Feature.INSIGHTS: ("look at Zeno's insights", "looks at Zeno's insights", "Zeno's insights"),
 }
 
 
@@ -92,6 +112,21 @@ def renews_at(sub: Subscription, now: datetime) -> datetime:
     return min(sub.started_at + (month_index(sub, now) + 1) * MONTH, sub.paid_until)
 
 
+def day_key(now: datetime) -> str:
+    """Today in Kenya, for a daily allowance."""
+    return f"day:{(now + _KENYA):%Y-%m-%d}"
+
+
+def day_renews_at(now: datetime) -> datetime:
+    """Next midnight in Kenya, as naive UTC."""
+    local = now + _KENYA
+    return datetime(local.year, local.month, local.day) + timedelta(days=1) - _KENYA
+
+
+def _period(feature: str, sub: Subscription, now: datetime) -> str:
+    return day_key(now) if feature in Feature.DAILY else period_key(sub, now)
+
+
 def first_plan_with(feature: str) -> Optional[PremiumPlan]:
     """The cheapest plan that includes `feature` - the one to suggest."""
     return next((p for p in PREMIUM_PLANS if p.allowance(feature) > 0), None)
@@ -107,15 +142,27 @@ def _refusal(feature: str, plan: Optional[PremiumPlan], sub: Optional[Subscripti
              now: datetime, spent: bool) -> HTTPException:
     one, many, title = _NAMES[feature]
     up = _next_plan_up(plan, feature)
-    if spent and plan is not None:
+    if spent and plan is not None and feature in Feature.DAILY:
+        message = (f"You've used today's {plan.allowance(feature)} {many} on "
+                   f"BROKA {plan.name}. They renew at midnight"
+                   + (f" - or move up to {up.name} for {up.allowance(feature)} a day." if up else "."))
+        code = "ALLOWANCE_USED"
+    elif spent and plan is not None:
         renew = renews_at(sub, now)
         message = (f"You've used this month's {plan.allowance(feature)} {many} on "
                    f"BROKA {plan.name}. They renew on {renew.day} {renew:%b}"
                    + (f" - or move up to {up.name} for {up.allowance(feature)} a month." if up else "."))
         code = "ALLOWANCE_USED"
+    elif spent and feature in Feature.TRIAL_ONLY:
+        up = PREMIUM_PLANS[0]
+        message = (f"You've used your {FREE_TRIAL.get(feature, 0)} free {many}. "
+                   f"{title} is part of every BROKA plan, from {up.name} at "
+                   f"KES {up.monthly_price} a month.")
+        code = "ALLOWANCE_USED"
     elif spent:
+        every = "a day" if feature in Feature.DAILY else "a month"
         message = (f"You've used your free {many}. "
-                   + (f"BROKA {up.name} gives you {up.allowance(feature)} a month, from "
+                   + (f"BROKA {up.name} gives you {up.allowance(feature)} {every}, from "
                       f"KES {up.monthly_price}." if up else ""))
         code = "ALLOWANCE_USED"
     else:
@@ -182,7 +229,9 @@ async def _allowance(db: AsyncSession, user_id: str, feature: str, now: datetime
     sub = await active_subscription(db, user_id, now)
     plan = plan_of(sub)
     if plan is not None:
-        return sub, plan, plan.allowance(feature), period_key(sub, now)
+        if feature in Feature.TRIAL_ONLY:
+            return sub, plan, None, None
+        return sub, plan, plan.allowance(feature), _period(feature, sub, now)
     return None, None, FREE_TRIAL.get(feature, 0), "trial"
 
 
@@ -197,6 +246,8 @@ async def consume(db: AsyncSession, user_id: str, feature: str, n: int = 1) -> N
         return
     now = datetime.utcnow()
     sub, plan, limit, key = await _allowance(db, user_id, feature, now)
+    if limit is None:
+        return  # TRIAL_ONLY, and the user has a plan: not counted
     if limit <= 0:
         raise _refusal(feature, plan, sub, now, spent=False)
     if not await _add(db, user_id, feature, key, n, limit):
@@ -212,8 +263,28 @@ async def require(db: AsyncSession, user_id: str, feature: str) -> None:
         return
     now = datetime.utcnow()
     sub, plan, limit, _key = await _allowance(db, user_id, feature, now)
+    if limit is not None and limit <= 0:
+        raise _refusal(feature, plan, sub, now, spent=False)
+
+
+async def require_left(db: AsyncSession, user_id: str, feature: str) -> None:
+    """The 402 unless at least one of `feature` is left - without spending
+    it. For work whose cost is only known afterwards (a Buying Agent
+    conversation is a try only once it brings back listings), spent with
+    try_consume() when it does."""
+    if not enabled():
+        return
+    now = datetime.utcnow()
+    sub, plan, limit, key = await _allowance(db, user_id, feature, now)
+    if limit is None:
+        return
     if limit <= 0:
         raise _refusal(feature, plan, sub, now, spent=False)
+    used = (await db.execute(select(FeatureUsage.used).where(
+        FeatureUsage.user_id == user_id, FeatureUsage.feature == feature,
+        FeatureUsage.period_key == key))).scalar() or 0
+    if used >= limit:
+        raise _refusal(feature, plan, sub, now, spent=True)
 
 
 async def try_consume(db: AsyncSession, user_id: str, feature: str, n: int = 1) -> bool:
@@ -234,7 +305,9 @@ async def release(db: AsyncSession, user_id: str, feature: str, n: int = 1) -> N
     if not enabled():
         return
     now = datetime.utcnow()
-    _sub, _plan, _limit, key = await _allowance(db, user_id, feature, now)
+    _sub, _plan, limit, key = await _allowance(db, user_id, feature, now)
+    if limit is None:
+        return
     await db.execute(
         update(FeatureUsage)
         .where(FeatureUsage.user_id == user_id, FeatureUsage.feature == feature,
@@ -246,11 +319,17 @@ async def release(db: AsyncSession, user_id: str, feature: str, n: int = 1) -> N
 
 
 async def watch_cap(db: AsyncSession, user_id: str) -> int:
-    """How many Buying Agent watches may run at once."""
+    """How many Buying Agent watches may run at once. Without a plan, one -
+    each spending one of the free Buying Agent tries (start_watch)."""
     if not enabled():
         return settings.buy_agent_max_active
     plan = plan_of(await active_subscription(db, user_id))
-    return plan.agent_watches if plan else 0
+    return plan.agent_watches if plan else 1
+
+
+async def start_watch(db: AsyncSession, user_id: str) -> None:
+    """A new watch is a Buying Agent try for someone without a plan."""
+    await consume(db, user_id, Feature.AGENT_TRY)
 
 
 def watches_refusal() -> HTTPException:
@@ -266,7 +345,8 @@ async def summary(db: AsyncSession, user_id: str) -> dict:
                 "usage": {}, "trial": {}}
     sub = await active_subscription(db, user_id, now)
     plan = plan_of(sub)
-    keys = {f: (period_key(sub, now) if plan else "trial") for f in Feature.COUNTED}
+    keys = {f: (_period(f, sub, now) if plan else "trial")
+            for f in Feature.COUNTED + Feature.TRIAL_ONLY}
     rows = (await db.execute(select(FeatureUsage.feature, FeatureUsage.period_key, FeatureUsage.used)
                              .where(FeatureUsage.user_id == user_id))).all()
     used = {feature: n for feature, key, n in rows if keys.get(feature) == key}
@@ -274,9 +354,16 @@ async def summary(db: AsyncSession, user_id: str) -> dict:
     def entry(feature: str) -> dict:
         allowance = plan.allowance(feature) if plan else FREE_TRIAL.get(feature, 0)
         spent = used.get(feature, 0)
-        return {"allowance": allowance, "used": spent, "left": max(0, allowance - spent)}
+        out = {"allowance": allowance, "used": spent, "left": max(0, allowance - spent)}
+        if plan and feature in Feature.DAILY:
+            out["per"] = "day"
+            out["renews_at"] = day_renews_at(now).isoformat()
+        return out
 
     usage = {f: entry(f) for f in Feature.COUNTED}
+    if plan is None:
+        # A plan holder's are not counted, so there is nothing to show.
+        usage.update({f: entry(f) for f in Feature.TRIAL_ONLY})
     # Nobody can host an auction while they are off (auctions/paused.py),
     # so a plan's auctions are not shown as something left to use - older
     # app builds list every allowance over 0.
@@ -286,7 +373,7 @@ async def summary(db: AsyncSession, user_id: str) -> dict:
     from api.database import BuyAgentRequest
     watching = (await db.execute(select(func.count(BuyAgentRequest.id)).where(
         BuyAgentRequest.buyer_id == user_id, BuyAgentRequest.status.in_(CAPPED_STATUSES)))).scalar() or 0
-    cap = plan.agent_watches if plan else 0
+    cap = plan.agent_watches if plan else (1 if usage[Feature.AGENT_TRY]["left"] else 0)
     usage[Feature.WATCHES] = {"allowance": cap, "used": watching, "left": max(0, cap - watching)}
     return {
         "enabled": True,

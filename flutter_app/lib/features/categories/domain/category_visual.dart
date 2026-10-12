@@ -5,7 +5,7 @@
 // Before this file there were six independent category-visual tables:
 // home_screen's _categoryEmojiMap (26 entries), BrokaColors.zoneGradients
 // (27 entries), and four near-identical four-case switches in
-// product_card.dart, models/listing.dart, boost_screen.dart and
+// product_card.dart, models/listing.dart and
 // inbox_screen.dart. The four switches only knew Vehicles, Property,
 // Electronics and Livestock, so eleven of the backend's then sixteen top-level
 // categories rendered as a generic 📦 everywhere except Home - the exact

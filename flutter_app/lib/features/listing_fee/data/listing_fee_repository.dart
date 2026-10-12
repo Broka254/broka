@@ -57,7 +57,6 @@ class ListingFeeRepository {
     required String listingId,
     required int months,
     required String phone,
-    String? featuredPlan,
     required String idempotencyKey,
   }) =>
       _guard(() async => ListingFeePayment.fromJson(await _client.post(
@@ -66,7 +65,6 @@ class ListingFeeRepository {
               'listing_id': listingId,
               'months': months,
               'phone_number': phone,
-              if (featuredPlan != null) 'featured_plan': featuredPlan,
             },
             headers: {'X-Idempotency-Key': idempotencyKey},
           ) as Map<String, dynamic>));

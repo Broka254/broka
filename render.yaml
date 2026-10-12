@@ -49,7 +49,8 @@ services:
       - key: HF_SHOWCASE_MODEL
         value: "Qwen/Qwen-Image-Edit-2511"   # any Hub model HF serves for image-to-image via fal-ai
       - key: DEEPGRAM_API_KEY
-        sync: false          # Deepgram streaming speech-to-text, for the Zeno voice card.
+        sync: false          # Deepgram streaming speech-to-text, for the Zeno voice card,
+                             # and Zeno's first stand-in voice (Aura) when Edge TTS fails.
                              # Unset is safe: /stt/deepgram-token returns 503 and the app
                              # keeps its text composer. This is the PERMANENT key and must
                              # never reach the Flutter build - the phone only ever receives
@@ -59,7 +60,9 @@ services:
                              # voice card, used when Deepgram cannot be reached or refuses
                              # a session. Unset is safe: /stt/assemblyai-token returns 503,
                              # the failover is simply unavailable and Deepgram (or the text
-                             # composer) carries voice on its own. Same rule as above: this
+                             # composer) carries voice on its own. Also Zeno's last stand-in
+                             # voice (its Voice Agent) when Edge and Deepgram TTS both fail.
+                             # Same rule as above: this
                              # is the PERMANENT key, it must never reach the Flutter build,
                              # and the phone only ever receives the short-lived token minted
                              # from it by /stt/assemblyai-token.

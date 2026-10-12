@@ -69,7 +69,7 @@ class PremiumPlan:
     name: str
     monthly_price: int
     pitch: str
-    voice_requests: int             # things said to Zeno in voice mode
+    voice_requests: int             # things said to Zeno in voice mode - A DAY (renews daily)
     sms_alerts: int                 # texts Zeno sends: a buyer waiting, a message you asked it to send
     agent_watches: int              # Buying Agent watches running at once (not a monthly count)
     auto_negotiations: int          # sellers Zeno opens a negotiation with for you
@@ -84,7 +84,7 @@ class PremiumPlan:
 
     def max_monthly_cost(self) -> float:
         usage = (
-            self.voice_requests * costs.VOICE_REQUEST
+            self.voice_requests * VOICE_FULL_DAYS_A_MONTH * costs.VOICE_REQUEST
             + self.sms_alerts * costs.SMS
             + self.agent_watches * costs.AGENT_WATCH_MONTH
             + self.auto_negotiations * costs.AI_PER_AUTO_NEGOTIATION
@@ -97,7 +97,9 @@ class PremiumPlan:
         return usage * costs.OVERHEAD + costs.mpesa_collection_cost(self.monthly_price)
 
     def allowance(self, feature: str) -> int:
-        return int(getattr(self, feature))
+        # 0 for what no plan counts (the trial-only Buying Agent tries and
+        # Zeno insights - premium/entitlements.py).
+        return int(getattr(self, feature, 0))
 
     def to_dict(self) -> dict:
         # While auctions are off, a plan must not sell them: nobody can
@@ -149,12 +151,23 @@ class PremiumPlan:
 # every plan, and price checks against similar BROKA listings from Pro up -
 # "pro sellers" are who it is for. Both cost cents a use (costs.py), so the
 # allowances are sized for a busy seller, not for the margin.
+# Voice requests are a DAILY allowance (2026-10-12): "90 a month" for KES 199
+# read as too little to be worth it, and an allowance that renews every day
+# is one a user can plan around. A day's full allowance is ~5 minutes on
+# Plus, ~13 on Pro, ~27 on Elite. Every-day full use would cost more than
+# Plus earns (15 x 30 x KES 0.81 = KES 364), so the margin rule counts voice
+# at VOICE_FULL_DAYS_A_MONTH days of full use: the daily cap bounds a single
+# day, and a month of maxed-out days is the abuse case, not the user. The
+# TTS reserve inside each request (a third of it) is still counted although
+# Edge speaks for free, which is the slack if heavy use grows.
+VOICE_FULL_DAYS_A_MONTH = 5
+
 PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
     PremiumPlan(
         id="plus", name="Plus", monthly_price=199,
         pitch="Zeno writes your listings from their photos, gives them AI covers, "
               "talks with you and texts you when a buyer is waiting.",
-        voice_requests=90, sms_alerts=30, agent_watches=1, auto_negotiations=0,
+        voice_requests=15, sms_alerts=30, agent_watches=1, auto_negotiations=0,
         ai_covers=6, auctions_hosted=0, ai_descriptions=30,
     ),
     PremiumPlan(
@@ -163,13 +176,13 @@ PREMIUM_PLANS: tuple[PremiumPlan, ...] = (
               "covers for a week of listings, and your own auctions.",
         pitch_without_auctions="Zeno prices your listings against the market, hunts and "
                                "haggles for you, and makes covers for a week of listings.",
-        voice_requests=180, sms_alerts=80, agent_watches=3, auto_negotiations=25,
+        voice_requests=40, sms_alerts=80, agent_watches=3, auto_negotiations=25,
         ai_covers=20, auctions_hosted=2, ai_descriptions=100, price_checks=40,
     ),
     PremiumPlan(
         id="elite", name="Elite", monthly_price=1499,
         pitch="Everything, in volume - for people who buy and sell for a living.",
-        voice_requests=360, sms_alerts=150, agent_watches=10, auto_negotiations=50,
+        voice_requests=80, sms_alerts=150, agent_watches=10, auto_negotiations=50,
         ai_covers=60, auctions_hosted=5, ai_descriptions=300, price_checks=150,
         priority_support_minutes=15,
     ),
@@ -183,7 +196,14 @@ PREMIUM_BY_ID: dict[str, PremiumPlan] = {p.id: p for p in PREMIUM_PLANS}
 #     Sellers were asked to pay for Zeno's selling help without ever seeing
 #     it work; "Zeno lists it for me" (zeno_assistant/autolist.py) shows the
 #     whole of it on their own item, which is the case for a plan.
-FREE_TRIAL: dict[str, int] = {"ai_covers": 1, "ai_descriptions": 1}
+#   * three each of voice requests, Buying Agent tries and looks at Zeno's
+#     insights (2026-10-12): a new user tries each three times, then needs a
+#     plan. A Buying Agent try is a search that brought back listings, or a
+#     watch started.
+FREE_TRIAL: dict[str, int] = {
+    "ai_covers": 1, "ai_descriptions": 1,
+    "voice_requests": 3, "agent_tries": 3, "zeno_insights": 3,
+}
 
 
 # ── Stores ───────────────────────────────────────────────────────────────────

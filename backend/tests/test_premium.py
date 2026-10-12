@@ -290,22 +290,28 @@ class TestAllowances:
     async def test_me_without_a_plan_shows_the_free_tries(self, client, premium_on):
         _, h = await _user()
         me = (await client.get("/premium/me", headers=h)).json()
-        assert me["plan"] is None and me["trial"] == {"ai_covers": 1, "ai_descriptions": 1}
-        assert me["usage"]["voice_requests"]["allowance"] == 0
+        assert me["plan"] is None and me["trial"] == {
+            "ai_covers": 1, "ai_descriptions": 1,
+            "voice_requests": 3, "agent_tries": 3, "zeno_insights": 3}
+        assert me["usage"]["voice_requests"]["allowance"] == 3
+        assert me["usage"]["zeno_insights"]["left"] == 3
 
 
 # ── The gates ────────────────────────────────────────────────────────────────
 
 class TestVoiceMode:
     @pytest.mark.asyncio
-    async def test_needs_a_plan_and_typing_does_not(self, client, premium_on, monkeypatch):
+    async def test_three_free_then_a_plan_and_typing_stays_free(self, client, premium_on, monkeypatch):
         monkeypatch.setattr("api.domains.zeno_assistant.service.assistant_turn",
                             AsyncMock(return_value={"reply": "Sawa", "action": None}))
         _, free = await _user()
         _, plus = await _user("plus")
         voice = {"message": "open my inbox", "mode": "voice"}
+        for _ in range(3):
+            assert (await client.post("/zeno/assistant/turn", headers=free, json=voice)).status_code == 200
         refused = await client.post("/zeno/assistant/turn", headers=free, json=voice)
-        assert refused.status_code == 402 and refused.json()["detail"]["code"] == "PREMIUM_REQUIRED"
+        assert refused.status_code == 402 and refused.json()["detail"]["code"] == "ALLOWANCE_USED"
+        assert refused.json()["detail"]["upgrade_to"] == "plus"
         typed = await client.post("/zeno/assistant/turn", headers=free, json={"message": "open my inbox"})
         assert typed.status_code == 200
         assert (await client.post("/zeno/assistant/turn", headers=plus, json=voice)).status_code == 200
@@ -313,30 +319,131 @@ class TestVoiceMode:
         assert me["usage"]["voice_requests"]["used"] == 1
 
 
+class TestDailyVoice:
+    @pytest.mark.asyncio
+    async def test_a_days_voice_requests_renew_the_next_day(self, premium_on):
+        user, _ = await _user("plus")
+        daily = PREMIUM_BY_ID["plus"].voice_requests
+        async with AsyncSessionLocal() as db:
+            for _ in range(daily):
+                await entitlements.consume(db, user.id, Feature.VOICE)
+            with pytest.raises(Exception) as exc:
+                await entitlements.consume(db, user.id, Feature.VOICE)
+            assert exc.value.status_code == 402
+            assert "renew at midnight" in exc.value.detail["message"]
+            tomorrow = datetime.utcnow() + timedelta(days=1)
+            with patch("api.domains.premium.entitlements.datetime") as clock:
+                clock.utcnow.return_value = tomorrow
+                clock.side_effect = datetime
+                await entitlements.consume(db, user.id, Feature.VOICE)
+
+    def test_the_day_turns_at_midnight_in_kenya(self):
+        # 20:59 UTC is 23:59 in Nairobi; 21:00 UTC is the next day there.
+        assert entitlements.day_key(datetime(2026, 10, 12, 20, 59)) == "day:2026-10-12"
+        assert entitlements.day_key(datetime(2026, 10, 12, 21, 0)) == "day:2026-10-13"
+        assert entitlements.day_renews_at(datetime(2026, 10, 12, 10, 0)) == datetime(2026, 10, 12, 21, 0)
+
+    @pytest.mark.asyncio
+    async def test_me_says_voice_is_per_day(self, client, premium_on):
+        _, h = await _user("pro")
+        voice = (await client.get("/premium/me", headers=h)).json()["usage"]["voice_requests"]
+        assert voice["per"] == "day" and voice["allowance"] == PREMIUM_BY_ID["pro"].voice_requests
+
+
+class TestZenoInsights:
+    @pytest.mark.asyncio
+    async def test_three_free_looks_then_a_plan(self, client, premium_on):
+        _, free = await _user()
+        for _ in range(3):
+            assert (await client.post("/premium/insights", headers=free)).status_code == 200
+        refused = await client.post("/premium/insights", headers=free)
+        assert refused.status_code == 402 and refused.json()["detail"]["code"] == "ALLOWANCE_USED"
+
+    @pytest.mark.asyncio
+    async def test_free_on_a_plan_and_while_premium_is_off(self, client, premium_on):
+        _, plus = await _user("plus")
+        for _ in range(5):
+            assert (await client.post("/premium/insights", headers=plus)).status_code == 200
+
+
 class TestBuyingAgent:
     @pytest.mark.asyncio
     async def test_watches_follow_the_plan(self, client, premium_on):
-        _, free = await _user()
+        free_user, free = await _user()
         _, pro = await _user("pro")
         watch = {"category": "Electronics", "max_price": 20000}
-        refused = await client.post("/buy-agent-requests", headers=free, json=watch)
-        assert refused.status_code == 402 and refused.json()["detail"]["upgrade_to"] == "plus"
+        # Without a plan: one watch at a time, each a free try.
+        assert (await client.post("/buy-agent-requests", headers=free, json=watch)).status_code == 200
+        second = await client.post("/buy-agent-requests", headers=free, json=watch)
+        assert second.status_code == 409
+        me = (await client.get("/premium/me", headers=free)).json()
+        assert me["usage"]["agent_tries"]["left"] == 2, "a refused watch gives its try back"
         for _ in range(PREMIUM_BY_ID["pro"].agent_watches):
             assert (await client.post("/buy-agent-requests", headers=pro, json=watch)).status_code == 200
         full = await client.post("/buy-agent-requests", headers=pro, json=watch)
         assert full.status_code == 409 and "3 active" in full.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_three_free_tries_then_a_plan(self, client, premium_on):
+        user, free = await _user()
+        async with AsyncSessionLocal() as db:
+            for _ in range(3):
+                await entitlements.consume(db, user.id, Feature.AGENT_TRY)
+        refused = await client.post("/buy-agent-requests", headers=free,
+                                    json={"category": "Electronics", "max_price": 20000})
+        assert refused.status_code == 402
+        assert refused.json()["detail"]["code"] == "ALLOWANCE_USED"
+        assert refused.json()["detail"]["upgrade_to"] == "plus"
+
+    @pytest.mark.asyncio
+    async def test_a_search_is_a_try_only_once_it_brings_back_listings(self, client, premium_on, monkeypatch):
+        answers = [{"phase": "ASKING"}, {"phase": "RESULTS", "listings": []}]
+        monkeypatch.setattr("api.domains.buy_agent.conversation.converse",
+                            AsyncMock(side_effect=lambda **_: answers.pop(0)))
+        _, free = await _user()
+        turn = {"message": "a phone under 20k"}
+        assert (await client.post("/buy-agent-requests/converse", headers=free, json=turn)).status_code == 200
+        me = (await client.get("/premium/me", headers=free)).json()
+        assert me["usage"]["agent_tries"]["used"] == 0, "Zeno's questions are free"
+        assert (await client.post("/buy-agent-requests/converse", headers=free, json=turn)).status_code == 200
+        me = (await client.get("/premium/me", headers=free)).json()
+        assert me["usage"]["agent_tries"]["used"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_spent_trial_is_refused_before_the_model_runs(self, client, premium_on, monkeypatch):
+        model = AsyncMock(return_value={"phase": "RESULTS"})
+        monkeypatch.setattr("api.domains.buy_agent.conversation.converse", model)
+        user, free = await _user()
+        async with AsyncSessionLocal() as db:
+            for _ in range(3):
+                await entitlements.consume(db, user.id, Feature.AGENT_TRY)
+        r = await client.post("/buy-agent-requests/converse", headers=free, json={"message": "phones"})
+        assert r.status_code == 402
+        model.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_plan_holder_is_never_counted(self, client, premium_on, monkeypatch):
+        monkeypatch.setattr("api.domains.buy_agent.conversation.converse",
+                            AsyncMock(return_value={"phase": "RESULTS"}))
+        _, plus = await _user("plus")
+        for _ in range(5):
+            r = await client.post("/buy-agent-requests/converse", headers=plus, json={"message": "phones"})
+            assert r.status_code == 200
+
+    @pytest.mark.asyncio
     async def test_asking_zeno_for_a_watch_without_a_plan_says_so_in_words(self, client, premium_on):
         # The Zeno tab sets watches through an action, which answers in its
         # FAILED shape. The plan refusal used to arrive there as the repr of
         # the 402's detail dict, printed to the buyer as is.
-        _, free = await _user()
+        user, free = await _user()
+        async with AsyncSessionLocal() as db:
+            for _ in range(3):
+                await entitlements.consume(db, user.id, Feature.AGENT_TRY)
         ask = {"action": "CREATE_BUYING_REQUEST",
                "parameters": {"category": "Electronics", "max_price": 20000}}
         answer = (await client.post("/buy-agent-requests/action", headers=free, json=ask)).json()
-        assert answer["status"] == "FAILED" and answer["error_code"] == "PREMIUM_REQUIRED"
-        assert answer["message"].startswith("The Buying Agent is part of BROKA Plus")
+        assert answer["status"] == "FAILED" and answer["error_code"] == "ALLOWANCE_USED"
+        assert answer["message"].startswith("You've used your 3 free Buying Agent tries")
 
     @pytest.mark.asyncio
     async def test_zeno_negotiates_on_a_plan_that_includes_it_once_per_thread(self, client, premium_on):

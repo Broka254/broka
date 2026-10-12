@@ -875,6 +875,10 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                   _buildDivider(),
                   const SizedBox(height: 18),
                   _buildSwitchPrompt(),
+                  if (!_isLogin) ...[
+                    const SizedBox(height: 14),
+                    _buildTermsNote(),
+                  ],
                   const SizedBox(height: 16),
                 ],
               ),
@@ -2041,6 +2045,26 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                 fontWeight: FontWeight.w700)),
       ],
     )),
+  ));
+
+  // Creating an account is agreeing to the Terms (assets/legal/terms.md,
+  // section 2): said where the account is made, with the Terms one tap away.
+  Widget _buildTermsNote() => Center(child: GestureDetector(
+    key: const Key('auth-terms'),
+    onTap: () => Navigator.of(context).pushNamed('/terms'),
+    child: const Text.rich(
+      TextSpan(
+        style: TextStyle(fontSize: 12.5, color: BrokaColors.textLow, height: 1.4),
+        children: [
+          TextSpan(text: 'By creating an account you agree to BROKA\'s '),
+          TextSpan(text: 'Terms of Use',
+              style: TextStyle(color: BrokaColors.gold, fontWeight: FontWeight.w700,
+                  decoration: TextDecoration.underline)),
+          TextSpan(text: '.'),
+        ],
+      ),
+      textAlign: TextAlign.center,
+    ),
   ));
 
   Widget _tab(String label, bool active, VoidCallback onTap) => Expanded(

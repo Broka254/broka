@@ -55,6 +55,13 @@ class PremiumRepository {
             headers: {'X-Idempotency-Key': idempotencyKey},
           ) as Map<String, dynamic>));
 
+  /// Opening Zeno's insights: three free looks without a plan, free with
+  /// one (POST /premium/insights). A 402 once the free looks are used.
+  Future<Result<bool>> openInsights() => _guard(() async {
+        await _client.post('/premium/insights', const <String, dynamic>{});
+        return true;
+      });
+
   Future<Result<PlanPayment>> paymentStatus(String paymentId) => _guard(() async =>
       PlanPayment.fromJson(await _client.get('/premium/payments/$paymentId') as Map<String, dynamic>));
 }

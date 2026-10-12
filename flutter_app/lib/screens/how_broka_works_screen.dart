@@ -136,18 +136,15 @@ const _zenoDirect = _Topic(
 const _ranking = _Topic(
   Icons.leaderboard_rounded, BrokaColors.neonBlue,
   'Ranking, and what buyers see first',
-  'Earned from your numbers - with one paid exception, always marked.',
+  'Earned from your numbers. Nothing on BROKA buys a higher place.',
   [
     'Your rank is computed from your completion rate, your response time '
     'and your credibility. That rank decides how high your listings sit '
     'when a buyer browses your category.',
-    // It said "there is no featured placement, no promoted listing and no
-    // paid badge" - while the app sold boosts and the Verified badge.
-    'The one thing you can pay for is a boost: a boosted listing is put '
-    'ahead of the others for the time you paid for, and it wears a '
-    'FEATURED badge so buyers always know. The Verified badge is paid for '
-    'too, but it is given only after an ID check, and it does not move '
-    'you up the list.',
+    // Boosts are no longer sold (2026-10-12): a listing pays its listing
+    // fee and nothing else. The Verified badge is still paid for.
+    'The Verified badge is paid for, but it is given only after an ID '
+    'check, and it does not move you up the list.',
     'Everything else is earned: the seller ahead of you got there by '
     'closing deals here and answering quickly. So can you.',
   ],

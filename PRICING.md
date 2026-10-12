@@ -23,7 +23,7 @@ Figures are in Kenyan shillings (KES), at **USD 1 = KES 129.5** (late September
 | **Commission**, when payments return | Negotiated deal: buyer pays **4.49%** (BROKA 3.49%, never under KES 20, + E-Confirm 1%). Auction: **5%** (BROKA 4% + E-Confirm 1%) |
 | **Listing fee** | Per listing, **for two months at a time** (2026-10-11), a cube root of its **value - price × quantity**: **f = 8.91822 × ∛value − 42.1011, between KES 10 and 2,000** (set 2026-10-09), never under what the listing costs to serve for those two months. A KES 1,500 dress pays KES 60 for two months, a KES 20,000 phone 200, a KES 800,000 car 785; from KES 12M of value (200 KES 180,000 iPhones, a house) it is KES 2,000. **Founding sellers' first listing is discounted by the order they joined**: the first 50 sellers list it free, the next 150 at half price, for 30 days (`FOUNDING_SELLER_TIERS`, `FOUNDING_DISCOUNT_DAYS`; costed in LAUNCH_DISCOUNT_MODEL.md). 2, 4 or 6 months at a time; longer is cheaper per month |
 | **Featured placement** | Short-term sellers only: KES 99 for 7 days, KES 350 for 28 days |
-| **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode, Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
+| **Plus** | KES 199 / month: Zeno writing listing descriptions from photos, voice mode (15 requests every day), Zeno's texts, a Buying Agent watch, AI covers for ~2 listings |
 | **Pro** | KES 599 / month: pricing listings with Zeno against the market, Zeno negotiating for you, 3 watches, AI covers for ~7 listings, 2 auctions |
 | **Elite** | KES 1,499 / month: volume allowances, AI covers for ~20 listings, priority support |
 | **Free** | Buying, selling, typing to Zeno, negotiating, bidding and your own photos - plus one AI cover try and one listing written by Zeno from its photo |
@@ -425,26 +425,16 @@ too, and are replaced the same way.
 
 ---
 
-## 3. Featured listings: short-term sellers only
+## 3. Featured listings: no longer sold
 
-A **short-term seller** (a few items, `seller_tier = short_term`) has no
-record to earn visibility with, so paid placement is offered with their
-listing fee: KES 99 for 7 days, KES 350 for 28 days (`/featured/plans`).
-
-A **long-term seller** gets no featured placement. Their visibility is earned:
-their record lowers their fee and lifts their ranking, and a store is their
-shop window. Selling them placement too would let money outrank the record
-the whole fee system rewards. `POST /featured/boost` now refuses them (403)
-before any M-Pesa prompt, and the listing-fee quote tells them why. It also
-refuses a listing buyers can't see (409): featuring an unpaid listing would
-take the money and show nothing.
-
-**Later:** the flat 99/350 ignores what a placement is worth: a shirt seller
-will not pay 350 to feature a KES 300 item, and a land seller gets a bargain.
-Once the app's Boost screen reads prices from the server (it has them
-hard-coded today), price placement at 2.5× the listing's list price for 30
-days (minimum KES 150, maximum 3,000) and a third of that for 7 days
-(minimum KES 50).
+**Removed 2026-10-12: a listing pays its listing fee and nothing else.** No
+seller can buy placement: `POST /featured/boost` and a listing-fee payment
+with `featured_plan` are refused (410) before any M-Pesa prompt, so an older
+app build still offering a boost never takes money for it; the quote's
+`featured` says `available: false` with no plans, and `/featured/plans` is
+empty. Ranking is earned from a seller's record alone, and a store is the
+shop window. Boosts bought before keep their FEATURED badge until they run
+out (`task_expire_featured_listings`); their callbacks and status poll stay.
 
 ---
 
@@ -485,7 +475,7 @@ dictating a message, and uploading your own cover photo stay free.
 | AI cover tries (≈ listings) | 6 (≈ 2) | 20 (≈ 7) | 60 (≈ 20) |
 | Descriptions Zeno writes from your photo | 30 | 100 | 300 |
 | Price checks against similar BROKA listings | - | 40 | 150 |
-| Voice requests (≈ minutes) | 90 (≈ 30) | 180 (≈ 60) | 360 (≈ 120) |
+| Voice requests **a day** (≈ minutes), renewing at midnight | 15 (≈ 5) | 40 (≈ 13) | 80 (≈ 27) |
 | Texts from Zeno (a buyer waiting, a message you asked it to send) | 30 | 80 | 150 |
 | Buying Agent watches, at once | 1 | 3 | 10 |
 | Negotiations Zeno opens for you | - | 25 | 50 |
@@ -506,7 +496,13 @@ what they pay (1.1×). **199 / 599 / 1,499 include VAT**, keep the floor
 after it, and sit at the value anchors above. Prepaying a year brings them
 to **159 / 479 / 1,199 a month**.
 
-**Free tries.** Someone without a plan gets **1 AI cover try, once** -
+**Free tries (2026-10-12).** Without a plan, a new user gets **three tries
+each of voice mode (3 voice requests), the Buying Agent and Zeno's
+insights**, then needs a plan. A Buying Agent try is a search that brought
+back listings, or a watch started (one at a time); Zeno's questions before
+the results are free. With a plan the Buying Agent and insights are not
+counted (only watches at once, by plan). Also, once:
+**1 AI cover try** -
 about KES 5, an acquisition cost, and the only way a seller learns what a
 cover does to a listing before paying for more - and, since 2026-10-08,
 **one description by Zeno, once** (KES 0.07): enough for "Let Zeno list it
@@ -535,8 +531,14 @@ any other it is Zeno's general estimate, said to be one, with Pro offered
 for the real check.
 
 Voice requests are the next most expensive (KES 0.71 each, a third of it the
-text-to-speech reserve). If the free voice keeps working, they can go up
-~75% at the same price.
+text-to-speech reserve). **Since 2026-10-12 they are a daily allowance**
+(`VOICE_FULL_DAYS_A_MONTH` in `plans.py`): "90 a month" read as too little
+for KES 199, and an allowance that renews every day is one a user can plan
+around. The margin rule counts voice at 5 days of full use a month. A
+subscriber who used every voice request every day would cost more than they
+pay (Plus: 15 x 30 x KES 0.81 = KES 364); the daily cap bounds a single
+day, `feature_usage` shows who comes near it, and the text-to-speech
+reserve (Edge speaks for free) is the slack if that grows.
 
 **Prepaying:** 3 months 8% off, 6 months 15%, 12 months 20% (Pro: 1,649 /
 3,049 / 5,749). Shallower than the listing-fee curve on purpose: a plan's
@@ -587,6 +589,8 @@ builds show it as it is. Background work has nobody to show a 402 to:
 | Description by Zeno (and Zeno listing it for you) | The Description step's card, and the Photos step's "Let Zeno list it", offer the plans instead of asking; writing your own stays free. Answering Zeno's questions about the photo is free once a plan has it: only the look at the photo is counted | - |
 | Pricing with Zeno | The Price step's card offers Pro; the conversation itself is free once a plan has it, and only the BROKA check is counted | - |
 | Voice mode | Zeno says why, stops listening, offers the plans; typing still works | - |
+| Buying Agent search (no plan, free tries used) | Zeno says why in the conversation and offers the plans; refused before the model runs | - |
+| Zeno insights (no plan, free looks used) | The screen says why, offers the plans and closes | - |
 | Buying Agent watch | 402 (the Zeno tab's action: `FAILED` with the plan code) and the plans | - |
 | Zeno negotiating for you | 402 and the plans | The automatic opener on a new match skips the buyer |
 | Text from Zeno | Go live says, before "SMS me", that texts need a plan | The availability nudge is cancelled for that buyer; the in-app notification still goes |

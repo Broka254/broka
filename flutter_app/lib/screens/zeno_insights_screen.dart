@@ -11,17 +11,48 @@
 //
 // No AI here either. These are the same fixed cards from
 // data/seller_insights.dart.
+//
+// Three free looks without a plan, then BROKA Premium (2026-10-12): the
+// server counts each opening (POST /premium/insights). The cards show at
+// once; a refusal then shows why, offers the plans and closes the screen.
+// Anything else (offline, an older server) leaves the cards up.
 
 import 'package:flutter/material.dart';
 
+import '../core/utils/result.dart';
 import '../data/seller_insights.dart';
+import '../features/premium/data/premium_repository.dart';
+import '../features/premium/presentation/premium_upsell.dart';
 import '../main.dart';
 import '../widgets/chat_ambient_background.dart';
 import '../widgets/motion_widgets.dart';
 import '../widgets/zeno_avatar.dart';
 
-class ZenoInsightsScreen extends StatelessWidget {
-  const ZenoInsightsScreen({super.key});
+class ZenoInsightsScreen extends StatefulWidget {
+  const ZenoInsightsScreen({super.key, this.premium});
+
+  /// For tests; the app's own otherwise.
+  final PremiumRepository? premium;
+
+  @override
+  State<ZenoInsightsScreen> createState() => _ZenoInsightsScreenState();
+}
+
+class _ZenoInsightsScreenState extends State<ZenoInsightsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _countLook();
+  }
+
+  Future<void> _countLook() async {
+    final r = await (widget.premium ?? PremiumRepository()).openInsights();
+    if (!mounted) return;
+    if (r case Failure(:final message, :final statusCode) when isPlanRefusal(statusCode)) {
+      await showPremiumUpsell(context, message: message);
+      if (mounted) Navigator.of(context).maybePop();
+    }
+  }
 
   @override
   Widget build(BuildContext context) => ChatAmbientBackground(

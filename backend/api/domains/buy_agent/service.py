@@ -168,18 +168,30 @@ class BuyAgentService:
         _validate_price_range(max_price, min_price)
         condition = clean_condition(condition)
 
+        # Without a plan, a new watch spends one of the three free Buying
+        # Agent tries - a 402 the app turns into "see plans" once they are
+        # gone. Spent before the buyer's lock: spending commits, which would
+        # let the lock go. Given back if the cap below refuses.
+        from api.domains.premium import entitlements
+        has_plan = entitlements.plan_of(await entitlements.active_subscription(self.db, buyer_id))
+        if not has_plan:
+            await entitlements.start_watch(self.db, buyer_id)
         await lock_buyer(self.db, buyer_id)
         # How many watches may run at once. With premium off, it is
         # settings.buy_agent_max_active (BUY_AGENT_MAX_ACTIVE, default 1 —
-        # Appendix C); with it on, the plan's (PRICING.md): none without one,
-        # which is a 402 the app turns into "see plans". count()-based rather
-        # than an existence check so the cap has real effect.
-        from api.domains.premium import entitlements
+        # Appendix C); with it on, the plan's (PRICING.md), or one at a time
+        # on the free tries. count()-based rather than an existence check so
+        # the cap has real effect.
         cap = await entitlements.watch_cap(self.db, buyer_id)
+        refusal = None
         if cap <= 0:
-            raise entitlements.watches_refusal()
-        if await self._active_count(buyer_id) >= cap:
-            raise HTTPException(status_code=409, detail=_cap_message(cap))
+            refusal = entitlements.watches_refusal()
+        elif await self._active_count(buyer_id) >= cap:
+            refusal = HTTPException(status_code=409, detail=_cap_message(cap))
+        if refusal is not None:
+            if not has_plan:
+                await entitlements.release(self.db, buyer_id, entitlements.Feature.AGENT_TRY)
+            raise refusal
 
         # A renamed category's old name ("Vehicles", from an older app build)
         # is stored under the current one ("Automobiles"): matching compares

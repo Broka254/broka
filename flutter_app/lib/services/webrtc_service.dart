@@ -376,11 +376,33 @@ class WebRtcService {
   /// TURN credential request only once the microphone was open: a round
   /// trip (three, with a session that expired while the app was closed)
   /// added to every answered call's "Connecting".
+  ///
+  /// The peer connection itself is made here too (2026-10-12): with a
+  /// candidate pool it starts gathering - the TURN relay's allocation, the
+  /// slowest step and the one mobile data usually needs - while the phone
+  /// rings. Made on Accept, that gathering sat between the callee's answer
+  /// and "connected", and the callee watched "Connecting…" for it.
   void prepare() {
-    _iceConfigFuture ??= _fetchIceConfiguration();
+    final iceConfig = _iceConfigFuture ??= _fetchIceConfiguration();
+    _preparedPc ??= iceConfig
+        .then<RTCPeerConnection?>((config) => createPeerConnection(config))
+        .catchError((Object e) {
+      // start() makes one then, as it did before.
+      debugPrint('WebRTC: could not prepare the peer connection: $e');
+      return null;
+    });
   }
 
   Future<Map<String, dynamic>>? _iceConfigFuture;
+  Future<RTCPeerConnection?>? _preparedPc;
+
+  /// The connection prepare() made, handed over once - or closed, when the
+  /// call ends without it.
+  Future<RTCPeerConnection?> _takePreparedPc() async {
+    final prepared = _preparedPc;
+    _preparedPc = null;
+    return prepared == null ? null : await prepared;
+  }
 
   /// Start: get mic/camera → open WebSocket → create peer connection.
   /// Caller then sends an offer; callee waits for one.
@@ -1576,7 +1598,7 @@ class WebRtcService {
     // callee's socket is open while this runs (start), and an offer handled
     // against a connection with no microphone track yet would be answered
     // receive-only - a call in which the other side hears nothing.
-    final pc = await createPeerConnection(iceConfig);
+    final pc = await _takePreparedPc() ?? await createPeerConnection(iceConfig);
     debugPrint('WebRTC: PEER_CONNECTION_CREATED room=$roomId');
     if (gen != _generation) { try { await pc.close(); } catch (_) {} return; }
 
@@ -2201,6 +2223,7 @@ class WebRtcService {
       }
     } catch (_) {}
     try { await _pc?.close();  } catch (_) {}
+    try { await (await _takePreparedPc())?.close(); } catch (_) {}
     try {
       _local?.getTracks().forEach((t) => t.stop());
       await _local?.dispose();

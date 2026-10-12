@@ -1002,12 +1002,26 @@ class _ZenoScreenState extends State<ZenoScreen>
         _persist();
         if (_ttsEnabled && reply.isNotEmpty) _speak(reply);
       },
-      onFailure: (msg, code) => _turnFailed(
-        text,
-        code == 429
-            ? "I need a moment — that's a lot of searching at once. Try me again shortly."
-            : "⚠️ I couldn't get that search through just now. Try me again in a moment.",
-      ),
+      onFailure: (msg, code) {
+        if (code == 402) {
+          // The free Buying Agent tries are used (backend: three, then a
+          // plan). Saying "try again" would only be refused again: the
+          // server's words say why, and the plans are one tap away.
+          setState(() {
+            _addArriving(_Turn(Message(role: 'broker', content: msg)));
+            _typing = false;
+          });
+          if (_history.isNotEmpty && _history.last['role'] == 'user') _history.removeLast();
+          showPremiumUpsell(context, message: msg);
+          return;
+        }
+        _turnFailed(
+          text,
+          code == 429
+              ? "I need a moment — that's a lot of searching at once. Try me again shortly."
+              : "⚠️ I couldn't get that search through just now. Try me again in a moment.",
+        );
+      },
     );
     _scrollDown();
   }

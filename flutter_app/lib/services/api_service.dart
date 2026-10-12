@@ -1835,34 +1835,6 @@ class ApiService {
 
   // ── Featured Listing Boost ─────────────────────────────────────────────────
 
-  static Future<List<Map<String, dynamic>>> getMyBoostableListings() async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/featured/my-listings'),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return List<Map<String, dynamic>>.from(data['listings'] as List);
-  }
-
-  static Future<Map<String, dynamic>> boostListing({
-    required String listingId,
-    required String plan,
-    required String phone,
-  }) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/featured/boost'),
-      headers: _headers,
-      body: jsonEncode({
-        'listing_id':   listingId,
-        'plan':         plan,
-        'phone_number': phone,
-      }),
-    ).timeout(const Duration(seconds: 20));
-    if (res.statusCode != 200) throw Exception(_extractError(res.body));
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
-
   static Future<Map<String, dynamic>> checkBoostStatus(String listingId) async {
     final res = await http.get(
       Uri.parse('$baseUrl/featured/status/$listingId'),

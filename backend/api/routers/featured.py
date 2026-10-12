@@ -1,15 +1,15 @@
 """
 BROKA - Featured Listing Boost Router
-Sellers pay via M-Pesa STK Push to pin a listing at the top of the home feed
-with a glowing "FEATURED" badge.
+Sellers paid via M-Pesa STK Push to pin a listing at the top of the home feed
+with a glowing "FEATURED" badge. No longer sold (2026-10-12): a listing pays
+only its listing fee. POST /featured/boost refuses; what is left settles and
+reports boosts bought before, until they run out.
 
 Pricing:
   1 week  - KES 99
   4 weeks - KES 350  (best value)
 
-ENV VARS (shared with mpesa.py / verify.py):
-  MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE,
-  MPESA_PASSKEY, MPESA_ENV
+ENV VARS (shared with mpesa.py / verify.py): MPESA_CALLBACK_SECRET
 
 FLOW:
   1. POST /featured/boost         - STK Push → save FeaturedPayment
@@ -23,23 +23,17 @@ FeaturedPayment through zetupay_settled() below.
 """
 
 import os
-import base64
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from api.core import mpesa_stk
-from api.core.rate_limit import stk_limiter
-from api.core.zetupay import ZetuPayUnavailable
-from api.database import get_db, Listing, FeaturedPayment, MpesaStatus, SellerTier, User
-from api.domains.listings.paid import is_live
+from api.database import get_db, Listing, FeaturedPayment, MpesaStatus
 from api.domains.payments import service as zetupay_charges
-from api.domains.pricing.service import FEATURED_NOT_FOR_LONG_TERM
+from api.domains.pricing.service import FEATURED_NOT_SOLD
 from api.models.zetupay import Purpose
 from api.security import get_current_user
 
@@ -48,22 +42,10 @@ router = APIRouter()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MPESA_ENV       = os.getenv("MPESA_ENV", "sandbox")
-CONSUMER_KEY    = os.getenv("MPESA_CONSUMER_KEY", "")
-CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET", "")
-SHORTCODE       = os.getenv("MPESA_SHORTCODE", "174379")
-PASSKEY         = os.getenv("MPESA_PASSKEY", "")
 # Same secret and same vulnerability class as mpesa.py's callback - see its
 # CALLBACK_SECRET comment. Reused (not a second env var) so Xavier sets one
 # secret and updates three Safaricom-registered callback URLs with it.
 CALLBACK_SECRET = os.getenv("MPESA_CALLBACK_SECRET", "")
-CALLBACK_URL    = os.getenv(
-    "MPESA_FEATURED_CALLBACK_URL",
-    "https://api.broka.co.ke/featured/callback",
-)
-BASE_URL  = "https://api.safaricom.co.ke" if MPESA_ENV == "production" else "https://sandbox.safaricom.co.ke"
-OAUTH_URL = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
-STK_URL   = f"{BASE_URL}/mpesa/stkpush/v1/processrequest"
 
 # ── Plans ─────────────────────────────────────────────────────────────────────
 
@@ -80,60 +62,12 @@ class BoostRequest(BaseModel):
     phone_number: str    # 07XX or 2547XX
 
 
-# ── M-Pesa helpers ────────────────────────────────────────────────────────────
-
-async def _get_token() -> str:
-    creds = base64.b64encode(f"{CONSUMER_KEY}:{CONSUMER_SECRET}".encode()).decode()
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(OAUTH_URL, headers={"Authorization": f"Basic {creds}"})
-    r.raise_for_status()
-    return r.json()["access_token"]
-
-
-def _normalize_phone(phone: str) -> str:
-    p = phone.strip().replace(" ", "").replace("-", "")
-    if p.startswith("0"):
-        p = "254" + p[1:]
-    if p.startswith("+"):
-        p = p[1:]
-    return p
-
-
-def _stk_password() -> tuple[str, str]:
-    ts = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y%m%d%H%M%S")
-    raw = f"{SHORTCODE}{PASSKEY}{ts}"
-    return base64.b64encode(raw.encode()).decode(), ts
-
-
-async def _send_stk(token: str, phone: str, amount: int, listing_name: str) -> dict:
-    password, ts = _stk_password()
-    payload = {
-        "BusinessShortCode": SHORTCODE,
-        "Password":          password,
-        "Timestamp":         ts,
-        "TransactionType":   "CustomerPayBillOnline",
-        "Amount":            amount,
-        "PartyA":            phone,
-        "PartyB":            SHORTCODE,
-        "PhoneNumber":       phone,
-        "CallBackURL":       CALLBACK_URL,
-        "AccountReference":  "BROKABoost",
-        "TransactionDesc":   f"Feature: {listing_name[:20]}",
-    }
-    async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.post(STK_URL, json=payload,
-                         headers={"Authorization": f"Bearer {token}",
-                                  "Content-Type": "application/json"})
-    r.raise_for_status()
-    return r.json()
-
-
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/plans")
 async def get_plans():
-    """Return available boost plans - no auth needed."""
-    return {"plans": BOOST_PLANS}
+    """No plans: featured placement is no longer sold (boost_listing)."""
+    return {"plans": {}}
 
 
 @router.get("/my-listings")
@@ -168,128 +102,12 @@ async def get_my_listings(
 async def boost_listing(
     req: BoostRequest,
     current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Initiate M-Pesa STK Push to boost a listing."""
-    # Validate plan
-    plan = BOOST_PLANS.get(req.plan)
-    if not plan:
-        raise HTTPException(status_code=400, detail="Invalid plan. Choose 'week' or 'month'.")
-
-    # Confirm listing belongs to this seller
-    result = await db.execute(
-        select(Listing).where(
-            Listing.id == req.listing_id,
-            Listing.seller_id == current_user["id"],
-        )
-    )
-    listing = result.scalar_one_or_none()
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found or not yours.")
-
-    # Placement is sold to short-term sellers only (PRICING.md, "Featured
-    # listings"): a long-term seller's listings rank on their completion
-    # record, and selling them placement as well would let money outrank the
-    # record the listing fee rewards. Checked before the STK push, so a
-    # refused seller is never prompted for money.
-    tier = (await db.execute(
-        select(User.seller_tier).where(User.id == current_user["id"])
-    )).scalar()
-    if tier == SellerTier.long_term:
-        raise HTTPException(status_code=403, detail=FEATURED_NOT_FOR_LONG_TERM)
-    # Featuring a listing buyers can't see - its fee unpaid, or its paid
-    # time over - would take the money and show nothing.
-    if not is_live(listing):
-        raise HTTPException(
-            status_code=409,
-            detail="Pay this listing's fee first - buyers can't see it yet.",
-        )
-
-    if zetupay_charges.enabled():
-        return await _boost_with_zetupay(db, current_user["id"], listing, req.plan, req.phone_number)
-
-    phone = _normalize_phone(req.phone_number)
-    amount = plan["price"]
-
-    try:
-        token = await _get_token()
-        stk   = await _send_stk(token, phone, amount, listing.name)
-    except Exception as e:
-        logger.error("STK Push failed for boost: %s", e)
-        raise HTTPException(status_code=502, detail="Could not reach M-Pesa. Try again.")
-
-    checkout_id  = stk.get("CheckoutRequestID", "")
-    merchant_id  = stk.get("MerchantRequestID", "")
-    resp_code    = stk.get("ResponseCode", "-1")
-
-    if resp_code != "0":
-        raise HTTPException(status_code=400, detail=stk.get("ResponseDescription", "STK Push rejected."))
-
-    # Save payment record
-    payment = FeaturedPayment(
-        user_id             = current_user["id"],
-        listing_id          = req.listing_id,
-        plan                = req.plan,
-        phone               = phone,
-        amount              = amount,
-        checkout_request_id = checkout_id,
-        merchant_request_id = merchant_id,
-        status              = MpesaStatus.pending,
-    )
-    db.add(payment)
-    await db.commit()
-
-    return {
-        "message":            "Payment prompt sent. Enter your M-Pesa PIN.",
-        "checkout_request_id": checkout_id,
-        "plan_label":         plan["label"],
-        "amount":             amount,
-        "days":               plan["days"],
-    }
-
-
-async def _boost_with_zetupay(
-    db: AsyncSession, user_id: str, listing: Listing, plan_key: str, phone_number: str,
-) -> dict:
-    """The boost's prompt through ZetuPay. Same answer as the Daraja path,
-    with checkout_request_id holding the ZetuPay reference."""
-    plan = BOOST_PLANS[plan_key]
-    # The strict check, before any prompt: a mistyped number prompts a
-    # stranger for money.
-    phone = mpesa_stk.normalize_phone(phone_number)
-    if phone is None:
-        raise HTTPException(status_code=400, detail="Enter a Safaricom number, e.g. 0712 345 678.")
-    # Per user: every call prompts a phone for money.
-    await stk_limiter.check_and_record(user_id)
-    if await zetupay_charges.prompt_pending(db, user_id, Purpose.BOOST, listing.id):
-        raise HTTPException(status_code=409, detail=(
-            "An M-Pesa prompt for this boost is already on your phone. "
-            "Finish it, or try again in two minutes."
-        ))
-
-    reference = zetupay_charges.new_reference(Purpose.BOOST)
-    payment = FeaturedPayment(
-        user_id=user_id, listing_id=listing.id, plan=plan_key, phone=phone,
-        amount=plan["price"], checkout_request_id=reference,
-        status=MpesaStatus.pending, provider=zetupay_charges.PROVIDER,
-    )
-    db.add(payment)
-    await db.flush()
-    try:
-        await zetupay_charges.start(
-            db, user_id=user_id, purpose=Purpose.BOOST, amount=plan["price"], phone=phone,
-            target_id=payment.id, related_id=listing.id, reference=reference,
-            description=f"BROKA boost {plan['days']}d",
-        )
-    except ZetuPayUnavailable as exc:
-        raise HTTPException(status_code=502, detail=zetupay_charges.unavailable_detail(exc))
-    return {
-        "message":            "Payment prompt sent. Enter your M-Pesa PIN.",
-        "checkout_request_id": reference,
-        "plan_label":         plan["label"],
-        "amount":             plan["price"],
-        "days":               plan["days"],
-    }
+    """No longer sold (2026-10-12): a listing pays its listing fee and
+    nothing else. Refused before any payment prompt, so an older app build
+    that still offers a boost never takes money for it. The callbacks and
+    the status poll below stay, for boosts paid before and running out."""
+    raise HTTPException(status_code=410, detail=FEATURED_NOT_SOLD)
 
 
 def _extend_featured(listing: Listing, plan_key: str) -> None:

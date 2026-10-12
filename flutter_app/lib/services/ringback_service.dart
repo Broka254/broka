@@ -5,10 +5,11 @@
 // call screen said "Ringing…" and was otherwise silent, so the caller held
 // a quiet phone to their ear with no sign the call had reached anyone.
 //
-// Played only once the callee's phone has acknowledged the call (the
-// server's `callee_ringing`), never on "Calling…": the tone means their
-// phone is ringing, as it does on a phone call. Stopped the moment they
-// answer, decline, or the call ends.
+// Played from the moment the call is placed, voice and video alike
+// (2026-10-12). It used to wait for the callee's phone to acknowledge the
+// call (the server's `callee_ringing`), which a phone answering from a
+// closed app often never sent, so the caller heard nothing. Stopped the
+// moment they answer, decline, or the call ends.
 //
 // assets/audio/ringback.wav is one cycle of the double ring (400+450 Hz,
 // 0.4s on, 0.2s off, 0.4s on, 2s off) at the telephone band's 8 kHz,

@@ -271,6 +271,13 @@ class _MenuScreenState extends State<MenuScreen> {
               : 'Buying, selling, staying safe, and Zeno',
           onTap: () => _open('/how-broka-works'),
         ),
+        MenuTile(
+          icon: Icons.gavel_rounded,
+          tint: BrokaColors.textMid,
+          title: 'Terms of Use',
+          subtitle: 'The rules for buying, selling, fees and plans on BROKA',
+          onTap: () => _open('/terms'),
+        ),
       ]),
       const SizedBox(height: 22),
       MenuGroup(children: [

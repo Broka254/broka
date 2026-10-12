@@ -88,36 +88,19 @@ async def category_completed_deals(db: AsyncSession, category: CategoryPricing) 
     )).scalar() or 0)
 
 
-FEATURED_NOT_FOR_LONG_TERM = (
-    "Featured placement is for occasional sellers. Your listings rank on your "
-    "completion record, and a store is your shop window."
+FEATURED_NOT_SOLD = (
+    "Featured placement is no longer sold. A listing pays only its listing fee; "
+    "it ranks on the seller's completion record, and a store is a shop window."
 )
 
 
-def featured_options(seller_tier: Optional[SellerTier]) -> dict:
-    """Paid placement, offered with the listing fee - to short-term sellers only.
+def featured_options(seller_tier: Optional[SellerTier] = None) -> dict:
+    """Paid placement is no longer offered with the listing fee (2026-10-12).
 
-    A long-term seller's visibility is earned: their completion record lowers
-    their fee and lifts their ranking, and a store gives them a shop window.
-    Selling them placement too would let money outrank the record the whole
-    fee system rewards. A short-term seller has no record to earn with, so
-    for them placement is the one lever there is.
+    Kept in the quote's shape, "available": False, because app builds that
+    still have the featured section hide it on exactly that.
     """
-    if seller_tier == SellerTier.long_term:
-        return {
-            "available": False,
-            "reason": FEATURED_NOT_FOR_LONG_TERM,
-            "plans": [],
-        }
-    from api.routers.featured import BOOST_PLANS
-    return {
-        "available": True,
-        "reason": None,
-        "plans": [
-            {"id": plan_id, "label": p["label"], "days": p["days"], "price": p["price"]}
-            for plan_id, p in BOOST_PLANS.items()
-        ],
-    }
+    return {"available": False, "reason": FEATURED_NOT_SOLD, "plans": []}
 
 
 async def free_listings_left(db: AsyncSession, seller_id: str) -> int:

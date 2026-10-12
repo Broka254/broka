@@ -512,24 +512,14 @@ class TestStatusPoll:
 
 class TestFeaturedAddOn:
     @pytest.mark.asyncio
-    async def test_a_short_term_seller_can_add_it_to_the_same_payment(self, client, fees_on, mpesa):
-        _, h = await _user(SellerTier.short_term)
-        listing = await _listing(client, h)
-        alone = (await client.get(f"/pricing/listing-fee/listings/{listing['id']}/quote", headers=h)).json()
-        paid = (await _pay(client, h, listing["id"], featured_plan="week")).json()
-        assert paid["amount"] == alone["options"][0]["total"] + 99
-        await client.post(f"/pricing/listing-fee/callback/{SECRET}",
-                          json=_callback(await _checkout_id(paid["payment_id"]), paid["amount"]))
-        async with AsyncSessionLocal() as db:
-            row = await db.get(Listing, listing["id"])
-            assert row.is_featured and row.featured_until > datetime.utcnow() + timedelta(days=6)
-
-    @pytest.mark.asyncio
-    async def test_a_long_term_seller_cannot(self, client, fees_on, mpesa):
-        _, h = await _user(SellerTier.long_term)
+    @pytest.mark.parametrize("tier", [SellerTier.short_term, SellerTier.long_term])
+    async def test_is_refused_before_any_prompt(self, client, fees_on, mpesa, tier):
+        # No longer sold (2026-10-12): an older app build that still offers
+        # it gets a refusal, never a prompt for the fee plus a boost.
+        _, h = await _user(tier)
         listing = await _listing(client, h)
         r = await _pay(client, h, listing["id"], featured_plan="week")
-        assert r.status_code == 403
+        assert r.status_code == 410
         assert mpesa.prompts == []
 
 
@@ -555,22 +545,3 @@ class TestSoldWhilePaying:
         assert payment.status == "success"
         assert audit is not None
         assert announced == [], "a withdrawn listing is not announced to buyers"
-
-
-# ── A boost for a listing buyers can't see ───────────────────────────────────
-
-class TestBoostNeedsALiveListing:
-    @pytest.mark.asyncio
-    async def test_is_refused_before_any_prompt(self, client, fees_on, monkeypatch):
-        from api.routers import featured
-
-        async def must_not_run(*_a, **_k):
-            raise AssertionError("the M-Pesa prompt must not be sent")
-
-        monkeypatch.setattr(featured, "_get_token", must_not_run)
-        _, h = await _user(SellerTier.short_term)
-        listing = await _listing(client, h)
-        r = await client.post("/featured/boost", headers=h, json={
-            "listing_id": listing["id"], "plan": "week", "phone_number": "0712345678"})
-        assert r.status_code == 409
-        assert "fee first" in r.json()["detail"]

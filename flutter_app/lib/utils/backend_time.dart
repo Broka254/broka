@@ -20,7 +20,7 @@
 // for a dedicated pass rather than silently left implied-fixed):
 // services/api_service.dart, auctions/domain/models/auction.dart,
 // buy_agent/domain/models/buy_agent_request.dart, models/models.dart,
-// core/network/deal_ws_client.dart, screens/boost_screen.dart,
+// core/network/deal_ws_client.dart,
 // screens/negotiation_screen.dart, screens/deal_receipt_history_screen.dart.
 // (screens/review_screen.dart, screens/user_profile_screen.dart and
 // screens/product_screen.dart were fixed on 2026-09-30 - the profile's

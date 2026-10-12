@@ -25,6 +25,7 @@ import 'screens/product_screen.dart';
 import 'screens/zeno_screen.dart';
 import 'screens/listing_analytics_screen.dart';
 import 'screens/how_broka_works_screen.dart';
+import 'screens/terms_screen.dart';
 import 'screens/receipt_history_screen.dart';
 import 'screens/store_explainer_screen.dart';
 import 'screens/zeno_insights_screen.dart';
@@ -41,7 +42,6 @@ import 'services/global_poller_service.dart';
 import 'theme/motion.dart';
 import 'screens/dispute_screen.dart';
 import 'screens/verification_screen.dart';
-import 'screens/boost_screen.dart';
 import 'screens/review_screen.dart';
 import 'features/premium/presentation/premium_screen.dart';
 import 'features/stores/presentation/my_store_screen.dart';
@@ -584,6 +584,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/listing-insights': (_) => const ListingAnalyticsScreen(),
         '/zeno-insights':    (_) => const ZenoInsightsScreen(),
         '/how-broka-works':  (_) => const HowBrokaWorksScreen(),
+        '/terms':            (_) => const TermsScreen(),
         '/escrow-services':  (_) => const EscrowServicesScreen(),
         '/receipt-history':  (_) => const ReceiptHistoryScreen(),
         '/store-explainer':  (_) => const StoreExplainerScreen(),
@@ -599,7 +600,6 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/call-history':     (_) => const CallHistoryScreen(),
         '/dispute':          (_) => const DisputeScreen(),
         '/verify':           (_) => const VerificationScreen(),
-        '/boost':            (_) => const BoostScreen(),
         // Arguments: the plan to pick first (a refused feature's upgrade_to).
         '/premium':          (ctx) => PremiumScreen(
               highlight: ModalRoute.of(ctx)?.settings.arguments as String?,

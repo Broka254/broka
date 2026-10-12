@@ -465,7 +465,7 @@ class ProductCard extends StatelessWidget {
   /// A paid boost that is still running - the same test Home uses to pin a
   /// listing to the top of its feed (HomeScreen._fetchListingsPage), so a
   /// card is never badged without being pinned, or pinned without its badge.
-  /// A seller pays for "a glowing FEATURED badge" (boost_screen.dart); until
+  /// A seller pays for "a glowing FEATURED badge" (a boost, no longer sold); until
   /// the 2026-09-29 pass no card drew one. featuredUntil is a DateTime on
   /// the older Listing model and the backend's naive-UTC string on
   /// BrokaListing.
@@ -922,7 +922,7 @@ class _PhotoChip extends StatelessWidget {
 }
 
 /// The badge a boost buys: the same gradient, rocket and lettering as the
-/// one boost_screen.dart shows the seller when they pay for it.
+/// one a boost bought, when boosts were sold.
 class _FeaturedBadge extends StatelessWidget {
   const _FeaturedBadge();
 

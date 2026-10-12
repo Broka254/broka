@@ -3,12 +3,13 @@ Not a new identity model (Design Journal Volume 6, Ch.5): Trader == User.
 """
 from __future__ import annotations
 
-from sqlalchemy import select, func
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.geo import haversine_km
 from api.core.text_search import matches_all_terms, search_terms
 from api.database import User, UserSpecialization, Listing, Category
+from api.models.store import Store
 
 
 class TradersService:
@@ -23,17 +24,31 @@ class TradersService:
         viewer_lng: float | None = None,
         search: str | None = None,
     ) -> list[dict]:
-        query = select(User).where(User.completed_deals > 0)
+        terms = search_terms(search)
+        # The browse list is proven traders; a search is for a business by
+        # name, and a new business has no completed deal yet - requiring one
+        # made "search Clanix Electronics" find nothing until its first sale.
+        # Anyone selling counts: a deal done, a listing, a business name or
+        # a store.
+        has_listing = exists(select(Listing.id).where(Listing.seller_id == User.id))
+        has_store = exists(select(Store.id).where(Store.owner_id == User.id))
+        has_business = func.length(func.coalesce(User.business_name, "")) > 0
+        query = select(User).where(
+            or_(User.completed_deals > 0, has_listing, has_store, has_business) if terms
+            else User.completed_deals > 0)
         if category_id:
             query = query.join(UserSpecialization, UserSpecialization.user_id == User.id).where(
                 UserSpecialization.category_id == category_id
             )
-        terms = search_terms(search)
         if terms:
-            # Every word in the name the card shows (business name, else the
-            # person's name) - the same word-by-word, wildcard-escaped match
+            # Every word in the business name the card shows (the person's
+            # name only for a trader without one), or in one of their
+            # stores' names - the same word-by-word, wildcard-escaped match
             # listing search uses.
-            query = query.where(matches_all_terms(terms, (User.business_name, User.name)))
+            shown_name = func.coalesce(func.nullif(User.business_name, ""), User.name)
+            store_named = exists(select(Store.id).where(
+                Store.owner_id == User.id, matches_all_terms(terms, (Store.name,))))
+            query = query.where(or_(matches_all_terms(terms, (shown_name,)), store_named))
         query = query.order_by(User.rating.desc()).limit(limit)
         users = (await self.db.execute(query)).scalars().all()
         if not users:

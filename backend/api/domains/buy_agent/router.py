@@ -196,7 +196,13 @@ async def converse_with_zeno(
     most expensive thing in the feature.
     """
     await ai_chat_limiter.check_and_record(current_user["id"])
-    return await conversation.converse(
+    # Without a plan the Buying Agent is three tries (PRICING.md). A try is
+    # a conversation that brought back listings, so Zeno's questions before
+    # them are free - but the last try is refused up front, not after the
+    # model has already been paid for.
+    from api.domains.premium import entitlements
+    await entitlements.require_left(db, current_user["id"], entitlements.Feature.AGENT_TRY)
+    result = await conversation.converse(
         db=db,
         buyer_id=current_user["id"],
         message=body.message,
@@ -206,6 +212,9 @@ async def converse_with_zeno(
         viewer_lat=lat,
         viewer_lng=lng,
     )
+    if isinstance(result, dict) and result.get("phase") == "RESULTS":
+        await entitlements.try_consume(db, current_user["id"], entitlements.Feature.AGENT_TRY)
+    return result
 
 
 @router.post("/action")

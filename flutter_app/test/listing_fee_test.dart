@@ -6,10 +6,10 @@
 //     the recommended months already chosen;
 //   * paying starts at the payment methods; picking M-Pesa opens a screen
 //     with the number to pay from at the top, editable;
-//   * Pay asks the server for exactly the months and extras chosen, under
+//   * Pay asks the server for exactly the months chosen, under
 //     one key per attempt, and waits for M-Pesa rather than assuming;
 //   * a failed prompt says so and lets the seller try again;
-//   * featured placement is offered only when the server offers it;
+//   * featured placement is never offered: the fee is the only charge;
 //   * a listing Go live creates unpaid goes straight to the fee screen, and
 //     only a paid one gets the celebration.
 import 'dart:convert';
@@ -168,7 +168,6 @@ void main() {
       expect(q.monthlyFee, 1210);
       expect(q.options.map((o) => o.months), [1, 2, 3, 4, 5, 6]);
       expect(q.defaultMonths, 5, reason: 'the recommended months are chosen to start with');
-      expect(q.featuredPlans.map((p) => p.price), [99, 350]);
       expect(q.state?.unpaid, isTrue);
     });
 
@@ -216,10 +215,10 @@ void main() {
     test('sends the choice and one key per attempt', () async {
       final backend = _FeeBackend();
       final r = await backend.repository.pay(
-          listingId: 'l1', months: 3, phone: '0712345678', featuredPlan: 'week', idempotencyKey: 'k1');
+          listingId: 'l1', months: 3, phone: '0712345678', idempotencyKey: 'k1');
       expect(r.isSuccess, isTrue);
       expect(backend.pays.single, {
-        'listing_id': 'l1', 'months': 3, 'phone_number': '0712345678', 'featured_plan': 'week'});
+        'listing_id': 'l1', 'months': 3, 'phone_number': '0712345678'});
       expect(backend.keys.single, 'k1');
       expect(ListingFeeRepository.newAttemptKey(), isNot(ListingFeeRepository.newAttemptKey()));
     });
@@ -289,21 +288,19 @@ void main() {
       expect(find.textContaining('prompt to 0722 000 111'), findsOneWidget);
     });
 
-    testWidgets('pays for the months and extras chosen, then waits for M-Pesa', (tester) async {
+    testWidgets('pays for the months chosen, then waits for M-Pesa', (tester) async {
       final backend = _FeeBackend();
       await _open(tester, ListingFeeScreen(
           listingId: 'l1', listingName: 'Plot in Kitengela', repository: backend.repository,
           pollEvery: _poll));
       await _tap(tester, find.byKey(const Key('fee-months-3')));
-      await _tap(tester, find.byKey(const Key('fee-featured-week')));
-      expect(find.text('Continue to payment · KES 3,109'), findsOneWidget, reason: '3,010 + 99');
+      expect(find.text('Continue to payment · KES 3,010'), findsOneWidget);
       await _toMpesa(tester, '0712 345 678');
-      expect(find.text('Featured for 7 days'), findsOneWidget);
       await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
       expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
       expect(backend.pays.single['months'], 3);
-      expect(backend.pays.single['featured_plan'], 'week');
+      expect(backend.pays.single.containsKey('featured_plan'), isFalse);
 
       await tester.pump(_poll); // pending
       expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
@@ -327,8 +324,9 @@ void main() {
       expect(find.byKey(const Key('mpesa-pay')), findsOneWidget);
     });
 
-    testWidgets('no featured placement unless the server offers it', (tester) async {
-      final backend = _FeeBackend(quote: _quote(featured: false));
+    testWidgets('no featured placement, even from a server that offers it', (tester) async {
+      // An older server still offering it is ignored: the fee is the only charge.
+      final backend = _FeeBackend(quote: _quote(featured: true));
       await _open(tester, ListingFeeScreen(listingId: 'l1', listingName: 'Plot', repository: backend.repository));
       expect(find.byKey(const Key('fee-featured-week')), findsNothing);
       expect(find.text('Feature it at the top of Home?'), findsNothing);

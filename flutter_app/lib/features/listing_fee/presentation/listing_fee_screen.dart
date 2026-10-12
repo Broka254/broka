@@ -8,9 +8,9 @@
 //
 // What the seller sees is PRICING.md's sell screen: the list price crossed
 // out and their price, why it is that price, 2, 4 or 6 months with the recommended
-// one picked, and - for short-term sellers only - featured placement in the
-// same payment. Every amount is the server's; Pay asks M-Pesa for exactly
-// the total shown, because the server works it out the same way.
+// one picked. The listing fee is the only charge: featured placement is no
+// longer sold (2026-10-12). Every amount is the server's; Pay asks M-Pesa
+// for exactly the total shown, because the server works it out the same way.
 //
 // Paying is the shared checkout: "Continue to payment" opens the payment
 // methods, then the M-Pesa screen with the number to pay from at the top
@@ -66,7 +66,6 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
   _Stage _stage = _Stage.loading;
   ListingFeeQuote? _quote;
   int _months = 2;
-  String? _featured;
   String? _error;
 
   @override
@@ -97,48 +96,33 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
     }
   }
 
-  FeaturedPlan? get _featuredPlan {
-    for (final p in _quote?.featuredPlans ?? const <FeaturedPlan>[]) {
-      if (p.id == _featured) return p;
-    }
-    return null;
-  }
+  int get _total => _quote?.option(_months)?.total ?? 0;
 
-  int get _featuredPrice => _featuredPlan?.price ?? 0;
-
-  int get _total => (_quote?.option(_months)?.total ?? 0) + _featuredPrice;
-
-  void _choose({int? months, String? featured, bool clearFeatured = false}) {
+  void _choose(int months) {
     HapticFeedback.selectionClick();
-    setState(() {
-      if (months != null) _months = months;
-      if (featured != null || clearFeatured) _featured = featured;
-    });
+    setState(() => _months = months);
   }
 
   CheckoutOrder get _order {
     final months = _months == 1 ? '1 month' : '$_months months';
-    final plan = _featuredPlan;
     return CheckoutOrder(
       title: _title,
       subject: widget.listingName,
       lines: [
         CheckoutLine('Listed for $months', _quote?.option(_months)?.total ?? 0),
-        if (plan != null) CheckoutLine('Featured for ${plan.days} days', plan.price),
       ],
       total: _total,
     );
   }
 
-  /// The months and extras chosen, frozen: the checkout charges exactly
+  /// The months chosen, frozen: the checkout charges exactly
   /// what was on screen when Continue was pressed.
   MpesaCharge _charge() {
     final months = _months;
-    final featured = _featured;
     return MpesaCharge(
       start: (phone, key) async {
         final r = await _repo.pay(
-            listingId: widget.listingId, months: months, phone: phone, featuredPlan: featured, idempotencyKey: key);
+            listingId: widget.listingId, months: months, phone: phone, idempotencyKey: key);
         return switch (r) {
           Success(:final data) => Success(ChargeStarted(paymentId: data.id, amount: data.amount)),
           Failure(:final message, :final statusCode) => Failure(message, statusCode: statusCode),
@@ -262,31 +246,8 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
             key: Key('fee-months-${o.months}'),
             option: o,
             selected: o.months == _months,
-            onTap: () => _choose(months: o.months),
+            onTap: () => _choose(o.months),
           ),
-        if (q.featuredAvailable && q.featuredPlans.isNotEmpty) ...[
-          const SizedBox(height: 18),
-          const CheckoutLabel('Feature it at the top of Home?'),
-          const SizedBox(height: 4),
-          const Text('Optional. Pinned where every buyer looks first, with a FEATURED badge.',
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
-          const SizedBox(height: 10),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            _Chip(
-              key: const Key('fee-featured-none'),
-              label: 'No thanks',
-              selected: _featured == null,
-              onTap: () => _choose(clearFeatured: true),
-            ),
-            for (final p in q.featuredPlans)
-              _Chip(
-                key: Key('fee-featured-${p.id}'),
-                label: '${p.days} days  +KES ${formatKesAmount(p.price)}',
-                selected: _featured == p.id,
-                onTap: () => _choose(featured: p.id),
-              ),
-          ]),
-        ],
       ]),
     );
   }
@@ -462,29 +423,4 @@ class _MonthOption extends StatelessWidget {
       ),
     );
   }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({super.key, required this.label, required this.selected, required this.onTap});
-  final String label;
-  final bool selected;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-          decoration: BoxDecoration(
-            color: selected ? BrokaColors.neonPink.withOpacity(0.14) : BrokaColors.bgCard,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: selected ? BrokaColors.neonPink : BrokaColors.border),
-          ),
-          child: Text(label,
-              style: TextStyle(
-                  color: selected ? BrokaColors.neonPink : BrokaColors.textHigh,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700)),
-        ),
-      );
 }
