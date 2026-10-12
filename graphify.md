@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-224 endpoints served by `backend/main.py`. **Auth** is read from each
+225 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 60, token 4, user 138.
+Counts: admin 20, optional 2, public 60, token 4, user 139.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -109,10 +109,10 @@ Counts: admin 20, optional 2, public 60, token 4, user 138.
 | POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:161) |
 | POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:307) |
 | GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:453) |
-| POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:245) |
-| POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:212) |
+| POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:254) |
+| POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:221) |
 | POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:178) |
-| GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:288) |
+| GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:297) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
 | GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1333) |
@@ -159,12 +159,12 @@ Counts: admin 20, optional 2, public 60, token 4, user 138.
 | POST | `/escrow/confirm-delivery/{deal_id}` | user | `confirm_delivery` (backend/api/routers/escrow.py:32) |
 | POST | `/escrow/open-dispute/{deal_id}` | user | `freeze_for_dispute` (backend/api/routers/escrow.py:105) |
 | GET | `/escrow/state/{deal_id}` | user | `get_escrow_state` (backend/api/routers/escrow.py:129) |
-| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:168) |
-| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:338) |
-| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:359) |
-| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:140) |
-| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:134) |
-| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:416) |
+| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:102) |
+| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:156) |
+| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:177) |
+| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:74) |
+| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:68) |
+| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:234) |
 | GET | `/health` | public | `health` (backend/main.py:494) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:196) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:254) |
@@ -225,11 +225,12 @@ Counts: admin 20, optional 2, public 60, token 4, user 138.
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
-| POST | `/premium/callback` | public | `premium_callback` (backend/api/domains/premium/router.py:80) |
-| POST | `/premium/callback/{secret}` | public | `premium_callback_secured` (backend/api/domains/premium/router.py:88) |
+| POST | `/premium/callback` | public | `premium_callback` (backend/api/domains/premium/router.py:91) |
+| POST | `/premium/callback/{secret}` | public | `premium_callback_secured` (backend/api/domains/premium/router.py:99) |
+| POST | `/premium/insights` | user | `open_zeno_insights` (backend/api/domains/premium/router.py:43) |
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
-| GET | `/premium/payments/{payment_id}` | user | `premium_payment_status` (backend/api/domains/premium/router.py:61) |
-| POST | `/premium/subscribe` | user | `subscribe` (backend/api/domains/premium/router.py:43) |
+| GET | `/premium/payments/{payment_id}` | user | `premium_payment_status` (backend/api/domains/premium/router.py:72) |
+| POST | `/premium/subscribe` | user | `subscribe` (backend/api/domains/premium/router.py:54) |
 | GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:167) |
 | POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:127) |
 | POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:137) |
@@ -271,8 +272,8 @@ Counts: admin 20, optional 2, public 60, token 4, user 138.
 | GET | `/traders` | public | `list_traders` (backend/api/domains/traders/router.py:15) |
 | GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:32) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
-| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:107) |
-| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:201) |
+| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:131) |
+| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:297) |
 | POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:315) |
 | POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:338) |
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:131) |
@@ -536,7 +537,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 138.
 - `deal.py` — BROKA - Deal Router: finalise agreed deals and reveal contacts.
 - `disputes.py` — ⚠️ NOT MOUNTED — LEGACY / DEAD CODE (verified during Store hardening pass, 2026-09: never imported in main.py).
 - `escrow.py` — BROKA - Escrow Router
-- `featured.py` — BROKA - Featured Listing Boost Router Sellers pay via M-Pesa STK Push to pin a listing at the top of the home feed with a glowing "FEATURED…
+- `featured.py` — BROKA - Featured Listing Boost Router Sellers paid via M-Pesa STK Push to pin a listing at the top of the home feed with a glowing "FEATURE…
 - `listings.py` — ⚠️ NOT MOUNTED — LEGACY / DEAD CODE ⚠️
 - `media.py` — BROKA - Media Router Handles voice note and image uploads for negotiations.
 - `mpesa.py` — BROKA - M-Pesa Router (Daraja API v2 - M-Pesa Express / STK Push)
@@ -789,7 +790,6 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/assistant` | `AiAssistantScreen` |
 | `/auction` | `AuctionScreen` |
 | `/auth` | `AuthScreen` |
-| `/boost` | `BoostScreen` |
 | `/broker` | `BrokerScreen` |
 | `/call-history` | `CallHistoryScreen` |
 | `/create-store` | `StoreSetupScreen` |
@@ -822,6 +822,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/store-manage` | `MyStoreScreen` |
 | `/store-setup` | `StoreSetupScreen` |
 | `/store-view` | `StoreHomeScreen` |
+| `/terms` | `TermsScreen` |
 | `/user-profile` | `UserProfileScreen` |
 | `/verify` | `VerificationScreen` |
 | `/voip-call` | `VoipCallScreen` |
@@ -1107,7 +1108,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### `flutter_app/lib/screens/` (46 files)
 
-`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `boost_screen.dart`, `broker_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `saved_listings_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
+`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `broker_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `saved_listings_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `terms_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
 
 ### Tests (`flutter_app/test/`)
 
@@ -1166,6 +1167,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
 - `stt_refused_connection_test.dart` — Voice input that said "Connecting…" and never anything else (2026-09-26).
 - `subcategory_screen_test.dart` — Types of item on screens of their own (2026-10-08): a category's types are photo cards, each opening a SubcategoryScreen that leads with th…
+- `terms_screen_test.dart` — The Terms of Use (assets/legal/terms.md) as the app shows them.
 - `user_facing_error_test.dart` — What a failure shows on screen (2026-10-09).
 - `user_profile_screen_test.dart` — The user profile (2026-09-30): on Home's visual system, showing only figures the API returns, and reviews that load - with "Write a review"…
 - `voip_call_permissions_test.dart` — The app closed the moment a call was placed or answered.
@@ -1173,6 +1175,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `zeno_about_listing_test.dart` — Zeno, opened from a listing's "Ask Zeno" card (2026-09-29): the listing pinned under the header, questions about it, its id on every turn s…
 - `zeno_assistant_test.dart` — Zeno as the user's assistant (2026-09-27): one-on-one conversation that can also DO things - open a screen, search, hand over to the Buying…
 - `zeno_chat_test.dart` — Zeno's conversation after the 2026-09-26 pass: it survives closing the screen (and the app), it can be started over, it sends Zeno only the…
+- `zeno_insights_trial_test.dart` — Zeno's insights without a plan: three free looks, then BROKA Premium (2026-10-12).
 - `zeno_photo_test.dart` — Zeno can look at a photo (2026-10-02).
 - `zeno_sms_prompts_test.dart` — How Zeno asks about SMS alerts on the sell wizard's last step (ZenoSmsPrompts, ZenoStreamingBubble): ten phrasings, never the same one twic…
 - `zeno_voice_anywhere_test.dart` — Zeno's voice pass of 2026-10-09:
@@ -1282,5 +1285,6 @@ Modules:
 - `STORES_PLAN.md` — Online Stores — build plan (2026-09-23)
 - `STORES_REVIEW.md` — BROKA — Online Stores Review
 - `STORES_UI_REVIEW.md` — BROKA — Online Stores UI Review
+- `TERMS.md` — Terms of Use and Service
 - `ZENO_ACTIONS.md` — Zeno as the user's assistant (2026-09-27)
 - `ZETUPAY.md` — ZetuPay
