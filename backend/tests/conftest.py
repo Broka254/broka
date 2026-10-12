@@ -46,6 +46,17 @@ def payments_off():
 
 
 @pytest.fixture
+def dcr_on():
+    """DCR_ENABLED on: the deal completion rate counts and is shown. Off by
+    default while buyers pay sellers outside BROKA."""
+    from api.core.config import settings
+    before = settings.dcr_enabled
+    object.__setattr__(settings, "dcr_enabled", True)
+    yield
+    object.__setattr__(settings, "dcr_enabled", before)
+
+
+@pytest.fixture
 def auctions_off():
     """AUCTIONS_ENABLED off, as production runs it for launch."""
     from api.core.config import settings

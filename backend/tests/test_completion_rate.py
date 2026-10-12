@@ -126,7 +126,7 @@ async def test_leak_not_flagged_before_full_window_plus_silence():
 
 
 @pytest.mark.asyncio
-async def test_leak_flagged_after_full_window_plus_silence():
+async def test_leak_flagged_after_full_window_plus_silence(dcr_on):
     """Same shape, but the full 7+5=12 days have genuinely elapsed - must flag."""
     async with AsyncSessionLocal() as db:
         seller = await _make_user(db, "Seller13")

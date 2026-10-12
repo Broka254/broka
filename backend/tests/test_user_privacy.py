@@ -226,7 +226,7 @@ class TestSellerStanding:
             await db.commit()
 
     @pytest.mark.asyncio
-    async def test_a_buyer_sees_rating_completion_and_reply_time(self, client, people):
+    async def test_a_buyer_sees_rating_completion_and_reply_time(self, client, people, dcr_on):
         grace_id, _ = people["grace"]
         _, as_otieno = people["otieno"]
         await self._snapshot(grace_id, 3, overall_rating=5.0, dcr_score=60.0, median_response_min=300.0)
@@ -255,7 +255,7 @@ class TestSellerStanding:
         assert standing["overall_rating"] == 8.5
 
     @pytest.mark.asyncio
-    async def test_under_ten_deals_is_provisional(self, client, people):
+    async def test_under_ten_deals_is_provisional(self, client, people, dcr_on):
         grace_id, _ = people["grace"]
         _, as_otieno = people["otieno"]
         await self._snapshot(grace_id, 0, completed_deals=4)

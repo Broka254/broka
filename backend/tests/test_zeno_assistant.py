@@ -607,7 +607,7 @@ async def _standing(seller: User, **fields) -> None:
 
 class TestAskingAboutAListing:
     @pytest.mark.asyncio
-    async def test_the_listing_is_in_the_prompt_with_its_sellers_words_fenced(self, client, monkeypatch):
+    async def test_the_listing_is_in_the_prompt_with_its_sellers_words_fenced(self, client, monkeypatch, dcr_on):
         seller = await _seller("Wanjiku Mwende")
         buyer = await _user("Otieno Buyer")
         listing = await _for_sale(seller)
