@@ -1110,8 +1110,8 @@ async def delete_listing(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete your own listing: buyers no longer see it anywhere. Refused
-    while a buyer's deal on it is under way - see ListingService.delete_listing."""
+    """Delete your own listing at any time: buyers no longer see it anywhere.
+    Deals on it keep going - see ListingService.delete_listing."""
     svc = ListingService(db)
     return await svc.delete_listing(listing_id, current_user["id"])
 

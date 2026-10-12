@@ -1275,14 +1275,16 @@ class ListingService:
         and search shows active listings only, so it is gone from all of
         them; a link to it says it was removed.
 
-        Refused while a buyer has a deal on it that is still under way: an
-        agreed price the buyer is about to pay, or money in escrow. Deleting
-        would strand them. Finished deals don't stop it. An auction with
-        bids is refused too - the bidders were promised a close.
+        Allowed whatever deals it has. Buyers and sellers settle off BROKA,
+        so most deals never reach a finished status here, and refusing while
+        one was "under way" left sold items listed for good. The deals keep
+        their rows (they point at this one, which stays), so a conversation
+        or a deal with money in escrow carries on; no new deal can start,
+        because finalizing refuses a removed listing. An auction with bids
+        is still refused - the bidders were promised a close.
         """
         from api.core.audit import record_audit
         from api.database import Bid
-        from api.domains.escrow.repository import TERMINAL_DEAL_STATUSES
 
         # Row-locked and read fresh, like PATCH: a buyer finalizing at the
         # same moment takes the same lock (EscrowService.finalize_deal).
@@ -1298,17 +1300,6 @@ class ListingService:
         if getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value:
             return {"deleted": True, "listing_id": listing_id}
 
-        live_deals = (await self.db.execute(
-            select(func.count(Deal.id)).where(
-                Deal.listing_id == listing_id,
-                Deal.status.not_in(tuple(TERMINAL_DEAL_STATUSES)),
-            )
-        )).scalar() or 0
-        if live_deals:
-            raise HTTPException(
-                status_code=409,
-                detail="A buyer has a deal in progress on this listing. "
-                       "You can delete it once that deal is finished.")
         if not is_stocked(listing):
             bids = (await self.db.execute(
                 select(func.count(Bid.id)).where(Bid.listing_id == listing_id)

@@ -258,19 +258,23 @@ class TestDelete:
         assert await _status(listing_id) == "active"
 
     @pytest.mark.asyncio
-    async def test_not_while_a_buyers_deal_is_under_way(self, client):
+    async def test_even_while_a_buyers_deal_is_under_way(self, client):
+        # Deals settle off BROKA and rarely reach a finished status, so a
+        # live deal must not pin the listing on sale for good.
         seller_id, as_seller = await _user("Grace")
-        listing_id = await _listing(seller_id, quantity=4)
         buyer, as_buyer = await _user("Amina")
-        deal_id = (await _finalize(client, listing_id, buyer, as_buyer)).json()["deal_id"]
-        for live in (DealStatus.agreed, DealStatus.paid, DealStatus.disputed):
+        for live in (DealStatus.negotiating, DealStatus.agreed, DealStatus.paid,
+                     DealStatus.disputed):
+            listing_id = await _listing(seller_id, quantity=4)
+            deal_id = (await _finalize(client, listing_id, buyer, as_buyer)).json()["deal_id"]
             await _set_deal(deal_id, live)
             res = await client.delete(f"/listings/{listing_id}", headers=as_seller)
-            assert res.status_code == 409, live
-            assert "deal in progress" in res.json()["detail"]
-        # Finished deals don't stop it.
-        await _set_deal(deal_id, DealStatus.released)
-        assert (await client.delete(f"/listings/{listing_id}", headers=as_seller)).status_code == 200
+            assert res.status_code == 200, live
+            assert await _status(listing_id) == "cancelled"
+            # The deal itself is left as it was: its conversation, or the
+            # money in escrow, carries on.
+            async with AsyncSessionLocal() as db:
+                assert (await db.get(Deal, deal_id)).status == live
 
     @pytest.mark.asyncio
     async def test_not_an_auction_with_bids(self, client):

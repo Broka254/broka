@@ -18,6 +18,10 @@
 // BROKA's Zeno, not a generic glowing blob. It swells a little with the
 // voice it hears and the words it says.
 //
+// 2026-10-12 (later): the globe's wireframe is now a sphere of linked
+// points the voice moves (_swarm) - it ripples with the user's voice, wrings
+// itself while Zeno thinks and runs bands of light as it speaks.
+//
 // 2026-10-12: with [hologram], voice mode's centre is a wireframe globe
 // turning inside three gyroscope rings, a scan line sweeping it - in place
 // of the face, which made the full-screen assistant look like a toy. The
@@ -30,6 +34,8 @@
 // blurs, except one soft blur on the outer plasma. Under reduced motion there
 // is no ticker at all: the orb is drawn once, in its state's colours.
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' show PointMode;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -300,6 +306,42 @@ class _OrbModel extends ChangeNotifier {
   }
 }
 
+// The hologram's points: evenly spread over a unit sphere (a Fibonacci
+// lattice), and each one's links to its two nearest neighbours, worked out
+// once.
+final List<(double, double, double)> _unitSphere = () {
+  const n = 260;
+  final golden = math.pi * (3 - math.sqrt(5));
+  return [
+    for (var i = 0; i < n; i++)
+      () {
+        final y = 1 - (i + 0.5) / n * 2;
+        final rho = math.sqrt(1 - y * y);
+        return (rho * math.cos(golden * i), y, rho * math.sin(golden * i));
+      }(),
+  ];
+}();
+
+final List<(int, int)> _sphereLinks = () {
+  final pts = _unitSphere;
+  final links = <(int, int)>{};
+  for (var i = 0; i < pts.length; i++) {
+    final (xi, yi, zi) = pts[i];
+    var best = <(double, int)>[];
+    for (var j = 0; j < pts.length; j++) {
+      if (j == i) continue;
+      final (xj, yj, zj) = pts[j];
+      final d = (xi - xj) * (xi - xj) + (yi - yj) * (yi - yj) + (zi - zj) * (zi - zj);
+      best.add((d, j));
+    }
+    best.sort((a, b) => a.$1.compareTo(b.$1));
+    for (final (_, j) in best.take(2)) {
+      links.add(i < j ? (i, j) : (j, i));
+    }
+  }
+  return links.toList();
+}();
+
 // ── Painting ─────────────────────────────────────────────────────────────────
 
 class _Palette {
@@ -474,7 +516,6 @@ class _OrbPainter extends CustomPainter {
 
   void _hologram(Canvas canvas, Offset c, double r, _Palette pal) {
     final think = m.mix[ZenoOrbMode.thinking]!;
-    final listen = m.mix[ZenoOrbMode.listening]!;
     final speak = m.mix[ZenoOrbMode.speaking]!;
     final radius = r * (0.95 + 0.05 * m.energy + 0.06 * speak * m.voice);
     final spin = m.t * (0.35 + 0.9 * think + 0.25 * m.energy);
@@ -493,54 +534,7 @@ class _OrbPainter extends CustomPainter {
             .createShader(Rect.fromCircle(center: c, radius: radius * 1.05)),
     );
 
-    final near = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1
-      ..color = pal.core.withOpacity(0.38 + 0.32 * m.energy);
-    final far = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8
-      ..color = pal.b.withOpacity(0.13);
-
-    const steps = 56;
-    // Meridians.
-    for (var k = 0; k < 8; k++) {
-      final phi = k * math.pi / 8;
-      _curve(canvas, [
-        for (var i = 0; i <= steps; i++)
-          () {
-            final th = i / steps * math.pi * 2;
-            return _project(c, radius * math.cos(th) * math.cos(phi), radius * math.sin(th),
-                radius * math.cos(th) * math.sin(phi), spin);
-          }(),
-      ], near, far);
-    }
-    // Parallels.
-    for (final lat in const [-1.05, -0.52, 0.0, 0.52, 1.05]) {
-      final y = radius * math.sin(lat), rho = radius * math.cos(lat);
-      _curve(canvas, [
-        for (var i = 0; i <= steps; i++)
-          _project(c, rho * math.cos(i / steps * math.pi * 2), y,
-              rho * math.sin(i / steps * math.pi * 2), spin),
-      ], near, far);
-    }
-
-    // The scan line, sweeping pole to pole - bright while it listens.
-    final scanLat = math.sin(m.t * 1.3) * 1.25;
-    final scanY = radius * math.sin(scanLat), scanRho = radius * math.cos(scanLat);
-    final scan = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8
-      ..blendMode = BlendMode.plus
-      ..color = pal.c.withOpacity(0.25 + 0.6 * listen + 0.3 * think);
-    _curve(canvas, [
-      for (var i = 0; i <= steps; i++)
-        _project(c, scanRho * math.cos(i / steps * math.pi * 2), scanY,
-            scanRho * math.sin(i / steps * math.pi * 2), spin),
-    ], scan, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..color = pal.c.withOpacity(0.1 + 0.2 * listen));
+    _swarm(canvas, c, radius, spin, pal);
 
     // Three gyroscope rings, each on its own axis, a satellite riding each.
     final ringR = radius * (1.3 + 0.08 * m.energy + 0.1 * speak * m.voice);
@@ -579,6 +573,99 @@ class _OrbPainter extends CustomPainter {
       );
       canvas.drawCircle(sat, 2.2 + m.energy, Paint()..color = Colors.white.withOpacity(0.9 * lit));
     }
+  }
+
+  /// The heart of the hologram: a sphere of points, each tied to its
+  /// nearest neighbours, that the voice moves. Listening, the surface
+  /// ripples with the microphone; thinking, it wrings itself one way and
+  /// the other; speaking, bands of light run pole to pole with the words;
+  /// a scan line lights the points it crosses. The near side is bigger and
+  /// brighter than the far one, so it reads as a solid turning in space.
+  void _swarm(Canvas canvas, Offset c, double radius, double spin, _Palette pal) {
+    final think = m.mix[ZenoOrbMode.thinking]!;
+    final listen = m.mix[ZenoOrbMode.listening]!;
+    final speak = m.mix[ZenoOrbMode.speaking]!;
+    final err = m.mix[ZenoOrbMode.error]!;
+    final t = m.t;
+    final twist = think * 1.7 * math.sin(t * 1.4);
+    final scanY = math.sin(t * 1.3) * 0.95;
+    final scanGain = 0.25 + 0.75 * listen + 0.4 * think;
+
+    final n = _unitSphere.length;
+    final px = Float32List(n), py = Float32List(n), depth = Float32List(n), lit = Float32List(n);
+    for (var i = 0; i < n; i++) {
+      final (x, y, z) = _unitSphere[i];
+      final d = 0.035 * math.sin(3 * x + 2 * y + t * 1.2) +
+          listen * m.level * 0.34 * math.sin(7 * y + t * 9) * math.cos(5 * x - t * 7) +
+          speak * m.voice * 0.16 * math.sin(11 * y - t * 12) +
+          think * 0.07 * math.sin(6 * z + t * 5) -
+          err * 0.12;
+      final rr = radius * (1 + d);
+      final a = twist * y;
+      final ca = math.cos(a), sa = math.sin(a);
+      final (p, pz) = _project(c, (x * ca + z * sa) * rr, y * rr, (-x * sa + z * ca) * rr, spin);
+      px[i] = p.dx;
+      py[i] = p.dy;
+      depth[i] = (pz / rr).clamp(-1.0, 1.0) * 0.5 + 0.5;
+      final band = speak * m.voice * math.max(0.0, math.sin(11 * y - t * 12));
+      final scan = (y - scanY) * 10;
+      lit[i] = (scanGain * math.exp(-scan * scan) + 0.8 * band).clamp(0.0, 1.0);
+    }
+
+    // The mesh: links on the near side only, so the back doesn't knot the
+    // front into a tangle.
+    final links = <double>[];
+    for (final (i, j) in _sphereLinks) {
+      if (depth[i] + depth[j] < 1.0) continue;
+      links..add(px[i])..add(py[i])..add(px[j])..add(py[j]);
+    }
+    canvas.drawRawPoints(
+      PointMode.lines,
+      Float32List.fromList(links),
+      Paint()
+        ..strokeWidth = 0.7
+        ..blendMode = BlendMode.plus
+        ..color = pal.c.withOpacity((0.12 + 0.22 * m.energy) * (1 - 0.6 * err)),
+    );
+
+    // Points in four depth bands, far to near: one draw call each.
+    final bands = List.generate(4, (_) => <double>[]);
+    final halos = <double>[], sparks = <double>[];
+    for (var i = 0; i < n; i++) {
+      final b = (depth[i] * 4).floor().clamp(0, 3);
+      bands[b]..add(px[i])..add(py[i]);
+      if (depth[i] > 0.62) halos..add(px[i])..add(py[i]);
+      if (lit[i] > 0.35) sparks..add(px[i])..add(py[i]);
+    }
+    canvas.drawRawPoints(
+      PointMode.points,
+      Float32List.fromList(halos),
+      Paint()
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 6 + 5 * m.energy
+        ..blendMode = BlendMode.plus
+        ..color = pal.b.withOpacity(0.09 + 0.1 * m.energy),
+    );
+    for (var b = 0; b < 4; b++) {
+      final f = (b + 0.5) / 4;
+      canvas.drawRawPoints(
+        PointMode.points,
+        Float32List.fromList(bands[b]),
+        Paint()
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 1.0 + 2.4 * f + 0.8 * m.energy * f
+          ..color = Color.lerp(pal.a, pal.core, f)!.withOpacity((0.18 + 0.75 * f) * (1 - 0.5 * err)),
+      );
+    }
+    canvas.drawRawPoints(
+      PointMode.points,
+      Float32List.fromList(sparks),
+      Paint()
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 3.2 + 1.5 * m.energy
+        ..blendMode = BlendMode.plus
+        ..color = Colors.white.withOpacity(0.85),
+    );
   }
 
   void _core(Canvas canvas, Offset c, double r, _Palette pal) {
