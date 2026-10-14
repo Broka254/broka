@@ -40,6 +40,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 
 import '../../../main.dart' show BrokaColors, ZoneGlowText;
 import '../../../services/broka_tts.dart' show spokenSoFar;
