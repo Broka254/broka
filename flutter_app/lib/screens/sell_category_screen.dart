@@ -1,0 +1,694 @@
+// BROKA - Sell Wizard Step 2: Category
+//
+// Categories used to be a wrap of chips inside the Basics step: sixteen
+// names in a paragraph, then another paragraph of subcategories, with
+// nothing to say which one a plot or a bag of maize belonged in. Now it is
+// its own step, top to bottom: every category as a row with its emoji and
+// a sample of what's in it, opening in place to its subcategories - and a
+// search across all ~180 subcategories at once, in the words sellers use
+// (CategorySearch). The whole taxonomy comes in one request
+// (GET /categories/tree).
+//
+// Two screens since 2026-10-08: the categories, then - on a screen of its
+// own - the chosen category's types of item (SellSubcategoryScreen).
+// Sellers found a category opening in place, with its types pushed into
+// the same long list, hard to read. Tapping a type moves on to Details;
+// Back from the types returns to the categories. A search still finds a
+// type directly, and "Other", which has no types, moves on as it is tapped.
+//
+// Each category and type carries the picture buyers browse it by
+// (2026-10-08): Home's category cards and the types' own screens use the
+// same artwork, so "where would a buyer look for it?" is answered by the
+// picture the buyer will actually see.
+import 'dart:async';
+import 'package:flutter/material.dart';
+import '../main.dart';
+import '../core/utils/result.dart';
+import '../features/categories/data/repositories/categories_repository.dart';
+import '../features/categories/domain/category_search.dart';
+import '../features/categories/domain/category_visual.dart';
+import '../features/categories/domain/models/category.dart';
+import '../features/categories/domain/subcategory_visual.dart';
+import '../features/categories/presentation/widgets/category_art_card.dart' show artDecodeWidth;
+import '../services/sell_wizard_data.dart';
+import '../utils/land_size.dart';
+import '../widgets/sell_step_scaffold.dart';
+import 'sell_flow.dart';
+
+class SellCategoryScreen extends StatefulWidget {
+  final SellWizardData data;
+
+  /// For tests: the tree instead of fetching it.
+  final Future<Result<List<CategoryNode>>> Function()? loadTree;
+
+  const SellCategoryScreen({super.key, required this.data, this.loadTree});
+  @override
+  State<SellCategoryScreen> createState() => _SellCategoryScreenState();
+}
+
+class _SellCategoryScreenState extends State<SellCategoryScreen> {
+  List<CategoryNode> _tree = [];
+  bool _loading = true;
+  bool _failed = false;
+  String? _error;
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+
+  SellWizardData get _data => widget.data;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    final result = await (widget.loadTree ?? categoriesRepository.getTree)();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (tree) => setState(() {
+        _tree = tree;
+        _loading = false;
+      }),
+      onFailure: (_, __) => setState(() {
+        _loading = false;
+        _failed = true;
+      }),
+    );
+  }
+
+  /// A type picked from the search: chosen, and on to Details.
+  void _pickAndGo(CategoryNode node, Category? sub) {
+    setState(() {
+      _pickCategory(_data, node, sub);
+      _error = null;
+    });
+    _goOn(context, _data);
+  }
+
+  /// A category tapped: its types, on their own screen - or, for one with
+  /// none ("Other"), straight on.
+  Future<void> _open(CategoryNode node) async {
+    if (node.subcategories.isEmpty) {
+      _pickAndGo(node, null);
+      return;
+    }
+    if (_data.categoryId != node.category.id) {
+      // Another category: the type chosen in the last one doesn't apply.
+      setState(() => _pickCategory(_data, node, null));
+    }
+    setState(() => _error = null);
+    await Navigator.of(context).push(SellFlow.stepRoute(SellSubcategoryScreen(data: _data, node: node)));
+    // The seller may have picked a type there and come back.
+    if (mounted) setState(() {});
+  }
+
+  void _next() {
+    if (SellFlow.isComplete(SellFlow.category, _data)) {
+      _goOn(context, _data);
+      return;
+    }
+    final chosen = _tree.where((n) => n.category.id == _data.categoryId).firstOrNull;
+    if (chosen != null) {
+      _open(chosen);
+      return;
+    }
+    setState(() => _error = 'Choose the category your item belongs in.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final picked = _data.categoryId != null
+        ? _tree.where((n) => n.category.id == _data.categoryId).firstOrNull
+        : null;
+    return SellStepScaffold(
+      step: SellFlow.category, totalSteps: SellFlow.total, title: SellFlow.title(SellFlow.category),
+      subtitle: 'Where would a buyer look for it? Search, or tap a category to choose the type of item.',
+      data: _data,
+      error: _error,
+      onNext: _next,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _searchField(),
+        SellGap.section,
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          child: picked != null && _query.isEmpty
+              ? _PickedBanner(
+                  key: ValueKey('${_data.categoryId}|${_data.subcategoryId}'),
+                  node: picked,
+                  subName: _data.subcategoryName,
+                )
+              : const SizedBox.shrink(),
+        ),
+        if (_loading)
+          ...List.generate(6, (i) => const _SkeletonRow())
+        else if (_failed)
+          SellCard(child: Row(children: [
+            const Expanded(child: Text("Couldn't load the categories. Check your connection.",
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
+            TextButton(onPressed: _load, child: const Text('Retry',
+                style: TextStyle(color: BrokaColors.gold, fontWeight: FontWeight.w700))),
+          ]))
+        else if (_query.isNotEmpty)
+          _results()
+        else ...[
+          sellStepLabel('ALL CATEGORIES'),
+          SellGap.label,
+          for (var i = 0; i < _tree.length; i++) _categoryRow(_tree[i], i),
+        ],
+      ]),
+    );
+  }
+
+  Widget _searchField() => Container(
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.8),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.4)),
+          boxShadow: const [BrokaColors.glowBlue],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Row(children: [
+          const Icon(Icons.search_rounded, color: BrokaColors.textMid, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              key: const Key('sell-category-search'),
+              controller: _searchCtrl,
+              textInputAction: TextInputAction.search,
+              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14),
+              decoration: const InputDecoration(
+                hintText: 'Search: maize, iPhone, plot, mtumba…',
+                hintStyle: TextStyle(color: BrokaColors.textMid, fontSize: 13.5),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: false,
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 14),
+              ),
+              onChanged: (v) => setState(() => _query = v.trim()),
+            ),
+          ),
+          if (_query.isNotEmpty)
+            GestureDetector(
+              onTap: () => setState(() {
+                _searchCtrl.clear();
+                _query = '';
+              }),
+              child: const Icon(Icons.close_rounded, color: BrokaColors.textMid, size: 18),
+            ),
+        ]),
+      );
+
+  Widget _results() {
+    final matches = CategorySearch.search(_query, _tree);
+    if (matches.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(children: [
+          const Text('🔎', style: TextStyle(fontSize: 30)),
+          const SizedBox(height: 8),
+          Text('Nothing called "$_query" yet.', style: const TextStyle(
+              color: BrokaColors.textHigh, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          const Text('Try another word, or clear the search and browse the categories.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+        ]),
+      );
+    }
+    return Column(children: [
+      for (var i = 0; i < matches.length; i++)
+        _Entrance(
+          index: i,
+          child: _resultRow(matches[i]),
+        ),
+    ]);
+  }
+
+  Widget _resultRow(CategoryMatch m) {
+    final visual = CategoryVisuals.resolve(m.node.category.name);
+    final selected = m.subcategory != null
+        ? _data.subcategoryId == m.subcategory!.id
+        : (_data.categoryId == m.node.category.id && _data.subcategoryId == null);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: _TapCard(
+        selected: selected,
+        colors: visual.gradient,
+        onTap: () {
+          if (m.subcategory == null) {
+            // A category, not a type of item: its types.
+            setState(() {
+              _searchCtrl.clear();
+              _query = '';
+            });
+            _open(m.node);
+            return;
+          }
+          _pickAndGo(m.node, m.subcategory);
+        },
+        child: Row(children: [
+          _ArtThumb(
+              assetPath: m.subcategory == null
+                  ? visual.assetPath
+                  : SubcategoryVisuals.resolve(m.node.category.name, m.subcategory!.name).assetPath,
+              emoji: visual.emoji, colors: visual.gradient, size: 38),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(m.subcategory?.name ?? m.node.category.name, style: const TextStyle(
+                color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(m.subcategory != null ? 'in ${m.node.category.name}' : 'Category',
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+          ])),
+          _Check(selected: selected),
+        ]),
+      ),
+    );
+  }
+
+  Widget _categoryRow(CategoryNode node, int index) {
+    final visual = CategoryVisuals.resolve(node.category.name);
+    final chosen = _data.categoryId == node.category.id;
+    final sample = chosen && _data.subcategoryName != null
+        ? _data.subcategoryName!
+        : node.subcategories.take(3).map((c) => c.name).join(' · ');
+    return _Entrance(
+      index: index,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: BrokaColors.bgCard.withOpacity(chosen ? 0.9 : 0.7),
+            border: Border.all(
+              color: chosen ? visual.gradient.first : BrokaColors.border,
+              width: chosen ? 1.6 : 1,
+            ),
+            boxShadow: chosen
+                ? [BoxShadow(color: visual.gradient.first.withOpacity(0.3), blurRadius: 18)]
+                : null,
+          ),
+          child: InkWell(
+            key: Key('sell-category-${node.category.name}'),
+            borderRadius: BorderRadius.circular(18),
+            onTap: () => _open(node),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              child: Row(children: [
+                _ArtThumb(assetPath: visual.assetPath, emoji: visual.emoji, colors: visual.gradient, size: 46),
+                const SizedBox(width: 14),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(node.category.name, style: const TextStyle(
+                      color: BrokaColors.textHigh, fontSize: 15, fontWeight: FontWeight.w800)),
+                  if (sample.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(sample, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: chosen ? Colors.white : BrokaColors.textMid,
+                            fontSize: 12,
+                            fontWeight: chosen ? FontWeight.w700 : FontWeight.w400)),
+                  ],
+                ])),
+                const SizedBox(width: 8),
+                if (node.subcategories.isEmpty || (chosen && _data.subcategoryId != null))
+                  _Check(selected: chosen)
+                else
+                  Icon(Icons.chevron_right_rounded,
+                      color: chosen ? visual.gradient.first : BrokaColors.textMid),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Picks [node] (and its type [sub], or none yet) for the listing.
+void _pickCategory(SellWizardData data, CategoryNode node, Category? sub) {
+  final categoryChanged = data.categoryId != node.category.id;
+  if (categoryChanged || data.subcategoryId != sub?.id) {
+    // Another kind of item: the previous one's details don't apply.
+    data.attributes = {};
+  }
+  data.categoryId = node.category.id;
+  data.category = node.category.name;
+  data.subcategoryId = sub?.id;
+  data.subcategoryName = sub?.name;
+  // Mtumba is second-hand by definition.
+  if (sub?.name == SubcategoryHighlights.mtumba) data.condition = 'used';
+  if (node.category.name == 'Land') data.condition = null;
+  data.persist();
+}
+
+/// On to Details with the category chosen.
+void _goOn(BuildContext context, SellWizardData data) {
+  // A Land listing keeps only its land details; anything else drops them.
+  if (!data.isLand) {
+    data.attributes.removeWhere((k, _) => LandSize.fieldNames.contains(k));
+  }
+  SellFlow.next(context, data, from: SellFlow.category);
+}
+
+/// The second screen of the Category step: the types of item in one
+/// category ("Electronics" -> Phones, Laptops, TVs...). Tapping one picks
+/// it and moves on to Details.
+class SellSubcategoryScreen extends StatefulWidget {
+  const SellSubcategoryScreen({super.key, required this.data, required this.node});
+  final SellWizardData data;
+  final CategoryNode node;
+
+  @override
+  State<SellSubcategoryScreen> createState() => _SellSubcategoryScreenState();
+}
+
+class _SellSubcategoryScreenState extends State<SellSubcategoryScreen> {
+  String? _error;
+
+  SellWizardData get _data => widget.data;
+  CategoryNode get _node => widget.node;
+
+  void _pick(Category sub) {
+    setState(() {
+      _pickCategory(_data, _node, sub);
+      _error = null;
+    });
+    _goOn(context, _data);
+  }
+
+  void _next() {
+    final picked = _node.subcategories.any((s) => s.id == _data.subcategoryId);
+    if (!picked) {
+      setState(() => _error = 'Choose the type of item within ${_node.category.name}.');
+      return;
+    }
+    _goOn(context, _data);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = CategoryVisuals.resolve(_node.category.name);
+    return SellStepScaffold(
+      step: SellFlow.category,
+      totalSteps: SellFlow.total,
+      title: _node.category.name,
+      subtitle: 'What kind of item is it? Pick the one a buyer would look for.',
+      data: _data,
+      // Back stays within the Category step: the categories are under this.
+      resumeOnBack: SellFlow.category,
+      error: _error,
+      onNext: _next,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          key: const Key('sell-subcategory-header'),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            gradient: LinearGradient(colors: [
+              visual.gradient.first.withOpacity(0.32),
+              visual.gradient.last.withOpacity(0.12),
+            ]),
+            border: Border.all(color: visual.gradient.first.withOpacity(0.6)),
+          ),
+          child: Row(children: [
+            _EmojiOrb(emoji: visual.emoji, colors: visual.gradient, size: 46),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('CATEGORY', style: TextStyle(color: Colors.white70, fontSize: 10,
+                  fontWeight: FontWeight.w800, letterSpacing: 1.4)),
+              const SizedBox(height: 3),
+              Text(_node.category.name, style: const TextStyle(
+                  color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+            ])),
+            TextButton(
+              key: const Key('sell-category-change'),
+              onPressed: () => Navigator.maybePop(context),
+              child: const Text('Change', style: TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w800,
+                  decoration: TextDecoration.underline, decorationColor: Colors.white)),
+            ),
+          ]),
+        ),
+        SellGap.section,
+        sellStepLabel('TYPE OF ITEM'),
+        SellGap.label,
+        for (var i = 0; i < _node.subcategories.length; i++)
+          _Entrance(index: i, child: _subRow(_node.subcategories[i], visual)),
+      ]),
+    );
+  }
+
+  Widget _subRow(Category sub, CategoryVisual visual) {
+    final selected = _data.subcategoryId == sub.id;
+    final highlight = SubcategoryHighlights.of(sub.name);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        key: Key('sell-subcategory-${sub.name}'),
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _pick(sub),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            color: selected ? null : BrokaColors.bgCard.withOpacity(0.75),
+            gradient: selected
+                ? LinearGradient(colors: [
+                    visual.gradient.first.withOpacity(0.32),
+                    visual.gradient.last.withOpacity(0.14),
+                  ])
+                : null,
+            border: Border.all(
+                color: selected ? visual.gradient.first : BrokaColors.border,
+                width: selected ? 1.5 : 1),
+          ),
+          child: Row(children: [
+            _ArtThumb(
+              assetPath: SubcategoryVisuals.resolve(_node.category.name, sub.name).assetPath,
+              emoji: highlight?.emoji ?? visual.emoji,
+              colors: visual.gradient,
+              size: 44,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(sub.name, style: TextStyle(
+                color: selected ? Colors.white : BrokaColors.textHigh,
+                fontSize: 14.5,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600))),
+            if (highlight != null) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  gradient: const LinearGradient(colors: [BrokaColors.neonPink, BrokaColors.gold]),
+                ),
+                child: Text(highlight.label.toUpperCase(), style: const TextStyle(
+                    color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8)),
+              ),
+              const SizedBox(width: 10),
+            ],
+            if (selected)
+              const _Check(selected: true)
+            else
+              const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Filed under Automobiles › Cars" - what the seller has chosen, above
+/// the list, so it stays visible however far they scroll.
+class _PickedBanner extends StatelessWidget {
+  const _PickedBanner({super.key, required this.node, required this.subName});
+  final CategoryNode node;
+  final String? subName;
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = CategoryVisuals.resolve(node.category.name);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(colors: [
+          visual.gradient.first.withOpacity(0.35),
+          visual.gradient.last.withOpacity(0.15),
+        ]),
+        border: Border.all(color: visual.gradient.first.withOpacity(0.7)),
+      ),
+      child: Row(children: [
+        Text(visual.emoji, style: const TextStyle(fontSize: 22)),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('FILED UNDER', style: TextStyle(color: Colors.white70, fontSize: 9.5,
+              fontWeight: FontWeight.w800, letterSpacing: 1.4)),
+          const SizedBox(height: 2),
+          Text(subName == null ? node.category.name : '${node.category.name}  ›  $subName',
+              style: const TextStyle(color: Colors.white, fontSize: 14,
+                  fontWeight: FontWeight.w800)),
+        ])),
+        const Icon(Icons.check_circle_rounded, color: Colors.white),
+      ]),
+    );
+  }
+}
+
+/// A category's or type's picture, small and rounded, in a row - or its
+/// emoji orb when it has none ("Other").
+class _ArtThumb extends StatelessWidget {
+  const _ArtThumb({required this.assetPath, required this.emoji, required this.colors,
+      required this.size});
+  final String? assetPath;
+  final String emoji;
+  final List<Color> colors;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final orb = _EmojiOrb(emoji: emoji, colors: colors, size: size);
+    if (assetPath == null) return orb;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.first.withOpacity(0.6)),
+        boxShadow: [BoxShadow(color: colors.first.withOpacity(0.25), blurRadius: 10)],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(11),
+        child: Image.asset(
+          assetPath!,
+          fit: BoxFit.cover,
+          // The pictures' subject sits right of centre.
+          alignment: const Alignment(0.45, 0),
+          cacheWidth: artDecodeWidth(context, size, size),
+          errorBuilder: (_, __, ___) => orb,
+        ),
+      ),
+    );
+  }
+}
+
+class _EmojiOrb extends StatelessWidget {
+  const _EmojiOrb({required this.emoji, required this.colors, required this.size});
+  final String emoji;
+  final List<Color> colors;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size, height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            colors: [colors.first.withOpacity(0.9), colors.last.withOpacity(0.55)],
+            begin: Alignment.topLeft, end: Alignment.bottomRight,
+          ),
+          boxShadow: [BoxShadow(color: colors.first.withOpacity(0.35), blurRadius: 12)],
+        ),
+        alignment: Alignment.center,
+        child: Text(emoji, style: TextStyle(fontSize: size * 0.46)),
+      );
+}
+
+class _Check extends StatelessWidget {
+  const _Check({required this.selected});
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 22, height: 22,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: selected ? BrokaColors.gold : Colors.transparent,
+          border: Border.all(color: selected ? BrokaColors.gold : BrokaColors.textMid, width: 1.5),
+          boxShadow: selected ? const [BrokaColors.glowGold] : null,
+        ),
+        child: selected ? const Icon(Icons.check_rounded, size: 14, color: Colors.white) : null,
+      );
+}
+
+class _TapCard extends StatelessWidget {
+  const _TapCard({required this.child, required this.onTap, required this.selected,
+      required this.colors});
+  final Widget child;
+  final VoidCallback onTap;
+  final bool selected;
+  final List<Color> colors;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            color: BrokaColors.bgCard.withOpacity(0.75),
+            border: Border.all(color: selected ? colors.first : BrokaColors.border,
+                width: selected ? 1.5 : 1),
+          ),
+          child: child,
+        ),
+      );
+}
+
+/// Rows slide up and fade in one after another when the list appears.
+class _Entrance extends StatelessWidget {
+  const _Entrance({required this.index, required this.child});
+  final int index;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (still) return child;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: 320 + 35 * index.clamp(0, 12)),
+      curve: Curves.easeOutCubic,
+      builder: (_, v, c) => Opacity(
+        opacity: v,
+        child: Transform.translate(offset: Offset(0, 18 * (1 - v)), child: c),
+      ),
+      child: child,
+    );
+  }
+}
+
+class _SkeletonRow extends StatelessWidget {
+  const _SkeletonRow();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 70,
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: BrokaColors.border),
+        ),
+      );
+}

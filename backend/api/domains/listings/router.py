@@ -1,0 +1,1183 @@
+"""Listings Router v3.0"""
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Literal, Optional
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# Listing was used by update_listing (db.get(Listing, ...)) without ever
+# being imported into this module - only inside a DIFFERENT function's local
+# import further down - so PATCH /listings/{id} raised
+# NameError: name 'Listing' is not defined and returned 500 on every call.
+# Every seller price edit and photo update through that endpoint has been
+# failing. Found by an auction terms-lock test that expected a 409 and got a
+# 500; no existing test covered this endpoint at all.
+from api.database import get_db, DealStatus, Listing
+from api.domains.auctions.lifecycle import AuctionError
+from api.domains.auctions.paused import require_auctions
+from api.security import _oauth2_scheme_optional, get_current_user
+from api.core.config import settings
+from api.database import ListingStatus, ListingType
+from api.domains.pricing import service as pricing_service
+from . import price_rules
+from . import validation as rules
+from .paid import fee_applies, fee_state, is_live
+from .service import ListingService
+
+router = APIRouter()
+
+
+class ListingIn(BaseModel):
+    # NaN and Infinity refused in every float field - see validation.py for
+    # what one of them in a stored listing did to the Home feed.
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    name: str
+    category: str
+    subcategory_id: Optional[str] = None
+    condition: Optional[str] = None  # "new" | "used" | "refurbished"
+    attributes: Optional[Dict[str, Any]] = None  # dynamic category fields, e.g. {"make": "Toyota"}
+    price: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    # Required (2026-09-25). validate_default so a request that leaves it
+    # out gets the same sentence as one that sends it empty, not pydantic's
+    # "Field required".
+    description: Optional[str] = Field(default=None, validate_default=True)
+    location_name: Optional[str] = None
+    # Selling terms (2026-09-25) - see the Listing model for what each
+    # means. All optional, with the defaults older app builds get: a price
+    # for the whole item, offers welcome, and the availability SMS on.
+    price_unit: Optional[str] = None
+    quantity: Optional[int] = None
+    price_negotiable: bool = True
+    delivery_available: Optional[bool] = None
+    delivery_note: Optional[str] = None
+    sms_alerts: bool = True
+    # Structured location (2026-08-29). location_county/location_subcounty
+    # are the new 3-part location step's real inputs; location_country
+    # isn't sent by the client at all right now (fixed to Kenya - see
+    # sell_location_screen.dart), so it's not exposed here. location_name
+    # above is kept for backward compatibility - ListingService derives it
+    # from county+subcounty when they're present rather than trusting a
+    # client-sent value, so existing readers (search, negotiate prompts,
+    # buy_agent matching...) keep seeing a normal display string either way.
+    location_county: Optional[str] = None
+    location_subcounty: Optional[str] = None
+    # A value outside the enum used to reach the Enum column and 500.
+    listing_type: Literal["direct", "auction"] = "direct"
+    # Image assets from POST /media/images (purpose "listing_photo"), first
+    # photo first. What current app builds send; verified_photos (base64)
+    # is still accepted from older builds, and converted by the media
+    # backfill.
+    photo_ids: Optional[List[str]] = Field(default=None, max_length=6)
+    verified_photos: Optional[str] = None
+    verified_video: Optional[str] = None
+    advert_video: Optional[str] = None
+    target_bidders: Optional[int] = Field(default=None, ge=2, le=500)
+    auction_date: Optional[str] = None
+    reserve_price: Optional[float] = None
+    # Auction lifecycle (0021). The window bidding is open for. Both
+    # optional: omitted, bidding opens now and closes at auction_date,
+    # which is what the sell wizard already collects. See
+    # ListingService._add_auction_meta.
+    auction_starts_at: Optional[str] = None
+    auction_ends_at: Optional[str] = None
+    # Minimum raise between bids. Defaults to AUCTION_DEFAULT_MIN_INCREMENT.
+    min_bid_increment: Optional[float] = None
+    # AI Showcase/Cover Image (2026-08-29). Optional - set only when the
+    # wizard's Showcase step produced one (gallery pick or an AI preview
+    # the seller explicitly chose "Use This Image" on client-side; see
+    # SellWizardData.showcaseImageDataUri). Both must be given together or
+    # not at all - validated in create_listing, not here, so the error can
+    # reference both fields by name in one message.
+    showcase_image_url: Optional[str] = None
+    showcase_image_source: Optional[str] = None  # "gallery" | "ai"
+    # The showcase as an image asset (purpose "listing_showcase"), in place
+    # of showcase_image_url. Needs showcase_image_source like the URL does.
+    showcase_id: Optional[str] = None
+    # Store feature. None = personal listing (unchanged default behavior);
+    # set = create this listing directly under a store the seller owns
+    # (ownership verified server-side in ListingService.create_listing).
+    store_id: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v):
+        return rules.clean_name(v)
+
+    @field_validator("category")
+    @classmethod
+    def _category(cls, v):
+        return rules.clean_category(v)
+
+    @field_validator("condition")
+    @classmethod
+    def _condition(cls, v):
+        return rules.clean_condition(v)
+
+    @field_validator("attributes")
+    @classmethod
+    def _attributes(cls, v):
+        return rules.clean_attributes(v)
+
+    @field_validator("price")
+    @classmethod
+    def _price(cls, v):
+        return rules.check_price(v)
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, v):
+        return rules.clean_description(v)
+
+    @field_validator("price_unit")
+    @classmethod
+    def _price_unit(cls, v):
+        return rules.clean_price_unit(v)
+
+    @field_validator("quantity")
+    @classmethod
+    def _quantity(cls, v):
+        return rules.clean_quantity(v)
+
+    @field_validator("delivery_note")
+    @classmethod
+    def _delivery_note(cls, v):
+        return rules.bounded_text(v, rules.MAX_DELIVERY_NOTE_LEN, "delivery note") or None
+
+    @field_validator("location_name")
+    @classmethod
+    def _location_name(cls, v):
+        return rules.bounded_text(v, rules.MAX_LOCATION_NAME_LEN, "location")
+
+    @field_validator("location_county", "location_subcounty")
+    @classmethod
+    def _place(cls, v):
+        return rules.bounded_text(v, rules.MAX_PLACE_LEN, "county and area names")
+
+
+class InterestIn(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    offer_price: Optional[float] = None
+
+    @field_validator("offer_price")
+    @classmethod
+    def _offer(cls, v):
+        return None if v is None else rules.check_price(v, "An offer")
+
+
+class ListingStoreIn(BaseModel):
+    store_id: str
+
+
+@router.get("/stats")
+async def get_stats(db: AsyncSession = Depends(get_db)):
+    svc = ListingService(db)
+    return await svc.get_stats()
+
+
+# Before /{listing_id}, which would otherwise take "saved" for an id.
+@router.get("/saved")
+async def saved_listings(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The caller's saved listings that are still on sale."""
+    svc = ListingService(db)
+    return await svc.saved_listings(current_user["id"])
+
+
+@router.get("/")
+async def list_listings(
+    category: Optional[str] = None,
+    category_id: Optional[str] = None,
+    subcategory_id: Optional[str] = None,
+    condition: Optional[str] = None,
+    listing_type: Optional[str] = None,
+    seller_id: Optional[str] = None,
+    store_id: Optional[str] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    max_km: Optional[float] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    search: Optional[str] = None,
+    location: Optional[str] = None,
+    attributes: Optional[str] = None,  # JSON-encoded dict, e.g. '{"brand":"Samsung"}'
+    sort: Optional[str] = None,
+    with_total: bool = False,
+    # Bounded. This was a bare `int = 20` with no ceiling, so any caller
+    # could ask for limit=1000000 and have the database assemble it - an
+    # unauthenticated endpoint doing unbounded work on request. 200 is the
+    # seller dashboard's catalogue ceiling, which is the largest legitimate
+    # ask on this route.
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    parsed_attributes = None
+    if attributes:
+        try:
+            parsed_attributes = json.loads(attributes)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="attributes must be valid JSON")
+    return await svc.list_listings(
+        category=category,
+        category_id=category_id,
+        subcategory_id=subcategory_id,
+        condition=condition,
+        listing_type=listing_type,
+        seller_id=seller_id,
+        store_id=store_id,
+        viewer_lat=lat,
+        viewer_lng=lng,
+        max_km=max_km,
+        min_price=min_price,
+        max_price=max_price,
+        search=search,
+        location=location,
+        attributes=parsed_attributes,
+        sort=sort,
+        with_total=with_total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/", status_code=201)
+async def create_listing(
+    body: ListingIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(
+        None, alias="X-Idempotency-Key", max_length=64,
+    ),
+):
+    """Create a listing. Auction terms are validated server-side here by
+    the same lifecycle.validate_terms the terms PATCH uses, so a window
+    that cannot be edited into existence cannot be created either.
+
+    X-Idempotency-Key (optional; the app sends one per draft) makes the
+    request safe to send again: a repeat returns the listing the first one
+    created. It is kept on the listing (Listing.client_ref) rather than in
+    Redis like the money endpoints' keys, so it holds without Redis and for
+    as long as the listing exists.
+    """
+    # Before anything is written: an older app build still offers "Auction"
+    # in the sell wizard, and a listing saved as one would be hidden from
+    # every buyer while auctions are off (auctions/paused.py).
+    if body.listing_type == "auction":
+        require_auctions()
+    svc = ListingService(db)
+    try:
+        return await svc.create_listing(
+            current_user["id"], body.model_dump(), client_ref=idempotency_key or None,
+        )
+    except AuctionError as e:
+        # Same structured shape the auction endpoints return, so the client
+        # reacts to the code instead of parsing English out of `detail`.
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={"code": e.code, "message": e.message},
+        )
+
+
+# ── Seller edits ────────────────────────────────────────────────────────────
+#
+# Sellers can change price and photos. Photos are unrestricted until a buyer
+# pays (below); price is not, and the asymmetry is deliberate.
+#
+# A price that moves while someone is negotiating breaks the negotiation:
+# a buyer who agreed KES 3,000 yesterday and opens the thread to find 3,800
+# has no reason to believe the next number either. And a listing whose price
+# visibly oscillates teaches every buyer watching it to wait rather than buy.
+# Neither is a hypothetical - they are the two failure modes of letting an
+# edit field loose on a marketplace.
+#
+# So: two rules, and both of them explain themselves when they fire, because
+# a limit a seller does not understand feels like a bug.
+#
+# Above both: while a buyer's money is held for the listing, nothing about
+# it changes. The listing is what they paid for, and its photos are what a
+# "not as described" dispute is decided against - editable after payment,
+# a seller could swap them for pictures of the damage the buyer is about to
+# report.
+
+# Deal states in which the buyer's money is held and not yet settled.
+_MONEY_HELD = (
+    DealStatus.paid, DealStatus.disputed, DealStatus.awaiting_condition_check,
+    DealStatus.awaiting_resolution, DealStatus.awaiting_replacement,
+    DealStatus.goods_not_arrived,
+)
+
+# Changes allowed in a rolling week. Two is enough to correct a mistake and
+# then respond to the market once; a third within seven days is oscillation.
+MAX_PRICE_CHANGES_PER_WEEK = 2
+PRICE_CHANGE_WINDOW_DAYS = 7
+
+# Minimum gap between changes, so the two allowances cannot be spent in the
+# same minute.
+MIN_HOURS_BETWEEN_PRICE_CHANGES = 12
+
+
+class ListingEdit(BaseModel):
+    # A NaN price used to pass the handler's old "<= 0" check (NaN fails
+    # every comparison) and be saved - see validation.py.
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    price: Optional[float] = None
+    # Replaces the photos, in this order (image asset ids).
+    photo_ids: Optional[List[str]] = Field(default=None, min_length=1, max_length=6)
+    verified_photos: Optional[str] = None      # comma-separated base64 (older app builds)
+    # Replaces the showcase with this image asset; "" removes it.
+    showcase_id: Optional[str] = None
+    showcase_image_url: Optional[str] = None
+    # A raise that shortens the listing's paid time (price_rules.py) is
+    # refused with PRICE_RAISE_SHORTENS_PAID_TIME and the numbers, so the
+    # app can ask; the seller's yes is this, sent with the same price.
+    accept_shorter_paid_time: bool = False
+
+    @field_validator("price")
+    @classmethod
+    def _price(cls, v):
+        return None if v is None else rules.check_price(v)
+
+
+@router.patch("/{listing_id}")
+async def update_listing(
+    listing_id: str,
+    body: ListingEdit,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Update price and/or photos on your own listing.
+
+    Returns the accepted changes plus how many price edits remain, so the
+    client can show the allowance BEFORE the seller types a new number
+    rather than rejecting them after.
+    """
+    from datetime import datetime, timedelta
+    from api.database import Deal, ListingPriceChange
+    from sqlalchemy import func
+    import uuid as _uuid
+
+    # Row-locked (PostgreSQL; SQLite serialises writers anyway) and read
+    # fresh: the weekly price allowance below is counted then spent, and two
+    # edits sent together could otherwise both see one change left.
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == listing_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found.")
+    if listing.seller_id != current_user["id"]:
+        raise HTTPException(status_code=403,
+                            detail="You can only edit your own listings.")
+
+    # ── Buyer's money held: no changes (see _MONEY_HELD) ────────────────
+    held = (await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.listing_id == listing_id, Deal.status.in_(_MONEY_HELD),
+        )
+    )).scalar() or 0
+    if held:
+        raise HTTPException(
+            status_code=409,
+            detail="A buyer has paid for this listing and the money is held in escrow. "
+                   "It can't be changed until that deal is settled.")
+
+    changed: Dict[str, Any] = {}
+
+    # ── Photos: unrestricted until a buyer pays ─────────────────────────
+    from api.domains.media.service import (
+        check_legacy_images, dump_id_list, require_owned_assets, split_legacy_photos,
+    )
+    from api.models.media import MediaPurpose
+
+    # Older app builds send base64; never a link to an image elsewhere.
+    await check_legacy_images(
+        db, current_user["id"], split_legacy_photos(body.verified_photos), MediaPurpose.LISTING_PHOTO,
+    )
+    await check_legacy_images(
+        db, current_user["id"], [body.showcase_image_url], MediaPurpose.LISTING_SHOWCASE,
+    )
+
+    if body.photo_ids is not None:
+        ids = await require_owned_assets(
+            db, current_user["id"], body.photo_ids, {MediaPurpose.LISTING_PHOTO},
+        )
+        listing.photo_ids = dump_id_list(ids)
+        # The base64 copy would now show older app builds the old photos.
+        listing.verified_photos = None
+        changed["photos"] = True
+    elif body.verified_photos is not None:
+        listing.verified_photos = body.verified_photos
+        # NULL = convert again: the media backfill picks this up.
+        listing.photo_ids = None
+        changed["verified_photos"] = True
+
+    if body.showcase_id is not None:
+        if body.showcase_id == "":
+            listing.showcase_id = None
+            listing.showcase_image_url = None
+            listing.showcase_image_source = None
+        else:
+            await require_owned_assets(
+                db, current_user["id"], [body.showcase_id],
+                {MediaPurpose.LISTING_SHOWCASE, MediaPurpose.LISTING_PHOTO},
+            )
+            listing.showcase_id = body.showcase_id
+            listing.showcase_image_url = None
+        changed["showcase"] = True
+    elif body.showcase_image_url is not None:
+        listing.showcase_image_url = body.showcase_image_url
+        listing.showcase_id = None
+        changed["showcase_image_url"] = True
+
+    # ── Price: gated ────────────────────────────────────────────────────
+    now = datetime.utcnow()
+    window_start = now - timedelta(days=PRICE_CHANGE_WINDOW_DAYS)
+
+    recent_r = await db.execute(
+        select(ListingPriceChange)
+        .where(ListingPriceChange.listing_id == listing_id,
+               ListingPriceChange.changed_at >= window_start)
+        .order_by(ListingPriceChange.changed_at.desc()))
+    recent = recent_r.scalars().all()
+
+    if body.price is not None and float(body.price) != float(listing.price or 0):
+        # (Above zero and within the escrow ceiling: ListingEdit checked.)
+        # On an auction, `price` IS the starting price (auction_meta mirrors
+        # it), so this generic edit path is a back door into an auction's
+        # terms - it predates auctions having terms at all. Once bidding has
+        # begun those are fixed; the seller changes them before it does
+        # through PATCH /auctions/{id}/terms, which validates the whole
+        # window rather than one number.
+        from api.database import AuctionMeta
+        from api.domains.auctions import lifecycle as _auction_lifecycle
+
+        if listing.listing_type == ListingType.auction:
+            meta = (await db.execute(
+                select(AuctionMeta).where(AuctionMeta.listing_id == listing_id)
+            )).scalar_one_or_none()
+            if meta is not None:
+                reason = _auction_lifecycle.terms_locked_reason(meta)
+                if reason is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "AUCTION_TERMS_LOCKED",
+                            "message": (
+                                f"{reason} The starting price can't be changed once "
+                                f"bidding begins. You can still update photos."
+                            ),
+                        },
+                    )
+                meta.starting_price = float(body.price)
+
+        # A live negotiation outranks the allowance. This is the rule that
+        # actually protects buyers: changing the number mid-thread is what
+        # makes a seller look like they are moving the goalposts, and no
+        # amount of remaining quota makes that acceptable.
+        live_r = await db.execute(
+            select(func.count(Deal.id)).where(
+                Deal.listing_id == listing_id,
+                Deal.status.in_((DealStatus.agreed,)),
+            ))
+        if int(live_r.scalar() or 0) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="There is an open deal on this listing. Finish or cancel "
+                       "it before changing the price - buyers who have already "
+                       "agreed a number should not see it move.")
+
+        if len(recent) >= MAX_PRICE_CHANGES_PER_WEEK:
+            nxt = recent[-1].changed_at + timedelta(days=PRICE_CHANGE_WINDOW_DAYS)
+            raise HTTPException(
+                status_code=429,
+                detail=f"You have used both price changes for this listing this "
+                       f"week. The next one is available "
+                       f"{nxt.strftime('%d %b')}. Frequent changes make buyers "
+                       f"wait for the next drop instead of buying.")
+
+        if recent:
+            gap = (now - recent[0].changed_at).total_seconds() / 3600.0
+            if gap < MIN_HOURS_BETWEEN_PRICE_CHANGES:
+                wait = MIN_HOURS_BETWEEN_PRICE_CHANGES - gap
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"You changed this price {gap:.0f} hours ago. Give it "
+                           f"{wait:.0f} more hours - a price that moves twice in "
+                           f"a day reads as uncertainty, not a deal.")
+
+        new_price = float(body.price)
+        old_price = float(listing.price or 0)
+
+        # How far one change may go (price_rules.py). Auctions are left to
+        # their terms lock above.
+        if (listing.listing_type != ListingType.auction
+                and new_price > price_rules.raise_limit(old_price)
+                and price_rules.raise_is_limited(
+                    listing.created_at,
+                    is_live(listing, now) and listing.status == ListingStatus.active, now)):
+            limit = int(price_rules.raise_limit(old_price))
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "PRICE_RAISE_TOO_LARGE",
+                    "message": (
+                        f"A price can go up by at most "
+                        f"{round(price_rules.MAX_RAISE_SHARE * 100)}% at a time - "
+                        f"KES {limit:,} for this listing. Buyers who saved it at "
+                        f"KES {old_price:,.0f} would read a bigger jump as a bait "
+                        f"and switch."),
+                    "max_price": limit,
+                },
+            )
+
+        # What the raise does to the fee already paid (price_rules.py).
+        paid_until_after = listing.paid_until
+        if (settings.listing_fees_enabled and fee_applies(listing)
+                and new_price > old_price
+                and listing.paid_until is not None and listing.paid_until > now):
+            fee_before, fee_after = await pricing_service.monthly_fees_at_prices(
+                db, listing.seller_id, listing.category, listing.quantity or 1,
+                old_price, new_price)
+            paid_until_after = price_rules.shortened_paid_until(
+                listing.paid_until, now, fee_before, fee_after)
+            if paid_until_after != listing.paid_until and not body.accept_shorter_paid_time:
+                days_left = (listing.paid_until - now).days
+                days_after = (paid_until_after - now).days
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "PRICE_RAISE_SHORTENS_PAID_TIME",
+                        "message": (
+                            f"At KES {new_price:,.0f} this listing's fee is "
+                            f"KES {fee_after:,} a month instead of KES {fee_before:,}, "
+                            f"so the {days_left} days you have paid for become "
+                            f"{days_after}. Change the price anyway?"),
+                        "monthly_fee_before": fee_before,
+                        "monthly_fee_after": fee_after,
+                        "paid_until": listing.paid_until.isoformat(),
+                        "paid_until_after": paid_until_after.isoformat(),
+                        "days_left": days_left,
+                        "days_left_after": days_after,
+                    },
+                )
+
+        db.add(ListingPriceChange(
+            id=str(_uuid.uuid4()),
+            listing_id=listing_id,
+            seller_id=listing.seller_id,
+            old_price=listing.price,
+            new_price=float(body.price),
+            changed_at=now,
+        ))
+        changed["price"] = {"from": listing.price, "to": new_price}
+        listing.price = new_price
+        if paid_until_after != listing.paid_until:
+            changed["paid_until"] = {"from": listing.paid_until.isoformat(),
+                                     "to": paid_until_after.isoformat()}
+            listing.paid_until = paid_until_after
+        recent = [None] + list(recent)   # count this one toward the allowance
+
+    await db.commit()
+
+    return {
+        "updated": changed,
+        "price_changes_used": len(recent),
+        "price_changes_allowed": MAX_PRICE_CHANGES_PER_WEEK,
+        "price_changes_remaining":
+            max(0, MAX_PRICE_CHANGES_PER_WEEK - len(recent)),
+        "window_days": PRICE_CHANGE_WINDOW_DAYS,
+        "listing_fee": fee_state(listing, now),
+    }
+
+
+@router.get("/{listing_id}/metrics")
+async def listing_metrics(
+    listing_id: str,
+    days: int = Query(60, ge=7, le=365),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Per-listing performance, history and advice. Seller's own listings only.
+
+    Views, likes and like/view ratio are commercially sensitive - they tell a
+    competitor exactly which of your products are moving and which are dead
+    stock, which is precisely what a rival would price against.
+    """
+    from datetime import date, datetime, timedelta
+    from api.database import Listing, ListingMetricSnapshot, SellerMetrics
+    from api.domains.listings.sell_probability import (
+        ListingSignals, compute_sell_probability, listing_advice,
+    )
+    from api.domains.listings.sell_signals import engagement_signals
+    from api.domains.trust.response_time import compute_all_response_times
+
+    listing = await db.get(Listing, listing_id)
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found.")
+    if listing.seller_id != current_user["id"]:
+        raise HTTPException(status_code=403,
+                            detail="You can only view metrics for your own listings.")
+
+    engagement = (await engagement_signals(db, [listing]))[listing_id]
+    likes = engagement["likes"]
+    interested = engagement["interested_buyers"]
+
+    # Category median, from OTHER sellers' active listings in this category.
+    #
+    # Two exclusions that were both missing:
+    #
+    #   * the listing itself. Without it, a category containing one listing
+    #     compared that listing against its own price - 0% off the median,
+    #     "your price is competitive". A router listed at KES 30,000 against
+    #     a real value near KES 2,000 was told it was priced correctly,
+    #     because the only thing being measured was the seller's own guess
+    #     handed back to them.
+    #   * the same seller's other listings. Otherwise anyone can set their
+    #     own benchmark by posting the same item five times, which is a
+    #     cheaper attack than it sounds.
+    median_r = await db.execute(
+        select(Listing.price).where(
+            Listing.category == listing.category,
+            Listing.status == listing.status,
+            Listing.price.isnot(None),
+            Listing.id != listing_id,
+            Listing.seller_id != listing.seller_id,
+        ))
+    prices = sorted(float(p) for (p,) in median_r.all() if p)
+    comparable_count = len(prices)
+    category_median = prices[len(prices) // 2] if prices else None
+
+    metrics = await db.get(SellerMetrics, listing.seller_id)
+    try:
+        response_minutes = (await compute_all_response_times(db)).get(listing.seller_id)
+    except Exception:
+        response_minutes = None
+
+    days_listed = ((datetime.utcnow() - listing.created_at).total_seconds() / 86400.0
+                   if listing.created_at else 1.0)
+
+    signals = ListingSignals(
+        views=int(listing.views or 0),
+        likes=likes,
+        interested_buyers=interested,
+        days_listed=max(days_listed, 1.0),
+        seller_dcr_percent=metrics.dcr_score if metrics else None,
+        seller_response_minutes=response_minutes,
+        price=float(listing.price) if listing.price else None,
+        category_median_price=category_median,
+        comparable_count=comparable_count,
+        best_offer=engagement["best_offer"],
+        photo_count=engagement["photo_count"],
+        description_chars=engagement["description_chars"],
+    )
+    prob = compute_sell_probability(signals)
+
+    since = date.today() - timedelta(days=days)
+    hist_r = await db.execute(
+        select(ListingMetricSnapshot)
+        .where(ListingMetricSnapshot.listing_id == listing_id,
+               ListingMetricSnapshot.snapshot_date >= since)
+        .order_by(ListingMetricSnapshot.snapshot_date.asc()))
+    rows = hist_r.scalars().all()
+
+    # Daily view deltas, derived from the cumulative counter. First day has
+    # no predecessor, so it is omitted rather than reported as its own total -
+    # which would show a spike on day one of every listing.
+    history = []
+    prev_views = None
+    for row in rows:
+        history.append({
+            "date": row.snapshot_date.isoformat(),
+            "views": row.views,
+            "views_today": (row.views - prev_views) if prev_views is not None else None,
+            "likes": row.likes,
+            "interested_buyers": row.interested_buyers,
+            "sell_probability": row.sell_probability,
+        })
+        prev_views = row.views
+
+    return {
+        "listing_id": listing_id,
+        "current": {
+            "views": signals.views,
+            # "likes" has always been the SAVE count (the wishlists table);
+            # older app builds read it by that name. "saves" says so, and
+            # "like_count" is the likes themselves (since 2026-10-09).
+            "likes": likes,
+            "saves": likes,
+            "like_count": engagement["like_count"],
+            "like_to_view_ratio": round(likes / signals.views, 4) if signals.views else None,
+            "interested_buyers": interested,
+            "views_per_day": round(signals.views / max(days_listed, 1.0), 2),
+            "days_listed": round(days_listed, 1),
+            "sell_probability": prob.probability,
+            "confidence": prob.confidence,
+            "price": signals.price,
+            "category_median_price": category_median,
+            "price_delta_percent": prob.price_delta_percent,
+            # Lets the screen say "not enough comparable listings" instead
+            # of showing a percentage computed against nothing.
+            "comparable_count": comparable_count,
+            "has_price_benchmark": prob.price_delta_percent is not None,
+            "components": {
+                "demand": prob.demand, "intent": prob.intent,
+                "commitment": prob.commitment, "seller": prob.seller,
+                "price_fit": prob.price_fit, "quality": prob.quality,
+            },
+            "best_offer": engagement["best_offer"],
+            "photo_count": engagement["photo_count"],
+            "freshness": prob.freshness,
+        },
+        "history": history,
+        "advice": listing_advice(signals, prob),
+    }
+
+
+@router.get("/seller/{seller_id}/receipts")
+async def seller_receipts(
+    seller_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Completed payments for this seller's deals, and (under `charges`) the
+    listing fees and premium plans they paid BROKA.
+
+    Provider-neutral in shape. The underlying table is named for M-Pesa
+    because that is the rail that exists today, but the response exposes a
+    generic `provider` and `reference` rather than `mpesa_receipt` - Airtel
+    Money and anything added later settle into the same escrow, and a client
+    written against `mpesa_receipt` would have to be rewritten to show them.
+    """
+    from api.database import Deal, Listing as L, MpesaStatus, MpesaTransaction, User
+
+    if seller_id != current_user["id"]:
+        raise HTTPException(status_code=403,
+                            detail="You can only view your own receipts.")
+
+    rows_r = await db.execute(
+        select(MpesaTransaction, Deal, L.name, User.name)
+        .join(Deal, Deal.id == MpesaTransaction.deal_id)
+        .join(L, L.id == Deal.listing_id)
+        .join(User, User.id == MpesaTransaction.buyer_id)
+        .where(Deal.seller_id == seller_id,
+               MpesaTransaction.status == MpesaStatus.success)
+        .order_by(MpesaTransaction.created_at.desc())
+        .limit(limit))
+
+    receipts = []
+    total = 0.0
+    for txn, deal, listing_name, buyer_name in rows_r.all():
+        total += float(txn.amount or 0)
+        receipts.append({
+            "id":          txn.id,
+            "deal_id":     txn.deal_id,
+            "listing":     listing_name,
+            "buyer":       buyer_name,
+            "amount":      float(txn.amount or 0),
+            "provider":    "M-Pesa",
+            "reference":   txn.mpesa_receipt,
+            "paid_at":     txn.created_at.isoformat() if txn.created_at else None,
+            "deal_status": deal.status.value if deal.status else None,
+        })
+
+    # What the seller paid BROKA (listing fees, plans), alongside: the same
+    # screen keeps every M-Pesa receipt a seller may be asked for, but in
+    # its own list and total - it is money out, and counting it into
+    # "released to you" would overstate what they were paid.
+    from api.domains.pricing.receipts import charges_paid_by
+    charges = await charges_paid_by(db, seller_id, limit)
+
+    return {"receipts": receipts, "total": round(total, 2),
+            "count": len(receipts),
+            "charges": charges,
+            "charges_total": sum(c["amount"] for c in charges)}
+
+
+@router.get("/seller/{seller_id}/metrics")
+async def seller_metrics(
+    seller_id: str,
+    days: int = Query(90, ge=7, le=730),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Current standing plus the history series behind the dashboard graphs.
+
+    Own metrics only. A seller's backlog and rank position are competitive
+    information - rank position in particular tells a rival exactly how far
+    they have to climb. Buyers are shown three of these figures on a
+    listing's screen (overall rating, DCR, response time), from the nightly
+    snapshot and nothing else of it: trust/public_standing.py.
+
+    `history` is one point per day from SellerMetricSnapshot. Days with no
+    snapshot are simply absent rather than zero-filled: a gap in the line is
+    honest about a job that did not run, while a zero is a false claim that
+    the seller scored nothing that day.
+    """
+    if seller_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="You can only view your own metrics.")
+
+    from datetime import date, datetime, timedelta
+    from api.database import Deal, DealStatus, SellerMetricSnapshot, SellerMetrics, User
+    from api.domains.trust.completion_rate import _FUNDED_STATUSES
+    from api.domains.trust.response_time import compute_all_response_times
+    from api.domains.trust.seller_rating import (
+        MIN_COUNTABLE_DEAL_VALUE_KES, SellerSignals, credibility_score,
+        overall_rating,
+    )
+    from sqlalchemy import func
+
+    user = await db.get(User, seller_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Seller not found.")
+
+    metrics = await db.get(SellerMetrics, seller_id)
+    dcr = metrics.dcr_score if metrics else None
+
+    async def _count(*conds) -> int:
+        r = await db.execute(select(func.count(Deal.id)).where(Deal.seller_id == seller_id, *conds))
+        return int(r.scalar() or 0)
+
+    completed = await _count(Deal.status.in_(_FUNDED_STATUSES))
+
+    # Backlog counts only deals the SELLER is the blocker on.
+    #
+    # `status == agreed` counted every open thread, including ones the buyer
+    # abandoned, ones where the seller already replied and is waiting, and
+    # ones opened by someone with no intention of buying. A competitor could
+    # inflate a rival's backlog just by starting conversations. See
+    # domains/trust/deal_lifecycle - the attribution is a timestamp
+    # comparison, not a model call.
+    from api.domains.trust.deal_lifecycle import (
+        assess_seller_deals, fair_backlog_count,
+    )
+    try:
+        assessments = await assess_seller_deals(db, seller_id)
+        pending = fair_backlog_count(assessments)
+        open_total = len([a for a in assessments if a.stall.value != "closed"])
+    except Exception as exc:
+        # Falls back to the old definition rather than dropping the term.
+        # An over-counted backlog is unfair; a missing one is wrong.
+        import logging
+        logging.getLogger(__name__).warning(
+            "[metrics] deal lifecycle assessment failed (%s) - falling back "
+            "to the raw open-deal count", exc)
+        pending = await _count(Deal.status == DealStatus.agreed)
+        open_total = pending
+        assessments = []
+    countable = await _count(Deal.status.in_(_FUNDED_STATUSES),
+                             Deal.agreed_price >= MIN_COUNTABLE_DEAL_VALUE_KES)
+    uniq_r = await db.execute(
+        select(func.count(func.distinct(Deal.buyer_id)))
+        .where(Deal.seller_id == seller_id, Deal.status.in_(_FUNDED_STATUSES)))
+    unique_counterparties = int(uniq_r.scalar() or 0)
+
+    # Live rather than from last night's snapshot: a seller who just closed
+    # a deal should see it, not be told to come back tomorrow.
+    try:
+        median_minutes = (await compute_all_response_times(db)).get(seller_id)
+    except Exception:
+        median_minutes = None
+
+    days_on = ((datetime.utcnow() - user.created_at).total_seconds() / 86400.0
+               if user.created_at else 0.0)
+
+    signals = SellerSignals(
+        dcr_percent=dcr,
+        median_response_minutes=median_minutes,
+        completed_deals=completed,
+        pending_deals=pending,
+        days_on_broka=days_on,
+        unique_counterparties=unique_counterparties,
+        countable_value_deals=countable,
+    )
+    breakdown = overall_rating(signals)
+
+    since = date.today() - timedelta(days=days)
+    hist_r = await db.execute(
+        select(SellerMetricSnapshot)
+        .where(SellerMetricSnapshot.seller_id == seller_id,
+               SellerMetricSnapshot.snapshot_date >= since)
+        .order_by(SellerMetricSnapshot.snapshot_date.asc())
+    )
+    history = [{
+        "date":            row.snapshot_date.isoformat(),
+        "overall_rating":  row.overall_rating,
+        "dcr":             row.dcr_score,
+        "rank_position":   row.rank_position,
+        "response_minutes": row.median_response_min,
+        "completed_deals": row.completed_deals,
+        "pending_deals":   row.pending_deals,
+        "total_views":     row.total_views,
+    } for row in hist_r.scalars().all()]
+
+    current_block = {
+            "overall_rating":        breakdown.rating,
+            "dcr":                   dcr,
+            "median_response_minutes": median_minutes,
+            "completed_deals":       completed,
+            "pending_deals":         pending,
+            # Everything still open, including deals that do NOT count
+            # against the seller - so the screen can show "8 open, 1 waiting
+            # on you" rather than implying all eight are their fault.
+            "open_deals":            open_total,
+            "deal_breakdown": [
+                {"deal_id": a.deal_id, "stage": a.stage.value,
+                 "stall": a.stall.value, "counts": a.counts_against_seller,
+                 "reason": a.reason}
+                for a in assessments
+            ],
+            "days_on_broka":         round(days_on, 1),
+            "unique_counterparties": unique_counterparties,
+            # The breakdown is what lets the dashboard say WHY the number
+            # moved instead of just showing it - Phase 3's "working for
+            # you / against you" panel reads these directly.
+            "components": {
+                "dcr":      breakdown.dcr_component,
+                "response": breakdown.response_component,
+                "volume":   breakdown.volume_component,
+                "tenure":   breakdown.tenure_component,
+                "backlog":  breakdown.backlog_component,
+            },
+            "confidence": breakdown.confidence,
+            "raw_rating": breakdown.raw_rating,
+            # Track record rather than current form - see credibility_score.
+            "credibility": credibility_score(signals),
+    }
+    # Rank position comes from last night's snapshot - it is a property of
+    # the whole seller population, so recomputing it live for one request
+    # would mean ranking every seller on the platform on a screen load.
+    current_block["rank_position"] = history[-1]["rank_position"] if history else None
+
+    from api.domains.trust.seller_advice import build_advice
+
+    return {
+        "current": current_block,
+        # Absent days are gaps, not zeroes - see docstring.
+        "history": history,
+        "history_days": days,
+        # Deterministic rules over the deltas above, not a model call:
+        # Zeno cannot see a trend, and a fluent guess about one is worse
+        # than no guess. See domains/trust/seller_advice.
+        "advice": build_advice(current_block, history),
+    }
+
+
+@router.get("/seller/{seller_id}/revenue")
+async def get_seller_revenue(
+    seller_id: str,
+    period: str = "week",
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Real revenue-over-time for the seller dashboard chart, aggregated
+    from actually-completed (released) deals - a seller may only see their
+    own revenue breakdown."""
+    from fastapi import HTTPException
+    if current_user["id"] != seller_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this seller's revenue")
+    svc = ListingService(db)
+    return await svc.get_seller_revenue(seller_id, period if period in ("week", "month") else "week")
+
+
+@router.get("/{listing_id}/private")
+async def get_own_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller's own view of their listing, reserve price included.
+
+    GET /{listing_id} below is unauthenticated - it is the buyer-facing
+    feed detail - so it serves the public payload, which deliberately has
+    no reserve_price in it. A seller editing an auction still needs to see
+    the reserve they set; this is where they get it, after proving they own
+    the listing.
+    """
+    svc = ListingService(db)
+    return await svc.get_own_listing(listing_id, current_user["id"])
+
+
+def _viewer_if_signed_in(token: Optional[str] = Depends(_oauth2_scheme_optional)) -> Optional[dict]:
+    """The signed-in caller, or None - and None, not 401, for a token that
+    has expired. The listing is public: an old session must still open it,
+    it just counts as a view."""
+    if not token:
+        return None
+    try:
+        return get_current_user(token)
+    except HTTPException:
+        return None
+
+
+@router.get("/{listing_id}")
+async def get_listing(
+    listing_id: str,
+    db: AsyncSession = Depends(get_db),
+    viewer: Optional[dict] = Depends(_viewer_if_signed_in),
+):
+    """PUBLIC listing detail. No private fields - see
+    ListingService._listing_dict. A signed-in caller is read only so the
+    seller opening their own listing is not counted as a view."""
+    svc = ListingService(db)
+    return await svc.get_listing(listing_id, viewer_id=viewer["id"] if viewer else None)
+
+
+@router.get("/{listing_id}/save")
+async def get_saved(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether the caller has saved this listing. How many others have is
+    the seller's to know (GET /listings/{id}/metrics), not every buyer's."""
+    svc = ListingService(db)
+    return await svc.is_saved(listing_id, current_user["id"])
+
+
+@router.post("/{listing_id}/save")
+async def save_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save (heart) a listing. Idempotent. Saves feed the listing's sell
+    probability - a save is a buyer saying "I want this, not today"."""
+    svc = ListingService(db)
+    return await svc.save_listing(listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}/save")
+async def unsave_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    return await svc.unsave_listing(listing_id, current_user["id"])
+
+
+@router.get("/{listing_id}/engagement")
+async def get_engagement(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether the caller liked and saved this listing. Its seller gets the
+    counts instead; nobody else does - which products are moving is what a
+    rival would price against."""
+    svc = ListingService(db)
+    return await svc.engagement(listing_id, current_user["id"])
+
+
+@router.post("/{listing_id}/like")
+async def like_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Like a listing. Idempotent. Apart from saving it: a save keeps it in
+    the buyer's Saved items, a like only tells the seller it's liked."""
+    svc = ListingService(db)
+    return await svc.like_listing(listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}/like")
+async def unlike_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    return await svc.unlike_listing(listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}")
+async def delete_listing(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete your own listing at any time: buyers no longer see it anywhere.
+    Deals on it keep going - see ListingService.delete_listing."""
+    svc = ListingService(db)
+    return await svc.delete_listing(listing_id, current_user["id"])
+
+
+@router.post("/{listing_id}/store")
+async def set_listing_store(
+    listing_id: str,
+    body: ListingStoreIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Associate an existing listing with a store the caller owns."""
+    svc = ListingService(db)
+    return await svc.set_listing_store(listing_id, current_user["id"], body.store_id)
+
+
+@router.delete("/{listing_id}/store")
+async def remove_listing_store(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a listing to personal (store_id=NULL)."""
+    svc = ListingService(db)
+    return await svc.remove_listing_store(listing_id, current_user["id"])
+
+
+@router.post("/{listing_id}/interest")
+async def express_interest(
+    listing_id: str,
+    body: InterestIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    return await svc.express_interest(listing_id, current_user["id"], body.offer_price)
+
+
+@router.post("/{listing_id}/sold-out")
+async def report_sold_out(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A buyer found the item gone: the listing is marked sold out and taken
+    out of every list until its seller says otherwise (sold_out.py)."""
+    from . import sold_out
+    return await sold_out.report(db, listing_id, current_user["id"])
+
+
+@router.delete("/{listing_id}/sold-out")
+async def revoke_sold_out(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The seller: the item is still available - back on sale."""
+    from . import sold_out
+    return await sold_out.revoke(db, listing_id, current_user["id"])
+
+
+@router.get("/{listing_id}/matches")
+async def get_matches(
+    listing_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = ListingService(db)
+    return await svc.get_matches(listing_id)

@@ -1,0 +1,203 @@
+# BROKA v4.0 — Render deployment config
+# Features: Redis (Upstash free tier), structured JSON logs
+#
+# SCHEMA: created by init_db() from main.py's FastAPI lifespan, on every
+# boot. Alembic does NOT run on deploy - the container command is uvicorn
+# alone. It used to be `alembic upgrade head && uvicorn ...`, which failed
+# before uvicorn was reached (asyncpg is installed, the migration env needs
+# psycopg2) and would still fail with the driver present, because the
+# migration chain is internally inconsistent from 0001 to 0002. See
+# backend/Dockerfile and backend/migrations/README.md.
+
+services:
+  - type: web
+    name: broka-api
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: MPESA_CALLBACK_SECRET
+        generateValue: true  # protects /mpesa/callback - see api/routers/mpesa.py
+      - key: GEMINI_API_KEY
+        sync: false          # Primary AI broker, and first in line for photos Zeno is shown
+      - key: GEMINI_MODEL
+        value: "gemini-flash-latest"   # Google's newest-Flash alias; gemini-2.0-flash was shut down 2026-06-01
+      - key: DEEPSEEK_API_KEY
+        sync: false          # DIRECT DeepSeek API (not OpenRouter) - TESTING for latency vs Nemotron below.
+                              # Safe to leave unset in the dashboard - app skips to OpenRouter/Nemotron without it
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-v4-flash"
+      - key: DEEPSEEK_BASE_URL
+        value: "https://api.deepseek.com"
+      - key: OPENROUTER_API_KEY
+        sync: false          # TESTING: Nemotron 3 Ultra (free) - standing in for Groq below,
+                              # whose llama-3.3-70b-versatile Groq decommissioned 2026-08-16
+      - key: OPENROUTER_MODEL
+        value: "nvidia/nemotron-3-ultra-550b-a55b:free"   # swap here to test other candidates - no redeploy needed
+      - key: GROQ_API_KEY
+        sync: false          # Legacy fallback - currently a no-op (see OPENROUTER_API_KEY above);
+                              # GROQ_MODEL is hardcoded in source, not env-driven, so reactivating
+                              # this tier with a still-served Groq model needs a code change too
+      - key: HF_TOKEN
+        sync: false          # Hugging Face token ("Make calls to Inference Providers") for AI
+                             # cover images - see api/core/hf_image_client.py. Unset is safe:
+                             # AI covers return a clear error, gallery covers still work.
+      - key: HF_SHOWCASE_MODEL
+        value: "Qwen/Qwen-Image-Edit-2511"   # any Hub model HF serves for image-to-image via fal-ai
+      - key: DEEPGRAM_API_KEY
+        sync: false          # Deepgram streaming speech-to-text, for the Zeno voice card,
+                             # and Zeno's first stand-in voice (Aura) when Edge TTS fails.
+                             # Unset is safe: /stt/deepgram-token returns 503 and the app
+                             # keeps its text composer. This is the PERMANENT key and must
+                             # never reach the Flutter build - the phone only ever receives
+                             # the short-lived token minted from it by /stt/deepgram-token.
+      - key: ASSEMBLYAI_API_KEY
+        sync: false          # AssemblyAI Universal Streaming - the FALLBACK for the Zeno
+                             # voice card, used when Deepgram cannot be reached or refuses
+                             # a session. Unset is safe: /stt/assemblyai-token returns 503,
+                             # the failover is simply unavailable and Deepgram (or the text
+                             # composer) carries voice on its own. Also Zeno's last stand-in
+                             # voice (its Voice Agent) when Edge and Deepgram TTS both fail.
+                             # Same rule as above: this
+                             # is the PERMANENT key, it must never reach the Flutter build,
+                             # and the phone only ever receives the short-lived token minted
+                             # from it by /stt/assemblyai-token.
+      - key: ASSEMBLYAI_VOICE
+        value: eve           # Zeno's English voice (AssemblyAI Voice Agent, tts.py). Must be in
+                             # AssemblyAI's current catalogue: alba, eve, george, jane, jean, mary,
+                             # michael, anna, charles, paul, vera. Change it here to try another.
+      - key: RESEND_API_KEY
+        sync: false          # Resend — email verification codes. Unset is safe:
+                             # email is optional at signup; verification requests
+                             # return 503 (codes are never logged in production).
+                             # See api/core/email.py
+      - key: RESEND_FROM
+        sync: false          # Must be on a domain verified in the Resend
+                             # dashboard, or Resend refuses every send
+      - key: AT_USERNAME
+        sync: false          # Africa's Talking — "sandbox" for testing, your live username in prod
+      - key: AT_API_KEY
+        sync: false          # Africa's Talking API key — required for OTP + SMS nudges to actually send
+      - key: AT_SENDER_ID
+        sync: false          # Optional: registered AT sender ID, else uses the shared AT number
+      - key: DATABASE_URL
+        fromDatabase:
+          name: broka-db
+          property: connectionString
+      - key: REDIS_URL
+        sync: false          # Upstash Redis free tier: https://upstash.com
+                             # Enables: durable events, idempotency, rate limiting, ARQ workers
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "15"          # Short-lived access tokens — refresh token handles renewal.
+                             # (Was TOKEN_EXPIRE_MINUTES, which nothing reads - changing
+                             # it in the dashboard silently did nothing.)
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "30"
+      - key: BUY_AGENT_WATCH_DAYS
+        value: "30"          # Days a Zeno watch runs before it ends by itself.
+      - key: IN_APP_PAYMENTS_ENABLED
+        value: "false"       # true: buyers pay through BROKA's escrow again, with commission.
+                             # Off: buyers pay sellers directly (PRICING.md, "While BROKA
+                             # handles no payments"). Only once an escrow provider works.
+      - key: REVIEWS_REQUIRE_COMPLETED_DEAL
+        value: "false"       # true: reviews only after a paid-out deal. Off: a buyer who agreed a deal or talked with the seller may review once.
+      - key: DCR_ENABLED
+        value: "false"       # true: deal completion rate counts towards rank. Off while payments happen outside BROKA.
+      - key: ESCROW_GUIDANCE_ENABLED
+        value: "false"       # true: Zeno recommends escrow when a price is agreed and points at the
+                             # app's Pay with escrow buttons. Off while the app hides payments.
+      - key: VERIFIED_BADGE_ENABLED
+        value: "false"       # true: the Verified badge is sold again. Off: purchases are refused.
+      - key: AUCTIONS_ENABLED
+        value: "false"       # true: auctions are back - creating, bidding, the Auction House. Off for
+                             # launch: a winning bid needs in-app escrow (AUCTIONS.md).
+      - key: FREE_LISTINGS_PER_SELLER
+        value: "0"           # Each seller's first N active listings pay no listing fee.
+      - key: FOUNDING_SELLER_TIERS
+        value: "50:100,150:50"  # count:percent off a seller's first listing, by order of it.
+      - key: FOUNDING_DISCOUNT_DAYS
+        value: "30"          # How long the discount on a seller's first listing lasts.
+      - key: LISTING_FEES_ENABLED
+        value: "false"       # true: a new listing is hidden until its monthly fee is paid
+                             # (PRICING.md). Only once the app build that can pay is required -
+                             # an older build would post listings nobody can see.
+      - key: MPESA_LISTING_FEE_CALLBACK_URL
+        sync: false          # Optional. Unset = /pricing/listing-fee/callback/<MPESA_CALLBACK_SECRET>
+      - key: PREMIUM_ENABLED
+        value: "false"       # true: voice mode, Zeno's SMS, the Buying Agent, AI covers and hosting
+                             # auctions need a plan, and plans are sold (PRICING.md). Only once
+                             # the app build with the Premium screen is required.
+                             # false: those stay free, but AI covers are off.
+      - key: MPESA_PREMIUM_CALLBACK_URL
+        sync: false          # Optional. Unset = /premium/callback/<MPESA_CALLBACK_SECRET>
+      - key: ECONFIRM_FALLBACK_EMAIL_DOMAIN
+        value: "broka.co.ke"   # E-Confirm needs both parties' emails; a user without one is
+                               # sent as user-<id>@this domain (domains/escrow/service.py).
+      - key: ZETUPAY_ENABLED
+        value: "false"       # true: listing fees, plans, boosts and badges are charged through
+                             # ZetuPay instead of Daraja (backend/api/domains/payments/, ZETUPAY.md).
+                             # Never deal money - that stays on E-Confirm. Production refuses to
+                             # start with this on and ZETUPAY_SECRET_KEY unset.
+      - key: ZETUPAY_BASE_URL
+        value: "https://pay.zetupay.co.ke/api/v1"
+      - key: ZETUPAY_SECRET_KEY
+        sync: false          # The wallet's LIVE key (sk_live_...): authenticates BROKA's calls and
+                             # verifies ZetuPay's signed webhooks. Backend-only.
+      - key: JSON_LOGS
+        value: "true"        # v4.0: structured JSON logs for Render log viewer
+      - key: ENV
+        value: "production"
+      - key: SENTRY_DSN
+        sync: false          # Error tracking AND reconciliation alerts (money that needs a
+                             # person - see api/core/reconciliation.py). Without it those
+                             # alerts only reach the logs. Free tier covers 5k errors/month.
+      - key: R2_ACCOUNT_ID
+        sync: false          # Cloudflare account id (R2 overview page). Images: see
+                             # api/core/media_storage.py. With any of these five unset,
+                             # images are stored in the database instead.
+      - key: R2_ACCESS_KEY_ID
+        sync: false          # R2 API token (Object Read & Write, this bucket only)
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false          # e.g. broka-media
+      - key: MEDIA_PUBLIC_BASE_URL
+        sync: false          # The bucket's public URL: custom domain or pub-....r2.dev
+      - key: PUBLIC_API_BASE_URL
+        sync: false          # This service's own URL; absolute links for database-stored images
+      - key: STORE_LINK_BASE
+        value: https://broka.co.ke/store   # Every store link: https://broka.co.ke/store/<name>
+      - key: CLIENT_IP_HEADER
+        value: CF-Connecting-IP   # Render is behind Cloudflare: the TCP peer is Render's proxy,
+                                  # shared by every user. Per-IP rate limits (login, signup,
+                                  # OTP) read the caller from this header. Check it with
+                                  # GET /admin/diagnostics/client-ip. See api/core/client_ip.py.
+      - key: BROKA_NATIVE
+        value: "required"    # The Rust extension (backend/native) must load or the service
+                             # refuses to start - the image is built with it. "off" is the
+                             # kill switch: the Python fallback, same results, slower.
+                             # GET /ready reports which is in use.
+      - key: STOREFRONT_API_KEY
+        sync: false          # 32+ random characters, the SAME value as in the web project
+                             # (Vercel). Lets the storefront pass on which visitor a store
+                             # visit or share came from; without it those are rate-limited
+                             # by Vercel's addresses.
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false          # Optional: FCM push notifications
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false          # Cloudflare Realtime TURN - see api/core/cloudflare_turn_client.py
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false          # Server-side only - never returned to Flutter (GET /calls/turn-credentials)
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false          # Only needed if a future administrative Cloudflare call requires it
+
+databases:
+  - name: broka-db
+    plan: free
+    region: oregon

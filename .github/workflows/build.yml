@@ -1,0 +1,471 @@
+name: BROKA CI — Test + Build APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+
+  # ── Rust extension (backend/native) ─────────────────────────────
+  # The crate's own gate: formatting, clippy with warnings denied (with and
+  # without the Python bindings), and its unit tests - plain Rust, no
+  # interpreter. Its Python face is exercised by backend-test, which builds
+  # the extension and runs the whole suite on it.
+  native:
+    name: Rust extension (backend/native)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend/native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the pinned Rust toolchain
+        # The version is rust-toolchain.toml's - the same one the Docker
+        # image builds with.
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/native
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --features python -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  # ── Backend Tests (v4.0 addition) ───────────────────────────────
+  # Runs on the Rust extension, as production does: it is built and
+  # installed here, and BROKA_NATIVE=required fails the run if it didn't
+  # load. The PostgreSQL job below runs the same suite on the Python
+  # fallback, so both engines are covered end to end.
+  backend-test:
+    name: Backend Tests (Python 3.11)
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install the pinned Rust toolchain
+        working-directory: backend/native
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/native
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ./native
+
+      - name: Run tests with coverage
+        env:
+          ENV: test
+          SECRET_KEY: ci-test-secret-key-long-enough-for-testing-purposes
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+          BROKA_NATIVE: required
+        run: |
+          cd backend
+          pytest tests/ -v \
+            --cov=api \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=50
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+        continue-on-error: true
+
+  # ── Backend Tests on PostgreSQL ─────────────────────────────────
+  # Production runs on Postgres; the job above runs the suite on SQLite,
+  # which doesn't enforce foreign keys and accepts timezone-aware values in
+  # naive DateTime columns. Both hid real production bugs - every signup
+  # and login failed on Postgres, and so did every "system" audit row and
+  # the payment update in its transaction. Same suite, a fresh schema per
+  # test module (backend/tests/postgres_plugin.py).
+  backend-test-postgres:
+    name: Backend Tests (PostgreSQL 16)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: broka
+          POSTGRES_PASSWORD: broka
+          POSTGRES_DB: broka_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U broka -d broka_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests on PostgreSQL
+        env:
+          ENV: test
+          SECRET_KEY: ci-test-secret-key-long-enough-for-testing-purposes
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          POSTGRES_TEST_URL: "postgresql+asyncpg://broka:broka@localhost:5432/broka_test"
+          REDIS_URL: redis://localhost:6379/0
+          # The extension isn't built in this job: the whole suite runs on
+          # the Python fallback (api/core/native.py), which is what a
+          # BROKA_NATIVE=off deploy would run.
+          BROKA_NATIVE: "off"
+        # python -m pytest, not the pytest command: the plugin is imported
+        # as tests.postgres_plugin, which needs backend/ on the import path,
+        # and only `python -m` puts the working directory there.
+        run: |
+          cd backend
+          python -m pytest tests/ -q -o addopts="" --tb=short -p tests.postgres_plugin
+
+  # ── Web storefront (broka.co.ke/store/<name>) ─────────────────────
+  # Vercel builds and deploys web/ on its own; this job is the gate that
+  # catches a type, lint, test or build failure before it gets there. It
+  # doesn't hold up the APK: the app and the website ship independently.
+  web:
+    name: Web Storefront (Next.js)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: web
+
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web/package.json
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        # Nothing is fetched at build time - store pages render on request -
+        # so the build needs no API or network.
+        run: npm run build
+
+  # ── Repository map (graphify.md) ──────────────────────────────────
+  # A map of the repository for people and coding agents - endpoints with
+  # their auth, tables, module summaries, app and web routes - generated
+  # from the source by scripts/graphify.py (standard library only, no
+  # third-party code runs with the write token). On a push to main the
+  # regenerated map is committed back when it changed; on a pull request
+  # it is only generated, so a broken generator shows up before merge.
+  # The output has no timestamps, so an unchanged codebase commits nothing.
+  # A push made with GITHUB_TOKEN starts no new workflow run, so this can't
+  # loop; [skip ci] says the same to anything else watching.
+  repo-map:
+    name: Repository map (graphify.md)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    concurrency:
+      group: repo-map-${{ github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate
+        run: python scripts/graphify.py
+
+      - name: Commit the updated map
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if git diff --quiet -- graphify.md; then
+            echo "graphify.md is up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add graphify.md
+          git commit -m "Update graphify.md [skip ci]"
+          # Someone may have pushed meanwhile: rebase onto them and retry.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Could not push graphify.md after 3 attempts." >&2
+          exit 1
+
+  # ── Build Flutter APK ─────────────────────────────────────────────
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    needs: backend-test    # APK only builds when tests pass
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Get packages
+        run: |
+          cd flutter_app
+          flutter pub get
+
+      - name: Analyze
+        # Non-blocking: this pass is about hardening calling, not fixing
+        # every pre-existing lint warning across the whole app, and a
+        # sudden strict gate here could block releases over unrelated
+        # findings this change didn't introduce. Still genuinely useful -
+        # a real type error (the exact class of bug the last CI run
+        # caught in webrtc_service.dart) shows up here in seconds instead
+        # of after the full release build.
+        # CI FIX (implementation audit, spec §27): this was
+        # `continue-on-error: true`, which meant a genuine Dart type or
+        # compile error was printed and then ignored - the exact thing §27
+        # rules out ("should not knowingly allow genuine compile/type
+        # failures to pass silently"). The step's own comment already
+        # described it as the place such a bug "shows up in seconds", but
+        # nothing acted on it.
+        #
+        # Now blocking on ERRORS only. flutter analyze treats warnings and
+        # infos as fatal by default, so simply dropping continue-on-error
+        # would have failed the build on pre-existing lint noise - which
+        # §27 equally rules out. --no-fatal-warnings/--no-fatal-infos keeps
+        # that noise informational while making real errors stop the build.
+        run: |
+          cd flutter_app
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Test
+        # Blocking: a failing widget or unit test stops the APK from being
+        # built and published. The suite needs no network - the voice tests
+        # inject their connectors and the HTTP tests use mock clients.
+        run: |
+          cd flutter_app
+          flutter test
+
+      - name: Release signing key
+        # With the ANDROID_KEYSTORE_* secrets set, the APK is signed with
+        # BROKA's release key (android/app/build.gradle reads
+        # android/app/key.properties); without them it's signed with the
+        # debug key, as before. A fixed key is what lets broka.co.ke store
+        # links open the app directly (Android App Links).
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No release key configured: signing with the debug key."
+            exit 0
+          fi
+          cd flutter_app/android/app
+          echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+          # key.properties is a Java properties file: a backslash in a
+          # password must be doubled to survive.
+          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$(esc "$KEYSTORE_PASSWORD")"
+            echo "keyAlias=$(esc "$KEY_ALIAS")"
+            echo "keyPassword=$(esc "${KEY_PASSWORD:-$KEYSTORE_PASSWORD}")"
+          } > key.properties
+          echo "Signing with the release key."
+
+      - name: Firebase config (push notifications)
+        id: firebase
+        # Without android/app/google-services.json the APK is built with no
+        # Firebase at all: main.dart's Firebase.initializeApp() throws, the
+        # app falls back to polling while it is open, and no phone can be
+        # reached by a push. That is how every release so far was built -
+        # an incoming call rang only with BROKA open, and messages waited
+        # until it was opened. The file is kept out of git (.gitignore); the
+        # GOOGLE_SERVICES_JSON secret holds it, as the JSON itself or
+        # base64-encoded. NOTIFICATIONS.md has the setup.
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::warning title=No push notifications in this APK::Set the GOOGLE_SERVICES_JSON repository secret (android/app/google-services.json from the Firebase console). Without it, calls and messages reach a phone only while BROKA is open."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 - flutter_app/android/app/google-services.json <<'PY'
+          import base64, json, os, sys
+          raw = os.environ["GOOGLE_SERVICES_JSON"].strip()
+          if not raw.startswith("{"):
+              raw = base64.b64decode(raw).decode()
+          data = json.loads(raw)
+          packages = [c["client_info"]["android_client_info"]["package_name"]
+                      for c in data.get("client", [])]
+          if "com.broka.app" not in packages:
+              sys.exit(f"google-services.json is for {packages}, not com.broka.app")
+          with open(sys.argv[1], "w") as f:
+              f.write(raw)
+          print("Firebase project:", data["project_info"]["project_id"])
+          PY
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        # flutter build apk's own post-build .apk existence check can return
+        # a false failure when used with --split-per-abi (it looks for a
+        # single default filename that doesn't apply to per-ABI output).
+        # We don't gate on this step's exit code — the Locate APK / Verify
+        # APK steps below are the real source of truth on whether files
+        # were actually produced.
+        continue-on-error: true
+        run: |
+          cd flutter_app
+          flutter build apk --release --split-per-abi
+          echo "=== APK files ===" && find . -name "*.apk" 2>/dev/null
+
+      - name: Locate APK
+        id: find_apk
+        run: |
+          APK=$(find $GITHUB_WORKSPACE -name "*arm64-v8a*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then APK=$(find $GITHUB_WORKSPACE -name "*.apk" 2>/dev/null | head -1); fi
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+
+      - name: Verify APK
+        run: |
+          if [ ! -f "${{ steps.find_apk.outputs.apk_path }}" ]; then echo "ERROR: APK not found" && exit 1; fi
+          ls -lh "${{ steps.find_apk.outputs.apk_path }}"
+
+      - name: Delete previous release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete latest-release --yes --repo ${{ github.repository }} 2>/dev/null || true; git push --delete origin latest-release 2>/dev/null || true
+
+      - name: Create GitHub Release
+        # The release page says when the APK has no Firebase. A build
+        # warning is easy to miss, and such an APK installs and runs
+        # normally - it just never rings while closed. That is what was
+        # shipped for weeks: the secret was set on another fork of the
+        # repository, not on the one building the APK people installed.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIREBASE_CONFIGURED: ${{ steps.firebase.outputs.configured }}
+        run: |
+          NOTES="Auto-built from commit ${{ github.sha }}"
+          if [ "$FIREBASE_CONFIGURED" != "true" ]; then
+            NOTES="**WARNING: this APK has no push notifications.** The GOOGLE_SERVICES_JSON secret is not set in ${{ github.repository }}, so calls ring and messages arrive only while BROKA is open. See NOTIFICATIONS.md.
+
+          $NOTES"
+          fi
+          gh release create latest-release \
+            "${{ steps.find_apk.outputs.apk_path }}#broka-release.apk" \
+            --repo ${{ github.repository }} \
+            --title "Broka Latest Release" \
+            --notes "$NOTES" \
+            --latest

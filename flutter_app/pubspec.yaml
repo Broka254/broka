@@ -1,0 +1,103 @@
+name: broka
+description: AI-powered marketplace - secure, fair, transparent transactions.
+publish_to: none
+version: 2.3.0+2
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.1
+  shared_preferences: ^2.2.3
+  permission_handler: ^11.3.1
+  geolocator: ^13.0.0
+  url_launcher: ^6.2.6
+  image_picker: ^1.1.2
+  camera: ^0.11.0
+  # flutter_tts removed (2026-09-26). It was the fallback when the backend's
+  # voices failed - the phone's own engine, robotic and without Swahili or
+  # any Kenyan language, so it read them in an English accent. Zeno stays
+  # silent instead (lib/services/broka_tts.dart).
+  audioplayers: ^6.1.0
+  # speech_to_text removed (Deepgram voice-card pass, 2026-09-18). Deepgram is
+  # the single production STT provider now; nothing in lib/ imported this any
+  # more, and shipping a second, unused speech engine means a second set of
+  # microphone permissions and platform plugins for code that never runs.
+  cached_network_image: ^3.3.1
+  provider: ^6.1.2
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
+  local_auth: ^2.1.8
+  flutter_webrtc: ^0.11.0
+  web_socket_channel: ^3.0.3
+  flutter_local_notifications: ^17.2.3
+  # FCM client integration (calling-hardening pass). Versions are a
+  # best-effort estimate from training knowledge, matched to this
+  # project's Flutter/Dart SDK constraint above - NOT verified against a
+  # live pub.dev (no network access in the sandbox this was written in).
+  # Run `flutter pub get` to confirm/resolve; bump these if pub reports an
+  # incompatibility or a newer minimum.
+  firebase_core: ^3.8.0
+  firebase_messaging: ^15.1.3
+  record: ^6.2.1
+  path_provider: ^2.1.2
+  http_parser: ^4.0.2
+  qr_flutter: ^4.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  # Already in the lockfile through image_picker; direct so a test can
+  # stand in for the platform and hand back a "lost" pick after a kill.
+  image_picker_platform_interface: ^2.10.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/broka_icon.png
+    - assets/images/broka_logo.jpg
+    - assets/images/broka_logo_transparent.png
+    - assets/images/zeno_full.png
+    - assets/images/zeno_icon.png
+    - assets/audio/ringtone.mp3
+    # What the caller hears while the other phone rings (RingbackService).
+    - assets/audio/ringback.wav
+    # The Terms of Use and Service (TermsScreen; TERMS.md at the root).
+    - assets/legal/terms.md
+    # Category and subcategory card artwork, the same pictures the website's
+    # category pages use (lib/features/categories/domain/category_visual.dart
+    # and subcategory_visual.dart say which is which). 640px WebP: sharp on a
+    # card at 3x, and about 5 MB for all of them. Flutter lists directories
+    # one level deep, so each category's folder is its own entry.
+    - assets/category_art/
+    - assets/category_art/agriculture/
+    - assets/category_art/arts-and-crafts/
+    - assets/category_art/automobiles/
+    - assets/category_art/baby-and-kids/
+    - assets/category_art/beauty-and-personal-care/
+    - assets/category_art/books-and-education/
+    - assets/category_art/business-and-industrial/
+    - assets/category_art/construction/
+    - assets/category_art/electronics/
+    - assets/category_art/fashion/
+    - assets/category_art/food-and-beverages/
+    - assets/category_art/gaming/
+    - assets/category_art/health-and-medical/
+    - assets/category_art/home-and-furniture/
+    - assets/category_art/land/
+    - assets/category_art/music-and-instruments/
+    - assets/category_art/pets-and-animals/
+    - assets/category_art/property/
+    - assets/category_art/services/
+    - assets/category_art/sports-and-fitness/
+
+# geolocator_android 4.6.x+ requires Flutter 3.29+ (migrated its build.gradle
+# off the imperative Gradle API onto the new declarative Flutter Gradle
+# plugin DSL). Our CI is pinned to Flutter 3.24.5, so we pin the transitive
+# geolocator_android dependency below that line to avoid:
+#   "Could not get unknown property 'flutter' for extension 'android'"
+dependency_overrides:
+  geolocator_android: 4.5.4

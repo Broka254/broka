@@ -1,0 +1,398 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- BROKA screens, recreated from flutter_app/lib and web/src for the investor deck.
+     Colours, radii, copy and layout follow the source files named beside each screen.
+     Listings, names and numbers are demo data. -->
+<!-- Gelasio stands in for Georgia (metric-compatible), which the app uses; DM Sans matches the storefront. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gelasio:ital,wght@0,400..700;1,400&amp;family=DM+Sans:opsz,wght@9..40,400..800&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Round|Material+Icons+Outlined">
+<style>
+:root{--bg:#03040A;--bgMid:#070B16;--card:#111D35;--card2:#0A1220;--violet:#8B5CF6;--dim:#4C2E8C;--blue:#3B82F6;--green:#10B981;--pink:#F472B6;--cyan:#22D3EE;--amber:#FBBF24;--orange:#FF6B4A;--warn:#F59E0B;--danger:#EF4444;--hi:#E3D9F7;--mid:#8A9BBF;--low:#2E3D5A;--border:#1E2D47}
+*{box-sizing:border-box}
+body{margin:0;background:#1a1a1a;font-family:'Gelasio',Georgia,serif;-webkit-font-smoothing:antialiased}
+.stage{display:flex;flex-wrap:wrap;gap:40px;padding:40px;align-items:flex-start}
+.mi{font-family:'Material Icons Round';font-weight:normal;font-style:normal;line-height:1;display:inline-block;white-space:nowrap;font-feature-settings:'liga'}
+.mo{font-family:'Material Icons Outlined';font-weight:normal;font-style:normal;line-height:1;display:inline-block;white-space:nowrap;font-feature-settings:'liga'}
+.sans{font-family:'DM Sans',system-ui,sans-serif}
+/* device frame */
+.device{width:414px;height:880px;border-radius:58px;background:linear-gradient(145deg,#1b1f2e,#07080d);padding:12px;position:relative;box-shadow:0 0 0 1.5px #2c3350,inset 0 0 0 1px #3a4263}
+.screen{width:390px;height:856px;border-radius:46px;overflow:hidden;position:relative;background:var(--bg);color:var(--hi)}
+.sky{position:absolute;left:0;top:0;width:100%;height:100%}
+.vig{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(3,4,10,.85) 100%)}
+.content{position:absolute;inset:0;display:flex;flex-direction:column}
+.status{height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 30px 0 34px;font-family:'DM Sans';font-size:15px;font-weight:700;color:#fff}
+.status .icons{display:flex;gap:5px;align-items:center}
+.status .mi{font-size:17px}
+.homebar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:rgba(255,255,255,.85)}
+/* shared bits */
+.grad-text{background:linear-gradient(90deg,var(--violet),var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent}
+.zav{border-radius:50%;box-shadow:0 0 8px 1px rgba(59,130,246,.45);object-fit:cover}
+.pill{border-radius:999px}
+.seclabel{font-size:11px;letter-spacing:2px;color:var(--mid);font-weight:700;font-family:'DM Sans'}
+/* nav */
+.nav{margin-top:auto;height:78px;flex:none;background:var(--bgMid);border-top:1px solid var(--border);display:flex;justify-content:space-around;padding:8px 6px 22px;box-shadow:0 -6px 16px rgba(0,0,0,.45)}
+.nav .it{display:flex;flex-direction:column;align-items:center;gap:3px;width:66px}
+.nav .ic{width:46px;height:30px;border-radius:15px;display:flex;align-items:center;justify-content:center;color:var(--mid)}
+.nav .sel .ic{background:rgba(139,92,246,.16);color:var(--violet)}
+.nav .lab{font-size:10.5px;color:var(--mid);font-family:'DM Sans';font-weight:600}
+.nav .sel .lab{color:var(--violet)}
+/* product card */
+.pcard{border-radius:18px;padding:1px;background:linear-gradient(135deg,rgba(139,92,246,.45),rgba(59,130,246,.35))}
+.pcard.feat{background:linear-gradient(135deg,#8B5CF6,#3B82F6,#22D3EE);box-shadow:0 0 14px rgba(139,92,246,.30)}
+.pcard .in{border-radius:17px;overflow:hidden;background:linear-gradient(135deg,#111D35,#0A1220)}
+.photo{position:relative;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1B1730,#11101F)}
+.photo .em{font-size:48px;opacity:.9;filter:drop-shadow(0 6px 18px rgba(0,0,0,.5))}
+.photo .glow{position:absolute;inset:0;opacity:.35}
+.badge-feat{position:absolute;left:8px;top:8px;display:flex;align-items:center;gap:3px;padding:3px 7px;border-radius:8px;background:linear-gradient(90deg,#8B5CF6,#3B82F6);box-shadow:0 0 8px rgba(139,92,246,.55);color:#fff;font:700 9px 'DM Sans';letter-spacing:.8px}
+.chip{position:absolute;left:8px;padding:3px 7px;border-radius:8px;background:rgba(3,4,10,.62);border:1px solid rgba(139,92,246,.6);color:#fff;font:600 10px 'DM Sans'}
+.heart{position:absolute;right:8px;top:8px;width:28px;height:28px;border-radius:50%;background:rgba(3,4,10,.55);display:flex;align-items:center;justify-content:center;color:#fff}
+.pbody{padding:9px 10px 10px}
+.ptitle{color:#fff;font-weight:700;font-size:13.5px;line-height:1.22;height:33px;overflow:hidden}
+.prow{display:flex;align-items:center;justify-content:space-between;margin-top:5px}
+.price{color:#AE8DF8;font-weight:700;font-size:17.5px;letter-spacing:-.2px;text-shadow:0 0 8px rgba(139,92,246,.32)}
+.price small{font-size:11px;opacity:.72;letter-spacing:.3px}
+.vd{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#8B5CF6,#4C2E8C);box-shadow:0 0 10px rgba(139,92,246,.4);display:flex;align-items:center;justify-content:center;color:#fff}
+.meta{display:flex;align-items:center;gap:3px;margin-top:4px;font-size:10.5px;color:rgba(255,255,255,.48)}
+.meta .fresh{margin-left:auto;color:rgba(255,255,255,.34);font-size:10px}
+.ident{border-top:1px solid rgba(255,255,255,.06);margin-top:8px;padding-top:7px;display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--mid)}
+.av{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:700 9px 'DM Sans';color:#fff}
+/* chat */
+.bub-z{background:rgba(17,29,53,.92);border:1px solid rgba(139,92,246,.30);border-radius:4px 16px 16px 16px;padding:9px 12px;font-size:13.5px;line-height:1.42;color:var(--hi);max-width:262px}
+.bub-me{background:linear-gradient(135deg,#8B5CF6,#3B82F6);border-radius:16px 4px 16px 16px;padding:9px 12px;font-size:13.5px;line-height:1.42;color:#fff;max-width:250px;box-shadow:0 0 10px rgba(59,130,246,.18);align-self:flex-end}
+.zrow{display:flex;gap:8px;align-items:flex-start}
+.ts{font:500 10px 'DM Sans';color:var(--mid);margin-top:3px}
+.composer{margin:0 12px 10px;min-height:50px;border-radius:26px;background:rgba(17,29,53,.92);border:1.2px solid rgba(59,130,246,.45);display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;color:var(--mid);font-size:13.5px}
+.send{margin-left:auto;width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#8B5CF6,#3B82F6);display:flex;align-items:center;justify-content:center;color:#fff}
+.actchip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:rgba(17,29,53,.9);border:1px solid rgba(139,92,246,.45);color:var(--hi);font:600 12px 'DM Sans'}
+.hdr{display:flex;align-items:center;gap:10px;padding:6px 14px 10px;border-bottom:1px solid rgba(30,45,71,.7);background:linear-gradient(180deg,rgba(7,11,22,.9),rgba(3,4,10,.6))}
+.hdr .back{color:var(--hi);font-size:26px}
+.role{font:700 9.5px 'DM Sans';letter-spacing:1.6px;padding:3px 8px;border-radius:6px}
+/* tiles */
+.tile{border-radius:14px;padding:10px;background:linear-gradient(135deg,#111D35,#0A1220);border:1px solid var(--border)}
+.card{border-radius:16px;background:linear-gradient(135deg,#111D35,#0A1220);border:1px solid var(--border)}
+.gbtn{height:52px;border-radius:14px;background:linear-gradient(90deg,#8B5CF6,#3B82F6,#22D3EE);display:flex;align-items:center;justify-content:center;gap:8px;color:#fff;font:700 15px 'DM Sans';letter-spacing:.3px;box-shadow:0 8px 24px rgba(139,92,246,.35)}
+/* browser */
+.browser{width:1280px;height:800px;border-radius:14px;overflow:hidden;background:#0d0f16;box-shadow:0 0 0 1px #2c3350}
+.bbar{height:44px;background:#161a26;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid #232a3d}
+.dots span{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px}
+.url{flex:1;height:28px;border-radius:14px;background:#0b0e17;border:1px solid #232a3d;display:flex;align-items:center;gap:8px;padding:0 12px;font:500 13px 'DM Sans';color:#b8c2da}
+.bview{position:relative;height:756px;overflow:hidden;background:#03040a}
+</style></head>
+<body><div class="stage">
+
+<!-- ============ HOME (screens/home_screen.dart, widgets/product_card.dart) ============ -->
+<div class="device" id="home"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>19:57</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_5_bar</span></span></div>
+  <div style="padding:4px 16px 2px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <img src="../flutter_app/assets/images/broka_icon.png" style="width:40px;height:40px;border-radius:12px;box-shadow:0 0 24px rgba(139,92,246,.31)">
+      <div><div class="grad-text" style="font-size:24px;font-weight:700;letter-spacing:2.2px;line-height:1">BROKA</div>
+      <div style="font:600 8px 'DM Sans';letter-spacing:2.4px;color:var(--mid);margin-top:3px">INTELLIGENT COMMERCE</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:5px;margin-top:7px"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span><span style="font-size:13.5px;font-weight:700">Good evening, Achieng 👋</span></div>
+    <div style="font-size:11.5px;color:var(--mid);margin-top:1px">Better deals. Smarter choices.</div>
+  </div>
+  <div style="display:flex;gap:8px;padding:10px 16px 10px">
+    <div style="flex:1;height:44px;border-radius:22px;background:rgba(17,29,53,.86);border:1px solid rgba(59,130,246,.35);display:flex;align-items:center;gap:9px;padding:0 14px;color:var(--mid);font-size:12.5px"><span class="mi" style="font-size:18px">search</span>Search listings - phones, cars, land…</div>
+    <div style="width:44px;height:44px;border-radius:12px;background:rgba(17,29,53,.86);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--mid)"><span class="mi" style="font-size:18px">tune</span></div>
+  </div>
+  <div style="display:flex;gap:6px;padding:2px 12px 8px;overflow:hidden" id="rail"></div>
+  <div style="padding:2px 16px 8px">
+    <div style="display:flex;align-items:center;gap:11px;padding:9px 14px;border-radius:16px;background:linear-gradient(135deg,#1A1040,#0E1B3D);border:1px solid rgba(59,130,246,.40);box-shadow:0 0 16px 1px rgba(59,130,246,.13)">
+      <img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:30px;height:30px">
+      <div style="flex:1"><div style="font-size:14px;font-weight:700;line-height:1.2">I can find the deal</div><div style="font-size:11px;color:var(--mid);line-height:1.3">Ask Zeno to find and negotiate it</div></div>
+      <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(90deg,#8B5CF6,#3B82F6);display:flex;align-items:center;justify-content:center;color:#fff"><span class="mi" style="font-size:15px">arrow_forward</span></div>
+    </div>
+  </div>
+  <div style="padding:6px 16px 8px;font-size:15px;font-weight:700">🔥 Fresh on Broka</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px;overflow:hidden;flex:1;min-height:0">
+    <div class="pcard feat"><div class="in"><div class="photo" style="height:138px"><div class="glow" style="background:radial-gradient(circle at 50% 60%,#22D3EE55,transparent 60%)"></div><span class="em">📱</span><span class="badge-feat"><span class="mi" style="font-size:10px">rocket_launch</span>FEATURED</span><span class="heart"><span class="mi" style="font-size:16px">favorite_border</span></span></div>
+      <div class="pbody"><div class="ptitle">Samsung Galaxy A54 5G · 128GB</div><div class="prow"><span class="price"><small>KES </small>34,000</span><span class="vd"><span class="mi" style="font-size:15px">arrow_forward</span></span></div><div class="meta"><span class="mo" style="font-size:11px">location_on</span>Westlands, Nairobi<span class="fresh">2h</span></div>
+      <div class="ident"><span class="av" style="background:linear-gradient(135deg,#3B82F6,#22D3EE)">B</span>Brian K.<span class="mi" style="font-size:12px;color:#3B82F6">verified</span><span style="margin-left:auto;color:#FBBF24">★ 4.8</span></div></div></div></div>
+    <div class="pcard"><div class="in"><div class="photo" style="height:138px"><div class="glow" style="background:radial-gradient(circle at 50% 60%,#FF6B4A55,transparent 60%)"></div><span class="em">🚗</span><span class="chip" style="top:8px">2016 · 1500cc</span><span class="heart"><span class="mi" style="font-size:16px">favorite_border</span></span></div>
+      <div class="pbody"><div class="ptitle">Toyota Axio 2016, silver, 1500cc</div><div class="prow"><span class="price"><small>KES </small>1,450,000</span><span class="vd"><span class="mi" style="font-size:15px">arrow_forward</span></span></div><div class="meta"><span class="mo" style="font-size:11px">location_on</span>Kisumu<span class="fresh">1d</span></div>
+      <div class="ident"><span class="av" style="background:linear-gradient(135deg,#FF6B4A,#8B5CF6)">O</span>Otieno Motors<span style="margin-left:auto;color:#FBBF24">★ 4.6</span></div></div></div></div>
+    <div class="pcard"><div class="in"><div class="photo" style="height:138px"><div class="glow" style="background:radial-gradient(circle at 50% 60%,#FBBF2455,transparent 60%)"></div><span class="em">🛋️</span></div>
+      <div class="pbody"><div class="ptitle">3-seater sofa, grey fabric</div></div></div></div>
+    <div class="pcard"><div class="in"><div class="photo" style="height:138px"><div class="glow" style="background:radial-gradient(circle at 50% 60%,#10B98155,transparent 60%)"></div><span class="em">🌾</span><span class="chip" style="top:8px">40 bags</span></div>
+      <div class="pbody"><div class="ptitle">Maize seed, 10 kg bag</div></div></div></div>
+  </div>
+  <div class="nav">
+    <div class="it sel"><div class="ic"><span class="mi" style="font-size:23px">grid_view</span></div><div class="lab">Home</div></div>
+    <div class="it"><div class="ic"><span class="mo" style="font-size:23px">inbox</span></div><div class="lab">Inbox</div></div>
+    <div class="it"><div class="ic"><span class="mo" style="font-size:23px">add_circle_outline</span></div><div class="lab">Sell</div></div>
+    <div class="it"><div class="ic"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:24px;height:24px;opacity:.85"></div><div class="lab">Zeno</div></div>
+    <div class="it"><div class="ic"><span class="mi" style="font-size:23px">menu</span></div><div class="lab">Menu</div></div>
+  </div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ NEGOTIATION ROOM, BUYER (screens/negotiate_screen.dart, widgets/chat_parts.dart) ============ -->
+<div class="device" id="neg-buyer"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>20:04</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_5_bar</span></span></div>
+  <div class="hdr"><span class="mi back">chevron_left</span><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:38px;height:38px">
+    <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Samsung A54 · KES 34,000</div>
+    <div style="font:600 11px 'DM Sans';color:var(--green);margin-top:2px">Zeno mediating · Escrow protected</div></div>
+    <div style="text-align:center"><div style="font:800 14px 'DM Sans';color:var(--green)">72%</div><div style="font:600 8.5px 'DM Sans';color:var(--mid);letter-spacing:.8px">DEAL</div></div>
+  </div>
+  <div style="display:flex;justify-content:center;padding:8px 0 2px"><span class="role" style="background:rgba(59,130,246,.15);color:#8fb6ff;border:1px solid rgba(59,130,246,.4)">YOUR PRIVATE ZENO · BUYER</span></div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:9px;padding:10px 14px;overflow:hidden">
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">Hi Joy 👋 Want me to ask Brian if the A54 is still available?</div></div></div>
+    <div class="bub-me">Yes please. Would he take 30k?</div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">On it.<br>Asked Brian, with your KES 30,000 offer.</div></div></div>
+    <div class="zrow" id="j-neg"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">It's available. Brian's lowest is KES 33,000. Keep going through me, or chat with him directly?</div></div></div>
+    <div class="bub-me">Tell him 32 and I'll pay today through escrow.</div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">Sent.<br>🛡 Your money stays in escrow until you confirm the phone arrived.</div><div class="ts">Brian replies in ~12 min</div></div></div>
+  </div>
+  <div style="display:flex;gap:8px;padding:0 14px 10px"><span class="actchip"><span class="mi" style="font-size:15px;color:#AE8DF8">sell</span>Make an offer</span><span class="actchip"><span class="mo" style="font-size:15px;color:#8fb6ff">forum</span>Chat directly</span></div>
+  <div class="composer"><span class="mo" style="font-size:22px">photo_camera</span>Talk to Zeno…<span class="send"><span class="mi" style="font-size:20px">mic</span></span></div>
+  <div style="height:18px"></div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ NEGOTIATION ROOM, SELLER ============ -->
+<div class="device" id="neg-seller"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>20:05</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_4_bar</span></span></div>
+  <div class="hdr"><span class="mi back">chevron_left</span><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:38px;height:38px">
+    <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Samsung A54 · KES 34,000</div>
+    <div style="font:600 11px 'DM Sans';color:var(--green);margin-top:2px">Zeno mediating · Escrow protected</div></div>
+    <div style="text-align:center"><div style="font:800 14px 'DM Sans';color:var(--green)">72%</div><div style="font:600 8.5px 'DM Sans';color:var(--mid);letter-spacing:.8px">DEAL</div></div>
+  </div>
+  <div style="display:flex;justify-content:center;padding:8px 0 2px"><span class="role" style="background:rgba(16,185,129,.13);color:#6ee7b7;border:1px solid rgba(16,185,129,.4)">YOUR PRIVATE ZENO · SELLER</span></div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:9px;padding:10px 14px;overflow:hidden">
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">Hey Brian, I've found a potential buyer for your Samsung Galaxy A54 in Kilimani, named Joy. Is it still available? She's offering KES 30,000.</div></div></div>
+    <div class="bub-me">Available. 33 is my lowest</div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">Got it.<br>Sent to Joy.</div></div></div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">Joy offers KES 32,000 and will pay today through escrow. You're paid when she confirms the phone arrived.</div></div></div>
+    <div class="bub-me">Deal. 32 works</div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div><div class="bub-z">Nice.<br>Tap Finalize and the deal locks at KES 32,000.</div><div class="ts">Just now</div></div></div>
+  </div>
+  <div id="j-agree" style="display:flex;gap:8px;padding:0 14px 10px"><span class="actchip" style="border-color:rgba(16,185,129,.6)"><span class="mi" style="font-size:15px;color:#6ee7b7">handshake</span>Finalize at KES 32,000</span><span class="actchip"><span class="mi" style="font-size:15px;color:#AE8DF8">sell</span>Make an offer</span></div>
+  <div class="composer"><span class="mo" style="font-size:22px">photo_camera</span>Talk to Zeno…<span class="send"><span class="mi" style="font-size:20px">mic</span></span></div>
+  <div style="height:18px"></div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ LISTING (screens/product_screen.dart) ============ -->
+<div class="device" id="listing"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>19:59</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_5_bar</span></span></div>
+  <div style="display:flex;align-items:center;gap:10px;padding:2px 14px 8px"><span class="mi" style="font-size:26px">chevron_left</span>
+    <span style="width:34px;height:34px;border-radius:50%;padding:2px;background:linear-gradient(135deg,#22D3EE,#3B82F6)"><span style="display:flex;width:30px;height:30px;border-radius:50%;background:#0A1220;align-items:center;justify-content:center;font-size:16px">📱</span></span>
+    <span style="font-size:17px;font-weight:700;letter-spacing:1.4px;background:linear-gradient(90deg,#22D3EE,#3B82F6);-webkit-background-clip:text;color:transparent;text-shadow:0 0 18px rgba(34,211,238,.25)">ELECTRONICS</span></div>
+  <div class="photo" style="height:168px;margin:0 14px;border-radius:18px;overflow:hidden"><div class="glow" style="background:radial-gradient(circle at 50% 55%,#22D3EE66,transparent 62%)"></div><span class="em" style="font-size:64px">📱</span><span style="position:absolute;right:10px;bottom:10px;font:600 11px 'DM Sans';padding:3px 8px;border-radius:8px;background:rgba(3,4,10,.6)">1/6</span></div>
+  <div style="padding:10px 16px 0"><div style="font-size:18px;font-weight:700;color:#fff">Samsung Galaxy A54 5G · 128GB</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-top:3px"><span class="price" style="font-size:22px"><small>KES </small>34,000</span><span style="font:500 11px 'DM Sans';color:var(--mid)">Listed 29 Sep · 214 views</span></div></div>
+  <div style="padding:12px 16px 0"><div class="seclabel">DEAL TERMS</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div class="tile" style="flex:1;border-color:rgba(139,92,246,.45)"><div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px"><span class="mi" style="font-size:16px;color:#AE8DF8">handshake</span>Negotiable</div><div style="font:500 10.5px/1.35 'DM Sans';color:var(--mid);margin-top:4px">Make an offer - Zeno negotiates it for you</div></div>
+      <div class="tile" style="flex:1"><div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px"><span class="mi" style="font-size:16px;color:#22D3EE">local_shipping</span>Seller delivers</div><div style="font:500 10.5px/1.35 'DM Sans';color:var(--mid);margin-top:4px">The seller can arrange delivery</div></div>
+    </div></div>
+  <div style="padding:12px 16px 0"><div class="seclabel">SELLER</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div class="tile" style="flex:1;border-color:rgba(16,185,129,.45)"><div style="font:700 9.5px 'DM Sans';letter-spacing:1.3px;color:var(--mid)">RATING</div><div style="margin-top:4px;color:var(--green);font:800 21px 'DM Sans'">8.5<span style="font-size:12px;opacity:.75">/10</span></div><div style="font:500 10px 'DM Sans';color:var(--mid)">BROKA rating</div></div>
+      <div class="tile" style="flex:1;border-color:rgba(16,185,129,.45)"><div style="font:700 9.5px 'DM Sans';letter-spacing:1.3px;color:var(--mid)">COMPLETION</div><div style="margin-top:4px;color:var(--green);font:800 21px 'DM Sans'">96%</div><div style="font:500 10px 'DM Sans';color:var(--mid)">of deals completed</div></div>
+      <div class="tile" style="flex:1;border-color:rgba(16,185,129,.45)"><div style="font:700 9.5px 'DM Sans';letter-spacing:1.3px;color:var(--mid)">REPLIES IN</div><div style="margin-top:4px;color:var(--green);font:800 21px 'DM Sans'">12m</div><div style="font:500 10px 'DM Sans';color:var(--mid)">typical reply</div></div>
+    </div>
+    <div style="font:500 10px 'DM Sans';color:var(--mid);margin-top:6px">Measured by BROKA from the seller's deals and chats · updated daily</div></div>
+  <div id="j-ask" style="padding:12px 16px 0"><div class="seclabel">ZENO INSIGHT</div>
+    <div style="margin-top:8px;padding:1.4px;border-radius:18px;background:linear-gradient(135deg,#8B5CF6,#3B82F6,#22D3EE);box-shadow:0 0 18px rgba(139,92,246,.28)">
+      <div style="border-radius:16.6px;padding:12px;background:linear-gradient(135deg,#1c1f45,#0A1220)">
+        <div style="display:flex;gap:10px;align-items:center"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:38px;height:38px"><div style="flex:1"><div style="font-size:14.5px;font-weight:700">Ask Zeno about this listing</div><div style="font:500 11px/1.35 'DM Sans';color:var(--mid);margin-top:2px">The price, the seller, delivery, what to check - and if it isn't right for you, Zeno finds you one that is.</div></div></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"><span class="actchip" style="font-size:11px;padding:5px 10px">Is this a fair price?</span><span class="actchip" style="font-size:11px;padding:5px 10px">Is this seller reliable?</span></div>
+      </div></div></div>
+  <div style="margin-top:auto;padding:10px 16px 26px;background:linear-gradient(180deg,transparent,rgba(3,4,10,.95) 30%)"><div class="gbtn"><span class="mi" style="font-size:18px">auto_awesome</span>Start Negotiation</div></div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ ZENO ASSISTANT + BUYING AGENT (screens/zeno_screen.dart, buy_agent/conversation.py) ============ -->
+<div class="device" id="zeno"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>21:12</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_5_bar</span></span></div>
+  <div class="hdr"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:40px;height:40px"><div style="flex:1"><div style="font-size:17px;font-weight:700">Zeno</div><div style="font:600 11px 'DM Sans';color:var(--mid)">AI Market Assistant</div></div>
+    <span style="font:600 11px 'DM Sans';padding:5px 10px;border-radius:999px;border:1px solid var(--border);color:var(--hi)">English ▾</span></div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:9px;padding:12px 14px;overflow:hidden">
+    <div class="bub-me">I'm looking for a laptop for work</div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div class="bub-z">Nice - what do you need it to have, and roughly what's your budget?</div></div>
+    <div class="bub-me">16GB RAM, SSD, under 60k</div>
+    <div class="zrow"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:26px;height:26px"><div class="bub-z">Closest I could get is two EliteBooks with 16GB - one is KES 2,000 over your 60k. Worth a look?</div></div>
+    <div style="margin-left:34px;display:flex;flex-direction:column;gap:7px">
+      <div class="card" style="display:flex;gap:10px;padding:8px;align-items:center"><div class="photo" style="width:52px;height:52px;border-radius:10px"><span style="font-size:24px">💻</span></div><div style="flex:1"><div style="font-size:12.5px;font-weight:700">HP EliteBook 840 G6</div><div style="font:700 13px 'DM Sans';color:#AE8DF8">KES 58,500</div><div style="font:600 10px 'DM Sans';color:var(--green)">✓ 16GB · ✓ SSD · ✓ budget</div></div></div>
+      <div class="card" style="display:flex;gap:10px;padding:8px;align-items:center"><div class="photo" style="width:52px;height:52px;border-radius:10px"><span style="font-size:24px">💻</span></div><div style="flex:1"><div style="font-size:12.5px;font-weight:700">HP EliteBook 850 G7</div><div style="font:700 13px 'DM Sans';color:#AE8DF8">KES 62,000</div><div style="font:600 10px 'DM Sans';color:var(--warn)">✓ 16GB · ✓ SSD · KES 2,000 over</div></div></div>
+    </div>
+    <div style="margin-left:34px;padding:1.2px;border-radius:14px;background:linear-gradient(135deg,#8B5CF6,#3B82F6)"><div style="border-radius:13px;background:#0e1430;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px;font:700 10px 'DM Sans';letter-spacing:1.2px;color:#AE8DF8"><span class="mi" style="font-size:14px">radar</span>BUYING AGENT</div>
+      <div style="font-size:12.5px;margin-top:4px">Keep watching for "laptop, 16GB, under KES 60,000"?</div>
+      <div style="display:flex;gap:8px;margin-top:8px"><span class="actchip" style="padding:6px 12px">Never mind</span><span class="actchip" style="background:linear-gradient(90deg,#8B5CF6,#3B82F6);border:none;color:#fff;padding:6px 14px">Watch for me</span></div></div></div>
+  </div>
+  <div class="composer"><span class="mo" style="font-size:22px">add_photo_alternate</span>Ask Zeno anything<span class="send"><span class="mi" style="font-size:20px">graphic_eq</span></span></div>
+  <div class="nav" style="margin-top:0">
+    <div class="it"><div class="ic"><span class="mi" style="font-size:23px">grid_view</span></div><div class="lab">Home</div></div>
+    <div class="it"><div class="ic"><span class="mo" style="font-size:23px">inbox</span></div><div class="lab">Inbox</div></div>
+    <div class="it"><div class="ic"><span class="mo" style="font-size:23px">add_circle_outline</span></div><div class="lab">Sell</div></div>
+    <div class="it sel"><div class="ic"><img class="zav" src="../flutter_app/assets/images/zeno_icon.png" style="width:24px;height:24px"></div><div class="lab">Zeno</div></div>
+    <div class="it"><div class="ic"><span class="mi" style="font-size:23px">menu</span></div><div class="lab">Menu</div></div>
+  </div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ VOICE (features/zeno_assistant/presentation/zeno_live_overlay.dart, zeno_orb.dart) ============ -->
+<div class="device" id="voice"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content" style="align-items:center">
+  <div class="status" style="width:100%"><span>21:15</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_5_bar</span></span></div>
+  <div style="font-size:19px;font-weight:700;margin-top:26px">Zeno</div>
+  <div style="font:600 12px 'DM Sans';color:#8fb6ff;margin-top:6px;display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:#22D3EE;box-shadow:0 0 8px #22D3EE"></span>Listening…</div>
+  <div style="position:relative;width:250px;height:250px;margin-top:60px">
+    <div style="position:absolute;inset:-40px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.35),transparent 65%)"></div>
+    <div style="position:absolute;inset:-14px;border-radius:50%;border:1.5px solid rgba(34,211,238,.35)"></div>
+    <div style="position:absolute;inset:-30px;border-radius:50%;border:1px solid rgba(139,92,246,.22)"></div>
+    <div style="position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 35% 30%,#f0e8ff 0%,#a78bfa 18%,#6d4bd8 42%,#2b4fd6 68%,#0e1b4d 100%);box-shadow:0 0 60px rgba(139,92,246,.6),inset -20px -30px 60px rgba(34,211,238,.35)"></div>
+  </div>
+  <div style="margin-top:62px;padding:0 34px;text-align:center;font-size:19px;line-height:1.4">"Find me a sofa under 30k in Ruiru"</div>
+  <div style="margin-top:14px;font:500 12px 'DM Sans';color:var(--mid)">Voice is listening in English for your language</div>
+  <div style="margin-top:auto;margin-bottom:34px;display:flex;gap:12px">
+    <span class="actchip" style="padding:10px 16px"><span class="mo" style="font-size:16px">keyboard</span>Type instead</span>
+    <span class="actchip" style="padding:10px 16px;border-color:rgba(239,68,68,.6)"><span class="mi" style="font-size:16px;color:#f87171">stop_circle</span>End voice</span>
+  </div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ PAYMENT (screens/econfirm_payment_screen.dart) ============ -->
+<div class="device" id="pay"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>20:21</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_4_bar</span></span></div>
+  <div style="display:flex;align-items:center;gap:10px;padding:4px 14px 10px"><span class="mi" style="font-size:26px">chevron_left</span><span style="font-size:17px;font-weight:700">Complete Payment</span></div>
+  <div id="j-pay" style="padding:0 16px"><div class="card" style="padding:14px">
+    <div style="font:700 10px 'DM Sans';letter-spacing:1.6px;color:var(--mid)">DEAL</div>
+    <div style="font-size:15px;font-weight:700;margin-top:4px">Samsung Galaxy A54 5G · from Brian K.</div>
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:7px;font:500 13px 'DM Sans'">
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--mid)">Agreed price</span><span>KES 32,000</span></div>
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--mid)">BROKA fee (3.49%)</span><span>KES 1,117</span></div>
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--mid)">E-Confirm escrow (1%)</span><span>KES 320</span></div>
+      <div style="height:1px;background:var(--border);margin:3px 0"></div>
+      <div style="display:flex;justify-content:space-between;font-weight:800;font-size:15px"><span>Amount</span><span style="color:#AE8DF8">KES 33,437</span></div>
+    </div></div></div>
+  <div style="padding:14px 16px 0"><div class="card" style="padding:18px;text-align:center;border-color:rgba(59,130,246,.45)">
+    <div style="width:64px;height:64px;margin:0 auto;border-radius:50%;background:rgba(16,185,129,.12);border:1.5px solid rgba(16,185,129,.55);display:flex;align-items:center;justify-content:center"><span class="mi" style="font-size:32px;color:#34d399">phonelink_ring</span></div>
+    <div style="font-size:15px;font-weight:700;margin-top:12px">STK prompt sent — check your phone</div>
+    <div style="font:500 12px/1.45 'DM Sans';color:var(--mid);margin-top:6px">Enter your M-Pesa PIN. E-Confirm holds the money until you confirm the phone arrived.</div>
+    <div style="margin:14px auto 0;width:200px;height:6px;border-radius:3px;background:#0b1224;overflow:hidden"><div style="width:62%;height:100%;background:linear-gradient(90deg,#8B5CF6,#3B82F6)"></div></div>
+    <div style="font:600 11px 'DM Sans';color:var(--mid);margin-top:6px">42 seconds left</div></div></div>
+  <div style="padding:14px 16px 0"><div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:12px;background:rgba(16,185,129,.09);border:1px solid rgba(16,185,129,.4);font:600 12px 'DM Sans';color:#6ee7b7">🛡 Protected — funds held until you confirm</div></div>
+  <div style="margin-top:auto;padding:12px 16px 30px"><div class="gbtn" style="opacity:.55">Waiting for M-Pesa…</div></div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ DEAL STATUS (features/escrow/presentation/deal_status_screen.dart, widgets/protection_badge.dart) ============ -->
+<div class="device" id="deal"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>20:23</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_4_bar</span></span></div>
+  <div style="display:flex;align-items:center;gap:10px;padding:4px 14px 10px"><span class="mi" style="font-size:26px">chevron_left</span><span style="font-size:17px;font-weight:700">Deal Status</span><span style="margin-left:auto;font:600 10.5px 'DM Sans';color:var(--green);display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>Live updates active</span></div>
+  <div style="padding:0 16px"><div class="card" style="padding:16px;border-color:rgba(16,185,129,.5);background:linear-gradient(135deg,#0f2a2a,#0A1220)">
+    <div style="display:flex;align-items:center;gap:10px"><span class="mi" style="font-size:30px;color:#34d399">verified_user</span><div><div style="font-size:16px;font-weight:700">Payment secured in escrow</div><div style="font:500 11.5px 'DM Sans';color:var(--mid);margin-top:2px">KES 33,437 held by E-Confirm</div></div></div></div></div>
+  <div id="j-done" style="padding:16px 22px 0">
+    <div class="seclabel">ESCROW TIMELINE</div>
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:0">
+      <div style="display:flex;gap:12px"><div style="display:flex;flex-direction:column;align-items:center"><span style="width:24px;height:24px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center"><span class="mi" style="font-size:15px;color:#03040a">check</span></span><span style="width:2px;height:34px;background:var(--green)"></span></div><div><div style="font-size:14px;font-weight:700">Agreed</div><div style="font:500 11px 'DM Sans';color:var(--mid)">KES 32,000 · finalized through Zeno</div></div></div>
+      <div style="display:flex;gap:12px"><div style="display:flex;flex-direction:column;align-items:center"><span style="width:24px;height:24px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center"><span class="mi" style="font-size:15px;color:#03040a">check</span></span><span style="width:2px;height:34px;background:linear-gradient(180deg,var(--green),var(--border))"></span></div><div><div style="font-size:14px;font-weight:700">Paid into escrow</div><div style="font:500 11px 'DM Sans';color:var(--mid)">M-Pesa · confirmed by E-Confirm</div></div></div>
+      <div style="display:flex;gap:12px"><div style="display:flex;flex-direction:column;align-items:center"><span style="width:24px;height:24px;border-radius:50%;border:2px solid #3B82F6;box-shadow:0 0 10px rgba(59,130,246,.6)"></span><span style="width:2px;height:34px;background:var(--border)"></span></div><div><div style="font-size:14px;font-weight:700">Delivered</div><div style="font:500 11px 'DM Sans';color:var(--mid)">Waiting for you to confirm</div></div></div>
+      <div style="display:flex;gap:12px"><div style="display:flex;flex-direction:column;align-items:center"><span style="width:24px;height:24px;border-radius:50%;border:2px solid var(--border)"></span></div><div><div style="font-size:14px;font-weight:700;color:var(--mid)">Released to seller</div><div style="font:500 11px 'DM Sans';color:var(--mid)">Only after your confirmation</div></div></div>
+    </div></div>
+  <div style="padding:16px 16px 0"><div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:12px;background:rgba(16,185,129,.09);border:1px solid rgba(16,185,129,.4);font:600 12px 'DM Sans';color:#6ee7b7">🛡 Payment secured</div></div>
+  <div style="margin-top:auto;padding:12px 16px 30px;display:flex;flex-direction:column;gap:10px">
+    <div class="gbtn" style="background:linear-gradient(90deg,#059669,#10B981);box-shadow:0 8px 24px rgba(16,185,129,.3)">Confirm Delivery &amp; Release Funds</div>
+    <div style="height:46px;border-radius:14px;border:1px solid rgba(239,68,68,.5);display:flex;align-items:center;justify-content:center;gap:6px;font:700 14px 'DM Sans';color:#fca5a5"><span class="mo" style="font-size:18px">report</span>Open Dispute</div>
+  </div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ MY STORE (features/stores/presentation/my_store_screen.dart, store_share_card.dart) ============ -->
+<div class="device" id="mystore"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>09:14</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div style="display:flex;align-items:center;gap:10px;padding:4px 14px 8px"><span class="mi" style="font-size:26px">chevron_left</span><span style="font-size:17px;font-weight:700">My Store</span><span style="margin-left:auto;font:600 11px 'DM Sans';color:#AE8DF8">View as a buyer</span></div>
+  <div style="display:flex;gap:6px;padding:0 16px 10px"><span style="flex:1;text-align:center;padding:7px;border-radius:999px;background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.6);font:700 12px 'DM Sans'">Overview</span><span style="flex:1;text-align:center;padding:7px;border-radius:999px;border:1px solid var(--border);font:600 12px 'DM Sans';color:var(--mid)">Products</span><span style="flex:1;text-align:center;padding:7px;border-radius:999px;border:1px solid var(--border);font:600 12px 'DM Sans';color:var(--mid)">Settings</span></div>
+  <div style="padding:0 16px"><div class="card" style="padding:14px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#22D3EE,#3B82F6);display:flex;align-items:center;justify-content:center;font:800 20px 'DM Sans';color:#fff">C</div><div style="flex:1"><div style="font-size:15px;font-weight:700">Clanix Electronics</div><div style="font:600 11px 'DM Sans';color:var(--green);display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>Your store is open</div></div>
+      <div style="width:54px;height:54px;border-radius:8px;background:#e9e6f5;padding:5px"><div style="width:100%;height:100%;background:repeating-linear-gradient(90deg,#111 0 3px,transparent 3px 6px),repeating-linear-gradient(0deg,#111 0 3px,transparent 3px 7px);mix-blend-mode:multiply;opacity:.85"></div></div></div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:#0b1224;border:1px solid var(--border);font:600 12px 'DM Sans'"><span class="mi" style="font-size:16px;color:#AE8DF8">link</span>broka.co.ke/store/clanix<span class="mo" style="margin-left:auto;font-size:16px;color:var(--mid)">content_copy</span></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <span style="flex:1;text-align:center;padding:7px 0;border-radius:10px;background:#0f2a1c;border:1px solid #1f7a4a;font:700 11px 'DM Sans';color:#6ee7b7">WhatsApp</span><span style="flex:1;text-align:center;padding:7px 0;border-radius:10px;background:#1a1224;border:1px solid #5b2a55;font:700 11px 'DM Sans';color:#f9a8d4">TikTok</span><span style="flex:1;text-align:center;padding:7px 0;border-radius:10px;background:#221426;border:1px solid #6b2b61;font:700 11px 'DM Sans';color:#f0abfc">Instagram</span><span style="width:40px;text-align:center;padding:7px 0;border-radius:10px;border:1px solid var(--border);font:700 11px 'DM Sans';color:var(--mid)">•••</span></div>
+  </div></div>
+  <div style="padding:12px 16px 0"><div class="card" style="padding:14px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="seclabel">THIS WEEK</span><span style="font:600 10px 'DM Sans';color:var(--mid)">demo data</span></div>
+    <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span style="font:800 26px 'DM Sans'">412</span><span style="font:600 12px 'DM Sans';color:var(--mid)">store visits</span><span style="margin-left:auto;font:700 12px 'DM Sans';color:var(--green)">38 shares</span></div>
+    <div style="display:flex;align-items:flex-end;gap:10px;height:70px;margin-top:10px" id="bars"></div>
+    <div style="display:flex;gap:10px;margin-top:4px;font:600 10px 'DM Sans';color:var(--mid)"><span style="flex:1;text-align:center">M</span><span style="flex:1;text-align:center">T</span><span style="flex:1;text-align:center">W</span><span style="flex:1;text-align:center">T</span><span style="flex:1;text-align:center">F</span><span style="flex:1;text-align:center">S</span><span style="flex:1;text-align:center">S</span></div>
+    <div style="margin-top:12px;font:700 10px 'DM Sans';letter-spacing:1.4px;color:var(--mid)">WHERE VISITORS CAME FROM</div>
+    <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;font:600 11.5px 'DM Sans'" id="sources"></div>
+  </div></div>
+  <div style="padding:12px 16px 0"><div class="card" style="padding:12px;border-color:rgba(245,158,11,.5)"><div style="font:700 10px 'DM Sans';letter-spacing:1.4px;color:#fbbf24">NEEDS YOUR ATTENTION</div><div style="font-size:13px;font-weight:700;margin-top:4px">1 product hidden from buyers</div><div style="font:500 11px 'DM Sans';color:var(--mid);margin-top:2px">Its listing fee is unpaid or ran out. Pay to show it again.</div></div></div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ SELLER DASHBOARD + LISTING FEE (screens/seller_dashboard_screen.dart, widgets/factor_trend_chart.dart, features/listing_fee) ============ -->
+<div class="device" id="dash"><div class="screen"><canvas class="sky"></canvas><div class="vig"></div>
+<div class="content">
+  <div class="status"><span>09:20</span><span class="icons"><span class="mi">signal_cellular_alt</span><span class="mi">wifi</span><span class="mi">battery_full</span></span></div>
+  <div style="display:flex;align-items:center;gap:10px;padding:4px 14px 8px"><span class="mi" style="font-size:26px">chevron_left</span><span style="font-size:17px;font-weight:700">Seller Dashboard</span></div>
+  <div style="padding:0 16px"><div class="card" style="padding:14px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="seclabel">OVERALL RATING</span><span style="font:600 10px 'DM Sans';color:var(--mid)">last 90 days</span></div>
+    <div style="display:flex;align-items:baseline;gap:6px;margin-top:4px"><span style="font:800 30px 'DM Sans';color:var(--green)">8.5</span><span style="font:700 13px 'DM Sans';color:var(--mid)">/10</span><span style="margin-left:auto;font:700 12px 'DM Sans';color:var(--green)">▲ 0.6 this month</span></div>
+    <svg viewBox="0 0 330 110" width="330" height="110" style="margin-top:6px;display:block">
+      <rect x="0" y="0" width="330" height="36" fill="rgba(16,185,129,.10)"/><rect x="0" y="36" width="330" height="38" fill="rgba(245,158,11,.08)"/><rect x="0" y="74" width="330" height="36" fill="rgba(239,68,68,.08)"/>
+      <line x1="0" y1="36" x2="330" y2="36" stroke="rgba(16,185,129,.5)" stroke-dasharray="4 4"/><line x1="0" y1="74" x2="330" y2="74" stroke="rgba(245,158,11,.5)" stroke-dasharray="4 4"/>
+      <polyline fill="none" stroke="#AE8DF8" stroke-width="2.5" points="0,70 30,66 60,64 90,58 120,60 150,52 180,47 210,44 240,38 270,34 300,31 330,28"/>
+      <circle cx="330" cy="28" r="4" fill="#AE8DF8"/>
+    </svg>
+    <div style="display:flex;gap:10px;font:600 9.5px 'DM Sans';color:var(--mid);margin-top:4px"><span style="color:#34d399">■ good</span><span style="color:#fbbf24">■ acceptable</span><span style="color:#f87171">■ poor</span></div>
+  </div></div>
+  <div style="padding:12px 16px 0;display:flex;flex-direction:column;gap:8px">
+    <div class="card" style="padding:11px 12px;border-color:rgba(16,185,129,.45)"><div style="font:700 10px 'DM Sans';letter-spacing:1.4px;color:#34d399">WORKING FOR YOU</div><div style="font-size:13px;font-weight:700;margin-top:4px">You reply in 12 min, down from 25 last week</div><div style="font:500 11px 'DM Sans';color:var(--mid);margin-top:2px">Keep it under 15 - replies are a quarter of your rating.</div></div>
+    <div class="card" style="padding:11px 12px;border-color:rgba(245,158,11,.5)"><div style="font:700 10px 'DM Sans';letter-spacing:1.4px;color:#fbbf24">WORKING AGAINST YOU</div><div style="font-size:13px;font-weight:700;margin-top:4px">2 deals pending for 5+ days</div><div style="font:500 11px 'DM Sans';color:var(--mid);margin-top:2px">Deliver and ask the buyer to confirm - pending deals weigh on your completion rate.</div></div>
+  </div>
+  <div style="padding:12px 16px 0"><div class="card" style="padding:14px;border-color:rgba(139,92,246,.5)">
+    <div class="seclabel">LISTING FEE · SAMSUNG A54</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span style="font:700 15px 'DM Sans';color:var(--mid);text-decoration:line-through">KES 150</span><span style="font:800 26px 'DM Sans';color:#AE8DF8">KES 85</span><span style="font:600 12px 'DM Sans';color:var(--mid)">a month</span><span style="margin-left:auto;padding:4px 8px;border-radius:8px;background:rgba(16,185,129,.15);font:800 12px 'DM Sans';color:#34d399">43% off</span></div>
+    <div style="font:500 11px/1.4 'DM Sans';color:var(--mid);margin-top:6px">Your record at work: sellers whose deals complete through BROKA pay less.</div>
+  </div></div>
+</div><div class="homebar"></div></div></div>
+
+<!-- ============ WEB STOREFRONT (web/src/app/store/[name]/page.tsx, components/StoreHero.tsx, CategoryPills.tsx) ============ -->
+<div class="browser" id="web"><div class="bbar"><div class="dots"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div><div class="url"><span class="mi" style="font-size:14px;color:#6b7896">lock</span>broka.co.ke/store/clanix</div></div>
+<div class="bview"><canvas class="sky"></canvas><div class="vig"></div>
+  <div style="position:absolute;inset:0;padding:0 64px;display:flex;flex-direction:column">
+    <div style="height:72px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,45,71,.7)"><img src="../flutter_app/assets/images/broka_icon.png" style="width:36px;height:36px;border-radius:10px"><span class="grad-text" style="font:800 22px 'DM Sans';letter-spacing:2px">BROKA</span><span style="margin-left:auto;display:inline-flex;align-items:center;height:40px;padding:0 18px;border-radius:12px;background:linear-gradient(90deg,#8b5cf6,#3b82f6);font:700 14px 'DM Sans';color:#fff;box-shadow:0 8px 24px rgba(139,92,246,.35)">Get the app</span></div>
+    <div style="display:flex;align-items:center;gap:22px;padding:30px 0 22px">
+      <div style="width:96px;height:96px;border-radius:26px;background:linear-gradient(135deg,#22D3EE,#3B82F6);display:flex;align-items:center;justify-content:center;font:800 44px 'DM Sans';color:#fff;box-shadow:0 10px 34px #22D3EE66">C</div>
+      <div style="flex:1"><div style="font:800 34px 'DM Sans';color:#e3d9f7;display:flex;align-items:center;gap:10px">Clanix Electronics<span style="display:inline-flex;width:26px;height:26px;border-radius:50%;background:#3B82F6;align-items:center;justify-content:center;font-size:15px;color:#fff">✓</span></div>
+        <div style="font:500 16px 'DM Sans';color:#8a9bbf;margin-top:4px">Electronics · Westlands, Nairobi</div>
+        <div style="font:600 14px 'DM Sans';color:#AE8DF8;margin-top:6px">ⓘ More details ›</div></div>
+      <div style="display:flex;gap:10px"><span style="display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 16px;border-radius:14px;background:#0f2a1c;border:1px solid #1f7a4a;font:700 14px 'DM Sans';color:#6ee7b7">WhatsApp</span><span style="display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 16px;border-radius:14px;background:rgba(17,29,53,.7);border:1px solid #1e2d47;font:700 14px 'DM Sans';color:#e3d9f7"><span class="mi" style="font-size:18px">ios_share</span>Share</span></div>
+    </div>
+    <div style="display:flex;gap:18px;align-items:flex-start;margin-top:14px" id="webpills"></div>
+    <div style="display:flex;gap:12px;margin-top:18px"><div style="flex:1;height:46px;border-radius:23px;background:rgba(17,29,53,.86);border:1px solid rgba(59,130,246,.35);display:flex;align-items:center;gap:10px;padding:0 16px;font:500 14px 'DM Sans';color:#8a9bbf"><span class="mi" style="font-size:20px">search</span>Search Clanix Electronics</div><div style="height:46px;padding:0 16px;border-radius:14px;border:1px solid #1e2d47;background:rgba(17,29,53,.7);display:flex;align-items:center;gap:8px;font:600 14px 'DM Sans';color:#e3d9f7">Newest <span class="mi" style="font-size:18px">expand_more</span></div></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:20px" id="webgrid"></div>
+  </div>
+</div></div>
+
+</div>
+<script>
+// The sky: web/src/lib/constellation.ts + components/Constellation.tsx, one still frame.
+function seededRandom(seed){let a=seed>>>0;return()=>{a=(a+0x6d2b79f5)>>>0;let t=a;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296}}
+function build(aspect,seed=20260917){const r=seededRandom(seed),n=[];for(let i=0;i<46;i++){const x=r(),raw=r();const y=raw<.5?raw*.82:1-(1-raw)*.82;n.push({x,y,size:1.8+r()*2.6,phase:r(),mesh:true})}for(let i=0;i<54;i++)n.push({x:r(),y:r(),size:.8+r()*1.5,phase:r(),mesh:false});const e=[],seen=new Set(),ys=Math.max(.3,Math.min(aspect,4));for(let i=0;i<46;i++){const a=n[i],near=[];for(let j=0;j<46;j++){if(i===j)continue;const b=n[j],dx=a.x-b.x,dy=(a.y-b.y)*ys;near.push({j,d:dx*dx+dy*dy})}near.sort((p,q)=>p.d-q.d);for(const {j,d} of near.slice(0,2)){if(d>.028)continue;const lo=Math.min(i,j),hi=Math.max(i,j),k=lo+':'+hi;if(!seen.has(k)){seen.add(k);e.push([lo,hi])}}}return{nodes:n,edges:e}}
+function sprite(rgb){const c=document.createElement('canvas');c.width=c.height=64;const g=c.getContext('2d');const gr=g.createRadialGradient(32,32,0,32,32,32);gr.addColorStop(0,`rgba(${rgb},1)`);gr.addColorStop(1,`rgba(${rgb},0)`);g.fillStyle=gr;g.fillRect(0,0,64,64);return c}
+function drawSky(cv,t=6.5){const w=cv.clientWidth,h=cv.clientHeight,d=2;cv.width=w*d;cv.height=h*d;const x=cv.getContext('2d');x.setTransform(d,0,0,d,0,0);const f=build(h/Math.max(w,1));const a=(t/24)*Math.PI*2;const cx=w*(.5+Math.sin(a)*.175),cy=h*(.5+(Math.cos(a)*.22-.35)*.5),R=Math.max(w,h)*.75;const bg=x.createRadialGradient(cx,cy,0,cx,cy,R);bg.addColorStop(0,'#140b2e');bg.addColorStop(.45,'#080618');bg.addColorStop(1,'#03040a');x.fillStyle=bg;x.fillRect(0,0,w,h);x.lineWidth=.8;for(const [i,j] of f.edges){const p=f.nodes[i],q=f.nodes[j];const pu=.5+.5*Math.sin(t*Math.PI*2*.22-((p.x+q.x)/2)*3.2);x.strokeStyle=`rgba(139,92,246,${.14+.12*pu})`;x.beginPath();x.moveTo(p.x*w,p.y*h);x.lineTo(q.x*w,q.y*h);x.stroke()}const sv=sprite('139,92,246'),sb=sprite('59,130,246');f.nodes.forEach((n,i)=>{const pu=.5+.5*Math.sin(t*Math.PI*2*.2+n.phase*4),op=.55+.45*pu,blue=i%3===0,px=n.x*w,py=n.y*h,gl=n.size*6.8;x.globalAlpha=.24*op;x.drawImage(blue?sb:sv,px-gl/2,py-gl/2,gl,gl);x.globalAlpha=op;x.fillStyle=blue?'rgb(59,130,246)':'rgb(139,92,246)';x.beginPath();x.arc(px,py,n.size,0,Math.PI*2);x.fill();x.globalAlpha=.6*op;x.fillStyle='#fff';x.beginPath();x.arc(px,py,n.size*.42,0,Math.PI*2);x.fill()});x.globalAlpha=1}
+document.querySelectorAll('canvas.sky').forEach(c=>drawSky(c));
+
+// Home's discovery rail: real categories, then the four destinations (destination_visual.dart).
+const rail=[['🚗','Automobiles',['#FF6B4A','#8B5CF6']],['🏠','Property',['#3B82F6','#10B981']],['📱','Electronics',['#22D3EE','#3B82F6']],['👗','Fashion',['#F472B6','#8B5CF6']],['🔥','Trending',['#F472B6','#FF6B9D']],['🏬','Stores',['#8B5CF6','#8B5CF6']]];
+document.getElementById('rail').innerHTML=rail.map(([e,l,g])=>`<div style="width:60px;display:flex;flex-direction:column;align-items:center;gap:5px"><div style="width:52px;height:52px;border-radius:50%;padding:2px;background:linear-gradient(135deg,${g[0]},${g[1]});box-shadow:0 0 12px ${g[0]}44"><div style="width:48px;height:48px;border-radius:50%;background:#0A1220;display:flex;align-items:center;justify-content:center;font-size:22px">${e}</div></div><div style="font:600 10px 'DM Sans';color:#c9bfe6;white-space:nowrap">${l}</div></div>`).join('');
+
+// My Store: a week of visits and their sources (demo data).
+const v=[38,52,47,61,74,88,52],mx=Math.max(...v);
+document.getElementById('bars').innerHTML=v.map((n,i)=>`<div style="flex:1;height:${Math.round(n/mx*66)}px;border-radius:6px 6px 2px 2px;background:linear-gradient(180deg,${i===5?'#22D3EE':'#8B5CF6'},${i===5?'#3B82F6':'#4C2E8C'})"></div>`).join('');
+const src=[['WhatsApp',58,'#10B981'],['TikTok',21,'#F472B6'],['Instagram',12,'#8B5CF6'],['BROKA app',9,'#3B82F6']];
+document.getElementById('sources').innerHTML=src.map(([n,p,c])=>`<div style="display:flex;align-items:center;gap:8px"><span style="width:74px">${n}</span><div style="flex:1;height:7px;border-radius:4px;background:#0b1224"><div style="width:${p}%;height:100%;border-radius:4px;background:${c}"></div></div><span style="width:32px;text-align:right;color:#8a9bbf">${p}%</span></div>`).join('');
+
+// Web storefront: category pills with counts (CategoryPills.tsx) and the catalogue grid.
+const pills=[['🏬','All','24',['#8B5CF6','#3B82F6','#22D3EE'],true],['📱','Electronics','18',['#22D3EE','#3B82F6']],['🎮','Gaming','4',['#8B5CF6','#F472B6']],['🛍️','Other','2',['#8B5CF6','#22D3EE']]];
+document.getElementById('webpills').innerHTML=pills.map(([e,l,n,g,sel])=>`<div style="display:flex;flex-direction:column;align-items:center;gap:6px;width:92px"><div style="position:relative;width:62px;height:62px;border-radius:50%;padding:2.5px;background:linear-gradient(135deg,${g.join(',')});box-shadow:0 0 ${sel?20:10}px ${g[0]}${sel?'88':'44'}"><div style="width:57px;height:57px;border-radius:50%;background:#0A1220;display:flex;align-items:center;justify-content:center;font-size:26px">${e}</div><span style="position:absolute;right:-6px;top:-4px;min-width:24px;height:22px;padding:0 6px;border-radius:11px;background:#111d35;border:1px solid #2a3b5e;font:700 12px 'DM Sans';color:#e3d9f7;display:flex;align-items:center;justify-content:center">${n}</span></div><div style="font:${sel?700:600} 13px 'DM Sans';color:${sel?'#e3d9f7':'#8a9bbf'}">${l}</div></div>`).join('');
+const prods=[['📱','Samsung Galaxy A54 5G · 128GB','34,000','#22D3EE'],['🎧','JBL Tune 510BT headphones','5,800','#8B5CF6'],['💻','HP EliteBook 840 G6, 16GB','58,500','#3B82F6'],['🎮','PS5 DualSense controller','8,900','#F472B6']];
+document.getElementById('webgrid').innerHTML=prods.map(([e,t,p,c])=>`<div style="border-radius:16px;background:rgba(17,29,53,.62);border:1px solid rgba(30,45,71,.9);overflow:hidden"><div style="height:150px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1B1730,#11101F);position:relative"><div style="position:absolute;inset:0;background:radial-gradient(circle at 50% 60%,${c}55,transparent 60%)"></div><span style="font-size:54px;position:relative">${e}</span></div><div style="padding:12px 14px 14px"><div style="font:700 14px 'DM Sans';color:#e3d9f7;height:38px;overflow:hidden">${t}</div><div style="font:800 18px 'DM Sans';color:#AE8DF8;margin-top:6px"><span style="font-size:12px;opacity:.75">KES </span>${p}</div><div style="margin-top:10px;height:36px;border-radius:10px;background:linear-gradient(90deg,#8b5cf6,#3b82f6);display:flex;align-items:center;justify-content:center;font:700 13px 'DM Sans';color:#fff">Make an offer</div></div></div>`).join('');
+</script>
+</body></html>

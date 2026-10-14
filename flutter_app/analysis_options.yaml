@@ -1,0 +1,18 @@
+# Static analysis for the BROKA app.
+#
+# flutter_lints has been a dev dependency all along, but without this file
+# none of its rules applied - `flutter analyze` ran with the analyzer's bare
+# defaults. Including the recommended set here is what makes it do anything.
+#
+# CI (.github/workflows/build.yml) runs `flutter analyze --no-fatal-warnings
+# --no-fatal-infos`, so these lints report without blocking a release; only
+# genuine errors stop the build. Keep the warning count at zero - warnings
+# here are almost always a real mistake (an unused result, a dead null
+# check), not style.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - build/**

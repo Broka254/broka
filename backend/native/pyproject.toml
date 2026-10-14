@@ -1,0 +1,25 @@
+# The Python package built from this crate: `pip install ./native` (from
+# backend/) compiles it with maturin and installs `broka_native`. Needs a
+# Rust toolchain; rust-toolchain.toml says which.
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "broka-native"
+description = "Rust acceleration for the BROKA backend: linear-time chat scanning and batch geo math."
+requires-python = ">=3.11"
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Private :: Do Not Upload",
+]
+
+[tool.maturin]
+module-name = "broka_native"
+features = ["python"]
+# Cargo.lock is committed: the wheel is built from exactly the reviewed
+# dependency versions, never whatever resolves on the day.
+locked = true
+strip = true

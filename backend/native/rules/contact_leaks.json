@@ -1,0 +1,135 @@
+{
+  "_comment": [
+    "Contact-leak rules: what counts as trying to take a BROKA deal off the platform.",
+    "Read by BOTH engines - the Rust one (native/src/text_guard.rs, compiled in with",
+    "include_str!) and the Python reference (api/core/text_guard.py) - so a rule",
+    "changed here changes both. Rebuild the extension after editing: the Python side",
+    "refuses a build whose embedded copy differs from this file.",
+    "",
+    "Patterns run on NORMALIZED text: printable ASCII, lower case, single spaces",
+    "(see normalize() in either engine). Keep them in the subset where Python's re",
+    "and Rust's regex agree: no lookaround, no backreferences, no \\p{..}; \\b, \\s",
+    "and \\d mean the same thing in both on ASCII. Rust's engine is linear-time",
+    "whatever the pattern; Python's is not, so avoid nested or adjacent quantifiers",
+    "that can match the same text (the fallback must not be a ReDoS).",
+    "",
+    "Every finding feeds the deal-leak signal (domains/trust/completion_rate.py),",
+    "which lowers a seller's rank - so a rule must be precise, not merely suggestive.",
+    "A rule may carry a \"note\" saying why it is shaped as it is; both engines ignore it."
+  ],
+  "version": 1,
+  "invisible": [
+    "00AD", "034F", "061C", "115F-1160", "17B4-17B5", "180B-180F",
+    "200B-200F", "202A-202E", "2060-2064", "2066-206F", "3164", "FE00-FE0F",
+    "FEFF", "FFA0", "1D173-1D17A", "E0000-E007F", "E0100-E01EF"
+  ],
+  "digit_blocks": [
+    "0660", "06F0", "07C0", "0966", "09E6", "0A66", "0AE6", "0B66", "0BE6",
+    "0C66", "0CE6", "0D66", "0DE6", "0E50", "0ED0", "0F20", "1040", "1090",
+    "17E0", "1810", "FF10"
+  ],
+  "homoglyphs": {
+    "0430": "a", "0441": "c", "0501": "d", "0435": "e", "0261": "g",
+    "04BB": "h", "0456": "i", "0458": "j", "043A": "k", "04CF": "l",
+    "043E": "o", "0440": "p", "051B": "q", "0455": "s", "0475": "v",
+    "051D": "w", "0445": "x", "0443": "y",
+    "03B1": "a", "03B5": "e", "03B9": "i", "03BA": "k", "03BD": "v",
+    "03BF": "o", "03C1": "p", "03C4": "t", "03C5": "u", "03C7": "x",
+    "0131": "i", "0237": "j", "0251": "a", "0269": "i",
+    "00F8": "o", "0111": "d", "0127": "h", "0142": "l", "0167": "t"
+  },
+  "number_words": {
+    "zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "sifuri": "0", "moja": "1", "mbili": "2", "tatu": "3", "nne": "4",
+    "tano": "5", "sita": "6", "saba": "7", "nane": "8", "tisa": "9"
+  },
+  "repeaters": {
+    "double": 2,
+    "triple": 3
+  },
+  "rules": [
+    {
+      "kind": "messaging_app",
+      "name": "whatsapp",
+      "pattern": "\\bwh?[a@4]t'?[ .\\-]{0,2}s?[ .\\-]{0,2}[a@4]pp?\\b"
+    },
+    {
+      "kind": "messaging_app",
+      "name": "whatsapp_link",
+      "pattern": "\\bwa\\.me/"
+    },
+    {
+      "kind": "messaging_app",
+      "name": "telegram",
+      "pattern": "\\btele?gr[a@4]m\\b|\\bt\\.me/"
+    },
+    {
+      "kind": "contact_request",
+      "name": "call_or_text_me",
+      "pattern": "\\b(?:call|text|sms|dm|inbox|beep|flash) me\\b"
+    },
+    {
+      "kind": "contact_request",
+      "name": "reach_me_on",
+      "pattern": "\\b(?:reach|contact) me (?:on|at|via)\\b"
+    },
+    {
+      "kind": "contact_request",
+      "name": "my_number",
+      "pattern": "\\bmy (?:phone )?(?:number|digits)\\b",
+      "note": "Not \"my line\": \"my line of business\" is ordinary talk."
+    },
+    {
+      "kind": "contact_request",
+      "name": "swahili_call_me",
+      "pattern": "\\b(?:nipigie|nibeep|niflash|nitext)\\b|\\bnitumie (?:sms|message|meseji|ujumbe)\\b"
+    },
+    {
+      "kind": "contact_request",
+      "name": "swahili_my_number",
+      "pattern": "\\b(?:namba|nambari|number) yangu\\b"
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "send_money_direct",
+      "pattern": "\\bsend (?:the )?(?:cash|money|pesa|payment|funds)(?: to me)? direct(?:ly)?\\b"
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "pay_direct",
+      "pattern": "\\bpay (?:me )?(?:directly|direct|outside)\\b"
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "till_or_paybill",
+      "pattern": "\\b(?:till|paybill|pay bill)(?: number| no| num)?[ :.#\\-]{0,3}[0-9]{5,7}\\b"
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "lipa_na_mpesa",
+      "pattern": "\\blipa na m-?pesa\\b"
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "send_to_my_number",
+      "pattern": "\\bsend (?:it )?to my (?:number|mpesa|m-pesa|line)\\b"
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "swahili_send_money_direct",
+      "pattern": "\\btuma (?:pesa|doh|cash|money|hela) (?:1 kwa 1|direct(?:ly)?)\\b",
+      "note": "\"moja kwa moja\" (directly): number words are digits by the time rules run."
+    },
+    {
+      "kind": "payment_redirect",
+      "name": "skip_escrow",
+      "pattern": "\\b(?:skip|avoid|bypass) (?:the )?escrow\\b"
+    },
+    {
+      "kind": "email",
+      "name": "webmail_domain",
+      "pattern": "\\b(?:gmail|yahoo|outlook|hotmail|icloud|ymail|protonmail|proton|aol) ?(?:\\.|\\(dot\\)|\\[dot\\]|dot) ?(?:com|net|co)\\b"
+    }
+  ]
+}

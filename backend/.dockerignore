@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+broka.db
+.env
+*.env.local
+.DS_Store
+# The Rust extension's local build output (backend/native): hundreds of MB
+# the image never uses - the Dockerfile compiles the extension itself.
+native/target/

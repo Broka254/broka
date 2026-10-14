@@ -1,0 +1,60 @@
+// lib/features/categories/data/repositories/categories_repository.dart
+import '../../../../core/network/api_client.dart';
+import '../../../../core/utils/result.dart';
+import '../../domain/models/category.dart';
+import '../../../../core/errors/user_facing_error.dart';
+
+class CategoriesRepository {
+  final ApiClient _client;
+  CategoriesRepository({ApiClient? client}) : _client = client ?? apiClient;
+
+  Future<Result<List<Category>>> getTopLevel() async {
+    try {
+      final res = await _client.get('/categories');
+      return Success((res as List).map((e) => Category.fromJson(e)).toList());
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  /// Every category with its subcategories in one request - the sell
+  /// wizard's category step searches all of them at once.
+  Future<Result<List<CategoryNode>>> getTree() async {
+    try {
+      final res = await _client.get('/categories/tree');
+      return Success((res as List)
+          .map((e) => CategoryNode.fromJson(e as Map<String, dynamic>))
+          .toList());
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  Future<Result<List<Category>>> getSubcategories(String categoryId) async {
+    try {
+      final res = await _client.get('/categories/$categoryId/subcategories');
+      return Success((res as List).map((e) => Category.fromJson(e)).toList());
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  Future<Result<List<CategoryFilterField>>> getFilters(String categoryId) async {
+    try {
+      final res = await _client.get('/categories/$categoryId/filters');
+      return Success((res as List).map((e) => CategoryFilterField.fromJson(e)).toList());
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+}
+
+final categoriesRepository = CategoriesRepository();

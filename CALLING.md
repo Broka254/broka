@@ -1,0 +1,933 @@
+# BROKA Calling — Architecture & Status
+
+This documents BROKA's buyer↔seller audio/video calling system as of the
+production-hardening pass described in CHANGES.md. It exists because
+ARCHITECTURE.md doesn't currently cover calling at all.
+
+## Architecture overview
+
+WebRTC peer-to-peer media, with the backend acting purely as a signaling
+relay plus authoritative call-session state:
+
+- **`backend/api/core/call_state.py`** — the authoritative session store.
+  Redis-backed in production (falls back to an in-memory store if
+  `REDIS_URL` is unset, e.g. local dev), with an explicit state machine
+  (see below) and an O(1) secondary index for the "is there a call waiting
+  for me on this listing" poll.
+- **`backend/api/routers/calls.py`** — REST endpoints (initiate, get a
+  room-scoped token, TURN credentials, log a call's outcome, poll for a
+  pending call) plus the `/calls/ws/{room_id}` WebSocket that relays SDP
+  offers/answers and ICE candidates between exactly two authenticated
+  participants. Live WebSocket connections are held in a process-local
+  dict — see **Multi-instance limitation** below.
+- **`backend/api/core/cloudflare_turn_client.py`** — generates short-lived
+  Cloudflare Realtime TURN credentials on request. A real circuit breaker
+  wraps the Cloudflare API call; on any failure the client falls back to
+  STUN-only rather than failing the call.
+- **`flutter_app/lib/services/webrtc_service.dart`** — the client-side
+  peer connection, signaling, and recovery logic (generation-guarded
+  against stale async callbacks, bounded reconnect/ICE-restart with
+  backoff, a WebSocket heartbeat, queued ICE candidates, offer/answer
+  caching for replay after a reconnect).
+- **`flutter_app/lib/screens/voip_call_screen.dart`** — the call UI
+  (ringing/accept/decline, in-call controls, outcome logging).
+- **`flutter_app/lib/services/notification_service.dart`** — the *active*
+  local-notification system (see **Incoming-call delivery** below).
+- **`flutter_app/lib/services/call_foreground_service.dart`** +
+  **`android/.../CallForegroundService.kt`** — keeps the mic/camera alive
+  through backgrounding and screen lock via a real Android foreground
+  service, for both parties, from the moment the microphone is granted and
+  open (see **The app closed on every call**, 2026-10-01).
+
+## Authoritative state machine
+
+```
+initiating → ringing → accepted → connecting → connected
+                                                    ↕ disconnected (recovering)
+ringing     → declined | missed | expired
+any active  → failed
+any active  → ended
+```
+
+All transitions are validated server-side (`call_state.is_valid_transition`);
+duplicate same-state events are harmless no-ops, and terminal states
+(`declined`, `missed`, `expired`, `failed`, `ended`) never transition back
+to an active state. `connected` sessions use a separate, longer,
+auto-renewing TTL from `ringing`/`connecting` sessions specifically so a
+call lasting well over 2 minutes doesn't have its server-side session
+disappear out from under it.
+
+Call **outcomes** (for history/logging, via `POST /calls/log-result`) are
+a business-level classification layered on top of the state machine, not
+new states: `completed`, `declined`, `missed`, and `cancelled` (caller
+hung up before any answer — distinct from `missed`, which means the
+*callee* never responded; both map to the same underlying `missed`
+CallState). Outcome recording is idempotent — whichever side's client
+reports first wins, and the backend derives caller/callee/listing/call
+type from the authoritative session rather than trusting the reporting
+client's claims about any of them.
+
+## Signaling protocol
+
+Messages on `/calls/ws/{room_id}`:
+
+| Type | Direction | Meaning |
+|---|---|---|
+| `offer` / `answer` / `ice` | peer → peer (relayed) | WebRTC negotiation. `offer`/`answer` carry `restart: true` during an ICE restart. |
+| `hangup` | peer → peer (relayed), or server → caller | Somebody **deliberately** ended the call. Always terminal. |
+| `ready` | server → both | Both peers are in the room; the caller sends (or resends) its offer. |
+| `ping` / `pong` | server ↔ client | Liveness. |
+| `busy` | server → client | A genuinely different second participant holds the room. |
+| `peer_state` | server → client | The other side's *signaling socket* went away (`disconnected`) or came back (`reconnected`). **Not** a hangup. |
+| `state` | client → server | Client-observed WebRTC peer-connection state (`connected`/`disconnected`/`failed`) — the one thing only the client can see. |
+| `callee_ringing` | server → caller | A phone of the callee's is ringing (`POST /calls/{room_id}/alerted`): "Calling…" becomes "Ringing…". |
+| `callee_answered` | server → caller | The callee pressed Accept (`POST /calls/{room_id}/answer`); their phone is on its way into the call. Re-sent to a caller socket that joins while the call is answered. |
+| `renegotiate` | callee → caller (relayed) | The callee turned its camera on mid-call and needs a fresh offer. Only the caller offers; its offer goes out flagged `restart` (and `renegotiate`), which every build answers mid-call. |
+
+Only `offer`, `answer`, `ice`, `hangup`, `video_state` and `renegotiate` are
+ever relayed between peers.
+Everything else is server-authored, so a participant can't forge a
+`ready`/`busy`/`hangup` at the other side. Frames above 128KB are dropped
+(the connection survives).
+
+`peer_state` exists because a transient signaling drop and a deliberate
+hangup are completely different events that were previously reported
+identically. An established WebRTC call does not need its signaling channel
+— media keeps flowing peer-to-peer — so the surviving side now holds the
+call open (up to 30s) while its peer reconnects, instead of tearing down.
+
+## Incoming-call delivery
+
+Two mechanisms now work together, with clearly defined roles:
+
+- **FCM (primary — background/terminated delivery).** Wired up this
+  pass: `main.dart` initializes Firebase and registers foreground
+  (`onMessage`), background (`onBackgroundMessage`, a required top-level
+  entry-point function), tap (`onMessageOpenedApp`), and cold-start
+  (`getInitialMessage`) handlers. The incoming-call push is sent
+  **data-only** (no FCM `notification` block) specifically so the app's
+  own code decides what to show — not a generic OS-displayed banner —
+  regardless of foreground/background/terminated state. A device's FCM
+  token is (re-)registered every time `GlobalPollerService.start()` runs,
+  which already happens at every login/session-restore path, and again
+  on token refresh.
+- **Polling (foreground fallback).** `GlobalPollerService` polls
+  `GET /calls/pending/{listing_id}` while the app is foregrounded (any
+  screen, not just the negotiation screen for that listing), **for both
+  roles** — the endpoint already scopes its answer to the authenticated
+  user as callee, so no client-side role gate is needed or correct. Both paths
+  converge on the same `NotificationService.showIncomingCall` /
+  `navigateFromPayload` — one call-routing mechanism regardless of which
+  detected the call. The notification's ID is derived from `room_id`
+  (not a fixed constant), so two different incoming calls get distinct
+  notification slots while the same call detected through both paths
+  still correctly collapses into one.
+
+Tapping the notification (from either mechanism) re-verifies the call is
+still live via `checkIncomingCall` and routes to `/voip-call` with a
+fresh room-scoped token — never trusting the notification payload alone
+for authorization, and never requiring the negotiation screen to already
+be open.
+
+**Everything above is wired up in code but not yet functional in
+practice**: it depends on a real Firebase project + `google-services.json`
+that don't exist in this repo (can't be committed) and haven't been set
+up yet. See FCM_SETUP_REMAINING.md for exactly what's left, all of it
+external configuration + device verification, none of it more code.
+
+## TURN / ICE
+
+`GET /calls/turn-credentials` returns short-lived Cloudflare-generated
+credentials; Flutter never holds a static TURN secret. TURN is used only
+as a relay fallback when direct/STUN connectivity fails, and the
+connection-path diagnostic (`direct` / `stun` / `turn`) is derived from
+the actual selected ICE candidate pair's type, not from whether TURN was
+merely configured. Credentials are refreshed pre-emptively before an ICE
+restart if they're within 2 minutes of expiry (not a continuous mid-call
+refresh loop — BROKA's calls are short 1-to-1 sessions well under
+Cloudflare's TTL, so that wasn't judged necessary).
+
+## Video
+
+The remote video surface is gated on a remote **video** track that is
+actually decoding frames (`onRemoteVideoChanged`), not on "any remote media
+arrived". Previously it flipped on the first remote track of any kind — on a
+video call that's almost always the audio track — so the UI swapped to an
+`RTCVideoView` with nothing in it and hid the avatar behind it. The visible
+result was a black screen, permanently so if the far camera never came up.
+
+Outgoing video is capped at 320kbps / 24fps via `RTCRtpSender` parameters
+(`b=AS:` is honoured inconsistently, and a getUserMedia constraint only
+bounds capture, not what the encoder spends). Uncapped, libwebrtc ramps a
+640x480 stream past 1Mbps and starves the audio sharing the same connection.
+
+The cap is applied **after negotiation completes** (from `_handleOffer`'s
+answer and from `_handleAnswer`), reading the sender back through
+`getSenders()`. It cannot be applied at `addTrack` time, which is where it
+used to live and why it never actually took effect — see the 2026-09-18
+pass below.
+
+Mic and camera are requested explicitly before `getUserMedia`. A denied
+camera degrades the call to audio-only rather than failing it.
+
+## Audio path and bandwidth
+
+Outgoing SDP is tuned before it's set locally (`WebRtcService._tuneSdp`):
+Opus gets `usedtx=1` (stop transmitting during silence — a large real saving
+in data and radio wake-ups on a two-way conversation), `useinbandfec=1`
+(tolerate the 1–3% loss normal on a congested mobile uplink without audible
+gaps), mono, and a `maxaveragebitrate` ceiling of 24kbps for voice / 32kbps
+for video calls. Video capture is capped at 24fps. If the SDP doesn't have
+the shape the tuner expects, the **original** description is used unchanged
+— an untuned call is a minor inefficiency, a malformed SDP doesn't connect
+at all.
+
+The platform is put into communication/telephony audio mode at call start
+(`Helper.setAndroidAudioConfiguration`), **awaited before `getUserMedia`**,
+which is what makes the hardware volume keys control *call* volume, routes
+through the voice-call stream, and engages the device's hardware echo
+canceller — that last one only applies to a stream opened while the mode is
+already in force, hence the await. The mode is put **back to `media` on
+teardown**; the speaker flag alone never did that. Voice calls start on the
+earpiece, video calls on the speaker.
+
+Call quality shown in the UI is measured — inbound audio packet loss and
+jitter sampled from `getStats()` every 4s — not inferred from how long the
+call has been up.
+
+## Android
+
+A real foreground service (`microphone|camera` types) plus a partial wake
+lock (with a 30-minute safety-timeout cap) keeps a call alive through
+backgrounding and screen lock, for both parties. `usesCleartextTraffic`
+is `false` in the shipped app (a debug-only manifest override keeps local
+HTTP dev servers working). The incoming-call notification's
+`fullScreenIntent` is backed by the `USE_FULL_SCREEN_INTENT` permission.
+Native bridge calls (Dart ↔ Kotlin) fail safely on either side.
+
+Known, deliberate non-goal: swiping the app away from Android's recents
+list ends an active call rather than surviving it. True survive-anything
+calling would need Android's Telecom/ConnectionService integration,
+which is a real feature addition, not a hardening-pass fix.
+
+## iOS
+
+**Implemented** (2026-09-14). iOS can't ring like Android, so two OS
+frameworks are mandatory rather than optional:
+
+- **PushKit** — the only push type that wakes a *terminated* app for a call.
+  A normal APNs/FCM alert can't. Delivered over APNs against its own token,
+  stored separately in `users.apns_voip_token` (FCM can't address the
+  PushKit `voip` topic, so it's a direct HTTP/2 call in `_send_voip_push`).
+- **CallKit** — rings, shows the native full-screen UI over the lock screen,
+  owns the audio session. Since iOS 13 an app that receives a VoIP push and
+  doesn't report a call to CallKit is killed, and loses VoIP delivery
+  entirely.
+
+`ios/Runner/AppDelegate.swift` is a thin native shell: it rings, answers,
+ends and mutes, then hands the decision to Dart over a MethodChannel. The
+call itself — peer connection, signaling, media — stays in
+`webrtc_service.dart`, identical to Android. `callkit_service.dart` is the
+Dart half and is a no-op on Android, so callers never branch on platform.
+
+Still requires a Mac: the Xcode project scaffolding is machine-generated and
+is restored with `flutter create --platforms=ios .` (it won't overwrite the
+files above). Capabilities, the APNs key, and the device test matrix are in
+**IOS_CALLING_SETUP.md**. PushKit and CallKit do not work in the simulator.
+
+## Multi-instance limitation
+
+Call *state* is Redis-backed and already safe across multiple backend
+instances. Live WebSocket *connections* are held in a process-local dict
+(`_rooms` in `calls.py`), which is **single-instance only** — two peers
+signaling through different backend instances would never reach each
+other. This is fine for the current single-instance Render deployment and
+is explicitly not being solved in this pass (per its own scope); the
+state/connection split is deliberate so a Redis Pub/Sub (or similar)
+relay layer could be added later without redesigning `call_state.py`.
+
+## Required environment variables
+
+| Variable | Purpose |
+|---|---|
+| `REDIS_URL` | Backs `call_state.py`'s session store and rate limiting. Falls back to in-memory (single-process only) if unset. |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Generate short-lived TURN credentials. Falls back to STUN-only if unset/failing. |
+| `CLOUDFLARE_ACCOUNT_ID` | Optional, used alongside the above. |
+| `CALL_TOKEN_EXPIRE_MINUTES` | Room-scoped call token lifetime (default 5). |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Backend FCM push capability (already implemented server-side; see FCM_SETUP_REMAINING.md for the still-missing client half). |
+| `APNS_AUTH_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID` | iOS PushKit VoIP pushes. Unset -> iOS calls work foregrounded but can't ring a terminated app. See IOS_CALLING_SETUP.md. |
+| `APNS_BUNDLE_ID` | Defaults to `com.broka.app`. Must match the Xcode bundle id. |
+| `APNS_USE_PRODUCTION` | Must match `aps-environment` in `Runner.entitlements`. Mismatch = push accepted, nothing rings. |
+
+## What device testing must still confirm
+
+None of the following has been verified on a physical device as of this
+pass — everything above was arrived at through direct code reading, a
+standalone simulation of the event-loop fix, and static/syntax checks
+only, in a sandboxed environment with no Flutter toolchain, no physical
+device, and no live Redis/Cloudflare/FCM to test against:
+
+- All four call directions (buyer/seller × audio/video) end to end.
+- The WebSocket heartbeat and client watchdog under a real flaky/dropped
+  connection, not a simulated one.
+- The pre-restart TURN credential refresh (`setConfiguration()`) actually
+  behaves as expected on-device.
+- Foreground/background/screen-lock behavior on a real Android device.
+- **FCM delivery end to end** — foreground, backgrounded, and fully
+  terminated — once a real Firebase project + `google-services.json`
+  exist (see FCM_SETUP_REMAINING.md). Nothing about the FCM wiring has
+  been compiled, run, or confirmed to actually wake a terminated app.
+- The full physical-device test matrix in the hardening pass's own spec
+  (two devices, all call/network/lifecycle combinations).
+
+See CHANGES.md for the full list of bugs found and fixed during this
+pass, and its final report for exact readiness status per platform/
+direction.
+
+---
+
+# Ringtone, notification and video-state pass (2026-09-15)
+
+## The ringtone is now the user's own
+
+`assets/audio/ringtone.mp3` was played for every incoming call on every
+device. Beyond it not being the sound the user chose, it was wrong three
+ways:
+
+- **Ringer mode was ignored.** `AndroidUsageType.notificationRingtone`
+  routes audio to the ring stream but does not implement silent/vibrate
+  policy, so a phone deliberately set to silent still made noise.
+- **It never vibrated.** A phone on vibrate got no indication at all.
+- **It was unrecognisable.** Half of what a ringtone does is tell you it is
+  *your* phone.
+
+Android now resolves `RingtoneManager.getActualDefaultRingtoneUri(
+TYPE_RINGTONE)` through a small platform channel
+(`android/.../SystemRingtone.kt`, channel `com.broka.app/ringtone`): the
+exact sound from Settings > Sound > Phone ringtone, looping, with the
+standard buzz-pause vibrate cadence, silent when the ringer is silent,
+vibrate-only when it is on vibrate. `Ringtone.isLooping` only exists from
+API 28, so below that a 500ms watchdog restarts it — otherwise the phone
+rings for four seconds and goes quiet while the caller is still waiting.
+
+No new package. The pubspec already carries unverified version guesses and
+one CI failure has already been caused by unpinned dependency resolution;
+this is ~80 lines of the platform API any such package would be wrapping.
+
+The notification channel carries the same sound for the case Dart cannot
+reach — app killed, notification posted from an FCM background isolate
+where `MainActivity`'s engine and therefore the channel do not exist. It
+uses `content://settings/system/ringtone` (`Settings.System.
+DEFAULT_RINGTONE_URI`), which needs no platform code and follows the user
+if they change their ringtone later. Channel ID bumped `broka_calls_v2` ->
+`_v3`: channel settings including sound are immutable once created, so
+without a new ID nobody with the app already installed would ever hear the
+change.
+
+iOS keeps the bundled tone as its fallback. A local notification cannot
+play the system ringtone there — only CallKit can, and that path is
+already wired separately in `CallKitService`.
+
+## Incoming-call notification
+
+**Two sounds at once.** `negotiation_screen.dart` called
+`showIncomingCall` (one-shot channel sound) *and* `RingtoneService.play`
+(looping tone) on the same event. They overlapped on every incoming call
+that arrived while the thread was open.
+
+**No ring at all, elsewhere.** `GlobalPollerService` only posted the
+notification. Android notification sounds do not loop, so a call arriving
+while the user was anywhere other than that one screen produced a single
+chirp — which is the entire reason an in-app looping player exists.
+
+Ringing is now owned by `showIncomingCall`, which starts the ring and posts
+the notification `playSound: !ringing`, so exactly one thing is ever
+audible. `cancelIncomingCall` stops the ring symmetrically, before its
+`_ready` guard and unconditionally — a ringtone that will not stop is the
+worst failure available in this file.
+
+`RingtoneService.play` now preserves a previously-registered `onTimeout`
+when called without one. Two callers start the same ring for one call and
+they race (`showIncomingCall` is not awaited), so a naive assignment let
+the callback-free one land second and drop the screen's teardown, leaving
+a dead incoming-call dialog on screen after the sound stopped.
+
+Also added: `timeoutAfter` on the notification, so a stale entry removes
+itself if every other teardown path is missed; `VIBRATE` in the manifest,
+without which the vibrator call is a silent no-op and a phone on vibrate
+gets no signal whatsoever.
+
+## Camera mute was invisible to the peer
+
+`toggleVideo()` set `track.enabled = false` and told nobody. Disabling a
+track keeps the transceiver alive and keeps sending — black frames, not
+nothing — so `onEnded` never fires on the receiving side and there is
+nothing else in the protocol that would tell them. The visible result: you
+turn your camera off, and the other person keeps looking at a frozen last
+frame for the rest of the call, indistinguishable from a hung pipeline.
+
+New `video_state` signal carrying one boolean, added to
+`WS_RELAYABLE_TYPES` in `routers/calls.py`. Cosmetic only — it selects
+which surface the UI shows and can never affect server-held call state,
+which is why relaying it verbatim is safe, unlike `state`, which is
+consumed server-side and stays value-restricted.
+
+Re-announced on `ready`, which fires again after a WS reconnect: a
+`video_state` sent while the socket was down is simply gone, and the peer's
+picture would stay stuck on whatever it was before the drop. Defaults to
+`true` for peers on older builds who never send it, so their behaviour is
+unchanged.
+
+
+---
+
+# Calling audit (2026-09-18)
+
+Seven defects, found by reading the call path against what this document
+already claimed it did. Several were things the code *described* correctly
+and did not actually do, which is why they survived the previous pass — the
+comment explaining the intent sat directly above the line that missed it.
+
+## Call quality
+
+**The video bitrate cap never applied.** `_applyVideoBitrateCap` ran once
+from `_createPc`, straight after `addTrack`. In that position it could not
+work: it read the sender's `parameters`, which in flutter_webrtc is a Dart
+field cached from `addTrack`'s response rather than a live read; before the
+transceiver is negotiated that cache's `encodings` list is empty, so the old
+code fabricated one; and libwebrtc rejects a `setParameters()` that changes
+the *number* of encodings. So the call threw and was swallowed — and even
+where it didn't, `setLocalDescription` re-derives the real parameters
+immediately afterwards. The cap that exists specifically to stop video
+starving the audio on the same uplink was a no-op. Now applied after
+negotiation, against senders re-read from native.
+
+**The audio mode switch was not awaited.** `Helper.setAndroidAudioConfiguration`
+returns a Future that was dropped, so `getUserMedia` could open the mic
+while the platform was still in MEDIA mode. Android engages its hardware
+AEC/NS based on the mode in force *when the stream is opened*, so losing
+that race gives a call with software echo cancellation only — the
+speakerphone echo the call is configured to avoid. Dropping the Future also
+meant the surrounding `try/catch` caught nothing.
+
+**The audio mode was never restored.** Teardown called
+`setSpeakerphoneOn(false)` under a comment claiming it handed the route back
+"so the next media playback (a voice note, the ringtone) isn't stuck in
+earpiece/communication mode". The speaker flag is not the audio *mode*: the
+device stayed in `VOICE_COMMUNICATION` for the rest of the app session, so
+the hardware volume keys kept adjusting call volume and later media played
+on the voice-call stream.
+
+**An ICE restart could strip TURN from a live call.** `_fetchIceConfiguration`
+does not throw when the credential fetch fails — it returns the STUN-only
+fallback. The pre-restart refresh then pushed *that* onto the live
+connection via `setConfiguration()`, removing the relay from a call that was
+in all likelihood only up because of the relay. On carrier-grade NAT (normal
+on Kenyan mobile data) that turns a recovery attempt into a disconnect. The
+refresh is now skipped unless real credentials came back.
+
+**The quality meter reported `bad` on the second call of a session.**
+`_lastPacketsReceived` / `_lastPacketsLost` / `_quality` survived teardown,
+so the next call's first sample subtracted the previous call's cumulative
+totals — a negative delta, which fell into the "no audio arrived" branch.
+Reset on teardown, and deltas are clamped (an ICE restart re-creates the
+inbound stream, and `packetsLost` is signed in the stats spec).
+
+## Notifications
+
+**Incoming-call pushes had no TTL**, so FCM's four-week default applied. A
+phone that was off or out of coverage when someone called received the push
+whenever it next reached the network and rang for a call that had ended
+hours before. Now `CALL_PUSH_TTL_SECONDS` (60s), with the APNs equivalent
+(`apns-expiration`). Foregrounded, the client additionally re-checks
+`GET /calls/pending/{listing_id}` before ringing, and fails *open* — only a
+definite "no call" suppresses the ring, since swallowing a real call is far
+worse than an occasional late one.
+
+**Every visible iOS notification was sent as a silent background push.**
+`_send_fcm` hardcoded `apns-push-type: background` with `content_available`
+regardless of the `data_only` argument. That is correct for an incoming call
+(the app draws its own UI) and wrong for everything else: the deal reminders
+and nudges in `core/workers.py` call this helper with `data_only=False` and
+were delivered to iOS devices as pushes that display nothing. The push type
+now follows the message.
+
+## Signaling
+
+**A reconnect could have its room deleted out from under it.** The relay's
+`finally` popped `_rooms[room_id]` whenever *its own* captured room dict was
+empty. Between removing itself and that check it awaits, and in that window
+another handler can pop the room and a reconnecting peer can create a brand
+new dict under the same key — which the stale handler then deleted, leaving
+both peers registered in a dict nothing can find each other through. No
+offer, answer, ICE candidate or restart crosses again, and the session is
+marked `ended`. The pop and the terminal transition are now guarded by
+`_owns_room()`, extracted so the invariant is testable without a live socket.
+
+## Verification
+
+`backend/tests/test_call_push_and_teardown.py` covers the push shaping and
+the room-ownership predicate; five of its seven assertions fail against the
+pre-fix code. The full backend suite passes (618), and `flutter analyze`
+reports no errors.
+
+The client-side fixes are **not device-verified** — same standing caveat as
+the rest of this document. They are reasoned from the flutter_webrtc 0.11.7
+source (`getSenders()` round-trips to native, `parameters` is a cached
+field, `AndroidAudioConfiguration.media` exists) rather than from a call
+placed on real hardware.
+
+---
+
+# Incoming-call notification: Accept and Decline (2026-09-25)
+
+**The notification had no buttons.** `showIncomingCall` posted no actions,
+so the only thing it could do was open the app: a call could not be declined
+from the shade or the lock screen at all. It now carries **Decline** and
+**Accept** (Android actions; an iOS notification category for the local
+notification — CallKit still owns ringing on iOS).
+
+- **Accept** opens the app and answers (`navigateFromPayload` with
+  `answer: true` -> `autoAccept`). **Only Accept answers.** A tap on the
+  notification body now opens the call screen *ringing*, with its own
+  Accept/Decline. It used to answer, and that was a live bug: the plugin
+  gives the notification's `fullScreenIntent` the very same intent as a body
+  tap, and Android fires the full-screen intent **by itself** when a call
+  arrives on a locked phone. So with the app running, every call to a locked
+  phone was answered, microphone live, with nobody touching it.
+- **Decline** records `declined` through `POST /calls/log-result`, the same
+  request the call screen's Decline makes, which also hangs up the caller.
+  Android runs actions that don't open the app in a **separate background
+  isolate, even while the app is running** — so the handler
+  (`notificationActionBackgroundHandler`) forwards to the main isolate through
+  `IsolateNameServer` when there is one (that is where the ringer lives), and
+  declines by itself only when the app is dead.
+- `ActionBroadcastReceiver` is declared in the app manifest: this version of
+  flutter_local_notifications does not declare it, and without it Decline
+  does nothing.
+- `logCallResult` now retries once after renewing an expired session, since
+  Decline is often pressed from an app that has been in the background past
+  the 15-minute access token.
+
+Two faults on the same path, fixed here:
+
+- **An un-stoppable ring.** The FCM background handler called
+  `showIncomingCall`, which started `RingtoneService` in *that* isolate. The
+  platform ringtone channel doesn't exist there, so it fell back to the
+  bundled tone. Accept, Decline and the caller hanging up all stop the main
+  isolate's ringer, so this one played for its full 45 seconds, over the
+  call when the user answered. The background handler now passes
+  `ringInApp: false`, and a notification that is the only sound is posted
+  with `FLAG_INSISTENT`: its ringtone repeats until the notification is
+  answered, declined or cancelled.
+- **Answering a call to a closed app opened the home screen.** The call
+  notification is local (drawn from a data-only push), so
+  `FirebaseMessaging.getInitialMessage()` never sees it, and nothing read
+  `getNotificationAppLaunchDetails()`. `main()` now does, and hands the
+  payload to the splash screen's existing cold-start route.
+
+Covered by `flutter_app/test/incoming_call_notification_test.dart`, which
+fails against the previous code. **Not device-verified**: that needs an APK
+on a phone.
+
+
+---
+
+# The app closed on every call (2026-10-01)
+
+Placing or answering a call closed the app at once; on Xiaomi phones MIUI
+then showed "BROKA should be granted Microphone access to function
+properly".
+
+The call screen started `CallForegroundService` - declared with the
+`microphone` type - before `WebRtcService` had asked for the microphone. On
+Android 14+ a microphone foreground service without `RECORD_AUDIO` throws
+`SecurityException` inside the service, and the OS kills the process; the
+permission dialog never got a chance to appear, so it happened on every
+call. A video call with the camera denied crashed the same way through the
+`camera` type.
+
+- `voip_call_screen.dart` starts the service from `onLocalMediaReady`: the
+  permissions have been granted and the mic (and camera) are open. It claims
+  the camera only when the camera is in use (`cameraUnavailable`).
+- `MainActivity` refuses to start the service without `RECORD_AUDIO`, and
+  catches Android 12+'s refusal to start one from the background.
+- `CallForegroundService` claims the `camera` type only with the camera
+  granted, catches a refused `startForeground` and stops instead of
+  crashing, and is no longer `START_STICKY`: a service recreated after the
+  process died has no call behind it, and starting a microphone service
+  from the background is itself refused on Android 14+.
+
+Covered by `flutter_app/test/voip_call_permissions_test.dart`, which fails
+against the previous code. **Not device-verified**: that needs an APK on a
+phone.
+
+
+---
+
+# Incoming calls to a closed app were never shown (2026-10-02)
+
+`NotificationService.initialize()` set its ready flag only after asking for
+the notification permission. In the FCM background isolate there is no
+Activity to ask from, the plugin throws, and the flag stayed false - so
+`showIncomingCall` returned without posting, and a call to a phone whose app
+was closed never appeared. The permission is now asked for after the service
+is ready, and the background handler passes `requestPermission: false`.
+Covered by `flutter_app/test/notification_init_test.dart`. Needs a configured
+Firebase project to matter on a device (FCM_SETUP_REMAINING.md).
+
+
+---
+
+# The call screen, names, and a call history (2026-10-02)
+
+**Names.** A seller calling a buyer from the direct chat saw "Buyer" on the
+call screen (and in the chat's header and call prompt): the chat passed the
+word, not the buyer's name, although the profile it already loads carries
+it. Every call site now passes the other person's name and their id as
+`peerId`; when all the screen gets is a placeholder ("Buyer", "Seller",
+"User", "Someone" - `VoipCallScreen.isPlaceholderName`), it looks the person
+up with `GET /auth/user/{peerId}`. The screen also says which side of the
+deal they are on, next to the listing, from `callerRole` and `isCaller`.
+
+**Look.** `voip_call_screen.dart` is on Home's visual system: the
+constellation behind everything, a glow in the state colour behind the
+person, the chat gradient on their ring, and the controls in a card like
+Home's. The pre-connection hint ("they may not pick up") and the button
+labels were in `textLow`, the dimmest colour, and close to invisible; they
+are `textMid`. Reconnecting is amber rather than the violet of "setting up".
+The call logic (state machine, CallKit, foreground service, result logging)
+is unchanged.
+
+**Call history.** `GET /calls/history` (`routers/calls.py`) lists the
+signed-in user's calls, newest first, from the call cards `log-result`
+already writes into each thread, so a call is in the history exactly when it
+is in the chat. Direction is the viewer's, from the caller's role stored on
+the card - not `sender_id`, which is whichever side logged first. A call the
+callee never picked up ("missed" or "cancelled") is `missed` for the callee.
+Names and photos come once per person in `people`. Pages with `before`.
+The app's Calls screen (`features/calls/`, route `/call-history`) opens from
+the Inbox's header and the Menu; a call opens its chat, and the button at
+its end calls back through the same path as every other call
+(`ZenoActionRunner.callOn`).
+
+Tests: `backend/tests/test_call_history.py`;
+`flutter_app/test/voip_call_screen_test.dart`,
+`flutter_app/test/call_history_screen_test.dart`.
+
+
+---
+
+# Ringing a closed app, and "Ringing" that means it (2026-10-07)
+
+The full review is in NOTIFICATIONS.md. For calls:
+
+- **Nothing could reach a closed app.** Released APKs had no Firebase
+  (CI never wrote `google-services.json`), and `/calls/register-token`
+  failed with 500 on every call, so the server never had a token.
+- **Every phone rings.** Tokens are kept per phone (`push_devices`), and
+  `/initiate` pushes all of them. Answering or declining on one sends
+  `call_over` to the others.
+- **"Calling" vs "Ringing".** The push carries the callee's call token, and
+  the phone posts `POST /calls/{room_id}/alerted` with it while ringing,
+  even from the FCM background isolate. The caller's socket then gets the
+  server-authored `callee_ringing` (new in the signalling table: server ->
+  caller, never relayed). The screen used to guess from presence ("they
+  may not pick up"). A late push for a finished call gets 410 and stops
+  ringing.
+- **The caller rang for 30 seconds, then "failed".** WebRtcService's
+  connect timeout was armed on `calling`, which the caller enters before
+  anyone answers. It now arms once the offer is sent, after the callee
+  joins. The screen has its own 45s no-answer window ("No answer").
+- **Unanswered and unreported.** `ring_watchdog_tick` (every 5s, Redis
+  sorted set `broka:call:ringing`) records a call still ringing after 55s
+  as missed: the call card, the missed-call push, and `hangup` with
+  `reason: no_answer` to the caller.
+- **`GET /calls/incoming`** replaces the app's per-thread
+  `/calls/pending` sweep with one request.
+
+Tests: `backend/tests/test_notifications.py`,
+`flutter_app/test/push_delivery_test.dart`. Not device-verified.
+
+
+
+# One call at a time (2026-10-08)
+
+Reported from phones: "multiple calls arriving at the same time even when
+another call is going on / ringing". Neither side had any notion of a call
+in progress.
+
+**Server** (`api/routers/calls.py` `_admit_call`, under one lock so two
+simultaneous `/initiate` calls are decided in turn):
+
+- **`CALLEE_BUSY`** (409): they are on a call - a socket in the room, or a
+  call ringing them from someone else. The message names them: "Ann is on
+  another call. Try again in a moment."
+- **`CALLER_BUSY`** (409): I am on a call.
+- **`CALL_CROSSED`** (409, with the call attached): they are calling me
+  right now. The app answers their call instead of placing a second one.
+- **A redial replaces my own call that is still ringing**: the old one
+  gets a `superseded` hangup, `call_over` to the callee's phones before the
+  new ring, and the new push names it (`replacesRoomId`) so the phone takes
+  the old ring down first. Calling someone else instead leaves the first
+  person a missed call.
+- **`POST /calls/{room_id}/answer`** (call token, callee only) moves the
+  call to `accepted` the moment Accept is pressed, before the socket joins,
+  and stops the ring on the callee's other phones. Before it, the call read
+  as ringing until the socket connected, so the inbox sweep rang it again.
+- A caller who hangs up, or whose app vanishes, while the call is ringing
+  settles it as cancelled at once. `renew` no longer stretches an
+  unanswered session for hours, which kept people "busy".
+
+**App** (`flutter_app/lib/services/active_call.dart`): the call screen
+registers its room; `NotificationService.showIncomingCall`, which every
+ringing path goes through, asks `ActiveCall.shouldRing` first - never over
+a call under way, never again for the call on screen or one this phone is
+done with. The room is saved to preferences for the FCM background
+isolate. The ringer belongs to a room (`RingtoneService.stopFor`), so one
+call's teardown no longer silences another's. A notification tap for the
+call already on screen answers it there instead of opening it twice. The
+chat screen's own incoming-call dialog is gone (the global sweep and push
+cover it). A 409 from `/initiate` shows the server's reason, or for
+`CALL_CROSSED` opens their call already answered.
+
+Tests: `backend/tests/test_one_call_at_a_time.py`,
+`flutter_app/test/one_call_at_a_time_test.dart`. Not device-verified.
+
+**Still open.** iOS: CallKit's Answer does not call `/answer` yet
+(`AppDelegate` passes only the room id), so an iPhone keeps the old
+behaviour there. The busy check is per process, like the call relay
+(see "Multi-instance limitation").
+
+
+# Answering from a closed app, and faces on notifications (2026-10-08)
+
+Reported from phones: with BROKA closed, pressing Accept on an incoming
+call "takes time opening, and once it opens the call gets disconnected";
+"sometimes after I accept an incoming call there is a notification of
+another incoming call from the same person"; and asked for: calls and
+messages showing the face of the person calling or writing.
+
+**Why the answered call dropped.** Accept on a closed app started BROKA,
+then sat behind the splash screen's boot sequence - a fixed **10.3
+seconds** - then asked `GET /calls/pending` whether the call was still
+ringing, and only then opened the call screen, which was the first thing to
+tell the server (`/answer`). Nothing told the caller at all: the caller's
+screen hangs up after 45 seconds of ringing unless the callee's socket has
+joined. Answer after 20-odd seconds of ringing, add a cold start and those
+ten seconds, and the caller's screen gave up just as the call appeared on
+the callee's - "No answer" for them, a dead call screen for the callee.
+
+**Why it rang again.** The app's first inbox sweep on starting asked
+`/calls/incoming`, which still reported the call ringing (the server had not
+heard of the answer yet), and nothing on the phone knew the call had been
+accepted: `ActiveCall` learns of a call only when its screen opens. So the
+sweep posted a fresh "Incoming call" with Accept and Decline over the call
+being answered. The same happened when the app was only in the background:
+resuming runs a catch-up sweep while Accept is still opening the call. And
+when the caller's screen had given up (above) and they dialled again, the
+callee's phone - sitting on the dead call screen, "on a call" - did not ring
+for the redial until that screen failed, and then the sweep rang it.
+
+What changed:
+
+- **Accept answers at once** (`NotificationService.answerFromNotification`),
+  before anything is drawn - in `main()` when the press started the app:
+  `POST /calls/{room_id}/answer` with the call token the push carries, the
+  call settled in `ActiveCall` (so no sweep, push or tap rings it again;
+  settled rooms are also saved for the FCM background isolate), and its
+  ringing notification taken down.
+- **The caller is told**: `/answer` sends the server-authored
+  `callee_answered` to the caller's socket (and to a caller socket joining
+  an answered call). The caller's screen cancels its 45-second no-answer
+  window, shows "Connecting… / They answered - connecting the call", and
+  gives the callee's phone 60 seconds (`answeredJoinWindow`, inside the
+  server's 120-second establishment TTL) to join, ending as "Couldn't
+  connect" if it never does.
+- **The call screen opens immediately.** Accept on a notification that
+  carries the call token (the push's, and now the sweep's) opens
+  `/voip-call` answered straight from the payload, with no `/pending` round
+  trip first - which would in any case answer "no call" once the answer has
+  reached the server. The splash screen skips its boot sequence and chime
+  when the app was opened from a notification. If the call turns out to be
+  over (`/answer` answers 404/410), the call screen says "The call ended
+  before you answered" and closes.
+- `showIncomingCall` asks `ActiveCall.shouldRing` again after its awaits
+  (the ringer starting, the caller's photo), so a call answered in that
+  moment is not posted. The slow ringing open (a locked phone's full-screen
+  launch) does nothing if Accept opened the call meanwhile.
+
+**Faces.** The incoming-call push carries `callerPhoto`, the missed-call
+push `callerPhoto`, the message push `senderPhoto`, and `/calls/incoming`
+and `/calls/pending` `caller_photo`: the URL of the person's profile photo
+as an image asset (`media.service.avatar_url`, the 480px thumb). Never the
+image itself - FCM carries 4KB - and nothing for a base64 selfie the media
+backfill has not converted yet (an empty string in push data, whose values
+are strings). The app (`notification_avatar.dart`) downloads it, crops it
+round at 192px and caches it on disk, so the same person's next call or
+message costs nothing; the inbox sweep's notifications use the inbox's
+photo, URL or inline. An incoming call waits at most 1.5 seconds for a
+first download before it is posted without a face (`callFaceWait`). Android
+draws a message or missed-call push itself while the app is not in front,
+and cannot fetch a picture: the background handler draws the same
+notification again over it, silently, with the face - only while Android's
+is still showing and still says what this push said. The call screen shows
+a photo URL as well as an inline selfie (`BrokaImage`).
+
+Tests: `backend/tests/test_call_answer_and_faces.py`;
+`flutter_app/test/answer_from_notification_test.dart`,
+`flutter_app/test/notification_faces_test.dart`, and two in
+`voip_call_screen_test.dart`. Not device-verified.
+
+**Still open.** iOS: CallKit's Answer still goes through the old path (no
+call token from `AppDelegate`), and pushes Android draws have no face on
+iOS (that needs a Notification Service Extension). The 4004 case below was
+fixed the same day.
+
+
+# Over the lock screen only for a call; a call over before it connected (2026-10-08)
+
+**The whole app showed over the lock screen.** `MainActivity` declares
+`showWhenLocked` and `turnScreenOn` in the manifest so that a ringing call
+can open over the lock screen - the notification's full-screen launch, and
+Accept on a locked phone without Android asking to unlock first (Android
+decides that from the declaration). But a declaration applies all the time:
+a phone locked while BROKA was open showed BROKA again on waking, chats and
+payments included, to whoever picked it up. The declaration stays (Android
+needs it to launch the call without unlocking); `MainActivity` overrides it
+at runtime (`setShowWhenLocked`, or the window flags before Android 8.1,
+where the attribute did nothing at all): on for an incoming call's
+notification intent - a tap, the full-screen launch, Accept - and while a
+call screen is open, which the call screen reports over
+`com.broka.app/call_service` (`overLockScreen`); off otherwise. Any other
+notification opened from the lock screen asks to unlock
+(`requestDismissKeyguard`) rather than sitting hidden behind it. If a call's
+notification opened the app but no call screen did (the call was over and
+the chat opened, or nobody is signed in), the app goes back behind the lock
+screen (`NotificationService.releaseLockScreenUnlessOnCall`). Intents
+replayed from Recents or held by a recreated activity are not calls.
+
+**A call over before it connected kept "Connecting".** A caller who hung up
+in the seconds between the callee's Accept and their phone joining left the
+callee's call screen retrying its socket: the server refuses a socket for a
+call that is over with close code 4004, and the app took that for a dropped
+connection - about 15 seconds of reconnect attempts before failing. It now
+ends the call at once ("The call ended before it connected") when the call
+never connected. A call that did connect keeps the old rule, since its media
+can outlive the signalling.
+
+Tests: `flutter_app/test/answer_from_notification_test.dart` (the socket
+closed with 4004; the lock screen released when no call screen opened) and
+`voip_call_screen_test.dart` (the call screen claims and releases it). The
+Kotlin was compiled against the Android framework and Flutter embedding
+classes, but the APK could not be built in the environment this was written
+in, and none of it is device-verified.
+
+
+# Accept that opens at once, a ring that stops, a ring the caller hears, and video (2026-10-09)
+
+Reported from phones: "When I click Accept the app takes long to open, then
+the call gets disconnected and is counted as a missed call - and when I try
+calling back the app says I'm already in a call." "Using the app, after I
+accept, the ringtone continues for some time, and sometimes it shows
+'Connecting…' for 5 to 10 seconds." Asked for: the caller hearing it ring
+while the other phone truly rings, and switching a voice call to video.
+
+**"You're already on a call."** `accepted` can't become `missed`, so when an
+answered call never connected and its outcome was logged as missed or
+cancelled, the session stayed `accepted` - which counts as being on a call
+(`_call_in_progress`) - and the socket heartbeat had renewed it to the
+4-hour connected TTL. Now:
+
+- recording an outcome always ends the session (`ended` when the outcome's
+  own state can't be reached from where it is);
+- the heartbeat gives an `accepted` (answered, not yet joined) call the
+  establishment window from now, never four hours;
+- placing a call proves you are not on one: a call past ringing with no
+  socket of yours in it no longer makes you, or the person you are calling
+  back, busy (`_left` in `_admit_call`) - it is ended, and anyone still in
+  its room gets `hangup` with `reason: superseded`.
+
+**"Counted as a missed call."** The session remembers it was answered
+(`CallSession.answered`, set by `/answer` and by the callee joining). An
+answered call that never connected is recorded as `completed` with no
+duration - "Answered" - by whichever side reports it, and sends no
+missed-call push. The callee's call screen reports it that way too. `/answer`
+also gives the callee the whole establishment window from the moment of
+Accept, not from when the call was placed.
+
+**The call dropped as the app opened.**
+
+- *Resuming swept the call away.* `main.dart`'s "back after five minutes,
+  go Home" guard read the screen on top as `ModalRoute.of(nav.context)` -
+  always null for the navigator's own context - so its "never out of a
+  call" check never matched: Accept on a call to an app that had been in
+  the background for five minutes could reopen the app with the call
+  screen swept away. It is `returnHomeAfterAbsence`, which reads the real
+  top route and never leaves a call.
+- *The caller gave up just before the Accept arrived.* The caller's screen
+  waits 55 seconds (`noAnswerAfter`), the server's no-answer watchdog: the
+  45 seconds the callee's phone rings and ten for an Accept pressed as the
+  ring ended to reach the server from a closed app.
+- *Opening took seconds the call needed.* Accept on a closed app now opens
+  the call screen in the splash screen's place: Home is built when the call
+  closes (`VoipCallScreen._closeOwnScreen`), and the inbox sweep waits
+  eight seconds (`SplashScreen.answeringSweepDelay`). Home's feed, images
+  and the sweep had been competing with the call for the phone and the
+  network in exactly the seconds it was connecting.
+
+**"Connecting…" for 5-10 seconds.** Every step after Accept that could run
+earlier, or alongside another, now does:
+
+- TURN credentials are fetched while the phone rings (`WebRtcService.prepare`),
+  or alongside the microphone opening - not after it - and by the call's own
+  token (`POST /calls/{room}/turn-credentials`), so a closed app's expired
+  access token costs no renewal first;
+- the callee's signalling socket opens while its microphone does (when the
+  permission is already granted); an offer that arrives before the peer
+  connection exists is held (`_offerBeforePc`), and the peer connection is
+  published only once its microphone track is in, so an offer is never
+  answered receive-only;
+- the caller makes its offer while the other phone rings, so ICE gathering -
+  the TURN relay's above all - happens then; its candidates are held until
+  the callee is in the room and sent right after the offer;
+- `bundlePolicy: max-bundle`, `rtcpMuxPolicy: require` and an
+  `iceCandidatePoolSize` of one: one transport to connect, gathering from the
+  moment the peer connection exists.
+
+**The ringtone went on after Accept.** The incoming-call notification is
+posted "without sound" when the app's own ringer is ringing - but Android 8+
+ignores a notification's own sound settings and plays its channel's, so the
+call channel's ringtone played on top of the app's ring, and on after Accept
+stopped the app's (a ringtone runs for half a minute). Those notifications
+now go on `broka_calls_in_app_v1`, a channel with no sound. And with the app
+in front a call no longer arrives as a notification at all: its call screen
+opens at once, ringing, with Accept and Decline on it
+(`NotificationService.openRingingCallScreen`) - no notification to find, no
+`/calls/pending` round trip before the call opens. If the app is left while
+that screen rings, the notification goes up then (not full-screen, so the
+power button doesn't relaunch the call over the lock screen).
+
+**Ringback.** The caller hears "ring-ring" once the callee's phone has
+acknowledged the call (`callee_ringing`) - never during "Calling…" - until
+they answer, join, decline, or the call ends (`RingbackService`,
+`assets/audio/ringback.wav`: 400+450 Hz, 0.4 s on, 0.2 s off, 0.4 s on, 2 s
+off). It plays on the call's own stream and audio mode: audioplayers applies
+a player's mode and speaker flag to the whole phone, and its defaults would
+take the call out of communication mode. Android only; on iOS CallKit and
+WebRTC own the audio session.
+
+**Switching to video.** A voice call has a Video button (it says, before the
+call connects, that it works once it has). It opens the camera, adds it to
+the call and renegotiates: the caller sends a new offer; the callee asks the
+caller for one (`renegotiate`), since two offers crossing would deadlock.
+The other side's screen becomes a video call when the picture arrives, with
+its own camera off until its Camera button turns it on (which opens the
+camera the same way). Turning your own camera on moves your call to the
+speaker; the other side turning theirs on does not. The foreground service
+is restarted with the camera type, so Android doesn't cut the camera off
+behind another app. Older builds answer the renegotiation like an ICE
+restart and simply show no picture.
+
+Tests: `backend/tests/test_answered_call_not_lost.py`;
+`flutter_app/test/call_answer_ring_and_video_test.dart`. Not device-verified.
