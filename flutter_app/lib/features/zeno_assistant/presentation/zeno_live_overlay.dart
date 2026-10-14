@@ -40,6 +40,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/foundation.dart' show ValueListenable;
 
 import '../../../main.dart' show BrokaColors, ZoneGlowText;
@@ -190,7 +191,27 @@ class _ZenoLiveOverlayState extends State<ZenoLiveOverlay> with SingleTickerProv
     }
   }
 
+  bool _syncQueued = false;
+
   void _onController() {
+    if (!mounted) return;
+    // The microphone announces its close synchronously, before the owner's
+    // `paused` has reached this widget; reading it now would hide the view
+    // of a session that is only paused. Decide after the next frame.
+    if (!(widget.controller.isOpen && widget.expanded)) {
+      if (_syncQueued) return;
+      _syncQueued = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _syncQueued = false;
+        if (mounted) _syncReveal();
+      });
+      SchedulerBinding.instance.scheduleFrame();
+      return;
+    }
+    _syncReveal();
+  }
+
+  void _syncReveal() {
     // A paused session has its microphone closed on purpose and keeps the
     // view: without this the view went away with the microphone.
     final open = (widget.controller.isOpen || widget.paused) && widget.expanded;
@@ -1079,8 +1100,11 @@ class _KeyboardLink extends StatelessWidget {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.keyboard_rounded, size: 18, color: BrokaColors.textMid),
               SizedBox(width: 7),
-              Text('Tap to show keyboard',
-                  style: TextStyle(color: BrokaColors.textMid, fontSize: 13, letterSpacing: 0.3)),
+              Flexible(
+                child: Text('Tap to show keyboard',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: BrokaColors.textMid, fontSize: 13, letterSpacing: 0.3)),
+              ),
             ]),
           ),
         ),

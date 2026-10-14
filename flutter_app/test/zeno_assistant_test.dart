@@ -446,6 +446,7 @@ void main() {
       expect(find.text('Resume'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Resume listening'));
+      await letTeardownFinish(tester);
       await run(tester, const Duration(milliseconds: 900));
       expect(mic.running, isTrue);
       expect(find.text('Paused'), findsNothing);

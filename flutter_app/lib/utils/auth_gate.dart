@@ -241,8 +241,11 @@ class _StepChip extends StatelessWidget {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, size: 14, color: BrokaColors.neonCyan),
           const SizedBox(width: 6),
-          Text(label,
-              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w700)),
+          Flexible(
+            child: Text(label,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w700)),
+          ),
         ]),
       );
 }

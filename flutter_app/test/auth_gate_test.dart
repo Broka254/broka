@@ -26,6 +26,7 @@ void main() {
     ));
     await tester.tap(find.text('open'));
     await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
   }
 
   testWidgets('the sheet sits on the same constellation sky as the rest of BROKA', (tester) async {
@@ -39,9 +40,13 @@ void main() {
   });
 
   testWidgets('"Not now" says no to the caller and closes the sheet', (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     final result = <bool>[];
     await openSheet(tester, result);
     await tester.tap(find.byKey(const Key('auth-gate-not-now')));
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 500));
     expect(result, [false]);
     expect(find.byType(ConstellationBackground), findsNothing);
