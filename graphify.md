@@ -273,8 +273,8 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 | POST | `/traders/me/cover` | user | `set_trader_cover` (backend/api/domains/traders/router.py:40) |
 | GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:50) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
-| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:135) |
-| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:311) |
+| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:143) |
+| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:328) |
 | POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:315) |
 | POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:338) |
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:131) |
@@ -1115,6 +1115,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `answer_from_notification_test.dart` — Answering a call from its notification (2026-10-08).
 - `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
+- `auth_gate_test.dart` — The "Create a free account" sheet (2026-10-14).
 - `broka_tts_parts_test.dart`
 - `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
 - `call_answer_ring_and_video_test.dart` — Answering a call, its ring, and turning a voice call into video (2026-10-09).
@@ -1265,7 +1266,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Zeno introduces itself, sells Premium, and every Zeno screen looks like BROKA (2026-10-10)
+- `CHANGES.md` — The sign-up sheet and voice mode look like BROKA, words and voice arrive together, a livelier voice (2026-10-14)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
