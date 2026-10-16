@@ -96,6 +96,12 @@ def _refuse_unless_payable(listing: Listing) -> None:
     if not settings.listing_fees_enabled:
         raise HTTPException(status_code=409, detail="Listing on BROKA is free right now.")
     if not fee_applies(listing):
+        if settings.store_billing_enabled and getattr(listing, "store_id", None):
+            # fee_applies excludes store listings once store billing is on
+            # (PRICING.md §5); the store's own billing screen is where that
+            # is paid, so this path refuses instead of silently quoting one.
+            raise HTTPException(status_code=409, detail=(
+                "This listing is covered by its store's plan - renew on the store's billing screen."))
         raise HTTPException(status_code=409, detail="Auctions don't pay a listing fee.")
     if listing.paid_until is None:
         raise HTTPException(status_code=409, detail="This listing is free - one of your free listings, or posted before listing fees.")

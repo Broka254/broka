@@ -16,6 +16,7 @@
 // content instead of sitting in a fixed band above an Expanded list. Same
 // repository call, same routes.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
 import '../../../widgets/broka_search_field.dart';
@@ -26,8 +27,10 @@ import '../../categories/domain/category_visual.dart';
 import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
+import '../domain/store_categories.dart';
 import 'store_media_image.dart';
 import 'store_home_screen.dart';
+import 'widgets/broka_default_logo.dart';
 
 class StoreListScreen extends StatefulWidget {
   const StoreListScreen({super.key});
@@ -41,6 +44,9 @@ class _StoreListScreenState extends State<StoreListScreen> {
   String? _error;
   final _searchCtrl = TextEditingController();
 
+  /// The category chip tapped, or null for every store.
+  String? _category;
+
   @override
   void initState() {
     super.initState();
@@ -50,7 +56,8 @@ class _StoreListScreenState extends State<StoreListScreen> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     final query = _searchCtrl.text.trim();
-    final result = await storesRepository.listStores(search: query.isEmpty ? null : query);
+    final result = await storesRepository.listStores(
+        search: query.isEmpty ? null : query, category: _category);
     if (!mounted) return;
     result.fold(
       onSuccess: (data) => setState(() {
@@ -59,6 +66,13 @@ class _StoreListScreenState extends State<StoreListScreen> {
       }),
       onFailure: (msg, __) => setState(() { _error = msg; _loading = false; }),
     );
+  }
+
+  void _selectCategory(String? category) {
+    if (_category == category) return;
+    HapticFeedback.selectionClick();
+    setState(() => _category = category);
+    _load();
   }
 
   static const _visual = DestinationVisuals.stores;
@@ -109,6 +123,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
                     ),
                   ),
                   SliverToBoxAdapter(child: _searchBar()),
+                  SliverToBoxAdapter(child: _categoryChips()),
                   ..._bodySlivers(),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
                 ],
@@ -131,6 +146,34 @@ class _StoreListScreenState extends State<StoreListScreen> {
           onChanged: (_) => setState(() {}),
           onSubmitted: (_) => _load(),
           onCleared: _load,
+        ),
+      );
+
+  /// One chip per top-level category - BROKA's own taxonomy
+  /// (domain/store_categories.dart) - so a directory of many shops can be
+  /// narrowed to a kind of shop the way Home's zones narrow products.
+  Widget _categoryChips() => SizedBox(
+        height: 44,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          children: [
+            _CategoryChip(
+              key: const Key('store-chip-all'),
+              label: 'All stores',
+              selected: _category == null,
+              onTap: () => _selectCategory(null),
+            ),
+            for (final name in StoreCategories.all) ...[
+              const SizedBox(width: 8),
+              _CategoryChip(
+                key: Key('store-chip-$name'),
+                label: '${CategoryVisuals.emojiFor(name)}  $name',
+                selected: _category == name,
+                onTap: () => _selectCategory(name),
+              ),
+            ],
+          ],
         ),
       );
 
@@ -271,9 +314,18 @@ class _StoreCardState extends State<_StoreCard> {
           ],
         ),
       ),
+      // A shop with no picture shows BROKA's mark, not its category emoji:
+      // the emoji read as clip-art standing in for a photo, and the mark is
+      // what the store's own logo falls back to everywhere else.
       child: Center(
-        child: Text(CategoryVisuals.emojiFor(store.category),
-            style: const TextStyle(fontSize: 46)),
+        child: SizedBox(
+          width: 64,
+          height: 64,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: const BrokaDefaultLogo(),
+          ),
+        ),
       ),
     );
 
@@ -485,6 +537,43 @@ class _Logo extends StatelessWidget {
             dataUri: source,
             fit: BoxFit.cover,
             placeholderBuilder: (_) => const SizedBox.shrink(),
+          ),
+        ),
+      );
+}
+
+/// One category chip in the directory's filter rail.
+class _CategoryChip extends StatelessWidget {
+  const _CategoryChip({super.key, required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        selected: selected,
+        button: true,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? BrokaColors.gold.withOpacity(0.16) : BrokaColors.bgCard.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: selected ? BrokaColors.gold.withOpacity(0.65) : BrokaColors.border,
+                width: selected ? 1.6 : 1,
+              ),
+            ),
+            child: Text(label,
+                maxLines: 1,
+                style: TextStyle(
+                  color: selected ? BrokaColors.gold : BrokaColors.textHigh,
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                )),
           ),
         ),
       );

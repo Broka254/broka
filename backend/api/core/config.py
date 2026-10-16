@@ -506,6 +506,32 @@ class Settings:
         "MPESA_PREMIUM_CALLBACK_URL", ""
     ).strip())
 
+    # ── Store billing (PRICING.md §9) ────────────────────────────────────────
+    # Off: opening and running a store is free. On: a store pays the one-off
+    # opening fee plus a monthly plan priced by the listings it holds
+    # (pricing/plans.py), and a store whose plan is unpaid is hidden from
+    # buyers - directory, its own page's catalogue, and every feed its
+    # listings would appear in (listings/paid.live_clause) - until it pays.
+    # Same rule as listing fees and premium: only once the app build with
+    # the store billing screen is the one sellers have, because an older
+    # build can open a store and has no way to pay for it, and that store
+    # would never appear.
+    store_billing_enabled: bool = field(default_factory=lambda: os.getenv(
+        "STORE_BILLING_ENABLED", "false"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    # How long a store already open when billing first turns on keeps
+    # running before its first payment. The startup backfill
+    # (stores/billing.ensure_grace_subscriptions) gives every existing
+    # store this much paid time, once.
+    store_billing_grace_days: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "STORE_BILLING_GRACE_DAYS", "30"
+    ))))
+    # Where Safaricom posts a store payment's result. Unset, derived from
+    # MPESA_CALLBACK_SECRET (stores/billing.py).
+    mpesa_store_callback_url: str = field(default_factory=lambda: os.getenv(
+        "MPESA_STORE_CALLBACK_URL", ""
+    ).strip())
+
     # ── Fraud thresholds ──────────────────────────────────────────────────────
     fraud_new_account_days: int = 7
     fraud_rapid_tx_window_hours: int = 24

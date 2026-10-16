@@ -1,5 +1,5 @@
-"""What a user has paid BROKA: listing fees and premium plans, for the
-Payment Receipts screen.
+"""What a user has paid BROKA: listing fees, premium plans and store
+plans, for the Payment Receipts screen.
 
 Separate from a seller's deal receipts (money a buyer paid them, through
 escrow) because it is the other direction - money out of the seller, not
@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.database import Listing
 from api.domains.pricing.plans import PREMIUM_BY_ID
 from api.models.listing_payment import ListingPayment, ListingPaymentStatus
+from api.models.store import Store
+from api.models.store_billing import StorePayment, StorePaymentStatus
 from api.models.subscription import SubscriptionPayment, SubscriptionPaymentStatus
 
 
@@ -40,6 +42,14 @@ async def charges_paid_by(db: AsyncSession, user_id: str, limit: int = 50) -> li
         .order_by(SubscriptionPayment.paid_at.desc())
         .limit(limit)
     )).scalars().all()
+    store_plans = (await db.execute(
+        select(StorePayment, Store.name)
+        .join(Store, Store.id == StorePayment.store_id)
+        .where(StorePayment.user_id == user_id,
+               StorePayment.status == StorePaymentStatus.SUCCESS)
+        .order_by(StorePayment.paid_at.desc())
+        .limit(limit)
+    )).all()
 
     charges = []
     for p, listing_name in fees:
@@ -69,6 +79,21 @@ async def charges_paid_by(db: AsyncSession, user_id: str, limit: int = 50) -> li
             "detail": _months(p.months),
             "amount": p.amount,
             "provider": "M-Pesa",
+            "reference": p.mpesa_receipt,
+            "paid_at": (p.paid_at or p.created_at).isoformat(),
+        })
+    for p, store_name in store_plans:
+        detail = _months(p.months)
+        if p.setup_fee:
+            detail += f" + opening fee (KES {p.setup_fee:,})"
+        charges.append({
+            "id": p.id,
+            "kind": "store",
+            "title": "Store plan",
+            "subject": store_name,
+            "detail": detail,
+            "amount": p.amount,
+            "provider": "ZetuPay" if p.provider == "zetupay" else "M-Pesa",
             "reference": p.mpesa_receipt,
             "paid_at": (p.paid_at or p.created_at).isoformat(),
         })

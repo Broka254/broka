@@ -8,6 +8,7 @@ import '../../../../widgets/gradient_button.dart';
 import '../../../../widgets/constellation_background.dart';
 import '../../../../core/utils/result.dart';
 import '../../../../widgets/wizard_scaffold.dart';
+import '../store_billing_screen.dart';
 import '../store_launched_screen.dart';
 import 'store_setup_controller.dart';
 import 'store_setup_steps.dart';
@@ -111,6 +112,21 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
     final (store, problem) = await c.launch();
     if (!mounted) return;
     if (store != null) {
+      // With store billing on, a fresh store is hidden until its plan is
+      // paid (backend stores/billing.py): show the plan before celebrating.
+      // Paying goes on to the launch screen; leaving goes to My Store,
+      // where the plan card keeps saying what is owed.
+      final billing = store.billing;
+      if (billing != null && !billing.active) {
+        final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
+            builder: (_) => StoreBillingScreen(
+                storeId: store.id, storeName: store.name)));
+        if (!mounted) return;
+        if (paid != true) {
+          Navigator.of(context).pushReplacementNamed('/store-manage');
+          return;
+        }
+      }
       Navigator.of(context).pushReplacement(MaterialPageRoute(
           builder: (_) => StoreLaunchedScreen(store: store)));
       return;

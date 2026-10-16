@@ -44,6 +44,7 @@ from api.domains.categories.seed import CANONICAL_CATEGORIES
 from api.models.store import Store
 from api.domains.listings.service import ListingService, load_listing_media
 from api.security import decode_email_verify_token
+from . import billing as store_billing
 from . import categories as store_categories
 from . import naming
 from .media import (
@@ -247,8 +248,11 @@ class StoreService:
         with_total: bool = False,
     ):
         """Browse active stores. A paused store is left out of the
-        directory, though its own link still resolves."""
+        directory, though its own link still resolves; with store billing
+        on, a store whose plan is unpaid is left out the same way."""
         q = select(Store).where(Store.is_active == True)  # noqa: E712
+        if store_billing.enabled():
+            q = q.where(store_billing.live_subscription_clause(Store.id))
         if search and search.strip():
             # term_matches escapes LIKE's own wildcards: a bare ILIKE of the
             # text made "_" or "%" match every store in the directory.
@@ -269,14 +273,17 @@ class StoreService:
         q = q.order_by(Store.created_at.desc()).limit(limit).offset(offset)
         stores = (await self.db.execute(q)).scalars().all()
 
-        # One grouped count, one owners query and one assets query for the
-        # whole page - never one per store.
+        # One grouped count, one owners query, one assets query and one
+        # subscriptions query for the whole page - never one per store.
         counts = await self._listing_counts_for([s.id for s in stores])
         assets = await self._assets_for(stores)
         owners = await self._owners_for(stores)
+        subs = (await store_billing.subscriptions_for(self.db, [s.id for s in stores])
+                if store_billing.enabled() else {})
         items = [
             await self._store_dict(
                 s, listing_count=counts.get(s.id, 0), assets=assets, owner=owners.get(s.owner_id),
+                billing_subs=subs,
             )
             for s in stores
         ]
@@ -339,9 +346,10 @@ class StoreService:
         max_price: Optional[float] = None,
     ):
         store = await self._get_or_404(store_id)
-        if not store.is_active:
-            # A paused store keeps its profile but shows an empty catalogue:
-            # a shared link should say "nothing listed right now", not 404.
+        if not await store_billing.store_live(self.db, store):
+            # A paused store - or, with billing on, one whose plan is unpaid
+            # - keeps its profile but shows an empty catalogue: a shared
+            # link should say "nothing listed right now", not 404.
             return {"items": [], "total": 0} if with_total else []
 
         listing_category = None
@@ -395,6 +403,9 @@ class StoreService:
         store = await self.get_owned(store_id, requester_id)
         now = datetime.utcnow()
         live = live_clause(now)
+        # With billing on, every active listing of an unpaid store reads
+        # "hidden" here too - the SQL counts below say the same thing.
+        store_live = await store_billing.store_live(self.db, store, now)
         in_state = {
             "live": and_(Listing.status == ListingStatus.active, live),
             "hidden": and_(Listing.status == ListingStatus.active, not_(live)),
@@ -436,17 +447,19 @@ class StoreService:
         for listing in listings:
             item = ListingService._owner_listing_dict(
                 listing, seller=sellers.get(listing.seller_id), store=store, assets=assets)
-            item["store_state"] = self._owner_state(listing, now)
+            item["store_state"] = self._owner_state(listing, now, store_live)
             items.append(item)
         return {"items": items, "counts": counts}
 
     @staticmethod
-    def _owner_state(listing: Listing, now: datetime) -> str:
+    def _owner_state(listing: Listing, now: datetime, store_live: bool = True) -> str:
         status = getattr(listing.status, "value", listing.status)
         if status == ListingStatus.pending.value:
             return "in_deal"
         if status == ListingStatus.completed.value:
             return "sold"
+        if not store_live:
+            return "hidden"
         return "live" if is_live(listing, now) else "hidden"
 
     async def list_categories(self, store_id: str) -> list[dict]:
@@ -454,7 +467,7 @@ class StoreService:
         biggest first - the storefront's category rail. Listings whose
         category isn't one of BROKA's own count under "Other"."""
         store = await self._get_or_404(store_id)
-        if not store.is_active:
+        if not await store_billing.store_live(self.db, store):
             return []
         rows = (await self.db.execute(
             select(Listing.category, func.count())
@@ -525,6 +538,15 @@ class StoreService:
     async def set_store_status(self, store_id: str, requester_id: str, is_active: bool) -> dict:
         store = await self._get_or_404(store_id)
         self._require_owner(store, requester_id)
+        if is_active and store_billing.enabled():
+            # Opening is what buyers see, and with billing on that is what
+            # a paid plan buys. Pausing needs no plan.
+            sub = await store_billing.subscription_for(self.db, store.id)
+            if not store_billing.is_live(sub):
+                raise HTTPException(status_code=409, detail=(
+                    "Your store's plan isn't paid, so buyers can't see it. "
+                    "Pay for the plan first, then open the store."
+                ))
         store.is_active = is_active
         store.updated_at = datetime.utcnow()
         await self.db.commit()
@@ -744,10 +766,19 @@ class StoreService:
         assets: Optional[dict] = None,
         owner: Optional[User] = None,
         owner_view: bool = False,
+        billing_subs: Optional[dict] = None,
     ) -> dict:
         """The store payload. owner_view=True only for responses to the
         owner themselves (create, update, status, /stores/mine); every other
-        read is public."""
+        read is public.
+
+        With store billing on, public reads report an unpaid store as
+        is_active=False - the storefront and app builds that predate
+        billing show the same "nothing listed right now" a paused store
+        shows - while the owner's own payload carries their real
+        is_active and a `billing` object with what is owed. `billing` is
+        null when the setting is off, and the app only shows billing
+        screens when it is not."""
         # listing_count and assets may come from a caller that loaded them
         # for a whole page at once (list_stores); single-store reads load
         # them here.
@@ -769,6 +800,15 @@ class StoreService:
             asset_urls(assets[i]) for i in parse_id_list(store.photo_ids) if i in assets
         ]
         category = store.category or store_categories.from_legacy(store.specialization)
+        active = bool(store.is_active)
+        billing_state = None
+        if store_billing.enabled():
+            sub = (billing_subs.get(store.id) if billing_subs is not None
+                   else await store_billing.subscription_for(self.db, store.id))
+            if owner_view:
+                billing_state = store_billing.state_for(sub)
+            elif not store_billing.is_live(sub):
+                active = False
 
         return {
             "id": store.id,
@@ -805,7 +845,11 @@ class StoreService:
             ),
             "business_email_verified": bool(store.business_email_verified),
             "owner": self._owner_facts(owner),
-            "is_active": bool(store.is_active),
+            "is_active": active,
+            # Owner's view only, and only while billing is on: the app
+            # routes a fresh store to the billing screen on this being
+            # non-null and not active.
+            "billing": billing_state,
             "listing_count": listing_count,
             "created_at": store.created_at.isoformat() if store.created_at else None,
             "updated_at": store.updated_at.isoformat() if store.updated_at else None,

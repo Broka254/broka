@@ -4,6 +4,7 @@
 // shown with a store is its owner's real seller record ([StoreOwnerFacts]);
 // there is no separate store rating because nothing computes one.
 import '../../../../models/listing_photo.dart';
+import 'store_billing.dart';
 
 /// The store owner's seller record, as shown on the storefront.
 class StoreOwnerFacts {
@@ -85,6 +86,12 @@ class Store {
 
   final StoreOwnerFacts? owner;
   final bool isActive;
+
+  /// The store's plan state on the owner's own reads, and null everywhere
+  /// else: public reads carry null, and so does every read while
+  /// STORE_BILLING_ENABLED is off. The app shows billing surfaces only
+  /// when this is not null (a fresh store's screen, My Store's card).
+  final StoreBilling? billing;
   final int listingCount;
   final String? createdAt;
   final String? updatedAt;
@@ -109,6 +116,7 @@ class Store {
     this.photos = const [],
     this.owner,
     this.isActive = true,
+    this.billing,
     this.listingCount = 0,
     this.createdAt,
     this.updatedAt,
@@ -137,6 +145,7 @@ class Store {
       photos:  (json['photos'] as List?)?.whereType<String>().toList() ?? const [],
       owner: StoreOwnerFacts.fromJson(json['owner']),
       isActive:     json['is_active']     as bool? ?? true,
+      billing:      StoreBilling.fromJson(json['billing']),
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,

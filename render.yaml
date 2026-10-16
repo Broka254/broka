@@ -136,6 +136,17 @@ services:
                              # false: those stay free, but AI covers are off.
       - key: MPESA_PREMIUM_CALLBACK_URL
         sync: false          # Optional. Unset = /premium/callback/<MPESA_CALLBACK_SECRET>
+      - key: STORE_BILLING_ENABLED
+        value: "false"       # true: opening and running a store costs the one-off opening fee
+                             # (KES 299, waived on 6+ months) plus a monthly plan priced by the
+                             # listings it holds (PRICING.md §5). A store whose plan is unpaid is
+                             # hidden from buyers, its catalogue included, until it pays. Only
+                             # once the app build with the store billing screen is required.
+      - key: STORE_BILLING_GRACE_DAYS
+        value: "30"          # Days an already-open store keeps running when billing first turns
+                             # on (startup backfill; the opening fee is still owed).
+      - key: MPESA_STORE_CALLBACK_URL
+        sync: false          # Optional. Unset = /stores/billing/callback/<MPESA_CALLBACK_SECRET>
       - key: ECONFIRM_FALLBACK_EMAIL_DOMAIN
         value: "broka.co.ke"   # E-Confirm needs both parties' emails; a user without one is
                                # sent as user-<id>@this domain (domains/escrow/service.py).

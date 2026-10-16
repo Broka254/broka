@@ -44,7 +44,9 @@ import '../data/store_share.dart';
 import '../domain/models/store.dart';
 import '../domain/models/store_product.dart';
 import 'setup/store_setup_controller.dart';
+import 'store_billing_screen.dart';
 import 'store_edit_screen.dart';
+import 'widgets/broka_default_logo.dart';
 import 'widgets/store_share_card.dart';
 
 class MyStoreScreen extends StatefulWidget {
@@ -491,20 +493,7 @@ class _PillTabs extends StatelessWidget {
   }
 }
 
-/// A store's logo, or its initial on the brand gradient.
-/// BROKA's logo, standing in for a store that has not uploaded its own.
-class BrokaDefaultLogo extends StatelessWidget {
-  const BrokaDefaultLogo({super.key});
-  static const asset = 'assets/images/broka_icon.png';
-
-  @override
-  Widget build(BuildContext context) => Container(
-        key: const Key('store-default-logo'),
-        color: Colors.white,
-        child: Image.asset(asset, fit: BoxFit.cover),
-      );
-}
-
+/// A store's logo, or BROKA's own when none has been uploaded.
 class StoreLogo extends StatelessWidget {
   const StoreLogo({super.key, required this.store, this.size = 48});
   final Store store;
@@ -699,12 +688,21 @@ class _OverviewTabState extends State<_OverviewTab> {
     final store = widget.store;
     final counts = _counts;
     final stats = _stats;
+    // With billing on, an unpaid plan hides the store from buyers however
+    // the open/paused switch stands: the plan card says so, and the status
+    // card below must not claim buyers can browse it (stores/billing.py).
+    final billing = store.billing;
+    final buyersCanSee = billing == null || billing.active;
     return RefreshIndicator(
       color: BrokaColors.gold,
       onRefresh: () async {
         await Future.wait([_loadStats(), _loadCounts(), widget.onRefresh()]);
       },
       child: _tabList(context, key: const Key('overview-list'), children: [
+        if (billing != null) ...[
+          _StorePlanCard(store: store, onChanged: widget.onRefresh),
+          const SizedBox(height: 14),
+        ],
         _card(
           padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
           child: Row(children: [
@@ -716,7 +714,9 @@ class _OverviewTabState extends State<_OverviewTab> {
                   style: const TextStyle(color: BrokaColors.textHigh,
                       fontWeight: FontWeight.w700, fontSize: 15)),
               Text(store.isActive
-                  ? 'Buyers can browse it from your link'
+                  ? (buyersCanSee
+                      ? 'Buyers can browse it from your link'
+                      : 'Hidden from buyers until your plan is paid')
                   : 'Buyers see it, but no products',
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
             ])),
@@ -800,6 +800,67 @@ class _OverviewTabState extends State<_OverviewTab> {
         const SizedBox(height: 22),
         _sectionLabel('Your selling'),
         const SellerDashboardLink(),
+      ]),
+    );
+  }
+}
+
+/// The store's plan at a glance, above the open/paused switch: unpaid and
+/// the shop is hidden from buyers, or paid up until a date. Tapping either
+/// opens the billing screen (stores/billing.py).
+class _StorePlanCard extends StatelessWidget {
+  const _StorePlanCard({required this.store, required this.onChanged});
+  final Store store;
+
+  /// The store again after coming back from the billing screen - a payment
+  /// there changes what this card says.
+  final Future<void> Function() onChanged;
+
+  Future<void> _open(BuildContext context) async {
+    final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => StoreBillingScreen(storeId: store.id, storeName: store.name)));
+    if (paid == true) await onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final billing = store.billing!;
+    final active = billing.active;
+    final color = active ? BrokaColors.success : BrokaColors.warning;
+    return Container(
+      key: const Key('my-store-plan-card'),
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withOpacity(0.45)),
+      ),
+      child: Row(children: [
+        Icon(active ? Icons.verified_rounded : Icons.lock_outline_rounded, color: color),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(active ? 'Plan active' : 'Plan unpaid',
+                style: const TextStyle(color: BrokaColors.textHigh,
+                    fontWeight: FontWeight.w700, fontSize: 15)),
+            const SizedBox(height: 2),
+            Text(
+              active
+                  ? (billing.paidUntil == null
+                      ? 'Buyers can see your store'
+                      : 'Buyers can see your store until ${_shortDate(billing.paidUntil!)}')
+                  : "Buyers can't see your store or its products yet",
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
+            ),
+          ]),
+        ),
+        TextButton(
+          key: const Key('my-store-plan-action'),
+          onPressed: () => _open(context),
+          child: Text(active ? 'Manage' : 'Pay now',
+              style: TextStyle(color: active ? BrokaColors.gold : BrokaColors.warning,
+                  fontWeight: FontWeight.w800)),
+        ),
       ]),
     );
   }

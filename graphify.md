@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-226 endpoints served by `backend/main.py`. **Auth** is read from each
+231 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 60, token 4, user 140.
+Counts: admin 20, optional 2, public 62, token 4, user 143.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -250,22 +250,27 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:54) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
-| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:145) |
-| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:132) |
-| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:185) |
-| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:204) |
-| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:164) |
-| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:173) |
-| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:221) |
-| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:226) |
-| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:231) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:296) |
-| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:255) |
-| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:279) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:341) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:360) |
-| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:245) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:302) |
+| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:151) |
+| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:138) |
+| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:250) |
+| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:258) |
+| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:191) |
+| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:210) |
+| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:170) |
+| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:179) |
+| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:227) |
+| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:267) |
+| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:272) |
+| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:296) |
+| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:310) |
+| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:334) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:385) |
+| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:344) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:368) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:430) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:449) |
+| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:286) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:391) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -393,7 +398,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 - `engine.py` — The listing fee: f = C x R, for two months at a time.
 - `payments.py` — Paying for a listing: the M-Pesa prompt, its result, and what a paid month buys.
 - `plans.py` — Premium plans, store plans and commission - the prices, and the costs they cover.
-- `receipts.py` — What a user has paid BROKA: listing fees and premium plans, for the Payment Receipts screen.
+- `receipts.py` — What a user has paid BROKA: listing fees, premium plans and store plans, for the Payment Receipts screen.
 - `router.py` — Pricing router.
 - `safe_payment.py` — Paying a seller safely while BROKA moves no deal money.
 - `service.py` — Gathering what a listing-fee quote needs from the database.
@@ -410,6 +415,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 
 ### `backend/api/domains/stores/`
 
+- `billing.py` — Running a store: its plan, the M-Pesa prompt that pays for it, and what a payment buys.
 - `categories.py` — A store's category: one of BROKA's top-level categories.
 - `media.py` — Store Media — small abstraction over Store.logo_url / Store.photos.
 - `naming.py` — Store link names: the `clanix` in https://broka.co.ke/store/clanix.
@@ -525,6 +531,7 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 - `review.py` — Review model — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `sold_out_report.py` — SoldOutReport - a buyer saying a listing is no longer available.
 - `store.py` — BROKA - Store Model
+- `store_billing.py` — Store billing: what an online store's plan is, until when, and every payment that bought it.
 - `subscription.py` — Premium subscriptions: who has which plan until when, what they paid, and how much of each monthly allowance they have used.
 - `user.py` — User model — re-exported from api.database (the single source of truth).
 - `zetupay.py` — ZetuPay payments - money a user pays BROKA, never a deal's money.
@@ -589,6 +596,8 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 | `seller_metrics` | `SellerMetrics` | backend/api/database.py:881 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:137 |
+| `store_payments` | `StorePayment` | backend/api/models/store_billing.py:59 |
+| `store_subscriptions` | `StoreSubscription` | backend/api/models/store_billing.py:36 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
@@ -597,8 +606,8 @@ Counts: admin 20, optional 2, public 60, token 4, user 140.
 | `users` | `User` | backend/api/database.py:153 |
 | `verification_payments` | `VerificationPayment` | backend/api/database.py:1117 |
 | `wishlists` | `Wishlist` | backend/api/database.py:648 |
-| `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:51 |
-| `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:80 |
+| `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
+| `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
 ## Backend dependencies between domains
 
@@ -617,15 +626,15 @@ of a change.
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, gemini, ledger, workers; database, security
 - **escrow** — domains: listings, pricing; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
-- **listings** — domains: auctions, categories, escrow, media, premium, pricing, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
+- **listings** — domains: auctions, categories, escrow, media, premium, pricing, stores, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
-- **payments** — domains: premium, pricing; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
+- **payments** — domains: premium, pricing, stores; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **premium** — domains: buy_agent, payments, pricing; core: audit, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **pricing** — domains: listings, payments, trust; core: audit, config, events, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **reviews** — core: audit, config, events; database, security
 - **showcase** — domains: media, premium; core: hf_image_client, image_processing, rate_limit; database, security
-- **stores** — domains: auth, categories, listings, media; core: client_ip, config, presence, rate_limit, text_search; database, security
+- **stores** — domains: auth, categories, listings, media, payments, pricing; core: audit, client_ip, config, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
 - **traders** — domains: listings, media, trust; core: geo, text_search; database, security
 - **trending** — domains: listings; database
 - **trust** — domains: listings; core: config; database
@@ -667,11 +676,11 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `REVIEWS_REQUIRE_COMPLETED_DEAL`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_STORE_CALLBACK_URL`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `REVIEWS_REQUIRE_COMPLETED_DEAL`, `SECRET_KEY`, `SENTRY_DSN`, `STOREFRONT_API_KEY`, `STORE_BILLING_ENABLED`, `STORE_BILLING_GRACE_DAYS`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
 
 ## Backend tests
 
-108 files in `backend/tests/`.
+109 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -764,6 +773,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_showcase.py` — BROKA - AI Showcase/Cover Image Tests Covers: location_name derivation from county/subcounty, ownership checks, AI covers as a premium allo…
 - `test_sms.py` — BROKA - SMS Provider Tests (v6.2) Run: pytest backend/tests/test_sms.py -v
 - `test_sold_out_reports.py` — Sold out with payments outside BROKA: agreed deals no longer take a listing off sale (listings/stock.py), buyers report an item gone and it…
+- `test_store_billing.py` — Online store plans (PRICING.md §5; api/domains/stores/billing.py).
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
 - `test_stores.py` — BROKA - Store Feature Tests Run: pytest backend/tests/test_stores.py -v
 - `test_stores_hardening.py` — Regression tests for the Store implementation audit (2026-09-14).
@@ -944,12 +954,14 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/store_share.dart` — Sharing a store's link.
 - `domain/kenya_locations.dart` — Kenya's 47 counties and their subcounties, for location pickers.
 - `domain/models/store.dart` — BROKA — Store domain model
+- `domain/models/store_billing.dart` — BROKA — Store billing domain model
 - `domain/models/store_product.dart` — A product in the owner's own store, as My Store manages it (GET /stores/{id}/manage/listings): the listing, whether buyers can see it, and…
 - `domain/store_categories.dart` — A store's category is one of BROKA's top-level categories (the home screen's category rail).
 - `presentation/my_store_screen.dart` — My Store - the owner's dashboard.
 - `presentation/setup/store_setup_controller.dart` — State behind the store setup wizard and the store's settings pages.
 - `presentation/setup/store_setup_screen.dart` — Store setup: one question per screen, on the constellation background, with the draft kept on the phone after every change.
 - `presentation/setup/store_setup_steps.dart` — The pages of the store setup wizard.
+- `presentation/store_billing_screen.dart` — BROKA - the store's plan: what it costs, paying for it, and what paying turns on (backend/api/domains/stores/billing.py; PRICING.md §5).
 - `presentation/store_cart_screen.dart` — A store's cart: what the buyer picked, how many, the total, and checkout.
 - `presentation/store_edit_screen.dart` — Editing one part of an open store, with the same page the setup wizard used for it.
 - `presentation/store_entry.dart` — Where "My Store" / "Open an online store" buttons go.
@@ -957,6 +969,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_launched_screen.dart` — "Your store is live" - the end of store setup: the link, its QR code, one-tap sharing, and the next thing to do (add products).
 - `presentation/store_list_screen.dart` — BROKA — Store discovery (spec §12/§21, Phase 4) 1-column list, modeled directly on trader_list_screen.dart - same reasoning applies: Produc…
 - `presentation/store_media_image.dart` — BROKA — Store media image (Phase 6 hardening)
+- `presentation/widgets/broka_default_logo.dart` — BROKA's own logo, standing in wherever a store has not uploaded one My Store's header and the directory card.
 - `presentation/widgets/menu_store_section.dart` — The Menu's "Online store" section.
 - `presentation/widgets/store_details_view.dart` — "Store details" - its own screen, opened from "More details" under the store's name or the info button in its bar.
 - `presentation/widgets/store_product_card.dart` — A product in a store's catalogue, as a shop shows it: the photo with its condition, the name, the price, and Add to cart - which turns into…
@@ -1165,6 +1178,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `sms_otp_autofill_test.dart` — The signup wizard's automatic OTP capture (Android SMS Retriever), end to end on the Dart side: a code the native bridge delivers must land…
 - `splash_screen_test.dart` — The splash plays its boot sequence once, the first time BROKA opens on a phone; after that the app opens straight onto Home (2026-10-09).
 - `start_selling_test.dart` — A buyer who starts selling later is asked what signup asks (2026-09-26): a few items - nothing more to fill in - or a business, which goes…
+- `store_billing_test.dart` — Store billing in the app (PRICING.md §5; backend stores/billing.py): the plan a store's own stock prices at, paying it through the shared c…
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…

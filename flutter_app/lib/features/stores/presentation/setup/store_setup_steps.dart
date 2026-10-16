@@ -654,7 +654,7 @@ class LogoStep extends StatelessWidget {
       ],
       const SizedBox(height: 22),
       const _Hint('Your logo shows on your store, next to your products and on '
-          "your store's share page. No logo? Skip this - your store's initial is "
+          "your store's share page. No logo? Skip this - BROKA's logo is "
           'used until you add one.'),
     ]);
   }

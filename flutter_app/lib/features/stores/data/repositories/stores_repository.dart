@@ -8,6 +8,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
+import '../../domain/models/store_billing.dart';
 import '../../domain/models/store_product.dart';
 import '../../../../core/errors/user_facing_error.dart';
 
@@ -208,6 +209,34 @@ class StoresRepository {
   Future<Result<StoreStats>> getStats(String storeId, {int days = 7}) => _guard(() async =>
       StoreStats.fromJson(await _client.get('/stores/$storeId/stats',
           queryParams: {'days': days.toString()}) as Map<String, dynamic>));
+
+  /// The owner's billing screen: their rate card and plan state, and - with
+  /// [listings] - that size's priced periods. Owner only.
+  Future<Result<StoreBillingQuote>> billingQuote(String storeId, {int? listings}) =>
+      _guard(() async => StoreBillingQuote.fromJson(await _client.get(
+            '/stores/$storeId/billing',
+            queryParams: {if (listings != null) 'listings': listings.toString()},
+          ) as Map<String, dynamic>));
+
+  /// Sends the M-Pesa prompt for a store plan. [idempotencyKey] is the
+  /// attempt's, so a retry after a timeout gets the prompt already sent,
+  /// not a second one.
+  Future<Result<StorePlanPayment>> payStorePlan({
+    required String storeId,
+    required int listings,
+    required int months,
+    required String phone,
+    required String idempotencyKey,
+  }) =>
+      _guard(() async => StorePlanPayment.fromJson(await _client.post(
+            '/stores/$storeId/billing/pay',
+            {'listings': listings, 'months': months, 'phone_number': phone},
+            headers: {'X-Idempotency-Key': idempotencyKey},
+          ) as Map<String, dynamic>));
+
+  Future<Result<StorePlanPayment>> storePaymentStatus(String storeId, String paymentId) =>
+      _guard(() async => StorePlanPayment.fromJson(await _client.get(
+          '/stores/$storeId/billing/payments/$paymentId') as Map<String, dynamic>));
 }
 
 final storesRepository = StoresRepository();

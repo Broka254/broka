@@ -76,6 +76,7 @@ TIMED_OUT = "provider_timeout"
 _PREFIX = {
     Purpose.LISTING_FEE: "LF",
     Purpose.SUBSCRIPTION: "PL",
+    Purpose.STORE: "SB",
     Purpose.BOOST: "BS",
     Purpose.VERIFICATION: "VB",
     Purpose.TEST: "TS",
@@ -112,6 +113,8 @@ def _domain(purpose: str):
         from api.domains.pricing import payments as module
     elif purpose == Purpose.SUBSCRIPTION:
         from api.domains.premium import payments as module
+    elif purpose == Purpose.STORE:
+        from api.domains.stores import billing as module
     elif purpose == Purpose.BOOST:
         from api.routers import featured as module
     elif purpose == Purpose.VERIFICATION:

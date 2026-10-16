@@ -10,20 +10,26 @@ a sign-in wall.
 """
 from __future__ import annotations
 
+import logging
 from typing import List, Literal, Optional
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.client_ip import client_ip
+from api.core.config import settings
+from api.core.idempotency import IdempotencyResult, idempotency_guard
 from api.core.rate_limit import (
     otp_request_limiter, otp_verify_limiter, store_counter_limiter, store_name_check_limiter,
+    stk_limiter,
 )
 from api.database import OtpPurpose, get_db
 from api.security import get_current_user, get_current_user_optional
+from . import billing as store_billing
 from . import stats as store_stats
 from .service import StoreService
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MAX_PAGE_SIZE = 100
@@ -222,6 +228,41 @@ async def get_store_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
     return await StoreService(db).get_store_by_slug(slug)
 
 
+# Registered before the dynamic "/{store_id}" routes, per this module's
+# rule: a fixed path first, or FastAPI reads it as a store id.
+class StorePayIn(BaseModel):
+    listings: int = Field(..., ge=1, le=10_000)
+    months: int = Field(..., ge=1, le=12)
+    phone_number: str = Field(..., max_length=20)
+
+
+async def _store_billing_callback(request: Request, db: AsyncSession) -> dict:
+    try:
+        await store_billing.process_callback(db, await request.json())
+    except Exception as exc:
+        # Still a 200: a non-200 makes Safaricom redeliver forever, and the
+        # status poll's own query settles the payment.
+        logger.error("[stores] billing callback error: %s", exc, exc_info=True)
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+@router.post("/billing/callback")
+async def store_billing_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    """Only while MPESA_CALLBACK_SECRET is unset (local and sandbox)."""
+    if settings.mpesa_callback_secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _store_billing_callback(request, db)
+
+
+@router.post("/billing/callback/{secret}")
+async def store_billing_callback_secured(
+    secret: str, request: Request, db: AsyncSession = Depends(get_db),
+):
+    if not settings.mpesa_callback_secret or secret != settings.mpesa_callback_secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _store_billing_callback(request, db)
+
+
 @router.get("/{store_id}")
 async def get_store(store_id: str, db: AsyncSession = Depends(get_db)):
     return await StoreService(db).get_store(store_id)
@@ -249,6 +290,54 @@ async def set_store_status(
     db: AsyncSession = Depends(get_db),
 ):
     return await StoreService(db).set_store_status(store_id, current_user["id"], body.is_active)
+
+
+@router.get("/{store_id}/billing")
+async def get_store_billing(
+    store_id: str,
+    listings: Optional[int] = Query(None, ge=1, le=10_000,
+                                    description="Price this size; without it, just the card and state"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The owner's billing screen: their store's rate card, what is owed
+    now, and - with ?listings= - that plan's priced periods. Owner only."""
+    store = await StoreService(db).get_owned(store_id, current_user["id"])
+    return await store_billing.summary(db, store, listings)
+
+
+@router.post("/{store_id}/billing/pay")
+async def pay_store_billing(
+    store_id: str,
+    body: StorePayIn,
+    current_user: dict = Depends(get_current_user),
+    idempotency: IdempotencyResult = Depends(idempotency_guard),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send the M-Pesa prompt for a store plan. The amount is the rate
+    card's price for that size and those months plus any opening fee,
+    never the request's."""
+    if idempotency.cached:
+        return idempotency.response
+    # Per user: every call prompts a phone for money, and the number is the
+    # caller's to type.
+    await stk_limiter.check_and_record(current_user["id"])
+    store = await StoreService(db).get_owned(store_id, current_user["id"])
+    result = await store_billing.start_payment(
+        db, current_user["id"], store, body.listings, body.months, body.phone_number,
+    )
+    await idempotency.store(result)
+    return result
+
+
+@router.get("/{store_id}/billing/payments/{payment_id}")
+async def store_billing_payment_status(
+    store_id: str,
+    payment_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await store_billing.payment_status(db, current_user["id"], store_id, payment_id)
 
 
 @router.get("/{store_id}/listings")

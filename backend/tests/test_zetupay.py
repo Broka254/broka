@@ -779,7 +779,8 @@ class TestSeparation:
             assert (await db.execute(select(ZetuPayPayment).where(
                 ZetuPayPayment.target_id == "deal-1"))).scalar_one_or_none() is None
         assert zp.prompts == []
-        assert set(Purpose.ALL) == {"listing_fee", "subscription", "boost", "verification", "test"}
+        assert set(Purpose.ALL) == {"listing_fee", "subscription", "boost", "verification", "store",
+                                    "test"}
 
 
 def _row(obj) -> dict:

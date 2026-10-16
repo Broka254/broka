@@ -1248,6 +1248,7 @@ async def init_db():
         ("api.models.media", ("MediaAsset", "MediaBlob")),
         ("api.models.listing_payment", ("ListingPayment",)),
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
+        ("api.models.store_billing", ("StoreSubscription", "StorePayment")),
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
@@ -1655,6 +1656,20 @@ async def init_db():
             print(f"✅ Store categories filled in for {updated} store(s)")
     except Exception as e:
         print(f"⚠️ Store category backfill failed (non-fatal): {e!r}")
+
+    # Store billing (PRICING.md §9): when billing turns on, every store
+    # already open gets its grace time as a subscription row, so switching
+    # it on never blanks a seller's shop the same afternoon. Idempotent:
+    # only stores with no row, and only while the setting is on.
+    from api.core.config import settings as _settings
+    if _settings.store_billing_enabled:
+        try:
+            from api.domains.stores.billing import ensure_grace_subscriptions
+            granted = await ensure_grace_subscriptions()
+            if granted:
+                print(f"✅ Store billing: {granted} store(s) given grace time")
+        except Exception as e:
+            print(f"⚠️ Store billing grace backfill failed (non-fatal): {e!r}")
 
     print("✅ Database initialised (v5.0)")
 

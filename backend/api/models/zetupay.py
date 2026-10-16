@@ -35,10 +35,11 @@ def _uuid() -> str:
 class Purpose:
     LISTING_FEE = "listing_fee"     # pricing/payments.py
     SUBSCRIPTION = "subscription"   # premium/payments.py
+    STORE = "store"                 # stores/billing.py
     BOOST = "boost"                 # routers/featured.py
     VERIFICATION = "verification"   # routers/verify.py
     TEST = "test"                   # payments/test_charge.py: KES 10, buys nothing
-    ALL = (LISTING_FEE, SUBSCRIPTION, BOOST, VERIFICATION, TEST)
+    ALL = (LISTING_FEE, SUBSCRIPTION, STORE, BOOST, VERIFICATION, TEST)
 
 
 class ZetuPayStatus:
