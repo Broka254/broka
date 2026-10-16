@@ -547,11 +547,11 @@ class TestZetuPay:
 
     @pytest.mark.asyncio
     async def test_zetupay_can_report_a_prompt_failed(self, client, billing_on):
-        _, h = await _register(client)
+        uid, h = await _register(client)
         sid = (await _store(client, h))["id"]
         async with AsyncSessionLocal() as db:
             payment = StorePayment(
-                store_id=sid, user_id="u", plan_id="goods-30", listings=30, months=1,
+                store_id=sid, user_id=uid, plan_id="goods-30", listings=30, months=1,
                 amount=898, setup_fee=299, phone="254712345678", status="pending",
                 provider="zetupay",
             )
