@@ -77,8 +77,19 @@ async def _register(client, tier="long_term", business_category="Electronics", e
     return reg.json()["user_id"], {"Authorization": f"Bearer {reg.json()['access_token']}"}
 
 
+# A 1x1 PNG as a legacy data URI: a real, inline image the compulsory
+# shop-photo rule accepts.
+_SHOP_PHOTO = ("data:image/png;base64,"
+               "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
 async def _store(client, headers, **fields) -> dict:
     body = {"name": f"Shop {next(_n)}", **fields}
+    # A store opened by a current client (one that chose a link name) must
+    # carry at least one shop photo. Tests about link names don't care
+    # about the image, so the helper supplies one.
+    if "slug" in body and "photos" not in body and "photo_ids" not in body:
+        body["photos"] = [_SHOP_PHOTO]
     r = await client.post("/stores", json=body, headers=headers)
     assert r.status_code == 201, r.text
     return r.json()
@@ -271,6 +282,72 @@ class TestCategory:
         store = await _store(client, headers, category="Fashion")
         r = await client.patch(f"/stores/{store['id']}", json={"category": "Gaming"}, headers=headers)
         assert r.json()["category"] == "Gaming"
+
+    async def test_a_wholesaler_is_found_under_every_category_it_stocks(self, client):
+        """A wholesaler is listed under one category but sells in many.
+        Matching only Store.category hid it from every category it stocks;
+        a live listing in the category is what should find it - the setup
+        screen has always said products from any category can go in."""
+        _, headers = await _register(client, business_category="Wholesale")
+        store = await _store(client, headers)
+        assert store["category"] == "Business & Industrial"
+
+        async def directory(category):
+            found = (await client.get(
+                "/stores", params={"category": category, "limit": 100})).json()
+            return [s["id"] for s in found]
+
+        # Its own category finds it before it has listed anything...
+        assert store["id"] in await directory("Business & Industrial")
+        # ...and Electronics does not.
+        assert store["id"] not in await directory("Electronics")
+
+        await _listing(client, headers, store["id"], "Wholesale chargers",
+                       category="Electronics")
+        assert store["id"] in await directory("Electronics")
+
+    async def test_a_store_is_found_under_its_main_category_with_no_listings(self, client):
+        """A new shop isn't hidden until its first product is live."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, category="Gaming")
+        found = (await client.get(
+            "/stores", params={"category": "Gaming", "limit": 100})).json()
+        assert store["id"] in [s["id"] for s in found]
+
+    async def test_other_matches_a_store_with_an_outside_category_listing(self, client):
+        """"Other" is every listing outside BROKA's named categories, the
+        same rule the storefront's rail counts by - not just the literal
+        word "Other"."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, category="Gaming")
+        await _listing(client, headers, store["id"], "Old shelf item", category="furniture")
+        found = (await client.get(
+            "/stores", params={"category": "Other", "limit": 100})).json()
+        assert store["id"] in [s["id"] for s in found]
+
+
+# ── The compulsory shop photo ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestShopPhotoRequired:
+    async def test_a_current_client_must_send_a_shop_photo(self, client):
+        _, headers = await _register(client)
+        r = await client.post("/stores", json={
+            "name": "Bare Shop", "slug": "bare-shop"}, headers=headers)
+        assert r.status_code == 400
+        assert "photo" in r.json()["detail"].lower()
+
+    async def test_a_shop_photo_opens_the_store(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, slug="photo-shop")
+        assert store["photos"] == [_SHOP_PHOTO]
+
+    async def test_an_old_build_without_a_link_name_is_never_refused(self, client):
+        # App builds that predate phase 2 send no slug and no image assets;
+        # refusing them would lock sellers on old builds out entirely.
+        _, headers = await _register(client)
+        store = await _store(client, headers)
+        assert store["photos"] == []
 
 
 # ── Business email ───────────────────────────────────────────────────────────

@@ -35,7 +35,7 @@ String stepSubtitle(StoreSetupStep step) => switch (step) {
       StoreSetupStep.category => 'Buyers find your store under this category',
       StoreSetupStep.location => 'So nearby buyers can find you',
       StoreSetupStep.logo => 'Optional - a square image works best',
-      StoreSetupStep.photos => 'Optional - show buyers your shop',
+      StoreSetupStep.photos => 'Required - show buyers your shop',
       StoreSetupStep.email => 'Optional - where order updates go',
       StoreSetupStep.review => 'Check everything, then open your store',
     };
@@ -734,7 +734,8 @@ class PhotosStep extends StatelessWidget {
       ),
       const SizedBox(height: 18),
       const _Hint('Your shop front, shelves, team - photos of a real place build '
-          'trust with buyers who have never visited.'),
+          'trust with buyers who have never visited. At least one photo is '
+          'needed to open your store.'),
     ]);
   }
 }

@@ -1,6 +1,6 @@
 // Store billing in the app (PRICING.md §5; backend stores/billing.py): the
 // plan a store's own stock prices at, paying it through the shared checkout,
-// the plan card on My Store, the store directory's category chips and its
+// the plan card on My Store, the store directory's category cards and its
 // BROKA-mark fallback, and where a fresh store goes after "Open my store"
 // while billing is on.
 //
@@ -28,11 +28,13 @@ import 'package:broka/features/stores/domain/models/store_billing.dart';
 import 'package:broka/features/stores/presentation/my_store_screen.dart';
 import 'package:broka/features/stores/presentation/setup/store_setup_controller.dart';
 import 'package:broka/features/stores/presentation/setup/store_setup_screen.dart';
+import 'package:broka/features/stores/presentation/store_category_screen.dart';
 import 'package:broka/features/stores/presentation/store_billing_screen.dart';
 import 'package:broka/features/stores/presentation/store_launched_screen.dart';
 import 'package:broka/features/stores/presentation/store_list_screen.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/sell_photo_store.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -494,27 +496,26 @@ void main() {
   });
 
   group('Store directory', () {
-    testWidgets('the category chips narrow the list and call it off the wire', (tester) async {
-      // Wide enough that the chip rail's early entries are all on screen.
+    testWidgets('a category card opens a screen scoped to that category, off the wire',
+        (tester) async {
+      // Wide enough that the rail's early entries are all on screen.
       tester.view.physicalSize = const Size(1400, 1200);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(const MaterialApp(home: StoreListScreen()));
       await _pumpFrames(tester);
-      expect(find.byKey(const Key('store-chip-all')), findsOneWidget);
-      expect(find.byKey(const Key('store-chip-Electronics')), findsOneWidget);
+      expect(find.byKey(const Key('store-category-rail')), findsOneWidget);
+      expect(find.byKey(const Key('store-category-Electronics')), findsOneWidget);
 
       clearFakeRequests();
-      await tester.tap(find.byKey(const Key('store-chip-Electronics')));
-      await _pumpFrames(tester);
+      await tester.tap(find.byKey(const Key('store-category-Electronics')));
+      // The category screen's constellation never stops; settle would only
+      // ever time out.
+      await _pumpFrames(tester, 12);
+
+      expect(find.byType(StoreCategoryScreen), findsOneWidget);
       final asked = fakeRequests.where((r) => r.uri.path == '/stores').last;
       expect(asked.uri.queryParameters['category'], 'Electronics');
-
-      clearFakeRequests();
-      await tester.tap(find.byKey(const Key('store-chip-all')));
-      await _pumpFrames(tester);
-      final all = fakeRequests.where((r) => r.uri.path == '/stores').last;
-      expect(all.uri.queryParameters.containsKey('category'), isFalse);
     });
 
     testWidgets("a shop with no picture wears BROKA's mark, not a category emoji",
@@ -522,7 +523,54 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: StoreListScreen()));
       await _pumpFrames(tester);
       expect(find.byKey(const Key('store-default-logo')), findsWidgets);
-      expect(find.text(CategoryVisuals.emojiFor('Electronics')), findsNothing);
+      // The directory rail legitimately wears category emoji now; the card
+      // itself must not fall back to one.
+      expect(
+          find.descendant(
+              of: find.byKey(const Key('store-card-store-0')),
+              matching: find.text(CategoryVisuals.emojiFor('Electronics'))),
+          findsNothing);
+    });
+
+    testWidgets("a cover photo and no uploaded logo still wears BROKA's sign",
+        (tester) async {
+      const cover = '/media/c1/medium.webp';
+      setFakeRoute((uri) => uri.path.startsWith('/stores')
+          ? [
+              {
+                ...fakeStoreJson(0),
+                'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+              },
+            ]
+          : null);
+      await tester.pumpWidget(const MaterialApp(home: StoreListScreen()));
+      await _pumpFrames(tester);
+      final card = find.byKey(const Key('store-card-store-0'));
+      expect(find.descendant(of: card, matching: find.byKey(const Key('store-default-logo'))),
+          findsOneWidget);
+    });
+
+    testWidgets("an uploaded logo wears the shop's own, not BROKA's", (tester) async {
+      const cover = '/media/c1/medium.webp';
+      const logo = '/media/l1/thumb.webp';
+      setFakeRoute((uri) => uri.path.startsWith('/stores')
+          ? [
+              {
+                ...fakeStoreJson(0),
+                'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+                'logo': {'id': 'l1', 'thumb': logo, 'medium': logo, 'large': logo},
+              },
+            ]
+          : null);
+      await tester.pumpWidget(const MaterialApp(home: StoreListScreen()));
+      await _pumpFrames(tester);
+      final card = find.byKey(const Key('store-card-store-0'));
+      expect(
+          find.descendant(
+              of: card,
+              matching: find.byWidgetPredicate(
+                  (w) => w is BrokaImage && w.source == logo)),
+          findsOneWidget);
     });
   });
 
@@ -553,7 +601,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Skip for now')); // logo
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Skip for now')); // photos
+      // Shop photos are compulsory: the button no longer offers a skip, so
+      // stand in an already-uploaded one rather than walking the picker.
+      c.photos = [const DraftImage(id: 'p1', url: 'https://broka.co.ke/media/p1.jpg')];
+      await tester.pump();
+      await tester.tap(find.text('Continue')); // photos
       await tester.pumpAndSettle();
       await tester.tap(find.text('Skip')); // email
       await tester.pumpAndSettle();

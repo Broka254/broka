@@ -140,7 +140,8 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
       case StoreSetupStep.logo:
         return c.logo == null ? 'Skip for now' : 'Continue';
       case StoreSetupStep.photos:
-        return c.cover == null && c.photos.isEmpty ? 'Skip for now' : 'Continue';
+        // Compulsory: a "Skip for now" that cannot skip would only lie.
+        return 'Continue';
       case StoreSetupStep.email:
         return c.email.trim().isEmpty ? 'Skip' : 'Continue';
       case StoreSetupStep.review:

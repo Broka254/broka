@@ -104,20 +104,27 @@ const shop = (over: Partial<Store> = {}): Store => ({
 })
 
 describe('StoreHero', () => {
-  it('is the name in lights, what and where, the record and More - no logo square', () => {
-    const { container } = render(<StoreHero view={storeView(shop())} />)
+  it("wears the shop's logo top-left, or BROKA's when it uploaded none", () => {
+    const { rerender } = render(<StoreHero view={storeView(shop())} />)
     expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
     expect(screen.getByRole('img', { name: 'Verified seller' })).toBeTruthy()
     expect(screen.getByText('Verified store')).toBeTruthy()
     expect(screen.getByText('Electronics · Starehe, Nairobi')).toBeTruthy()
-    // No logo, no initial, no cover photo behind the name.
-    expect(container.querySelectorAll('img')).toHaveLength(0)
+    // No logo uploaded: BROKA's mark stands in - never an initial.
+    expect(screen.getByTestId('store-logo').querySelector('img')!.getAttribute('src')).toBe(
+      '/store-assets/logo.png',
+    )
     expect(screen.queryByText('C')).toBeNull()
     expect(screen.getByText('4.8')).toBeTruthy()
     expect(screen.getByText('12 deals')).toBeTruthy()
     expect(screen.getByText('3 products')).toBeTruthy()
     expect(screen.getByText('More').closest('a')!.getAttribute('href')).toBe('/store/clanix/about')
     expect(screen.queryByText('Genuine phones and accessories.')).toBeNull()
+
+    rerender(<StoreHero view={storeView(shop({ logo: sizes('l1') }))} />)
+    expect(screen.getByTestId('store-logo').querySelector('img')!.getAttribute('src')).toBe(
+      'https://media.broka.co.ke/img/l1/medium.webp',
+    )
   })
 
   it('says whether the owner is online, or when they last were', () => {
@@ -135,7 +142,10 @@ describe('StoreHero', () => {
     const { container } = render(
       <StoreHero view={storeView(shop())} showcase={[{ ...card('a'), image: 'https://cdn/a.webp' }, card('b')]} />,
     )
-    expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual(['https://cdn/a.webp'])
+    expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
+      '/store-assets/logo.png',
+      'https://cdn/a.webp',
+    ])
   })
 
   it('shows no tick and no rating for a new, unverified seller', () => {

@@ -668,7 +668,12 @@ class StoreSetupController extends ChangeNotifier {
         if (subcounty == null || subcounty!.trim().isEmpty) return 'Choose or type your area.';
         return null;
       case StoreSetupStep.logo:
+        return null;
       case StoreSetupStep.photos:
+        // A shop opens with at least one real photo of it. The API refuses
+        // a store without one too (for clients new enough to send a link
+        // name); this is the gate the person actually sees.
+        if (photos.isEmpty) return 'Add at least one photo of your shop.';
         return null;
       case StoreSetupStep.email:
         if (email.trim().isEmpty) return null;
@@ -783,6 +788,9 @@ class StoreSetupController extends ChangeNotifier {
       emailVerified = false;
       _emailToken = null;
       return SetupProblem(message, StoreSetupStep.email);
+    }
+    if (statusCode == 400 && message.toLowerCase().contains('photo')) {
+      return SetupProblem(message, StoreSetupStep.photos);
     }
     return SetupProblem(message);
   }

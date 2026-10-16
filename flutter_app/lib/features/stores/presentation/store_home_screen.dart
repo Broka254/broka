@@ -4,10 +4,12 @@
 //
 //   bar       back, the name once the hero has scrolled away, More, share,
 //             and the cart with how many items are in it
-//   hero      the store's name, big, on moving colour - no logo square
-//             (the old rounded-square logo read as a profile picture, and
-//             its initial as a placeholder). Whether the owner is online,
-//             the seller's record, and the More button for everything else
+//   hero      the shop's sign (its logo, or BROKA's mark when none was
+//             uploaded, in a round gradient ring - never the old
+//             rounded-square profile picture with its initial), the
+//             store's name, big, on moving colour. Whether the owner is
+//             online, the seller's record, and the More button for
+//             everything else
 //   perks     what buying here means: see it before you pay, M-Pesa,
 //             delivery or pickup
 //   products  Home's search pill and filter button (sort, condition,
@@ -44,6 +46,8 @@ import '../data/store_cart.dart';
 import '../data/store_share.dart';
 import '../domain/models/store.dart';
 import 'store_cart_screen.dart';
+import 'store_media_image.dart';
+import 'widgets/broka_default_logo.dart';
 import 'widgets/store_details_view.dart';
 import 'widgets/store_product_card.dart';
 
@@ -744,15 +748,25 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
               Padding(
                 padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Wrap(spacing: 6, runSpacing: 6, children: [
-                    _GlassChip(
-                      icon: verified ? Icons.verified_rounded : Icons.storefront_rounded,
-                      iconColor: verified ? BrokaColors.success : _accent,
-                      label: verified ? 'Verified store' : 'BROKA store',
-                      semantics: verified ? 'Verified seller' : null,
+                  // The shop's sign, top-left: its own logo, or BROKA's mark
+                  // when the owner uploaded none - the same sign the store
+                  // card hangs over its picture. Round and in BROKA's ring,
+                  // not the old rounded square that read as a profile photo.
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _HeroLogo(store: store, size: 54),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Wrap(spacing: 6, runSpacing: 6, children: [
+                        _GlassChip(
+                          icon: verified ? Icons.verified_rounded : Icons.storefront_rounded,
+                          iconColor: verified ? BrokaColors.success : _accent,
+                          label: verified ? 'Verified store' : 'BROKA store',
+                          semantics: verified ? 'Verified seller' : null,
+                        ),
+                        if (owner != null && (owner.online || owner.lastActive != null))
+                          _PresenceChip(online: owner.online, label: owner.lastActive),
+                      ]),
                     ),
-                    if (owner != null && (owner.online || owner.lastActive != null))
-                      _PresenceChip(online: owner.online, label: owner.lastActive),
                   ]),
                   const SizedBox(height: 10),
                   AnimatedBuilder(
@@ -942,6 +956,42 @@ class _AuroraPainter extends CustomPainter {
   bool shouldRepaint(_AuroraPainter old) => old.t != t;
 }
 
+/// The shop's sign on the hero: the store's own logo, or BROKA's mark when
+/// none was uploaded. Round, in BROKA's gradient ring - the store card's
+/// sign, carried onto the first screen a buyer sees.
+class _HeroLogo extends StatelessWidget {
+  const _HeroLogo({required this.store, required this.size});
+  final Store store;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final source = store.logoSource;
+    return Container(
+      key: const Key('store-hero-logo'),
+      width: size,
+      height: size,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(colors: BrokaColors.brandGradient),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 10)],
+      ),
+      child: Container(
+        decoration: const BoxDecoration(shape: BoxShape.circle, color: BrokaColors.bgMid),
+        clipBehavior: Clip.antiAlias,
+        child: source == null
+            ? const BrokaDefaultLogo()
+            : StoreMediaImage(
+                dataUri: source,
+                fit: BoxFit.cover,
+                placeholderBuilder: (_) => const BrokaDefaultLogo(),
+              ),
+      ),
+    );
+  }
+}
+
 class _GlassChip extends StatelessWidget {
   const _GlassChip({
     super.key,
@@ -974,7 +1024,6 @@ class _GlassChip extends StatelessWidget {
         ]),
       );
 }
-
 /// "● Online now" in green, or when the owner was last active.
 class _PresenceChip extends StatelessWidget {
   const _PresenceChip({required this.online, required this.label});

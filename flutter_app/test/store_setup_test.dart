@@ -376,7 +376,10 @@ void main() {
       await pumpEventQueue();
       c
         ..setCounty('Nairobi')
-        ..setSubcounty('Westlands');
+        ..setSubcounty('Westlands')
+        // Photos are compulsory now, and the refusal must still be what the
+        // server says - not the local gate - for this test to mean anything.
+        ..photos = [const DraftImage(id: 'p1')];
       final (store, problem) = await c.launch();
       expect(store, isNull);
       expect(problem, isNotNull);
@@ -530,11 +533,56 @@ void main() {
       final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
       await c.load();
       await pumpEventQueue();
-      c.setSubcounty('Starehe');
+      c
+        ..setSubcounty('Starehe')
+        ..photos = [const DraftImage(id: 'p1')];
       final (store, problem) = await c.launch();
       expect(store, isNull);
       expect(problem!.step, StoreSetupStep.link);
       expect(c.linkStatus, LinkStatus.unavailable);
+    });
+
+    test('a store cannot be opened without a photo of the shop', () async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json(_owner()),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      await pumpEventQueue();
+      c.setSubcounty('Starehe');
+
+      expect(c.validate(StoreSetupStep.photos), 'Add at least one photo of your shop.');
+      final (store, problem) = await c.launch();
+      expect(store, isNull);
+      expect(problem!.step, StoreSetupStep.photos);
+      expect(backend.requests.where((r) => r.url.path == '/stores'), isEmpty,
+          reason: 'the local gate asks before the wire');
+
+      c.photos = [const DraftImage(id: 'p1')];
+      expect(c.validate(StoreSetupStep.photos), isNull);
+      c.dispose();
+    });
+
+    test("the server's photo refusal comes back as the photos step", () async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json(_owner()),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+        'POST /stores': (_) => _json(
+            {'detail': 'Add at least one photo of your shop before opening your store.'}, 400),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      await pumpEventQueue();
+      c
+        ..setSubcounty('Starehe')
+        ..photos = [const DraftImage(id: 'p1')];
+      final (store, problem) = await c.launch();
+      expect(store, isNull);
+      expect(problem!.step, StoreSetupStep.photos);
+      c.dispose();
     });
 
     test('the draft survives leaving the wizard', () async {

@@ -1076,9 +1076,11 @@ class _SetupChecklist extends StatelessWidget {
       ),
       (
         key: 'cover',
-        done: store.shopPhotos.isNotEmpty,
+        // A shop photo, not the cover: since 2026-10-16 at least one is
+        // what opens a store, so this is the item that says what's missing.
+        done: store.photoImages.isNotEmpty || store.photos.isNotEmpty,
         title: 'Add photos of your shop',
-        hint: 'Buyers see them under Store details',
+        hint: 'At least one real photo of your shop is needed',
         onTap: () => onEdit(StoreSetupStep.photos),
       ),
       (

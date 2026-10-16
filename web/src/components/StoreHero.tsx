@@ -1,17 +1,17 @@
-// The top of the store: its name, large, over moving colour - aurora
-// light in the store's category colours and BROKA's violet and blue, orbit
-// rings, stars, and a shimmer running through the letters - with, on a wide
-// screen, its first products fanned out beside it. No logo square: the old
-// rounded square read as a profile picture, and its initial as a
-// placeholder. Under the name: what and where, whether the owner is online,
-// the seller's record, and More for everything else (the Store details
-// page). The page's only animation is here, and it stops for anyone who
-// asked for less motion.
+// The top of the store: its round logo top-left - the shop's own, or BROKA's
+// mark when it uploaded none; never the old square with an initial, which
+// read as a missing picture. Then its name, large, over moving colour -
+// aurora light in the store's category colours and BROKA's violet and blue,
+// orbit rings, stars, and a shimmer running through the letters - with, on a
+// wide screen, its first products fanned out beside it. Under the name: what
+// and where, whether the owner is online, the seller's record, and More for
+// everything else (the Store details page). The page's only animation is
+// here, and it stops for anyone who asked for less motion.
 import Link from 'next/link'
 
 import type { ProductCardData } from '@/lib/catalogue'
 import { placeLine, plural } from '@/lib/format'
-import { storeDetailsPath } from '@/lib/links'
+import { asset, storeDetailsPath } from '@/lib/links'
 import type { StoreView } from '@/lib/storefront'
 
 import { Icon } from './Icon'
@@ -45,6 +45,13 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
       </div>
 
       <div className={styles.heroBody}>
+        {/* The store's own logo, or BROKA's when it uploaded none - the same
+            fallback the app card and Store details wear. */}
+        <div className={styles.heroLogo} data-testid="store-logo">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={view.logo ?? asset('/logo.png')} alt="" />
+        </div>
+
         <div className={styles.heroChips}>
           {owner?.verified ? (
             <span className={styles.glassChip}>

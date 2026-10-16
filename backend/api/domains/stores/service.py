@@ -31,7 +31,7 @@ import uuid
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, desc, func, not_, select
+from sqlalchemy import and_, case, desc, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,7 +40,7 @@ from api.core.presence import online_status
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import is_live, live_clause
-from api.domains.categories.seed import CANONICAL_CATEGORIES
+from api.domains.categories.seed import CANONICAL_CATEGORIES, canonical_category_name
 from api.models.store import Store
 from api.domains.listings.service import ListingService, load_listing_media
 from api.security import decode_email_verify_token
@@ -138,6 +138,16 @@ class StoreService:
                 logo_url = None
             if image_columns.get("photo_ids"):
                 photos = None
+            # A store opens with at least one real photo of the shop. A
+            # logo or a cover isn't one: buyers trust a shop they can see.
+            # Only clients new enough to choose a link name are held to
+            # it - app builds that predate phase 2 (no slug, no image
+            # assets) must still be able to open a store.
+            if data.get("slug") and not image_columns.get("photo_ids") and not photos:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Add at least one photo of your shop before opening your store.",
+                )
             slug = chosen_slug or await self._unique_slug(name)
             store = Store(
                 owner_id=owner_id, name=name, slug=slug, category=category,
@@ -261,7 +271,15 @@ class StoreService:
             # Old stores' categories are filled in at startup
             # (categories.backfill_store_categories).
             wanted = store_categories.canonical(category) or store_categories.from_legacy(category)
-            q = q.where(Store.category == wanted)
+            # A store's `category` is only where it is listed - the setup
+            # screen has always said products from any category can go in
+            # it. Matching the column alone hid every wholesaler from
+            # every category they stock but aren't listed under, so a
+            # store also matches through a live listing in the category.
+            q = q.where(or_(
+                Store.category == wanted,
+                Store.id.in_(self._stores_stocking(wanted)),
+            ))
         if county:
             q = q.where(Store.county == county)
 
@@ -288,6 +306,36 @@ class StoreService:
             for s in stores
         ]
         return {"items": items, "total": total} if with_total else items
+
+    @staticmethod
+    def _stores_stocking(category: str):
+        """The subquery of store ids with a live listing filed under
+        `category` - the wholesaler's second way into the directory.
+
+        Matching mirrors ListingService.list_listings: the lower-cased
+        canonical name (so an old name of a renamed category still finds
+        its listings), and "Other" is every listing outside BROKA's named
+        ones, NULL included - the same rule the storefront's category
+        rail counts by. Only live listings count: a hidden or sold one is
+        not something a buyer browsing the category can find.
+        """
+        if category == store_categories.OTHER:
+            outside = store_categories.named_listing_categories()
+            conditions = (
+                Listing.category.is_(None),
+                func.lower(Listing.category).not_in([c.lower() for c in outside]),
+            )
+        else:
+            conditions = (
+                func.lower(Listing.category) ==
+                canonical_category_name(category).strip().lower(),
+            )
+        return (
+            select(Listing.store_id)
+            .where(Listing.store_id.is_not(None),
+                   Listing.status == ListingStatus.active, live_clause(),
+                   or_(*conditions))
+        )
 
     async def _listing_counts_for(self, store_ids: list[str]) -> dict[str, int]:
         """Active-listing counts for many stores in one grouped query. A

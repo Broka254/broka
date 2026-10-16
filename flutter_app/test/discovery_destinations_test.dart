@@ -448,6 +448,9 @@ void main() {
           matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == logo)),
           findsOneWidget);
 
+      // The category rail sits above the list, so the second card starts
+      // below the fold; bring it in before reading it.
+      await _scroll(tester, -260);
       final second = find.byKey(const Key('store-card-store-1'));
       expect(find.descendant(of: second, matching: find.text('Active 2d ago')), findsOneWidget);
       expect(find.descendant(of: second, matching: find.text('New seller')), findsOneWidget);
