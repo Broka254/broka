@@ -964,6 +964,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/models/store_reviews.dart` — A store's buyer reviews, as GET /stores/{id}/reviews returns them (backend/api/domains/stores/service.py: store_reviews).
 - `domain/store_categories.dart` — A store's category is one of BROKA's top-level categories (the home screen's category rail).
 - `presentation/my_store_screen.dart` — My Store - the owner's dashboard.
+- `presentation/nearby_stores_screen.dart` — BROKA — Stores near you
 - `presentation/setup/store_setup_controller.dart` — State behind the store setup wizard and the store's settings pages.
 - `presentation/setup/store_setup_screen.dart` — Store setup: one question per screen, on the constellation background, with the draft kept on the phone after every change.
 - `presentation/setup/store_setup_steps.dart` — The pages of the store setup wizard.
