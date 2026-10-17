@@ -268,25 +268,33 @@ class _StoreCardState extends State<StoreCard> {
                       const SizedBox(height: 12),
                       Container(height: 1, color: BrokaColors.border.withOpacity(0.8)),
                       const SizedBox(height: 10),
-                      Row(children: [
-                        const Icon(Icons.inventory_2_outlined, size: 15,
-                            color: BrokaColors.textMid),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(products, maxLines: 1, overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                        const SizedBox(width: 10),
-                        if (widget.onMap != null) ...[
-                          _MapButton(
-                            key: Key('store-map-${store.id}'),
-                            onTap: widget.onMap!,
+                      // One line at every width: under 360dp the Map pill
+                      // is icon-only and Visit shortens, so the product
+                      // count keeps room instead of overflowing the row
+                      // (a 320dp phone's card is ~260dp inside).
+                      LayoutBuilder(builder: (context, row) {
+                        final compact = row.maxWidth < 360;
+                        return Row(children: [
+                          const Icon(Icons.inventory_2_outlined, size: 15,
+                              color: BrokaColors.textMid),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(products, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13,
+                                    fontWeight: FontWeight.w700)),
                           ),
-                          const SizedBox(width: 8),
-                        ],
-                        _VisitButton(key: Key('visit-store-${store.id}')),
-                      ]),
+                          const SizedBox(width: 10),
+                          if (widget.onMap != null) ...[
+                            _MapButton(
+                              key: Key('store-map-${store.id}'),
+                              onTap: widget.onMap!,
+                              iconOnly: compact,
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          _VisitButton(key: Key('visit-store-${store.id}'), short: compact),
+                        ]);
+                      }),
                     ]),
                   ),
                   if (showLogo)
@@ -331,8 +339,12 @@ class _DistancePill extends StatelessWidget {
 /// Map: the quiet sibling of Visit store - an outline pill that opens
 /// the shop's approximate point on the in-app map.
 class _MapButton extends StatelessWidget {
-  const _MapButton({super.key, required this.onTap});
+  const _MapButton({super.key, required this.onTap, this.iconOnly = false});
   final VoidCallback onTap;
+
+  /// Icon without the word, on narrow cards (see the footer's
+  /// LayoutBuilder). The semantics label still says what it does.
+  final bool iconOnly;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -342,17 +354,21 @@ class _MapButton extends StatelessWidget {
           onTap: onTap,
           child: Container(
             height: 38,
-            padding: const EdgeInsets.symmetric(horizontal: 13),
+            width: iconOnly ? 38 : null,
+            padding: iconOnly ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 13),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: BrokaColors.neonCyan.withOpacity(0.10),
               borderRadius: BorderRadius.circular(19),
               border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.65)),
             ),
-            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.map_outlined, size: 16, color: BrokaColors.neonCyan),
-              SizedBox(width: 6),
-              Text('Map',
-                  style: TextStyle(color: BrokaColors.neonCyan, fontSize: 13, fontWeight: FontWeight.w800)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.map_outlined, size: 16, color: BrokaColors.neonCyan),
+              if (!iconOnly) ...[
+                const SizedBox(width: 6),
+                const Text('Map',
+                    style: TextStyle(color: BrokaColors.neonCyan, fontSize: 13, fontWeight: FontWeight.w800)),
+              ],
             ]),
           ),
         ),
@@ -362,7 +378,11 @@ class _MapButton extends StatelessWidget {
 /// Visit store: a pill as wide as its words (the whole card is the tap
 /// target; this says what the tap does).
 class _VisitButton extends StatelessWidget {
-  const _VisitButton({super.key});
+  const _VisitButton({super.key, this.short = false});
+
+  /// "Visit" instead of "Visit store", on narrow cards (see the
+  /// footer's LayoutBuilder).
+  final bool short;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -374,13 +394,13 @@ class _VisitButton extends StatelessWidget {
           boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.35), blurRadius: 12,
               offset: const Offset(0, 3))],
         ),
-        child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.storefront_rounded, color: Colors.white, size: 17),
-          SizedBox(width: 7),
-          Text('Visit store', style: TextStyle(color: Colors.white,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.storefront_rounded, color: Colors.white, size: 17),
+          const SizedBox(width: 7),
+          Text(short ? 'Visit' : 'Visit store', style: const TextStyle(color: Colors.white,
               fontWeight: FontWeight.w800, fontSize: 13.5)),
-          SizedBox(width: 3),
-          Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 16),
+          const SizedBox(width: 3),
+          const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 16),
         ]),
       );
 }
