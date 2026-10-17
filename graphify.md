@@ -250,28 +250,28 @@ Counts: admin 20, optional 2, public 63, token 4, user 143.
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:54) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
-| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:158) |
-| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:145) |
-| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:265) |
-| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:273) |
-| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:206) |
-| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:225) |
-| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:185) |
-| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:194) |
-| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:242) |
-| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:282) |
-| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:287) |
-| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:311) |
-| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:325) |
-| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:349) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:400) |
-| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:359) |
-| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:383) |
-| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:406) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:458) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:477) |
-| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:301) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:419) |
+| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:164) |
+| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:151) |
+| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:272) |
+| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:280) |
+| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:213) |
+| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:232) |
+| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:192) |
+| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:201) |
+| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:249) |
+| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:289) |
+| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:294) |
+| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:318) |
+| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:332) |
+| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:356) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:407) |
+| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:366) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:390) |
+| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:413) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:465) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:484) |
+| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:308) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:426) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -597,8 +597,8 @@ Counts: admin 20, optional 2, public 63, token 4, user 143.
 | `seller_metrics` | `SellerMetrics` | backend/api/database.py:881 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_billing_meta` | `StoreBillingMeta` | backend/api/models/store_billing.py:88 |
-| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:137 |
-| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:156 |
+| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:143 |
+| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:162 |
 | `store_payments` | `StorePayment` | backend/api/models/store_billing.py:62 |
 | `store_subscriptions` | `StoreSubscription` | backend/api/models/store_billing.py:39 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
@@ -976,11 +976,13 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/store_home_screen.dart` — A store's home in the app - the "mini Jumia" a buyer lands on from a shared link, a product's store badge, or the store directory.
 - `presentation/store_launched_screen.dart` — "Your store is live" - the end of store setup: the link, its QR code, one-tap sharing, and the next thing to do (add products).
 - `presentation/store_list_screen.dart` — BROKA — Store discovery (spec §12/§21, Phase 4) 1-column list, modeled directly on trader_list_screen.dart - same reasoning applies: Produc…
+- `presentation/store_map_screen.dart` — A store on a map: the buyer's point and the shop's approximate point (±1 km, the point the API hands out - never an exact address), on Open…
 - `presentation/store_media_image.dart` — BROKA — Store media image (Phase 6 hardening)
 - `presentation/widgets/broka_default_logo.dart` — BROKA's own logo, standing in wherever a store has not uploaded one My Store's header and the directory card.
 - `presentation/widgets/menu_store_section.dart` — The Menu's "Online store" section.
 - `presentation/widgets/store_card.dart` — A store in the directory, as a shop window: the picture its owner chose to show (the cover, else a shop photo, else the logo), whether the…
 - `presentation/widgets/store_details_view.dart` — "Store details" - its own screen, opened from "More details" under the store's name or the info button in its bar.
+- `presentation/widgets/store_location_filter.dart` — County / subcounty filter for store browsing: two pickers over KenyaLocations, shared by Near you and the store directory so a place means…
 - `presentation/widgets/store_product_card.dart` — A product in a store's catalogue, as a shop shows it: the photo with its condition, the name, the price, and Add to cart - which turns into…
 - `presentation/widgets/store_share_card.dart` — The store's link, its QR code and one-tap sharing - on the "your store is live" screen and at the top of My Store.
 
@@ -1188,6 +1190,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `splash_screen_test.dart` — The splash plays its boot sequence once, the first time BROKA opens on a phone; after that the app opens straight onto Home (2026-10-09).
 - `start_selling_test.dart` — A buyer who starts selling later is asked what signup asks (2026-09-26): a few items - nothing more to fill in - or a business, which goes…
 - `store_billing_test.dart` — Store billing in the app (PRICING.md §5; backend stores/billing.py): the plan a store's own stock prices at, paying it through the shared c…
+- `store_card_test.dart` — StoreCard: distance is prominent when known, the Map action shows only when wired, and the shop's approximate point parses for the map.
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
