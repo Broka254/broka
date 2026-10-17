@@ -42,6 +42,7 @@ import '../../../widgets/product_grid_view.dart';
 import '../../categories/domain/category_visual.dart';
 import '../../listings/domain/models/listing.dart';
 import '../data/repositories/stores_repository.dart';
+import '../domain/store_categories.dart';
 import '../data/store_cart.dart';
 import '../data/store_share.dart';
 import '../domain/models/store.dart';
@@ -236,9 +237,15 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
     final result = await _repo.getStoreCategories(id);
     if (!mounted) return;
     if (result case Success(:final data)) {
+      // Online stores never browse by Property, Automobiles, Land, Services
+      // or Other - the backend already filters goods rails, this keeps older
+      // backends and cached rows consistent on the client too.
+      final visible = data
+          .where((c) => StoreCategories.isOnlineListingCategory(c.name))
+          .toList(growable: false);
       setState(() {
-        _categories = data;
-        if (_category != null && !data.any((c) => c.name == _category)) _category = null;
+        _categories = visible;
+        if (_category != null && !visible.any((c) => c.name == _category)) _category = null;
       });
     }
   }

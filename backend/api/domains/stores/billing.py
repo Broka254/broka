@@ -44,7 +44,7 @@ from api.core.zetupay import ZetuPayUnavailable
 from api.database import Listing, ListingStatus
 from api.domains.payments import service as zetupay_charges
 from api.domains.pricing.plans import (
-    PLAN_PERIODS, STORE_RATE_CARDS, STORE_RATE_CARDS_BY_ID, STORE_SETUP_FEE,
+    STORE_PERIODS, STORE_RATE_CARDS, STORE_RATE_CARDS_BY_ID,
     STORE_SETUP_WAIVED_FROM_MONTHS, StorePlan, StoreRateCard,
 )
 from api.models.store import Store
@@ -189,11 +189,11 @@ async def live_listings_count(db: AsyncSession, store_id: str,
     )).scalar_one()
 
 
-def _periods_with_fees(plan: StorePlan, setup_fee_paid: bool) -> dict:
+def _periods_with_fees(plan: StorePlan, setup_fee: int, setup_fee_paid: bool) -> dict:
     """The plan's periods with the opening fee this store would actually
-    be charged added: waived from 6 months, and nothing once it has been
-    paid."""
-    plan_dict = plan.to_dict()
+    be charged added: waived from 6 months, nothing once it has been paid,
+    and never anything on a card with no opening fee (online stores)."""
+    plan_dict = plan.to_dict(setup_fee=setup_fee)
     for period in plan_dict["periods"]:
         if setup_fee_paid:
             period["setup_fee"] = 0
@@ -204,7 +204,8 @@ def _periods_with_fees(plan: StorePlan, setup_fee_paid: bool) -> dict:
 async def summary(db, store: Store, listings: Optional[int] = None) -> dict:
     """The owner's billing screen: the store's card, what is owed now, and -
     when a size is asked for - that plan's priced periods. Owner checked by
-    the caller (StoreService.get_owned)."""
+    the caller (StoreService.get_owned). Any size between the card's minimum
+    and maximum is sold: the seller picks how many listings they want."""
     if not enabled():
         raise HTTPException(status_code=409, detail="Online store billing isn't switched on yet.")
     card = rate_card_for(store.category)
@@ -212,19 +213,19 @@ async def summary(db, store: Store, listings: Optional[int] = None) -> dict:
     setup_paid = bool(sub.setup_fee_paid) if sub else False
     out = {
         "rate_card": card.to_dict(),
-        "setup_fee": 0 if setup_paid else STORE_SETUP_FEE,
+        "setup_fee": 0 if (setup_paid or card.setup_fee == 0) else card.setup_fee,
         "setup_fee_waived_from_months": STORE_SETUP_WAIVED_FROM_MONTHS,
         "min_listings": card.min_listings,
         "live_listings": await live_listings_count(db, store.id),
         "current": state_for(sub),
-        "months_options": sorted(PLAN_PERIODS),
+        "months_options": sorted(STORE_PERIODS),
     }
     if listings is not None:
-        if listings < 1 or listings > card.max_listings:
+        if listings < card.min_listings or listings > card.max_listings:
             raise HTTPException(status_code=422, detail=(
-                f"{card.name} plans go up to {card.max_listings} listings. "
+                f"{card.name} plans cover {card.min_listings} to {card.max_listings} listings. "
                 "For more, contact BROKA and we'll price it with you."))
-        out["plan"] = _periods_with_fees(card.plan(listings), setup_paid)
+        out["plan"] = _periods_with_fees(card.plan(listings), card.setup_fee, setup_paid)
     return out
 
 
@@ -235,12 +236,12 @@ async def start_payment(
     if not enabled():
         raise HTTPException(status_code=409, detail="Online store billing isn't switched on yet.")
     card = rate_card_for(store.category)
-    if listings < 1 or listings > card.max_listings:
+    if listings < card.min_listings or listings > card.max_listings:
         raise HTTPException(status_code=422, detail=(
-            f"{card.name} plans go up to {card.max_listings} listings. "
+            f"{card.name} plans cover {card.min_listings} to {card.max_listings} listings. "
             "For more, contact BROKA and we'll price it with you."))
-    if months not in PLAN_PERIODS:
-        raise HTTPException(status_code=400, detail="A store plan is bought for 1, 3, 6 or 12 months.")
+    if months not in STORE_PERIODS:
+        raise HTTPException(status_code=400, detail="A store plan is bought for 2, 4, 6 or 12 months.")
 
     now = datetime.utcnow()
     sub = await subscription_for(db, store.id)
@@ -257,11 +258,11 @@ async def start_payment(
             f"Your store is already paid until {sub.paid_until.day} {sub.paid_until:%b %Y}."
         ))
 
-    # Cards with a stock floor (car yards, agents: 5, PRICING.md §5) are
-    # paid for stock, not for a name. The goods card's 1 is the pricing
-    # floor, not a listing requirement - a new shop pays before its first
-    # listing.
-    if card.min_listings > 1:
+    # Cards with a stock floor (online stores: 20, car yards/agents: 5)
+    # are paid for stock, not for a name. An online store pays for the
+    # plan size it picks, so a new shop chooses its size before its first
+    # listing - the live count is not a gate, the plan size is.
+    if card.id != "goods" and card.min_listings > 1:
         live = await live_listings_count(db, store.id, now)
         if live < card.min_listings:
             raise HTTPException(status_code=409, detail=(
@@ -287,10 +288,11 @@ async def start_payment(
         ))
 
     plan = card.plan(listings)
-    setup_fee = 0 if (sub is not None and sub.setup_fee_paid) else (
-        0 if months >= STORE_SETUP_WAIVED_FROM_MONTHS else STORE_SETUP_FEE
-    )
-    period = next(p for p in plan.to_dict()["periods"] if p["months"] == months)
+    if card.setup_fee == 0 or (sub is not None and sub.setup_fee_paid):
+        setup_fee = 0
+    else:
+        setup_fee = 0 if months >= STORE_SETUP_WAIVED_FROM_MONTHS else card.setup_fee
+    period = next(p for p in plan.to_dict(setup_fee=card.setup_fee)["periods"] if p["months"] == months)
     amount = period["total"] + setup_fee
 
     payment = StorePayment(

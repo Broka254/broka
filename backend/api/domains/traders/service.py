@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi import HTTPException
 
-from api.core.geo import haversine_km
+from api.core.geo import format_distance_km, haversine_km, round_distance_km
 from api.core.text_search import matches_all_terms, search_terms
 from api.database import ListingStatus, Review, User, UserSpecialization, Listing, Category
 from api.domains.listings.paid import live_clause
@@ -237,5 +237,8 @@ class TradersService:
             viewer_lat is not None and viewer_lng is not None
             and u.lat is not None and u.lng is not None and u.location_visible
         ):
-            out["distance_km"] = round(haversine_km(viewer_lat, viewer_lng, u.lat, u.lng), 1)
+            dist = round_distance_km(haversine_km(viewer_lat, viewer_lng, u.lat, u.lng))
+            if dist is not None:
+                out["distance_km"] = dist
+                out["distance_label"] = format_distance_km(dist)
         return out

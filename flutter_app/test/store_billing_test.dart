@@ -8,8 +8,9 @@
 //   * the app shows no billing surface at all while the payload carries no
 //     `billing` - the feature's switch is the server's;
 //   * every amount on the screen is the server's quote, and the plan's size
-//     follows the store's live listings, never a number the owner picks;
-//   * the opening fee is waived from six months (the quote says so) and the
+//     starts at the card's minimum (20 for online stores) or the live
+//     stock, whichever is bigger - then the owner picks any size;
+//   * online stores carry no opening fee (the quote says so) and the
 //     checkout charges exactly what was on screen;
 //   * an unpaid store is hidden from buyers - both cards say so - and paying
 //     pops back with `true` so the caller can celebrate or refresh;
@@ -48,56 +49,58 @@ http.Response _json(Object? body, [int status = 200]) =>
 
 // ── The server's shapes (stores/billing.py, pricing/plans.py) ───────────────
 
-/// The goods card: 599 a month for 30 listings, 16 a listing to 100.
+/// The goods card: 400 a month for 20 listings (KES 40 a listing per two
+/// months), then 15/14/13/13 a listing - and no opening fee.
 Map<String, dynamic> _rateCard() => {
       'id': 'goods',
       'name': 'Goods store',
-      'included_listings': 30,
-      'base_price': 599,
+      'included_listings': 20,
+      'base_price': 400,
       'per_listing_bands': [
-        {'up_to': 100, 'price': 16},
-        {'up_to': 250, 'price': 14},
-        {'up_to': 1000, 'price': 12},
+        {'up_to': 30, 'price': 15},
+        {'up_to': 100, 'price': 14},
+        {'up_to': 250, 'price': 13},
+        {'up_to': 1000, 'price': 13},
       ],
-      'min_listings': 1,
+      'min_listings': 20,
       'max_listings': 1000,
       'categories': ['Electronics'],
+      'setup_fee': 0,
     };
 
-/// period_prices() totals for 599, as plans.py rounds them.
-const _totals = {1: 599, 3: 1649, 6: 3049, 12: 5749};
+/// store_period_prices() totals for 400, as plans.py rounds them.
+const _totals = {2: 799, 4: 1499, 6: 2109, 12: 3939};
 
-int _amount(int months, {bool setupPaid = false}) =>
-    _totals[months]! + (setupPaid || months >= 6 ? 0 : 299);
+int _amount(int months) => _totals[months]!;
 
-List<Map<String, dynamic>> _periods({bool setupPaid = false}) => [
+List<Map<String, dynamic>> _periods() => [
       for (final e in _totals.entries)
         {
           'months': e.key,
           'total': e.value,
           'per_month': e.value / e.key,
-          'saving_percent': (100 * (1 - e.value / (_totals[1]! * e.key))).round(),
-          'setup_fee': setupPaid || e.key >= 6 ? 0 : 299,
-          'amount': _amount(e.key, setupPaid: setupPaid),
+          'saving_percent': (100 * (1 - e.value / (400 * e.key))).round(),
+          'setup_fee': 0,
+          'amount': _amount(e.key),
         },
     ];
 
 Map<String, dynamic> _plan() => {
-      'id': 'goods-30',
-      'name': 'Goods store, 30 listings',
-      'monthly_price': 599,
-      'listings': 30,
+      'id': 'goods-20',
+      'name': 'Goods store, 20 listings',
+      'monthly_price': 400,
+      'listings': 20,
       'periods': _periods(),
     };
 
 Map<String, dynamic> _quote({int? listings, Map<String, dynamic>? current}) => {
       'rate_card': _rateCard(),
-      'setup_fee': 299,
+      'setup_fee': 0,
       'setup_fee_waived_from_months': 6,
-      'min_listings': 1,
+      'min_listings': 20,
       'live_listings': 2,
       'current': current ?? _billingUnpaid(),
-      'months_options': [1, 3, 6, 12],
+      'months_options': [2, 4, 6, 12],
       if (listings != null) 'plan': _plan(),
     };
 
@@ -107,7 +110,7 @@ Map<String, dynamic> _billingUnpaid() => {
     };
 
 Map<String, dynamic> _billingActive() => {
-      'active': true, 'plan_id': 'goods-30', 'listings': 30, 'monthly_price': 599,
+      'active': true, 'plan_id': 'goods-20', 'listings': 20, 'monthly_price': 400,
       // Naive UTC, as the backend sends it.
       'paid_until': '2026-12-16T10:00:00', 'setup_fee_paid': true,
     };
@@ -207,9 +210,9 @@ class _BillingBackend extends _Backend {
         keys.add(r.headers['X-Idempotency-Key']);
         final months = body['months'] as int;
         return _json({
-          'payment_id': 'bp1', 'status': 'pending', 'plan_id': 'goods-30',
-          'listings': 30, 'months': months, 'amount': _amount(months),
-          'setup_fee': months >= 6 ? 0 : 299,
+          'payment_id': 'bp1', 'status': 'pending', 'plan_id': 'goods-20',
+          'listings': 20, 'months': months, 'amount': _amount(months),
+          'setup_fee': 0,
           'message': 'Check your phone and enter your M-Pesa PIN.',
         });
       },
@@ -217,8 +220,8 @@ class _BillingBackend extends _Backend {
         final status = statuses[polls < statuses.length ? polls : statuses.length - 1];
         polls++;
         return _json({
-          'payment_id': 'bp1', 'status': status, 'plan_id': 'goods-30', 'listings': 30,
-          'months': 1, 'amount': 898,
+          'payment_id': 'bp1', 'status': status, 'plan_id': 'goods-20', 'listings': 20,
+          'months': 2, 'amount': 799,
           'failure_reason': status == 'failed' ? 'Request cancelled by user' : null,
           'paid_until': status == 'success' ? '2026-12-16T10:00:00' : null,
         });
@@ -315,51 +318,55 @@ void main() {
 
       final active = Store.fromJson(_storeJson(billing: _billingActive()));
       expect(active.billing!.active, isTrue);
-      expect(active.billing!.listings, 30);
+      expect(active.billing!.listings, 20);
       expect(active.billing!.paidUntil, DateTime.utc(2026, 12, 16, 10).toLocal());
     });
 
-    test('a quote: the card, the priced size, and the periods with the opening fee', () {
-      final q = StoreBillingQuote.fromJson(_quote(listings: 2));
+    test('a quote: the card, the priced size, and periods with no opening fee', () {
+      final q = StoreBillingQuote.fromJson(_quote(listings: 20));
       expect(q.liveListings, 2);
       expect(q.rateCard.name, 'Goods store');
-      expect(q.rateCard.includedListings, 30);
-      expect(q.rateCard.bandUpTo, 100);
-      expect(q.setupFee, 299);
+      expect(q.rateCard.includedListings, 20);
+      expect(q.rateCard.bandUpTo, 30);
+      expect(q.setupFee, 0, reason: 'online stores carry no opening fee');
       expect(q.setupFeeWaivedFromMonths, 6);
-      expect(q.plan!.listings, 30);
-      expect(q.plan!.monthlyPrice, 599);
-      expect(q.plan!.period(1)!.amount, 898, reason: '599 + the 299 opening fee');
-      expect(q.plan!.period(6)!.amount, 3049, reason: 'six months waives the fee');
+      expect(q.minListings, 20);
+      expect(q.monthsOptions, [2, 4, 6, 12]);
+      expect(q.plan!.listings, 20);
+      expect(q.plan!.monthlyPrice, 400);
+      expect(q.plan!.period(2)!.amount, 799, reason: '400 a month for two months');
+      expect(q.plan!.period(6)!.amount, 2109);
       expect(q.plan!.period(6)!.setupFee, 0);
-      expect(q.plan!.period(12)!.savingPercent, 20);
+      expect(q.plan!.period(12)!.savingPercent, 18);
     });
   });
 
   group('StoreBillingScreen', () {
-    testWidgets("prices the plan for the store's own stock, opening fee waived from six months",
+    testWidgets("prices the plan from the card minimum, every two months, no opening fee",
         (tester) async {
       final backend = _BillingBackend()..wire();
       await _openBilling(tester, backend);
 
-      // The card first, then the size the live count picked: never a number
-      // the owner has to know.
-      expect(backend.listingsAsked, [null, 2]);
+      // The card first, then the card's minimum (20 beats the 2 live): the
+      // owner then picks any size with the stepper.
+      expect(backend.listingsAsked, [null, 20]);
       expect(find.byKey(const Key('store-billing-status')), findsOneWidget);
       expect(find.text('Your store is offline'), findsOneWidget);
       expect(find.textContaining("Buyers can't see Clanix Electronics"), findsOneWidget);
       expect(find.byKey(const Key('store-billing-plan')), findsOneWidget);
-      expect(find.text('Goods store · up to 30 listings'), findsOneWidget);
-      expect(find.text('KES 599 a month · 2 live now'), findsOneWidget);
-      expect(find.textContaining('Plus a one-off KES 299 opening fee'), findsOneWidget);
-      // Every period is priced; six and twelve wear the waiver.
-      expect(find.text('Opening fee waived'), findsNWidgets(2));
-      expect(find.text('Continue to payment · KES 898'), findsOneWidget);
+      expect(find.text('Goods store · 20 listings'), findsOneWidget);
+      expect(find.text('KES 400 a month · KES 20.0 a listing · 2 live now'), findsOneWidget);
+      expect(find.byKey(const Key('store-billing-size')), findsOneWidget);
+      expect(find.text('No opening fee on online stores - you only pay the plan.'),
+          findsOneWidget);
+      // Every period is priced; nothing wears a waiver on a fee-free card.
+      expect(find.text('Opening fee waived'), findsNothing);
+      expect(find.text('Continue to payment · KES 799'), findsOneWidget);
 
       await _tap(tester, find.byKey(const Key('store-billing-months-6')));
       await tester.pumpAndSettle();
-      expect(find.text('Continue to payment · KES 3,049'), findsOneWidget);
-      expect(find.text('KES 3,049'), findsOneWidget);
+      expect(find.text('Continue to payment · KES 2,109'), findsOneWidget);
+      expect(find.text('KES 2,109'), findsOneWidget);
     });
 
     testWidgets('pays through the shared checkout and pops true once M-Pesa confirms',
@@ -368,7 +375,7 @@ void main() {
       final popped = await _openBilling(tester, backend);
 
       await _toMpesa(tester, '0712 345 678');
-      expect(find.text('Pay KES 898'), findsOneWidget);
+      expect(find.text('Pay KES 799'), findsOneWidget);
       await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
       expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);
@@ -376,7 +383,7 @@ void main() {
       // The charge is the size and months that were on screen, under one
       // idempotency key per attempt.
       expect(backend.pays.single,
-          {'listings': 30, 'months': 1, 'phone_number': '0712 345 678'});
+          {'listings': 20, 'months': 2, 'phone_number': '0712 345 678'});
       expect(backend.keys.single, isNotNull);
 
       await tester.pump(_poll); // pending

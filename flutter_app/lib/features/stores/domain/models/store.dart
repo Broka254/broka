@@ -100,6 +100,13 @@ class Store {
   /// when this is not null (a fresh store's screen, My Store's card).
   final StoreBilling? billing;
   final int listingCount;
+  /// Straight-line km from the viewer, one decimal, to the owner's
+  /// approximate point (±1 km) - null when the viewer sent no location,
+  /// the owner hid theirs, or either side has none. Backends before store
+  /// distances send none.
+  final double? distanceKm;
+  /// '6 km from you' label for the card, null with distanceKm.
+  final String? distanceLabel;
   final String? createdAt;
   final String? updatedAt;
 
@@ -126,6 +133,8 @@ class Store {
     this.isActive = true,
     this.billing,
     this.listingCount = 0,
+    this.distanceKm,
+    this.distanceLabel,
     this.createdAt,
     this.updatedAt,
   });
@@ -160,6 +169,8 @@ class Store {
       isActive:     json['is_active']     as bool? ?? true,
       billing:      StoreBilling.fromJson(json['billing']),
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
+      distanceKm: (json['distance_km'] as num?)?.toDouble(),
+      distanceLabel: json['distance_label'] as String?,
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,
     );
@@ -171,6 +182,21 @@ class Store {
         .where((s) => s != null && s.trim().isNotEmpty)
         .toList();
     return parts.isEmpty ? null : parts.join(', ');
+  }
+
+  /// '6 km from you' for the card: the server's label when present, else
+  /// formatted locally from distanceKm so older backends still read right.
+  /// Null when neither is known - a missing distance is unknown, never 0 km.
+  String? get nearLabel {
+    if (distanceLabel != null && distanceLabel!.trim().isNotEmpty) return distanceLabel;
+    final km = distanceKm;
+    if (km == null || km.isNaN || km.isInfinite || km < 0) return null;
+    if (km < 1.0) {
+      final m = (km * 1000).round();
+      return m == 1 ? '1 m from you' : '$m m from you';
+    }
+    if (km < 10) return '${km.toStringAsFixed(1)} km from you';
+    return '${km.toStringAsFixed(0)} km from you';
   }
 
   /// The link without the scheme, for display: "broka.co.ke/store/clanix".

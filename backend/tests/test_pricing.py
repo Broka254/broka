@@ -257,7 +257,13 @@ class TestPlans:
         """Prices include VAT, so the rule is checked on what BROKA keeps."""
         worst = plan.max_monthly_cost()
         assert costs.net_of_vat(plan.monthly_price) >= plans.MIN_MARGIN_MULTIPLE * worst
-        for period in plans.period_prices(plan.monthly_price):
+        periods = (
+            plans.store_period_prices(plan.monthly_price)
+            if plan.id.startswith(("goods-", "vehicles-", "property-"))
+            or getattr(plan, "trade", None) in ("goods", "vehicles", "property")
+            else plans.period_prices(plan.monthly_price)
+        )
+        for period in periods:
             assert costs.net_of_vat(period["total"] / period["months"]) >= worst, period
 
     def test_each_premium_tier_gives_at_least_as_much_as_the_one_below(self):
@@ -273,11 +279,11 @@ class TestPlans:
     def test_a_store_of_any_size_never_loses_money(self, card):
         """Sellers pick any size, so the margin rule is checked at every one,
         prepaid periods included - not only at the example plans."""
-        for n in range(1, card.max_listings + 1):
+        for n in range(card.min_listings, card.max_listings + 1):
             plan = card.plan(n)
             worst = plan.max_monthly_cost()
             assert costs.net_of_vat(plan.monthly_price) >= plans.MIN_MARGIN_MULTIPLE * worst, n
-            for period in plans.period_prices(plan.monthly_price):
+            for period in plans.store_period_prices(plan.monthly_price):
                 assert costs.net_of_vat(period["total"] / period["months"]) >= worst, (n, period)
 
     @pytest.mark.parametrize("card", plans.STORE_RATE_CARDS, ids=lambda c: c.id)
@@ -290,17 +296,24 @@ class TestPlans:
         per_listing = [p / n for n, p in enumerate(prices, start=card.included)]
         assert all(a >= b for a, b in zip(per_listing, per_listing[1:]))
 
-    def test_a_goods_store_is_599_for_30_and_any_size_after(self):
-        """The founder's call (2026-10-06): 599 covers 30 listings, and a
-        seller with 40 pays for 40 rather than for the next plan up."""
+    def test_an_online_store_is_40_a_listing_per_two_months(self):
+        """KES 40 a listing per two months, 20 listings minimum: 20 is 400
+        a month -> 799 for two months charmed, 30 is 550 a month -> 1,099
+        for two months instead of 1,200, and bigger keeps falling per
+        listing. No opening fee."""
         goods = plans.STORE_RATE_CARDS_BY_ID["goods"]
-        assert goods.price(1) == goods.price(30) == 599
-        assert goods.plan(10).listings == 30
-        assert goods.price(40) == 599 + 10 * 16 == 759
-        # At or under every fixed plan it replaces (50: 999, 100: 1,799,
-        # 250: 3,999, 500: 6,999).
-        for n, old in ((50, 999), (100, 1_799), (250, 3_999), (500, 6_999)):
-            assert goods.price(n) <= old, n
+        assert goods.min_listings == 20 and goods.setup_fee == 0
+        assert goods.price(20) == 400
+        assert goods.plan(10).listings == 20
+        assert goods.price(30) == 400 + 10 * 15 == 550
+        two = plans.store_period_prices(goods.price(20))
+        assert two[0] == {
+            "months": 2, "total": 799, "per_month": 399.5, "saving_percent": 0.0,
+        }
+        thirty_two = plans.store_period_prices(goods.price(30))[0]["total"]
+        assert thirty_two == 1_099
+        # Bigger is cheaper per listing, no cliffs.
+        assert goods.price(40) == 550 + 10 * 14 == 690
 
     @pytest.mark.parametrize("card, category, price", [
         ("goods", ELECTRONICS, 20_000),
@@ -466,10 +479,14 @@ class TestPublicEndpoints:
         r = await client.get("/pricing/store-plan", params={"listings": 40})
         assert r.status_code == 200
         plan = r.json()["plan"]
-        assert plan["trade"] == "goods" and plan["listings"] == 40 and plan["monthly_price"] == 759
+        assert plan["trade"] == "goods" and plan["listings"] == 40 and plan["monthly_price"] == 690
+        assert plan["periods"][0]["months"] == 2
         yard = (await client.get("/pricing/store-plan",
                                  params={"trade": "vehicles", "listings": 25})).json()["plan"]
         assert yard["monthly_price"] == 5_999
+        # Below the online minimum the app doesn't sell it either.
+        too_small = await client.get("/pricing/store-plan", params={"listings": 10})
+        assert too_small.status_code == 422
         # Past the card's most, the app doesn't sell it - BROKA prices it by hand.
         too_big = await client.get("/pricing/store-plan", params={"listings": 1_001})
         assert too_big.status_code == 422 and "contact BROKA" in too_big.json()["detail"]

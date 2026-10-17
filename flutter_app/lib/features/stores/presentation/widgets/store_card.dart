@@ -166,13 +166,20 @@ class _StoreCardState extends State<StoreCard> {
                       Positioned(
                         top: 10,
                         right: 10,
-                        child: _Pill(
+                        child: _DetailsButton(
                           key: Key('store-details-${store.id}'),
-                          icon: Icons.info_outline_rounded,
-                          label: 'Details',
+                          onTap: widget.onDetails!,
+                        ),
+                      ),
+                    if (store.nearLabel != null)
+                      Positioned(
+                        left: 10,
+                        bottom: 10,
+                        child: _Pill(
+                          key: Key('store-distance-${store.id}'),
+                          icon: Icons.near_me_outlined,
+                          label: store.nearLabel!,
                           color: Colors.white,
-                          tooltip: 'View store details',
-                          onTap: widget.onDetails,
                         ),
                       ),
                     if (store.categories.isNotEmpty)
@@ -212,13 +219,18 @@ class _StoreCardState extends State<StoreCard> {
                                   color: BrokaColors.success, semanticLabel: 'Verified seller'),
                             ],
                           ]),
-                          if (store.locationLine != null) ...[
+                          if (store.locationLine != null || store.nearLabel != null) ...[
                             const SizedBox(height: 3),
                             Row(children: [
                               const Icon(Icons.location_on_outlined, size: 14,
                                   color: BrokaColors.textMid),
                               const SizedBox(width: 3),
-                              Flexible(child: Text(store.locationLine!, maxLines: 1,
+                              Flexible(child: Text(
+                                  [
+                                    if (store.locationLine != null) store.locationLine!,
+                                    if (store.nearLabel != null) store.nearLabel!,
+                                  ].join(' · '),
+                                  maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(color: BrokaColors.textMid,
                                       fontSize: 12.5))),
@@ -333,22 +345,15 @@ class _Logo extends StatelessWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({super.key, required this.label, required this.color, this.dot, this.icon,
-      this.onTap, this.tooltip});
+  const _Pill({super.key, required this.label, required this.color, this.dot, this.icon});
   final String label;
   final Color color;
   final Color? dot;
   final IconData? icon;
 
-  /// When set the pill is a button of its own; without it, a label.
-  final VoidCallback? onTap;
-
-  /// What the pill means to a screen reader; defaults to the label.
-  final String? tooltip;
-
   @override
   Widget build(BuildContext context) {
-    final pill = Container(
+    return Container(
       constraints: const BoxConstraints(maxWidth: 200),
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
@@ -373,13 +378,44 @@ class _Pill extends StatelessWidget {
         ),
       ]),
     );
-    if (onTap == null) return pill;
-    return Semantics(
-      button: true,
-      label: tooltip ?? label,
-      child: GestureDetector(onTap: onTap, child: pill),
-    );
   }
+}
+
+/// Details: the secondary action on a store card (the card itself opens the
+/// store). A solid, high-contrast button - white surface, dark text, larger
+/// than the overlay pills - so it reads as a button, not a caption. Kept
+/// small enough to stay off the picture's subject, with a shadow so it holds
+/// on any photo.
+class _DetailsButton extends StatelessWidget {
+  const _DetailsButton({super.key, required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: 'View store details',
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 10,
+                    offset: const Offset(0, 2)),
+              ],
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.info_rounded, size: 16, color: Color(0xFF0A1220)),
+              SizedBox(width: 5),
+              Text('Details', style: TextStyle(color: Color(0xFF0A1220),
+                  fontSize: 13.5, fontWeight: FontWeight.w800, letterSpacing: -0.1)),
+            ]),
+          ),
+        ),
+      );
 }
 
 class _Fact extends StatelessWidget {

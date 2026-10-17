@@ -11,6 +11,14 @@ import styles from './store.module.css'
  * gradient ring around the category's emoji, its name underneath, and here
  * how many products it has. Plain links, so they work without JavaScript.
  */
+const ONLINE_STORE_EXCLUDED = new Set([
+  'Property',
+  'Automobiles',
+  'Land',
+  'Services',
+  'Other',
+])
+
 export function CategoryPills({
   basePath,
   categories,
@@ -22,9 +30,12 @@ export function CategoryPills({
   total: number
   filters: CatalogueFilters
 }) {
+  // Online stores never browse by Property, Automobiles, Land, Services or
+  // Other - same rule as the app and the backend goods rail.
+  const visible = categories.filter((c) => !ONLINE_STORE_EXCLUDED.has(c.name))
   const items = [
     { value: null as string | null, label: 'All', emoji: '✨', gradient: categoryVisual('Other').gradient, count: total },
-    ...categories.map((c) => {
+    ...visible.map((c) => {
       const v = categoryVisual(c.name)
       return { value: c.name, label: c.name, emoji: v.emoji, gradient: v.gradient, count: c.count }
     }),

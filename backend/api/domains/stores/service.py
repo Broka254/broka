@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
+from api.core.geo import format_distance_km, haversine_km, round_distance_km
 from api.core.presence import online_status
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
@@ -272,10 +273,23 @@ class StoreService:
         limit: int = 20,
         offset: int = 0,
         with_total: bool = False,
+        viewer_lat: Optional[float] = None,
+        viewer_lng: Optional[float] = None,
+        max_distance_km: Optional[float] = None,
+        nearest_first: bool = False,
     ):
         """Browse active stores. A paused store is left out of the
         directory, though its own link still resolves; with store billing
-        on, a store whose plan is unpaid is left out the same way."""
+        on, a store whose plan is unpaid is left out the same way.
+
+        With viewer_lat/lng every item also carries distance_km (one
+        decimal, to the owner's approximate point - see _store_distance_km)
+        and distance_label ('6 km from you'). With max_distance_km only
+        stores within that range are returned; with nearest_first they come
+        nearest first for the 'Stores near you' rail. A store's distance
+        comes from its owner's location - stores hold no coordinates of
+        their own - so a store whose owner hid their location or never set
+        one has no distance and is left out of a max-distance filter."""
         q = select(Store).where(Store.is_active == True)  # noqa: E712
         if store_billing.enabled():
             q = q.where(store_billing.live_subscription_clause(Store.id))
@@ -315,7 +329,13 @@ class StoreService:
             count_q = select(func.count()).select_from(q.order_by(None).subquery())
             total = (await self.db.execute(count_q)).scalar_one()
 
-        q = q.order_by(Store.created_at.desc()).limit(limit).offset(offset)
+        # Nearest-first needs the whole filtered set to sort before the
+        # page is cut: fetch a bounded window, sort by distance, then cut.
+        # Newest keeps the SQL order and pages normally.
+        want_near = nearest_first and viewer_lat is not None and viewer_lng is not None
+        fetch_limit, fetch_offset = (500, 0) if want_near else (limit, offset)
+
+        q = q.order_by(Store.created_at.desc()).limit(fetch_limit).offset(fetch_offset)
         stores = (await self.db.execute(q)).scalars().all()
 
         # One grouped count, one owners query, one assets query, one
@@ -331,10 +351,44 @@ class StoreService:
             await self._store_dict(
                 s, listing_count=counts.get(s.id, 0), assets=assets, owner=owners.get(s.owner_id),
                 billing_subs=subs, category_names=links.get(s.id, []),
+                viewer_lat=viewer_lat, viewer_lng=viewer_lng,
             )
             for s in stores
         ]
+        if viewer_lat is not None and viewer_lng is not None and max_distance_km is not None:
+            items = [d for d in items
+                     if d.get("distance_km") is not None and d["distance_km"] <= max_distance_km]
+        if want_near:
+            items.sort(key=lambda d: (d.get("distance_km") is None, d.get("distance_km") or 0))
+            total = len(items) if with_total else None
+            items = items[offset: offset + limit]
+            return {"items": items, "total": total} if with_total else items
         return {"items": items, "total": total} if with_total else items
+
+    @staticmethod
+    def _store_distance_km(owner, viewer_lat: Optional[float], viewer_lng: Optional[float]) -> Optional[float]:
+        """A store's distance: its owner's approximate point, not the exact fix.
+
+        Stores hold no coordinates of their own - only county/subcounty text -
+        so nearness comes from who runs the shop. The point is rounded to two
+        decimals (~1 km, the same rule auth uses for people) so a distance
+        asked for from three made-up places cannot triangulate a home to
+        ~100 m; product cards already warn '±1km'. Respects the owner's
+        location switch and drops bad coordinates to None instead of 0 km -
+        a missing point is unknown, never next door."""
+        if viewer_lat is None or viewer_lng is None or owner is None:
+            return None
+        if not getattr(owner, "location_visible", True):
+            return None
+        lat, lng = getattr(owner, "lat", None), getattr(owner, "lng", None)
+        if lat is None or lng is None:
+            return None
+        try:
+            approx = (round(float(lat), 2), round(float(lng), 2))
+            viewer = (float(viewer_lat), float(viewer_lng))
+        except (TypeError, ValueError):
+            return None
+        return round_distance_km(haversine_km(viewer[0], viewer[1], approx[0], approx[1]))
 
     @staticmethod
     def _stores_stocking(category: str):
@@ -566,7 +620,12 @@ class StoreService:
     async def list_categories(self, store_id: str) -> list[dict]:
         """The categories this store has active products in, with counts,
         biggest first - the storefront's category rail. Listings whose
-        category isn't one of BROKA's own count under "Other"."""
+        category isn't one of BROKA's own count under "Other".
+
+        Online (goods) stores never browse by Property, Automobiles, Land,
+        Services or Other: those rows stay stored, they are just left out
+        of the rail so the shop reads as a goods shop. Dealer/agent cards
+        keep their own trades."""
         store = await self._get_or_404(store_id)
         if not await store_billing.store_live(self.db, store):
             return []
@@ -579,6 +638,10 @@ class StoreService:
         counts: dict[str, int] = defaultdict(int)
         for category, n in rows:
             counts[store_categories.for_listing(category)] += n
+        card = store_billing.rate_card_for(store.category)
+        if card.id == "goods":
+            for excluded in store_categories.ONLINE_STORE_EXCLUDED:
+                counts.pop(excluded, None)
         order = {c: i for i, c in enumerate(CANONICAL_CATEGORIES)}
         return [
             {"name": name, "count": n}
@@ -949,6 +1012,8 @@ class StoreService:
         owner_view: bool = False,
         billing_subs: Optional[dict] = None,
         category_names: Optional[list[str]] = None,
+        viewer_lat: Optional[float] = None,
+        viewer_lng: Optional[float] = None,
     ) -> dict:
         """The store payload. owner_view=True only for responses to the
         owner themselves (create, update, status, /stores/mine); every other
@@ -1038,6 +1103,10 @@ class StoreService:
             # non-null and not active.
             "billing": billing_state,
             "listing_count": listing_count,
+            "distance_km": self._store_distance_km(owner, viewer_lat, viewer_lng),
+            "distance_label": format_distance_km(
+                self._store_distance_km(owner, viewer_lat, viewer_lng)
+            ),
             "created_at": store.created_at.isoformat() if store.created_at else None,
             "updated_at": store.updated_at.isoformat() if store.updated_at else None,
         }

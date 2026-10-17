@@ -54,6 +54,28 @@ class StoreCategories {
     'Other',
   ];
 
+  /// Listing categories not sold through an online store: dealer/agent
+  /// trades (Property, Automobiles, Land), booked Services, and the
+  /// catch-all Other. Mirrors backend/api/domains/stores/categories.py
+  /// ONLINE_STORE_EXCLUDED - the rows stay stored, only browsing hides them.
+  static const Set<String> onlineExcluded = {
+    'Property',
+    'Automobiles',
+    'Land',
+    'Services',
+    'Other',
+  };
+
+  /// The directory rail without the excluded online-store trades, for the
+  /// online-store directory. Dealer/agent shops keep their own screens.
+  static List<String> get onlineRail =>
+      rail.where((name) => !onlineExcluded.contains(name)).toList(growable: false);
+
+  /// A store catalogue rail without the excluded trades (store_home's pills,
+  /// the web CategoryPills, and the backend list_categories for goods).
+  static bool isOnlineListingCategory(String? name) =>
+      name != null && !onlineExcluded.contains(name);
+
   /// The "Wholesale and General" card's visual. It lives here, not in
   /// CategoryVisuals: that table mirrors the backend seed exactly
   /// (test/category_visual_test.dart holds it to it), and this facet is

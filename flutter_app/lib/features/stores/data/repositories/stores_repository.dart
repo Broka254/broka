@@ -61,13 +61,19 @@ class StoresRepository {
     }
   }
 
-  /// Browse active stores.
+  /// Browse active stores. With [lat]/[lng] every store carries
+  /// distanceKm/distanceLabel ('6 km from you'); with [nearestFirst] nearest
+  /// first for 'Stores near you'; with [maxDistanceKm] only nearby stores.
   Future<Result<List<Store>>> listStores({
     String? search,
     String? category,
     String? county,
     int limit = 20,
     int offset = 0,
+    double? lat,
+    double? lng,
+    double? maxDistanceKm,
+    bool nearestFirst = false,
   }) =>
       _guard(() async {
         final data = await _client.get('/stores', queryParams: {
@@ -76,6 +82,10 @@ class StoresRepository {
           if (county != null) 'county': county,
           'limit': limit.toString(),
           'offset': offset.toString(),
+          if (lat != null) 'lat': lat.toString(),
+          if (lng != null) 'lng': lng.toString(),
+          if (maxDistanceKm != null) 'max_distance_km': maxDistanceKm.toString(),
+          if (nearestFirst) 'nearest_first': 'true',
         }) as List;
         return data.map((e) => Store.fromJson(e as Map<String, dynamic>)).toList();
       });

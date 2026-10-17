@@ -60,3 +60,40 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     # anything above 1 raises.
     a = min(1.0, max(0.0, a))
     return 2.0 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+
+
+def format_distance_km(km: Optional[float]) -> Optional[str]:
+    """'6 km from you' style label for a distance, or None when unknown.
+
+    Rounded to one decimal under 10 km ('3.2 km from you'), whole km above
+    ('12 km from you'), metres under one km ('450 m from you') - the same
+    wording the app shows on listing, trader and store cards, so one helper
+    keeps them identical. NaN/None/infinite read as unknown, never '0 km'."""
+    if km is None:
+        return None
+    try:
+        value = float(km)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    if value < 1.0:
+        metres = int(round(value * 1000))
+        return f"{metres} m from you" if metres != 1 else "1 m from you"
+    if value < 10:
+        return f"{value:.1f} km from you"
+    return f"{value:.0f} km from you"
+
+
+def round_distance_km(km: float) -> Optional[float]:
+    """One-decimal distance for API payloads, or None when not a real distance.
+
+    Centralises the `round(..., 1)` every card annotation does, so a NaN
+    from a bad coordinate never reaches a client as a number."""
+    try:
+        value = float(km)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return round(value, 1)

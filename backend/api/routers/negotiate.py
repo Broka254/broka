@@ -49,7 +49,7 @@ from api.database import get_db, NegotiationMessage, Listing, User, Deal, DealSt
 from api.domains.listings.handover import IN_PLACE_NOTE, is_deliverable
 from api.routers.auth import _approx_location
 from api.core import gemini, text_guard
-from api.core.geo import haversine_km
+from api.core.geo import haversine_km, round_distance_km
 from api.core.audit import record_audit
 from api.core.config import settings
 from api.domains.pricing.safe_payment import ai_payment_policy
@@ -1862,9 +1862,10 @@ async def send_message(
     b_lng  = (buyer.lng  if buyer else data.buyer_lng)
 
     dist_str = ""
-    if b_lat and b_lng and seller.lat and seller.lng:
-        km       = haversine_km(b_lat, b_lng, seller.lat, seller.lng)
-        dist_str = f"- Distance between them: {km:.1f} km\n"
+    if b_lat is not None and b_lng is not None and seller.lat is not None and seller.lng is not None:
+        km = round_distance_km(haversine_km(b_lat, b_lng, seller.lat, seller.lng))
+        if km is not None:
+            dist_str = f"- Distance between them: {km:.1f} km\n"
 
     lang = data.language
 

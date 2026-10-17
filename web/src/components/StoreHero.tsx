@@ -95,10 +95,14 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
               {plural(store.listing_count, 'product')}
             </li>
           </ul>
-          <Link href={storeDetailsPath(store.slug)} className={styles.moreWidget}>
-            <Icon name="grid" size={16} />
-            <span>More</span>
-            <Icon name="chevron" size={16} />
+          <Link
+            href={storeDetailsPath(store.slug)}
+            className={styles.moreWidget}
+            aria-label={`Store details for ${store.name}`}
+          >
+            <Icon name="grid" size={18} />
+            <span>Store details</span>
+            <Icon name="chevron" size={18} />
           </Link>
         </div>
       </div>

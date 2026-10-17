@@ -23,8 +23,10 @@
 // opens StoreCategoryScreen, scoped to that category. The search stays
 // here for every store; a category screen has its own.
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
+import '../../../services/api_service.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
@@ -49,18 +51,24 @@ class _StoreListScreenState extends State<StoreListScreen> {
   bool _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
+  final List<Store> _nearby = [];
+  double? _userLat;
+  double? _userLng;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadNearby();
   }
 
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     final query = _searchCtrl.text.trim();
     final result = await storesRepository.listStores(
-        search: query.isEmpty ? null : query);
+        search: query.isEmpty ? null : query,
+        lat: _userLat,
+        lng: _userLng);
     if (!mounted) return;
     result.fold(
       onSuccess: (data) => setState(() {
@@ -69,6 +77,50 @@ class _StoreListScreenState extends State<StoreListScreen> {
       }),
       onFailure: (msg, __) => setState(() { _error = msg; _loading = false; }),
     );
+  }
+
+  /// 'Stores near you' for the general directory: live GPS first, the
+  /// saved session point as fallback - never a stale zero. A missing fix
+  /// leaves the section hidden, not a 0 km list.
+  Future<void> _loadNearby() async {
+    double? lat = ApiService.currentUserLat;
+    double? lng = ApiService.currentUserLng;
+    try {
+      if (await Geolocator.isLocationServiceEnabled()) {
+        var perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.denied) {
+          perm = await Geolocator.requestPermission();
+        }
+        if (perm != LocationPermission.denied &&
+            perm != LocationPermission.deniedForever) {
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 10),
+            ),
+          );
+          lat = pos.latitude;
+          lng = pos.longitude;
+        }
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    if (lat == null || lng == null) return;
+    setState(() {
+      _userLat = lat;
+      _userLng = lng;
+    });
+    final result = await storesRepository.listStores(
+        lat: lat, lng: lng, nearestFirst: true, limit: 10);
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (data) => setState(() {
+        _nearby..clear()..addAll(data.take(5));
+      }),
+      onFailure: (_, __) {},
+    );
+    // Refresh distances on the main list once the fix is known.
+    if (_userLat != null) _load();
   }
 
   static const _visual = DestinationVisuals.stores;
@@ -96,7 +148,10 @@ class _StoreListScreenState extends State<StoreListScreen> {
           child: SafeArea(
             bottom: false,
             child: RefreshIndicator(
-              onRefresh: _load,
+              onRefresh: () async {
+                await _load();
+                await _loadNearby();
+              },
               color: BrokaColors.gold,
               backgroundColor: BrokaColors.bgCard,
               displacement: 72,
@@ -120,6 +175,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
                   ),
                   SliverToBoxAdapter(child: _searchBar()),
                   SliverToBoxAdapter(child: _categoryRail()),
+                  ..._nearbySlivers(),
                   SliverToBoxAdapter(child: _listHeading()),
                   ..._bodySlivers(),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
@@ -148,11 +204,9 @@ class _StoreListScreenState extends State<StoreListScreen> {
 
   /// Every rail entry as Home draws one (CategoryArtCard), so a directory
   /// of many shops narrows the way products do: pick the kind of shop and
-  /// its screen opens with only those stores. StoreCategories.rail is a
-  /// store-directory order - the categories buyers shop first, with the
-  /// "Wholesale and General" facet fourth (stores selling across several
-  /// categories). The whole rail stays visible whether or not a category
-  /// has shops yet - the same promise Home makes with its category row.
+  /// its screen opens with only those stores. Online stores browse by the
+  /// goods rail only - Property, Automobiles, Land, Services and Other are
+  /// dealer/agent trades, not online-store listing categories.
   Widget _categoryRail() {
     final narrow = MediaQuery.sizeOf(context).width < 360;
     final cardWidth = narrow ? 112.0 : 122.0;
@@ -176,10 +230,10 @@ class _StoreListScreenState extends State<StoreListScreen> {
           key: const Key('store-category-rail'),
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-          itemCount: StoreCategories.rail.length,
+          itemCount: StoreCategories.onlineRail.length,
           separatorBuilder: (_, __) => const SizedBox(width: 10),
           itemBuilder: (_, i) {
-            final name = StoreCategories.rail[i];
+            final name = StoreCategories.onlineRail[i];
             final visual = StoreCategories.visualFor(name);
             return CategoryArtCard(
               key: Key('store-category-$name'),
@@ -208,6 +262,43 @@ class _StoreListScreenState extends State<StoreListScreen> {
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.1)),
       );
+
+  /// 'Stores near you': nearest first, each with its '6 km from you' label.
+  /// Hidden until a location fix arrives - no fix, no guess.
+  List<Widget> _nearbySlivers() {
+    if (_nearby.isEmpty) return const [];
+    return [
+      const SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Text('Stores near you',
+              style: TextStyle(
+                  color: BrokaColors.textHigh,
+                  fontSize: 13,
+                  height: 1.2,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.1)),
+        ),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) => StoreCard(
+              store: _nearby[i],
+              onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => StoreHomeScreen(storeId: _nearby[i].id))),
+              onDetails: () => showStoreDetails(context, _nearby[i],
+                  repository: storesRepository),
+            ),
+            childCount: _nearby.length,
+          ),
+        ),
+      ),
+    ];
+  }
 
   List<Widget> _bodySlivers() {
     if (_loading) {

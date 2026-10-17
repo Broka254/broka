@@ -681,10 +681,12 @@ class TestCatalogue:
         await _listing(client, headers, sid, "Mystery Item", category="random stuff", price=100)
 
         cats = (await client.get(f"/stores/{sid}/categories")).json()
+        # Online stores never browse by Other (nor Property, Automobiles,
+        # Land, Services): the free-text row stays stored and listed, just
+        # not railed.
         assert cats == [
             {"name": "Electronics", "count": 3},
             {"name": "Home & Furniture", "count": 1},
-            {"name": "Other", "count": 1},
         ]
 
         async def names(**params):
@@ -730,8 +732,10 @@ class TestCatalogue:
             assert r.status_code == 422, params
 
     async def test_the_other_shelf_holds_what_the_rail_counts_there(self, client):
-        # The rail counts free-text categories as "Other"; tapping "Other"
-        # filtered on the literal word, so it showed only "Odd Thing".
+        # The rail used to count free-text categories as "Other"; tapping
+        # "Other" filtered on the literal word, so it showed only "Odd Thing".
+        # Online stores no longer rail Other at all, but the filter still
+        # returns every listing outside the named categories.
         _, headers = await _register(client)
         store = await _store(client, headers)
         sid = store["id"]
@@ -740,7 +744,7 @@ class TestCatalogue:
         await _listing(client, headers, sid, "Odd Thing", category="Other")
 
         cats = (await client.get(f"/stores/{sid}/categories")).json()
-        assert {"name": "Other", "count": 2} in cats
+        assert all(c["name"] != "Other" for c in cats)
         r = await client.get(f"/stores/{sid}/listings",
                              params={"category": "other", "with_total": True})
         assert r.status_code == 200, r.text

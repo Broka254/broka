@@ -147,9 +147,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 from datetime import datetime
 from sqlalchemy import func, select, update
+
+from api.core.geo import haversine_km as _haversine_km
 
 from api.core.event_catalog import subscribe_to, EventType, EventEnvelope
 from api.core.text_search import search_terms
@@ -178,14 +179,9 @@ _inflight: set = set()
 # documented (buy_agent/service.py) as a lifetime counter.
 WATCHING_STATUSES = ("active", "matched")
 
-
-def _haversine_km(lat1, lng1, lat2, lng2) -> float:
-    R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+# Distance uses api.core.geo.haversine_km (imported as _haversine_km above) -
+# the one implementation, so match filtering agrees with card labels to the
+# digit instead of carrying its own atan2 copy.
 
 
 def _listing_satisfies_request(listing: Listing, req: BuyAgentRequest) -> bool:

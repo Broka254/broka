@@ -55,7 +55,9 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
 
   _Stage _stage = _Stage.loading;
   StoreBillingQuote? _quote;
-  int _months = 1;
+  int _months = 2;
+  int _size = 20;
+  bool _sizing = false;
   String? _error;
 
   @override
@@ -64,8 +66,9 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
     _load();
   }
 
-  /// The card first, then the plan priced for the store's own stock: the
-  /// live count picks the size, so nobody has to know the bands.
+  /// The card first, then the plan priced for the size the seller picks:
+  /// at least the card's minimum (20 for online stores), defaulting to the
+  /// live stock when that is bigger. Any size in between is sold.
   Future<void> _load() async {
     setState(() {
       _stage = _Stage.loading;
@@ -81,22 +84,48 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
       return;
     }
     final listed = (base as Success<StoreBillingQuote>).data;
-    final size = listed.liveListings < 1 ? 1 : listed.liveListings;
+    final min = listed.rateCard.minListings < 1 ? 1 : listed.rateCard.minListings;
+    final size = listed.liveListings < min ? min : listed.liveListings;
+    await _priceSize(listed, size, first: true);
+  }
+
+  Future<void> _priceSize(StoreBillingQuote base, int size, {bool first = false}) async {
+    if (!first) setState(() => _sizing = true);
     final priced = await _repo.billingQuote(widget.storeId, listings: size);
     if (!mounted) return;
     switch (priced) {
       case Success(:final data):
+        final options = data.monthsOptions;
         setState(() {
           _quote = data;
-          _months = 1;
+          _size = data.plan?.listings ?? size;
+          if (!options.contains(_months)) {
+            _months = options.contains(2) ? 2 : options.first;
+          }
           _stage = _Stage.ready;
+          _sizing = false;
         });
       case Failure(:final message):
         setState(() {
-          _error = message;
-          _stage = _Stage.loadFailed;
+          if (first) {
+            _error = message;
+            _stage = _Stage.loadFailed;
+          }
+          _sizing = false;
         });
     }
+  }
+
+  void _changeSize(int delta) {
+    final q = _quote;
+    if (q == null || _sizing) return;
+    final min = q.rateCard.minListings;
+    final max = q.rateCard.maxListings;
+    final next = (_size + delta).clamp(min, max);
+    if (next == _size) return;
+    HapticFeedback.selectionClick();
+    setState(() => _size = next);
+    _priceSize(q, next);
   }
 
   StorePlanPeriod? get _period => _quote?.plan?.period(_months);
@@ -111,7 +140,7 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   CheckoutOrder get _order {
     final plan = _quote!.plan!;
     final period = _period!;
-    final months = _months == 1 ? '1 month' : '$_months months';
+    final months = '$_months months';
     return CheckoutOrder(
       title: 'Store plan',
       subject: widget.storeName,
@@ -234,21 +263,60 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
         if (plan != null) ...[
           CheckoutCard(
             accent: BrokaColors.gold,
-            child: Row(children: [
-              const Icon(Icons.inventory_2_outlined, color: BrokaColors.gold, size: 22),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${q.rateCard.name} · up to ${plan.listings} listings',
-                      key: const Key('store-billing-plan'),
-                      style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15,
-                          fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 2),
-                  Text('KES ${formatKesAmount(plan.monthlyPrice)} a month'
-                      '${q.liveListings > 1 ? ' · ${q.liveListings} live now' : ''}',
-                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
-                ]),
-              ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.inventory_2_outlined, color: BrokaColors.gold, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${q.rateCard.name} · $_size listings',
+                        key: const Key('store-billing-plan'),
+                        style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15,
+                            fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 2),
+                    Text('KES ${formatKesAmount(plan.monthlyPrice)} a month'
+                        ' · KES ${(plan.monthlyPrice / plan.listings).toStringAsFixed(1)} a listing'
+                        '${q.liveListings > 1 ? ' · ${q.liveListings} live now' : ''}',
+                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+                  ]),
+                ),
+              ]),
+              const SizedBox(height: 12),
+              // Customizable size: 20 listings minimum, every size priced by
+              // the server - bigger is cheaper per listing (30 is 1,099 for
+              // two months instead of 1,200).
+              Row(children: [
+                _SizeButton(
+                    key: const Key('store-billing-minus'),
+                    icon: Icons.remove_rounded,
+                    onTap: _sizing ? null : () => _changeSize(-1)),
+                Expanded(
+                  child: Center(
+                    child: _sizing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                color: BrokaColors.gold, strokeWidth: 2))
+                        : Text('$_size listings',
+                            key: const Key('store-billing-size'),
+                            style: const TextStyle(
+                                color: BrokaColors.textHigh,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800)),
+                  ),
+                ),
+                _SizeButton(
+                    key: const Key('store-billing-plus'),
+                    icon: Icons.add_rounded,
+                    onTap: _sizing ? null : () => _changeSize(1)),
+              ]),
+              const SizedBox(height: 6),
+              Text(
+                  'From ${q.rateCard.minListings} to ${q.rateCard.maxListings} listings'
+                  ' · bigger is cheaper per listing.',
+                  style: const TextStyle(
+                      color: BrokaColors.textMid, fontSize: 11.5, height: 1.4)),
             ]),
           ),
           const SizedBox(height: 12),
@@ -256,11 +324,13 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
             q.setupFee > 0
                 ? 'Plus a one-off KES ${formatKesAmount(q.setupFee)} opening fee. '
                     'Pay for ${q.setupFeeWaivedFromMonths} months or more and it is waived.'
-                : 'Opening fee already paid.',
+                : q.rateCard.id == 'goods'
+                    ? 'No opening fee on online stores - you only pay the plan.'
+                    : 'Opening fee already paid.',
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4),
           ),
           const SizedBox(height: 22),
-          const CheckoutLabel('How long should it run?'),
+          const CheckoutLabel('How long should it run? Every 2 months.'),
           const SizedBox(height: 10),
           for (final months in q.monthsOptions)
             if (plan.period(months) != null)
@@ -318,6 +388,39 @@ class _StatusCard extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// The +/- stepper for how many listings the plan covers.
+class _SizeButton extends StatelessWidget {
+  const _SizeButton({super.key, required this.icon, required this.onTap});
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        enabled: onTap != null,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: onTap == null
+                  ? BrokaColors.bgCard
+                  : BrokaColors.gold.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: onTap == null
+                      ? BrokaColors.border
+                      : BrokaColors.gold.withOpacity(0.6)),
+            ),
+            child: Icon(icon,
+                color: onTap == null ? BrokaColors.textMid : BrokaColors.gold,
+                size: 20),
+          ),
+        ),
+      );
 }
 
 /// One prepay period, its total the amount actually charged.

@@ -210,9 +210,30 @@ FREE_TRIAL: dict[str, int] = {
 
 # Opening a store, once. Covers reviewing it and an onboarding call, and
 # puts a price on a store name so names are not squatted. Waived when the
-# first payment covers six months or more.
+# first payment covers six months or more. Online (goods) stores carry no
+# opening fee at all - see StoreRateCard.setup_fee.
 STORE_SETUP_FEE = 299
 STORE_SETUP_WAIVED_FROM_MONTHS = 6
+
+# Store subscriptions run every two months, not monthly: 2, 4, 6 or 12
+# months at a time. Longer prepay cuts the price, but never below the
+# maxed-out cost (the margin rule in tests/test_pricing.py checks every
+# size and period).
+STORE_PERIODS: dict[int, float] = {2: 0.0, 4: 0.06, 6: 0.12, 12: 0.18}
+
+
+def store_period_prices(monthly: int) -> list[dict]:
+    """Like period_prices() but on the store's bi-monthly periods."""
+    out = []
+    for months, off in STORE_PERIODS.items():
+        total = charm(monthly * months * (1 - off))
+        out.append({
+            "months": months,
+            "total": total,
+            "per_month": round(total / months, 2),
+            "saving_percent": round(100 * (1 - total / (monthly * months))),
+        })
+    return out
 
 # What one listing slot in a store costs at full use: a listing drawing an
 # average category's demand (one negotiation a month).
@@ -239,10 +260,13 @@ class StorePlan:
             + costs.mpesa_collection_cost(self.monthly_price)
         )
 
-    def to_dict(self) -> dict:
-        periods = period_prices(self.monthly_price)
+    def to_dict(self, setup_fee: int = STORE_SETUP_FEE) -> dict:
+        periods = store_period_prices(self.monthly_price)
         for p in periods:
-            p["setup_fee"] = 0 if p["months"] >= STORE_SETUP_WAIVED_FROM_MONTHS else STORE_SETUP_FEE
+            if setup_fee == 0:
+                p["setup_fee"] = 0
+            else:
+                p["setup_fee"] = 0 if p["months"] >= STORE_SETUP_WAIVED_FROM_MONTHS else setup_fee
         return {
             "id": self.id,
             "name": self.name,
@@ -284,6 +308,8 @@ class StoreRateCard:
     # hold it to this many live listings.
     min_listings: int = 1
     slot_cost: float = STORE_SLOT_MONTH
+    # Online (goods) stores carry no opening fee; dealer/agent cards keep it.
+    setup_fee: int = STORE_SETUP_FEE
 
     def price(self, listings: int) -> int:
         n = min(max(int(listings), 1), self.max_listings)
@@ -314,6 +340,7 @@ class StoreRateCard:
             "min_listings": self.min_listings,
             "max_listings": self.max_listings,
             "categories": list(self.categories),
+            "setup_fee": self.setup_fee,
         }
 
 
@@ -321,18 +348,20 @@ def _slot_cost(category: str) -> float:
     return costs.listing_month_cost(for_category(category).chats_per_month)
 
 
-# VAT included. A goods store is KES 599 for up to 30 listings (the founder's
-# call, 2026-10-06: 20 a month for each, a fifth of what a KES 20,000 phone
-# pays listed alone), then 16 a listing to 100, 14 to 250 and 12 to 1,000:
-# 40 listings 759, 100 listings 1,719, 500 listings 6,819 - each size at or
-# under the fixed plans it replaces. Car yards and agents start at 2,999 for
-# 10: KES 167-300 a car, against ~866 a month for a KABA member's Sunday spot
-# at Jamhuri and 1,120 for one KES 800,000 car listed alone; Househunt
-# charges agents 10,000 for 20 listings. tests/test_pricing.py checks the
-# margin rule at every size of every card.
+# VAT included. An online (goods) store is KES 40 a listing per two months:
+# 20 listings (the smallest plan) is 800 -> 799 charmed for two months
+# (400 a month), 30 listings is 550 a month -> 1,099 for two months instead
+# of 1,200, and the per-listing rate keeps falling after that (14 to 100,
+# 13 to 250 and 13 to 1,000 a month - ~28/26/26 per two months).
+# No opening fee. Car yards and agents start at 2,999 for 10: KES 167-300
+# a car, against ~866 a month for a KABA member's Sunday spot at Jamhuri
+# and 1,120 for one KES 800,000 car listed alone; Househunt charges agents
+# 10,000 for 20 listings. tests/test_pricing.py checks the margin rule at
+# every size of every card.
 STORE_RATE_CARDS: tuple[StoreRateCard, ...] = (
-    StoreRateCard(id="goods", name="Store", included=30, base_price=599,
-                  bands=((100, 16), (250, 14), (1_000, 12)), max_listings=1_000),
+    StoreRateCard(id="goods", name="Store", included=20, base_price=400,
+                  bands=((30, 15), (100, 14), (250, 13), (1_000, 13)), max_listings=1_000,
+                  min_listings=20, setup_fee=0),
     StoreRateCard(id="vehicles", name="Car yard", included=10, base_price=2_999,
                   bands=((25, 200), (60, 114), (200, 100)), max_listings=200,
                   categories=("Automobiles",), min_listings=5,
@@ -347,7 +376,7 @@ STORE_RATE_CARDS_BY_ID: dict[str, StoreRateCard] = {c.id: c for c in STORE_RATE_
 # Sizes shown as examples next to the cards; any size in between is sold too.
 STORE_PLANS: tuple[StorePlan, ...] = tuple(
     STORE_RATE_CARDS_BY_ID[card].plan(n)
-    for card, sizes in (("goods", (30, 50, 100, 250, 500, 1_000)),
+    for card, sizes in (("goods", (20, 30, 50, 100, 250, 500, 1_000)),
                         ("vehicles", (10, 25, 60, 200)),
                         ("property", (10, 30, 100, 300)))
     for n in sizes
@@ -382,17 +411,29 @@ def commission() -> dict:
 
 
 def catalog() -> dict:
+    goods = STORE_RATE_CARDS_BY_ID["goods"]
     return {
         "currency": "KES",
         "premium": [p.to_dict() for p in PREMIUM_PLANS],
         "free_trial": FREE_TRIAL,
         "stores": {
-            "setup_fee": STORE_SETUP_FEE,
+            # Online (goods) stores carry no opening fee; dealer/agent
+            # cards keep theirs (see each rate card's setup_fee).
+            "setup_fee": goods.setup_fee,
             "setup_fee_waived_from_months": STORE_SETUP_WAIVED_FROM_MONTHS,
+            "months_options": sorted(STORE_PERIODS),
             # Any size is sold: GET /pricing/store-plan prices the one a
             # seller picks. `plans` are examples along each card.
             "rate_cards": [c.to_dict() for c in STORE_RATE_CARDS],
-            "plans": [s.to_dict() for s in STORE_PLANS],
+            "plans": [
+                s.to_dict(
+                    setup_fee=(
+                        STORE_RATE_CARDS_BY_ID[s.trade].setup_fee
+                        if s.trade in STORE_RATE_CARDS_BY_ID else STORE_SETUP_FEE
+                    )
+                )
+                for s in STORE_PLANS
+            ],
         },
         "commission": commission(),
         # False while buyers pay sellers outside BROKA: no commission is

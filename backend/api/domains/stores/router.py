@@ -164,12 +164,20 @@ async def list_stores(
     limit: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
     with_total: bool = False,
+    lat: Optional[float] = Query(None, description="Viewer's latitude for distance_km"),
+    lng: Optional[float] = Query(None, description="Viewer's longitude for distance_km"),
+    max_distance_km: Optional[float] = Query(None, gt=0, le=2000),
+    nearest_first: bool = Query(False, description="Nearest stores first for 'Stores near you'"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Browse active stores. Public."""
+    """Browse active stores. Public. With lat/lng every store carries
+    distance_km and distance_label ('6 km from you'); with max_distance_km
+    only nearby stores; with nearest_first nearest first."""
     return await StoreService(db).list_stores(
         search=search, category=category or specialization, county=county,
         limit=limit, offset=offset, with_total=with_total,
+        viewer_lat=lat, viewer_lng=lng,
+        max_distance_km=max_distance_km, nearest_first=nearest_first,
     )
 
 
@@ -238,8 +246,8 @@ async def get_store_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
 # Registered before the dynamic "/{store_id}" routes, per this module's
 # rule: a fixed path first, or FastAPI reads it as a store id.
 class StorePayIn(BaseModel):
-    listings: int = Field(..., ge=1, le=10_000)
-    months: int = Field(..., ge=1, le=12)
+    listings: int = Field(..., ge=1, le=10_000, description="Listings the plan should cover")
+    months: int = Field(..., ge=2, le=12, description="2, 4, 6 or 12 months")
     phone_number: str = Field(..., max_length=20)
 
 

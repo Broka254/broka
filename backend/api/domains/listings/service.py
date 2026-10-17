@@ -17,7 +17,7 @@ from api.database import (
 from api.models.store import Store
 from api.core.events import publish, ListingCreated, InterestExpressed
 from api.core.config import settings
-from api.core.geo import distances_km, haversine_km
+from api.core.geo import distances_km, format_distance_km, haversine_km, round_distance_km
 from api.core.text_search import matches_all_terms, search_terms, term_matches
 from . import validation as rules
 from .location import canonical_county, listing_point, tidy_place
@@ -912,7 +912,10 @@ class ListingService:
                 assets=assets, card=True,
             )
             if viewer_lat is not None and viewer_lng is not None:
-                d["distance_km"] = round(haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng), 1)
+                dist = round_distance_km(haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng))
+                if dist is not None:
+                    d["distance_km"] = dist
+                    d["distance_label"] = format_distance_km(dist)
             # Auto-expire featured
             if listing.is_featured and listing.featured_until and listing.featured_until < now:
                 listing.is_featured = False

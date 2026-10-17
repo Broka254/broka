@@ -118,7 +118,7 @@ describe('StoreHero', () => {
     expect(screen.getByText('4.8')).toBeTruthy()
     expect(screen.getByText('12 deals')).toBeTruthy()
     expect(screen.getByText('3 products')).toBeTruthy()
-    expect(screen.getByText('More').closest('a')!.getAttribute('href')).toBe('/store/clanix/about')
+    expect(screen.getByText('Store details').closest('a')!.getAttribute('href')).toBe('/store/clanix/about')
     expect(screen.queryByText('Genuine phones and accessories.')).toBeNull()
 
     rerender(<StoreHero view={storeView(shop({ logo: sizes('l1') }))} />)

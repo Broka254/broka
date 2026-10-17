@@ -28,7 +28,7 @@ from api.security import (
 )
 from api.core.events import publish, UserRegistered, UserLoggedIn
 from api.core.config import settings
-from api.core.geo import haversine_km
+from api.core.geo import haversine_km, round_distance_km
 from api.core.sms import get_sms_provider
 from api.core.email import get_email_provider, build_otp_email
 from api.database import AccountType, OtpPurpose, SellerMetrics, SellerTier
@@ -718,8 +718,11 @@ class AuthService:
         own = viewer_id is not None and viewer_id == user.id
         if own:
             d = self._user_dict(user)
-            if viewer_lat is not None and viewer_lng is not None and user.lat and user.lng:
-                d["distance_km"] = round(haversine_km(viewer_lat, viewer_lng, user.lat, user.lng), 1)
+            if (viewer_lat is not None and viewer_lng is not None
+                    and user.lat is not None and user.lng is not None):
+                dist = round_distance_km(haversine_km(viewer_lat, viewer_lng, user.lat, user.lng))
+                if dist is not None:
+                    d["distance_km"] = dist
         else:
             d = self._public_user_dict(user)
             distance = self._public_distance_km(user, viewer_lat, viewer_lng)
@@ -786,7 +789,7 @@ class AuthService:
         point = cls._approx_point(user)
         if point is None or viewer_lat is None or viewer_lng is None:
             return None
-        return round(haversine_km(viewer_lat, viewer_lng, point[0], point[1]), 1)
+        return round_distance_km(haversine_km(viewer_lat, viewer_lng, point[0], point[1]))
 
     @classmethod
     def _public_user_dict(cls, user) -> dict:

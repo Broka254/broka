@@ -19,6 +19,16 @@ from api.domains.categories.seed import (
 
 OTHER = "Other"
 
+# Listing categories that are not sold through an online (goods) store.
+# Property, Automobiles and Land are dealer/agent trades with their own
+# rate cards; Services are booked, not stocked; Other is the catch-all
+# with nothing to browse by. An online store's catalogue rail, directory
+# rail and billing all filter these out - the data stays, only what
+# buyers browse by changes, so old stores keep their rows.
+ONLINE_STORE_EXCLUDED = frozenset({
+    "Property", "Automobiles", "Land", "Services", "Other",
+})
+
 # The directory facet for a store that sells across several categories.
 # Not a taxonomy category - the canonical list is untouched - it names the
 # view of stores with two or more category links (StoreCategoryLink).
@@ -64,6 +74,23 @@ def is_wholesale_facet(value: Optional[str]) -> bool:
     """Whether a directory filter is asking for the multi-category facet,
     not a category named that (no canonical category is)."""
     return bool(value) and value.strip().lower() == WHOLESALE.lower()
+
+
+def is_online_store_listing_category(value: Optional[str]) -> bool:
+    """Whether `value` is browsable as a listing category inside an online
+    (goods) store. The five excluded trades are still stored - this only
+    decides what the catalogue rail and directory show."""
+    name = canonical(value)
+    return name is not None and name not in ONLINE_STORE_EXCLUDED
+
+
+def filter_online_store_categories(names: list[str]) -> list[str]:
+    """`names` without the excluded online-store trades, order kept."""
+    out: list[str] = []
+    for name in names:
+        if name not in ONLINE_STORE_EXCLUDED and name not in out:
+            out.append(name)
+    return out
 
 
 def for_listing(value: Optional[str]) -> str:

@@ -151,16 +151,19 @@ async def store_plan(
     trade: Literal["goods", "vehicles", "property"] = Query("goods"),
     listings: int = Query(..., ge=1, le=10_000, description="Listings the store should hold"),
 ):
-    """The price of a store holding `listings`, any number up to the card's
-    most: a seller with 40 listings pays for 40, not for the next plan up.
-    Public, like the plans, so a seller can price a store before opening one."""
+    """The price of a store holding `listings`, any number from the card's
+    minimum to its most: a seller with 40 listings pays for 40, not for the
+    next plan up. Public, like the plans, so a seller can price a store
+    before opening one. Online stores start at 20 listings at KES 40 a
+    listing per two months, with the per-listing rate falling as the count
+    grows, and no opening fee."""
     card = plans.STORE_RATE_CARDS_BY_ID[trade]
-    if listings > card.max_listings:
+    if listings < card.min_listings or listings > card.max_listings:
         raise HTTPException(status_code=422, detail=(
-            f"{card.name} plans in the app go up to {card.max_listings} listings. "
+            f"{card.name} plans cover {card.min_listings} to {card.max_listings} listings. "
             "For more, contact BROKA and we'll price it with you."))
     plan = card.plan(listings)
-    return {"currency": "KES", "rate_card": card.to_dict(), "plan": plan.to_dict()}
+    return {"currency": "KES", "rate_card": card.to_dict(), "plan": plan.to_dict(setup_fee=card.setup_fee)}
 
 
 @router.get("/categories")

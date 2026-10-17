@@ -9,9 +9,11 @@
 // rule as category_navigation.dart: choosing a category should feel like
 // the page changing in place, not a screen sliding over it.
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
+import '../../../services/api_service.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
@@ -49,6 +51,9 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   String? _error;
   final _searchCtrl = TextEditingController();
   final _scrollController = ScrollController();
+  final List<Store> _nearby = [];
+  double? _userLat;
+  double? _userLng;
 
   CategoryVisual get _visual => StoreCategories.visualFor(widget.categoryName);
 
@@ -56,6 +61,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadNearby();
   }
 
   Future<void> _load() async {
@@ -64,6 +70,8 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
     final result = await storesRepository.listStores(
       search: query.isEmpty ? null : query,
       category: widget.categoryName,
+      lat: _userLat,
+      lng: _userLng,
     );
     if (!mounted) return;
     result.fold(
@@ -73,6 +81,51 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
       }),
       onFailure: (msg, __) => setState(() { _error = msg; _loading = false; }),
     );
+  }
+
+  /// 'Stores near you' scoped to this category: same live-GPS-first rule as
+  /// the general directory, filtered to shops selling this category.
+  Future<void> _loadNearby() async {
+    double? lat = ApiService.currentUserLat;
+    double? lng = ApiService.currentUserLng;
+    try {
+      if (await Geolocator.isLocationServiceEnabled()) {
+        var perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.denied) {
+          perm = await Geolocator.requestPermission();
+        }
+        if (perm != LocationPermission.denied &&
+            perm != LocationPermission.deniedForever) {
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 10),
+            ),
+          );
+          lat = pos.latitude;
+          lng = pos.longitude;
+        }
+      }
+    } catch (_) {}
+    if (!mounted || lat == null || lng == null) return;
+    setState(() {
+      _userLat = lat;
+      _userLng = lng;
+    });
+    final result = await storesRepository.listStores(
+        category: widget.categoryName,
+        lat: lat,
+        lng: lng,
+        nearestFirst: true,
+        limit: 10);
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (data) => setState(() {
+        _nearby..clear()..addAll(data.take(5));
+      }),
+      onFailure: (_, __) {},
+    );
+    if (_userLat != null) _load();
   }
 
   @override
@@ -97,7 +150,10 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
           child: SafeArea(
             bottom: false,
             child: RefreshIndicator(
-              onRefresh: _load,
+              onRefresh: () async {
+                await _load();
+                await _loadNearby();
+              },
               color: BrokaColors.gold,
               backgroundColor: BrokaColors.bgCard,
               displacement: 72,
@@ -120,6 +176,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
                     ),
                   ),
                   SliverToBoxAdapter(child: _searchBar()),
+                  ..._nearbySlivers(),
                   ..._bodySlivers(),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
                 ],
@@ -141,6 +198,41 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
           onCleared: _load,
         ),
       );
+
+  List<Widget> _nearbySlivers() {
+    if (_nearby.isEmpty) return const [];
+    return [
+      const SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Text('Stores near you',
+              style: TextStyle(
+                  color: BrokaColors.textHigh,
+                  fontSize: 13,
+                  height: 1.2,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.1)),
+        ),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (_, i) => StoreCard(
+              store: _nearby[i],
+              onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => StoreHomeScreen(storeId: _nearby[i].id))),
+              onDetails: () => showStoreDetails(context, _nearby[i],
+                  repository: storesRepository),
+            ),
+            childCount: _nearby.length,
+          ),
+        ),
+      ),
+    ];
+  }
 
   List<Widget> _bodySlivers() {
     final visual = _visual;
