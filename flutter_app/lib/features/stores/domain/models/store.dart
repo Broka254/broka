@@ -184,13 +184,19 @@ class Store {
     return parts.isEmpty ? null : parts.join(', ');
   }
 
+  /// How far still counts as near, in km. Beyond it a shop is not near
+  /// you, and the card shows the place instead of a number.
+  static const double nearRadiusKm = 25;
+
   /// '6 km from you' for the card: the server's label when present, else
   /// formatted locally from distanceKm so older backends still read right.
-  /// Null when neither is known - a missing distance is unknown, never 0 km.
+  /// Null beyond [nearRadiusKm], and when neither is known - a missing
+  /// distance is unknown, never 0 km.
   String? get nearLabel {
-    if (distanceLabel != null && distanceLabel!.trim().isNotEmpty) return distanceLabel;
     final km = distanceKm;
-    if (km == null || km.isNaN || km.isInfinite || km < 0) return null;
+    if (km != null && (km.isNaN || km.isInfinite || km < 0 || km > nearRadiusKm)) return null;
+    if (distanceLabel != null && distanceLabel!.trim().isNotEmpty) return distanceLabel;
+    if (km == null) return null;
     if (km < 1.0) {
       final m = (km * 1000).round();
       return m == 1 ? '1 m from you' : '$m m from you';

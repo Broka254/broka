@@ -13,7 +13,6 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
-import '../../../services/api_service.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
@@ -86,8 +85,9 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   /// 'Stores near you' scoped to this category: same live-GPS-first rule as
   /// the general directory, filtered to shops selling this category.
   Future<void> _loadNearby() async {
-    double? lat = ApiService.currentUserLat;
-    double? lng = ApiService.currentUserLng;
+    // Live GPS only - the saved session point can be tens of km stale.
+    double? lat;
+    double? lng;
     try {
       if (await Geolocator.isLocationServiceEnabled()) {
         var perm = await Geolocator.checkPermission();
@@ -116,6 +116,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
         category: widget.categoryName,
         lat: lat,
         lng: lng,
+        maxDistanceKm: Store.nearRadiusKm,
         nearestFirst: true,
         limit: 10);
     if (!mounted) return;
@@ -202,16 +203,26 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   List<Widget> _nearbySlivers() {
     if (_nearby.isEmpty) return const [];
     return [
-      const SliverToBoxAdapter(
+      SliverToBoxAdapter(
         child: Padding(
-          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
-          child: Text('Stores near you',
-              style: TextStyle(
-                  color: BrokaColors.textHigh,
-                  fontSize: 13,
-                  height: 1.2,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.1)),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [
+              Icon(Icons.near_me_rounded, size: 16, color: BrokaColors.gold),
+              SizedBox(width: 6),
+              Text('Stores near you',
+                  style: TextStyle(
+                      color: BrokaColors.textHigh,
+                      fontSize: 15,
+                      height: 1.2,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.1)),
+            ]),
+            const SizedBox(height: 2),
+            Text('${_nearby.length} within 25 km of you',
+                style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
+                    fontWeight: FontWeight.w700)),
+          ]),
         ),
       ),
       SliverPadding(

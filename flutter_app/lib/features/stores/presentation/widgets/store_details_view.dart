@@ -347,9 +347,9 @@ class StoreDetailsView extends StatelessWidget {
                     "escrow service: it holds the money until you have the item. BROKA doesn't run "
                     'them, and Zeno walks you through it. Collecting? See the item first, then pay '
                     'the store. Never send a deposit to "hold" an item. Land or a car: see Pay with escrow.'
-                  : "BROKA doesn't hold payments: you pay the store directly. See the item first, "
-                    'then pay. Never send a deposit to "hold" an item, and never pay a number '
-                    'claiming to be BROKA.',
+                  : "BROKA doesn't hold payments: you pay the store directly. Delivery or "
+                    'pickup is agreed with the store. See the item first, then pay. Never send '
+                    'a deposit to "hold" an item, and never pay a number claiming to be BROKA.',
               style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13, height: 1.45),
             )),
           ]),

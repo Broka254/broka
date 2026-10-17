@@ -14,6 +14,8 @@
 // M-Pesa screen.
 //
 // Pops `true` once paid, so the caller can celebrate or refresh.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -59,11 +61,20 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   int _size = 20;
   bool _sizing = false;
   String? _error;
+  final _sizeCtrl = TextEditingController();
+  Timer? _sizeDebounce;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _sizeDebounce?.cancel();
+    _sizeCtrl.dispose();
+    super.dispose();
   }
 
   /// The card first, then the plan priced for the size the seller picks:
@@ -99,6 +110,7 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
         setState(() {
           _quote = data;
           _size = data.plan?.listings ?? size;
+          if (_sizeCtrl.text != _size.toString()) _sizeCtrl.text = _size.toString();
           if (!options.contains(_months)) {
             _months = options.contains(2) ? 2 : options.first;
           }
@@ -116,16 +128,24 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
     }
   }
 
-  void _changeSize(int delta) {
+  /// Pick any size in one gesture and price it: drag, tap a common size,
+  /// or type the number - all three land here.
+  void _setSize(int size) {
     final q = _quote;
-    if (q == null || _sizing) return;
-    final min = q.rateCard.minListings;
-    final max = q.rateCard.maxListings;
-    final next = (_size + delta).clamp(min, max);
-    if (next == _size) return;
+    if (q == null) return;
+    final clamped = size.clamp(q.rateCard.minListings, q.rateCard.maxListings);
+    if (clamped == _size && !_sizing) return;
     HapticFeedback.selectionClick();
-    setState(() => _size = next);
-    _priceSize(q, next);
+    setState(() => _size = clamped);
+    _priceSize(q, clamped);
+  }
+
+  void _onSizeTyped(String raw) {
+    _sizeDebounce?.cancel();
+    _sizeDebounce = Timer(const Duration(milliseconds: 500), () {
+      final parsed = int.tryParse(raw.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (parsed != null && mounted) _setSize(parsed);
+    });
   }
 
   StorePlanPeriod? get _period => _quote?.plan?.period(_months);
@@ -273,48 +293,73 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
                         key: const Key('store-billing-plan'),
                         style: const TextStyle(color: BrokaColors.textHigh, fontSize: 15,
                             fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 2),
-                    Text('KES ${formatKesAmount(plan.monthlyPrice)} a month'
-                        ' · KES ${(plan.monthlyPrice / plan.listings).toStringAsFixed(1)} a listing'
-                        '${q.liveListings > 1 ? ' · ${q.liveListings} live now' : ''}',
-                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
+                    if (q.liveListings > 1)
+                      Text('${q.liveListings} live now',
+                          style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
                   ]),
                 ),
               ]),
               const SizedBox(height: 12),
-              // Customizable size: 20 listings minimum, every size priced by
-              // the server - bigger is cheaper per listing (30 is 1,099 for
-              // two months instead of 1,200).
+              // Any size in one gesture: type it, drag to it, or tap a
+              // common size. Every size is priced by the server.
               Row(children: [
-                _SizeButton(
-                    key: const Key('store-billing-minus'),
-                    icon: Icons.remove_rounded,
-                    onTap: _sizing ? null : () => _changeSize(-1)),
                 Expanded(
-                  child: Center(
-                    child: _sizing
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                color: BrokaColors.gold, strokeWidth: 2))
-                        : Text('$_size listings',
-                            key: const Key('store-billing-size'),
-                            style: const TextStyle(
-                                color: BrokaColors.textHigh,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800)),
+                  child: TextField(
+                    key: const Key('store-billing-size-field'),
+                    controller: _sizeCtrl,
+                    keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
+                    onChanged: _onSizeTyped,
+                    onSubmitted: (v) {
+                      _sizeDebounce?.cancel();
+                      final parsed = int.tryParse(v.replaceAll(RegExp(r'[^0-9]'), ''));
+                      if (parsed != null) _setSize(parsed);
+                    },
+                    decoration: InputDecoration(
+                      labelText: 'Listings',
+                      hintText: 'e.g. 150',
+                      suffixText: 'listings',
+                      isDense: true,
+                      suffixIcon: _sizing
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: Padding(
+                                padding: EdgeInsets.all(8),
+                                child: CircularProgressIndicator(
+                                    color: BrokaColors.gold, strokeWidth: 2)))
+                          : null,
+                    ),
                   ),
                 ),
-                _SizeButton(
-                    key: const Key('store-billing-plus'),
-                    icon: Icons.add_rounded,
-                    onTap: _sizing ? null : () => _changeSize(1)),
+              ]),
+              Slider(
+                key: const Key('store-billing-size-slider'),
+                value: _size.toDouble(),
+                min: q.rateCard.minListings.toDouble(),
+                max: q.rateCard.maxListings.toDouble(),
+                activeColor: BrokaColors.gold,
+                onChanged: _sizing
+                    ? null
+                    : (v) => setState(() {
+                          _size = v.round();
+                          _sizeCtrl.text = _size.toString();
+                        }),
+                onChangeEnd: (v) => _setSize(v.round()),
+              ),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final n in const [20, 30, 50, 100, 150, 250, 500, 1000])
+                  if (n >= q.rateCard.minListings && n <= q.rateCard.maxListings)
+                    ChoiceChip(
+                      key: Key('store-billing-size-$n'),
+                      label: Text('$n'),
+                      selected: _size == n,
+                      onSelected: _sizing ? null : (_) => _setSize(n),
+                    ),
               ]),
               const SizedBox(height: 6),
               Text(
-                  'From ${q.rateCard.minListings} to ${q.rateCard.maxListings} listings'
-                  ' · bigger is cheaper per listing.',
+                  'From ${q.rateCard.minListings} to ${q.rateCard.maxListings} listings.',
                   style: const TextStyle(
                       color: BrokaColors.textMid, fontSize: 11.5, height: 1.4)),
             ]),
@@ -390,39 +435,6 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-/// The +/- stepper for how many listings the plan covers.
-class _SizeButton extends StatelessWidget {
-  const _SizeButton({super.key, required this.icon, required this.onTap});
-  final IconData icon;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        enabled: onTap != null,
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: onTap == null
-                  ? BrokaColors.bgCard
-                  : BrokaColors.gold.withOpacity(0.14),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: onTap == null
-                      ? BrokaColors.border
-                      : BrokaColors.gold.withOpacity(0.6)),
-            ),
-            child: Icon(icon,
-                color: onTap == null ? BrokaColors.textMid : BrokaColors.gold,
-                size: 20),
-          ),
-        ),
-      );
-}
-
 /// One prepay period, its total the amount actually charged.
 class _MonthOption extends StatelessWidget {
   const _MonthOption({
@@ -483,11 +495,12 @@ class _MonthOption extends StatelessWidget {
                                     fontWeight: FontWeight.w800)),
                           ),
                       ]),
-                  if (period.months > 1)
+                  // No monthly equivalent: the charge is the total on the
+                  // right, and a monthly figure only invites "why is the
+                  // total higher than that?" (the owner's request).
+                  if (period.setupFee > 0)
                     Text(
-                        'KES ${formatKesAmount(period.perMonth.round())} a month'
-                        '${period.savingPercent > 0 ? ' · save ${period.savingPercent}%' : ''}'
-                        '${period.setupFee > 0 ? ' · + KES ${formatKesAmount(period.setupFee)} opening fee' : ''}',
+                        '+ KES ${formatKesAmount(period.setupFee)} opening fee',
                         style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
                 ]),
               ),

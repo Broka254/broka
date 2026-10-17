@@ -26,7 +26,6 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../main.dart';
 import '../../../core/utils/result.dart';
-import '../../../services/api_service.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
@@ -35,6 +34,7 @@ import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import '../domain/store_categories.dart';
+import 'nearby_stores_screen.dart';
 import 'store_category_screen.dart';
 import 'store_home_screen.dart';
 import 'widgets/store_card.dart';
@@ -83,8 +83,11 @@ class _StoreListScreenState extends State<StoreListScreen> {
   /// saved session point as fallback - never a stale zero. A missing fix
   /// leaves the section hidden, not a 0 km list.
   Future<void> _loadNearby() async {
-    double? lat = ApiService.currentUserLat;
-    double? lng = ApiService.currentUserLng;
+    // Live GPS only. The saved session point (ApiService.currentUserLat/Lng)
+    // is the signup fix and can be tens of km stale - near you from a stale
+    // point is worse than no near you at all.
+    double? lat;
+    double? lng;
     try {
       if (await Geolocator.isLocationServiceEnabled()) {
         var perm = await Geolocator.checkPermission();
@@ -111,7 +114,9 @@ class _StoreListScreenState extends State<StoreListScreen> {
       _userLng = lng;
     });
     final result = await storesRepository.listStores(
-        lat: lat, lng: lng, nearestFirst: true, limit: 10);
+        lat: lat, lng: lng,
+        maxDistanceKm: Store.nearRadiusKm,
+        nearestFirst: true, limit: 10);
     if (!mounted) return;
     result.fold(
       onSuccess: (data) => setState(() {
@@ -230,10 +235,27 @@ class _StoreListScreenState extends State<StoreListScreen> {
           key: const Key('store-category-rail'),
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-          itemCount: StoreCategories.onlineRail.length,
+          itemCount: StoreCategories.onlineRail.length + 1,
           separatorBuilder: (_, __) => const SizedBox(width: 10),
           itemBuilder: (_, i) {
-            final name = StoreCategories.onlineRail[i];
+            // Near you first: not a category, but browsable exactly like
+            // one - shops within 25 km of where you are standing.
+            if (i == 0) {
+              return CategoryArtCard(
+                key: const Key('store-category-near-you'),
+                label: 'Near you',
+                emoji: '📍',
+                gradient: const [BrokaColors.gold, BrokaColors.neonCyan],
+                width: cardWidth,
+                height: cardHeight,
+                labelSize: narrow ? 11.5 : 12.0,
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const NearbyStoresScreen())),
+              );
+            }
+            final name = StoreCategories.onlineRail[i - 1];
             final visual = StoreCategories.visualFor(name);
             return CategoryArtCard(
               key: Key('store-category-$name'),
@@ -263,21 +285,32 @@ class _StoreListScreenState extends State<StoreListScreen> {
                 letterSpacing: -0.1)),
       );
 
-  /// 'Stores near you': nearest first, each with its '6 km from you' label.
-  /// Hidden until a location fix arrives - no fix, no guess.
+  /// 'Stores near you': nearest first within 25 km, each with its distance.
+  /// Hidden until a live fix arrives and something qualifies - no fix or
+  /// nothing near means no section, never a guess.
   List<Widget> _nearbySlivers() {
     if (_nearby.isEmpty) return const [];
     return [
-      const SliverToBoxAdapter(
+      SliverToBoxAdapter(
         child: Padding(
-          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
-          child: Text('Stores near you',
-              style: TextStyle(
-                  color: BrokaColors.textHigh,
-                  fontSize: 13,
-                  height: 1.2,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.1)),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [
+              Icon(Icons.near_me_rounded, size: 16, color: BrokaColors.gold),
+              SizedBox(width: 6),
+              Text('Stores near you',
+                  style: TextStyle(
+                      color: BrokaColors.textHigh,
+                      fontSize: 15,
+                      height: 1.2,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.1)),
+            ]),
+            const SizedBox(height: 2),
+            Text('${_nearby.length} within 25 km of you',
+                style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
+                    fontWeight: FontWeight.w700)),
+          ]),
         ),
       ),
       SliverPadding(

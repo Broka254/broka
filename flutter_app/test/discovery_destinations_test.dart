@@ -446,7 +446,10 @@ void main() {
       expect(find.descendant(of: first, matching: find.text('9 products')), findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('Visit store')), findsOneWidget);
       // No escrow promise: BROKA holds no payments while they are paused.
-      expect(find.descendant(of: first, matching: find.text('Delivery or pickup')), findsOneWidget);
+      // Delivery/pickup moved into Store details; the card's fact row
+      // carries Details instead.
+      expect(find.descendant(of: first, matching: find.text('Delivery or pickup')), findsNothing);
+      expect(find.byKey(const Key('store-details-store-0')), findsOneWidget);
       expect(find.textContaining('Escrow'), findsNothing);
       // Taller than the old 80dp row, the same full-width shape.
       expect(tester.getSize(first).height, greaterThan(240));
@@ -460,7 +463,7 @@ void main() {
           matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == logo)),
           findsOneWidget);
 
-      // Details is its own pill on the picture: it opens the details
+      // Details sits in the card's fact row: it opens the details
       // screen (reviews and all), not the store's home.
       await tester.tap(find.byKey(const Key('store-details-store-0')));
       await _settle(tester);

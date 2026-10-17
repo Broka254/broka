@@ -162,26 +162,6 @@ class _StoreCardState extends State<StoreCard> {
                           color: owner.online ? BrokaColors.success : Colors.white70,
                         ),
                       ),
-                    if (widget.onDetails != null)
-                      Positioned(
-                        top: 10,
-                        right: 10,
-                        child: _DetailsButton(
-                          key: Key('store-details-${store.id}'),
-                          onTap: widget.onDetails!,
-                        ),
-                      ),
-                    if (store.nearLabel != null)
-                      Positioned(
-                        left: 10,
-                        bottom: 10,
-                        child: _Pill(
-                          key: Key('store-distance-${store.id}'),
-                          icon: Icons.near_me_outlined,
-                          label: store.nearLabel!,
-                          color: Colors.white,
-                        ),
-                      ),
                     if (store.categories.isNotEmpty)
                       Positioned(
                         right: 10,
@@ -220,20 +200,29 @@ class _StoreCardState extends State<StoreCard> {
                             ],
                           ]),
                           if (store.locationLine != null || store.nearLabel != null) ...[
-                            const SizedBox(height: 3),
+                            const SizedBox(height: 4),
                             Row(children: [
-                              const Icon(Icons.location_on_outlined, size: 14,
-                                  color: BrokaColors.textMid),
-                              const SizedBox(width: 3),
-                              Flexible(child: Text(
-                                  [
-                                    if (store.locationLine != null) store.locationLine!,
-                                    if (store.nearLabel != null) store.nearLabel!,
-                                  ].join(' · '),
+                              const Icon(Icons.location_on_outlined, size: 15,
+                                  color: BrokaColors.gold),
+                              const SizedBox(width: 4),
+                              Flexible(child: Text.rich(
+                                  TextSpan(children: [
+                                    if (store.locationLine != null)
+                                      TextSpan(text: store.locationLine!,
+                                          style: const TextStyle(
+                                              color: BrokaColors.textMid, fontSize: 13)),
+                                    if (store.locationLine != null && store.nearLabel != null)
+                                      const TextSpan(text: ' · ',
+                                          style: TextStyle(
+                                              color: BrokaColors.textMid, fontSize: 13)),
+                                    if (store.nearLabel != null)
+                                      TextSpan(text: store.nearLabel!,
+                                          style: const TextStyle(
+                                              color: BrokaColors.gold, fontSize: 13,
+                                              fontWeight: FontWeight.w700)),
+                                  ]),
                                   maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: BrokaColors.textMid,
-                                      fontSize: 12.5))),
+                                  overflow: TextOverflow.ellipsis)),
                             ]),
                           ],
                         ]),
@@ -246,13 +235,16 @@ class _StoreCardState extends State<StoreCard> {
                             text: rating != null ? rating.toStringAsFixed(1) : 'New seller'),
                         _Fact(icon: Icons.handshake_outlined, color: BrokaColors.neonCyan,
                             text: '$deals deal${deals == 1 ? '' : 's'} done'),
-                        // Not "Escrow protected": BROKA holds no payments
-                        // while they are paused, and a buyer who believes
-                        // it does is the one who sends money to a fake
-                        // "BROKA escrow" number. Delivery or pickup is
-                        // agreed with every store, whatever the payment.
-                        const _Fact(icon: Icons.local_shipping_outlined, color: BrokaColors.success,
-                            text: 'Delivery or pickup'),
+                        // Details lives here, in the card's own chip row -
+                        // the quiet sibling of Visit store below. (The
+                        // "Delivery or pickup" fact that sat here moved to
+                        // Store details, with the buying-safely text - see
+                        // store_details_view.dart.)
+                        if (widget.onDetails != null)
+                          _DetailsPill(
+                            key: Key('store-details-${store.id}'),
+                            onTap: widget.onDetails!,
+                          ),
                       ]),
                       const SizedBox(height: 12),
                       Container(height: 1, color: BrokaColors.border.withOpacity(0.8)),
@@ -345,11 +337,10 @@ class _Logo extends StatelessWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({super.key, required this.label, required this.color, this.dot, this.icon});
+  const _Pill({super.key, required this.label, required this.color, this.dot});
   final String label;
   final Color color;
   final Color? dot;
-  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
@@ -368,10 +359,6 @@ class _Pill extends StatelessWidget {
               boxShadow: [BoxShadow(color: dot!, blurRadius: 5)])),
           const SizedBox(width: 5),
         ],
-        if (icon != null) ...[
-          Icon(icon, size: 13, color: color),
-          const SizedBox(width: 4),
-        ],
         Flexible(
           child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
@@ -382,12 +369,11 @@ class _Pill extends StatelessWidget {
 }
 
 /// Details: the secondary action on a store card (the card itself opens the
-/// store). A solid, high-contrast button - white surface, dark text, larger
-/// than the overlay pills - so it reads as a button, not a caption. Kept
-/// small enough to stay off the picture's subject, with a shadow so it holds
-/// on any photo.
-class _DetailsButton extends StatelessWidget {
-  const _DetailsButton({super.key, required this.onTap});
+/// store). Drawn in the fact row's own language - a gold-outline pill on the
+/// card surface, the quiet sibling of the gradient Visit store pill - so it
+/// reads as part of BROKA, not a system warning.
+class _DetailsPill extends StatelessWidget {
+  const _DetailsPill({super.key, required this.onTap});
   final VoidCallback onTap;
 
   @override
@@ -397,21 +383,17 @@ class _DetailsButton extends StatelessWidget {
         child: GestureDetector(
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: BrokaColors.gold.withOpacity(0.10),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 10,
-                    offset: const Offset(0, 2)),
-              ],
+              border: Border.all(color: BrokaColors.gold.withOpacity(0.65)),
             ),
             child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.info_rounded, size: 16, color: Color(0xFF0A1220)),
+              Icon(Icons.info_outline_rounded, size: 15, color: BrokaColors.gold),
               SizedBox(width: 5),
-              Text('Details', style: TextStyle(color: Color(0xFF0A1220),
-                  fontSize: 13.5, fontWeight: FontWeight.w800, letterSpacing: -0.1)),
+              Text('Details', style: TextStyle(color: BrokaColors.gold,
+                  fontSize: 12.5, fontWeight: FontWeight.w800, letterSpacing: -0.1)),
             ]),
           ),
         ),

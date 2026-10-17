@@ -1,8 +1,14 @@
 """Online-store update: excluded listing categories, '6 km from you'
 distances, and KES 40-a-listing-per-two-months pricing."""
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
 from api.core.geo import format_distance_km, round_distance_km
+from api.database import init_db, reset_engine
 from api.domains.pricing import plans
 from api.domains.stores import categories as store_categories
+from main import app
 
 
 class TestExcludedListingCategories:
@@ -58,3 +64,79 @@ class TestOnlinePricing:
 
     def test_store_periods_are_bi_monthly(self):
         assert sorted(plans.STORE_PERIODS) == [2, 4, 6, 12]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def set_test_db(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("data") / "test_online_update.db"
+    mp = pytest.MonkeyPatch()
+    mp.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    reset_engine()
+    yield
+    mp.undo()
+
+
+@pytest_asyncio.fixture(scope="module", autouse=True)
+async def setup_db():
+    await init_db()
+
+
+@pytest_asyncio.fixture(scope="module")
+async def client():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        yield ac
+
+
+async def _register_at(client, phone: str, name: str, lat: float, lng: float) -> str:
+    req = await client.post("/auth/otp/request", json={"phone": phone})
+    code = req.json()["debug_code"]
+    verify = await client.post("/auth/otp/verify", json={"phone": phone, "code": code})
+    reg = await client.post("/auth/register", json={
+        "phone_verify_token": verify.json()["phone_verify_token"], "name": name,
+        "email": f"{phone}@test.ke", "password": "OwnerPass123!",
+        "lat": lat, "lng": lng, "account_type": "buyer_seller",
+        "seller_tier": "long_term", "business_name": name,
+        "business_category": "Electronics", "business_location": "Test",
+    })
+    assert reg.status_code == 201, reg.text
+    login = await client.post("/auth/login", json={"phone": phone, "password": "OwnerPass123!"})
+    return login.json()["access_token"]
+
+
+async def _open_store(client, token: str, name: str) -> dict:
+    r = await client.post("/stores", json={"name": name},
+                          headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+class TestStoresNearYou:
+    @pytest.mark.asyncio
+    async def test_only_shops_within_25km_are_near(self, client):
+        viewer = (-1.286, 36.817)  # Nairobi
+        near = await _open_store(
+            client,
+            await _register_at(client, "0722000001", "Near Owner", *viewer),
+            "Near Shop")
+        far = await _open_store(
+            client,
+            await _register_at(client, "0722000002", "Far Owner", 1.0, 36.817),
+            "Far Shop")
+
+        nearby = (await client.get("/stores", params={
+            "lat": viewer[0], "lng": viewer[1], "with_total": True,
+            "max_distance_km": 25, "nearest_first": True,
+        })).json()
+        names = {s["name"] for s in nearby["items"]}
+        assert names == {"Near Shop"}, names
+        item = nearby["items"][0]
+        assert item["id"] == near["id"]
+        assert item["distance_km"] is not None and item["distance_km"] <= 25
+        assert item["distance_label"].endswith("from you")
+
+        everything = (await client.get("/stores", params={
+            "lat": viewer[0], "lng": viewer[1], "with_total": True,
+        })).json()
+        by_name = {s["name"]: s for s in everything["items"]}
+        assert by_name["Far Shop"]["distance_km"] > 25
+        assert far["id"] == by_name["Far Shop"]["id"]

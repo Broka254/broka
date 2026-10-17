@@ -355,8 +355,14 @@ void main() {
       expect(find.textContaining("Buyers can't see Clanix Electronics"), findsOneWidget);
       expect(find.byKey(const Key('store-billing-plan')), findsOneWidget);
       expect(find.text('Goods store · 20 listings'), findsOneWidget);
-      expect(find.text('KES 400 a month · KES 20.0 a listing · 2 live now'), findsOneWidget);
-      expect(find.byKey(const Key('store-billing-size')), findsOneWidget);
+      // No monthly or per-listing price anywhere - only the real charge
+      // in the period rows below. Any size in one gesture: type, drag, tap.
+      expect(find.text('2 live now'), findsOneWidget);
+      expect(find.textContaining('a month'), findsNothing);
+      expect(find.textContaining('a listing'), findsNothing);
+      expect(find.byKey(const Key('store-billing-size-field')), findsOneWidget);
+      expect(find.byKey(const Key('store-billing-size-slider')), findsOneWidget);
+      expect(find.byKey(const Key('store-billing-size-150')), findsOneWidget);
       expect(find.text('No opening fee on online stores - you only pay the plan.'),
           findsOneWidget);
       // Every period is priced; nothing wears a waiver on a fee-free card.
