@@ -192,7 +192,8 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
           // After this frame, so the store's home is under the details.
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
-              showStoreDetails(context, data, animateBackground: widget.animateBackground);
+              showStoreDetails(context, data, animateBackground: widget.animateBackground,
+                  repository: _repo);
             }
           });
         }
@@ -287,7 +288,8 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
   }
 
   void _details(Store store) =>
-      showStoreDetails(context, store, animateBackground: widget.animateBackground);
+      showStoreDetails(context, store, animateBackground: widget.animateBackground,
+          repository: _repo);
 
   void _openCart(Store store) => openStoreCart(context,
       storeId: store.id, storeName: store.name, animateBackground: widget.animateBackground);
@@ -704,8 +706,10 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
   Widget build(BuildContext context) {
     final store = widget.store;
     final owner = store.owner;
-    final place = [store.category, store.locationLine]
-        .whereType<String>().where((s) => s.isNotEmpty).join(' · ');
+    final place = [
+      if (store.categories.isNotEmpty) store.categories.join(', '),
+      store.locationLine,
+    ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     final verified = owner?.verified ?? false;
     final rating = owner?.shownRating;
     final deals = owner?.completedDeals ?? 0;

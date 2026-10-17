@@ -8,6 +8,9 @@
 //   seller     who runs it, and their record in three numbers: deals
 //              done, rating, and the year they joined BROKA (these were
 //              chips crowding the store's header)
+//   reviews    the owner's buyer reviews, their star breakdown and reply
+//              time (a store has none of its own; these are the owner's,
+//              fetched from /stores/{id}/reviews)
 //   photos     the cover and shop photos
 //   about      the owner's own description, in full
 //   location   where the shop is, with a way to find it on a map
@@ -23,11 +26,17 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../main.dart' show BrokaColors;
+import '../../../../core/utils/result.dart';
+import '../../../../models/seller_standing.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/constellation_background.dart';
+import '../../../../widgets/seller_standing_tiles.dart' show SellerStandingTiles;
+import '../../../reviews/domain/models/review.dart';
 import '../../../safe_payment/payments_shown.dart';
 import '../../../safe_payment/safe_payment.dart';
+import '../../data/repositories/stores_repository.dart';
 import '../../domain/models/store.dart';
+import '../../domain/models/store_reviews.dart';
 import '../my_store_screen.dart' show StoreLogo;
 
 const _months = [
@@ -37,27 +46,75 @@ const _months = [
 
 String _monthYear(DateTime d) => '${_months[d.month - 1]} ${d.year}';
 
-/// Opens [store]'s details on top of whatever is showing.
+/// Opens [store]'s details on top of whatever is showing. With
+/// [repository], the screen fetches the store's reviews; without one it
+/// shows everything it already has and no reviews section.
 /// [animateBackground] follows the screen it's opened from (tests draw
 /// the constellation still).
 Future<void> showStoreDetails(BuildContext context, Store store,
-        {bool animateBackground = true}) =>
+        {bool animateBackground = true, StoresRepository? repository}) =>
     Navigator.of(context).push(MaterialPageRoute<void>(
       settings: const RouteSettings(name: 'store-details'),
-      builder: (_) => StoreDetailsScreen(store: store, animateBackground: animateBackground),
+      builder: (_) => StoreDetailsScreen(store: store, animateBackground: animateBackground,
+          repository: repository),
     ));
 
-class StoreDetailsScreen extends StatelessWidget {
+class StoreDetailsScreen extends StatefulWidget {
   const StoreDetailsScreen({
     super.key,
     required this.store,
+    this.repository,
     this.openUrl,
     this.animateBackground = true,
   });
 
   final Store store;
+
+  /// Where the buyer reviews come from. Null keeps the screen static -
+  /// widget tests of the rest of the page don't answer a network call.
+  final StoresRepository? repository;
   final Future<bool> Function(Uri uri)? openUrl;
   final bool animateBackground;
+
+  @override
+  State<StoreDetailsScreen> createState() => _StoreDetailsScreenState();
+}
+
+class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
+  StoreReviews? _reviews;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.repository != null) {
+      _loading = true;
+      _fetch();
+    }
+  }
+
+  Future<void> _fetch() async {
+    final result = await widget.repository!.getStoreReviews(widget.store.id);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      switch (result) {
+        case Success(:final data):
+          _reviews = data;
+        case Failure(:final message):
+          _error = message;
+      }
+    });
+  }
+
+  void _retry() {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    _fetch();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,11 +128,20 @@ class StoreDetailsScreen extends StatelessWidget {
             fontSize: 17, fontWeight: FontWeight.w800)),
       ),
       body: ConstellationBackground(
-        animate: animateBackground,
+        animate: widget.animateBackground,
         child: ListView(
           key: const Key('store-details-list'),
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-          children: [StoreDetailsView(store: store, openUrl: openUrl)],
+          children: [
+            StoreDetailsView(
+              store: widget.store,
+              openUrl: widget.openUrl,
+              reviews: _reviews,
+              reviewsLoading: _loading,
+              reviewsError: _error,
+              onRetryReviews: _retry,
+            ),
+          ],
         ),
       ),
     );
@@ -83,13 +149,30 @@ class StoreDetailsScreen extends StatelessWidget {
 }
 
 class StoreDetailsView extends StatelessWidget {
-  const StoreDetailsView({super.key, required this.store, this.openUrl});
+  const StoreDetailsView({
+    super.key,
+    required this.store,
+    this.openUrl,
+    this.reviews,
+    this.reviewsLoading = false,
+    this.reviewsError,
+    this.onRetryReviews,
+  });
 
   final Store store;
 
   /// Opens a mailto: or maps link. Defaults to the system handler; tests
   /// pass their own.
   final Future<bool> Function(Uri uri)? openUrl;
+
+  /// The owner's buyer reviews. Null while they are on their way (or when
+  /// the screen wasn't given a repository at all).
+  final StoreReviews? reviews;
+  final bool reviewsLoading;
+  final String? reviewsError;
+
+  /// Loads the reviews again after a failure.
+  final VoidCallback? onRetryReviews;
 
   Future<void> _open(BuildContext context, Uri uri) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -129,6 +212,16 @@ class StoreDetailsView extends StatelessWidget {
       const SizedBox(height: 22),
       _label('The seller'),
       _OwnerCard(store: store),
+      if (reviews != null || reviewsLoading || reviewsError != null) ...[
+        const SizedBox(height: 22),
+        _label('Buyer reviews'),
+        _ReviewsSection(
+          reviews: reviews,
+          loading: reviewsLoading,
+          error: reviewsError,
+          onRetry: onRetryReviews,
+        ),
+      ],
       if (photos.isNotEmpty) ...[
         const SizedBox(height: 22),
         _label('Photos of the shop'),
@@ -200,9 +293,9 @@ class StoreDetailsView extends StatelessWidget {
       _card(
         padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
         child: Column(children: [
-          if (store.category != null)
-            _InfoRow(icon: Icons.category_outlined, label: 'Sells', value: store.category!,
-                dense: true),
+          if (store.categories.isNotEmpty)
+            _InfoRow(icon: Icons.category_outlined, label: 'Sells',
+                value: store.categories.join(', '), dense: true),
           _InfoRow(
             key: const Key('store-details-link'),
             icon: Icons.link_rounded,
@@ -284,8 +377,10 @@ class _Summary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final place = [store.category, store.locationLine]
-        .whereType<String>().where((s) => s.isNotEmpty).join(' · ');
+    final place = [
+      if (store.categories.isNotEmpty) store.categories.join(', '),
+      store.locationLine,
+    ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     final color = store.isActive ? BrokaColors.success : BrokaColors.warning;
     return _card(
       key: const Key('store-details-summary'),
@@ -507,6 +602,214 @@ class _OwnerCard extends StatelessWidget {
           ]),
         ),
       );
+}
+
+/// The owner's buyer reviews: the star summary, the reply time, and the
+/// reviews themselves. A store has no reviews of its own - these are the
+/// seller's, from /stores/{id}/reviews - and the empty state says how
+/// reviews come to exist at all.
+class _ReviewsSection extends StatelessWidget {
+  const _ReviewsSection({
+    this.reviews,
+    required this.loading,
+    this.error,
+    this.onRetry,
+  });
+
+  final StoreReviews? reviews;
+  final bool loading;
+  final String? error;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final data = reviews;
+    if (data == null) {
+      if (error != null) {
+        return _card(
+          key: const Key('store-reviews-error'),
+          child: Row(children: [
+            const Icon(Icons.cloud_off_rounded, color: BrokaColors.warning, size: 22),
+            const SizedBox(width: 12),
+            Expanded(child: Text(error!, style: const TextStyle(
+                color: BrokaColors.textMid, fontSize: 13, height: 1.4))),
+            if (onRetry != null)
+              TextButton(
+                key: const Key('store-reviews-retry'),
+                onPressed: onRetry,
+                style: TextButton.styleFrom(foregroundColor: _link),
+                child: const Text('Retry'),
+              ),
+          ]),
+        );
+      }
+      if (loading) {
+        return _card(
+          key: const Key('store-reviews-loading'),
+          child: const Row(children: [
+            SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _link)),
+            SizedBox(width: 12),
+            Text('Loading buyer reviews...', style: TextStyle(
+                color: BrokaColors.textMid, fontSize: 13)),
+          ]),
+        );
+      }
+      return const SizedBox.shrink();
+    }
+
+    final summary = data.summary;
+    final reply = responseTimeLabel(data.sellerStanding?.responseMinutes);
+    final band = data.sellerStanding?.responseBand ?? StandingBand.unknown;
+    if (summary.count == 0) {
+      return _card(
+        key: const Key('store-reviews-empty'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(children: [
+            Icon(Icons.rate_review_outlined, color: BrokaColors.textMid, size: 22),
+            SizedBox(width: 12),
+            Expanded(child: Text('No reviews yet', style: TextStyle(
+                color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w700))),
+          ]),
+          const SizedBox(height: 6),
+          const Text("Reviews come from buyers after a completed deal. When you buy from this "
+              'store, yours will help the next buyer.',
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4)),
+          if (reply != null) ...[
+            const SizedBox(height: 10),
+            _replyLine(reply, band),
+          ],
+        ]),
+      );
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _card(
+        key: const Key('store-reviews-summary'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Column(children: [
+              Text((summary.average ?? 0).toStringAsFixed(1), style: const TextStyle(
+                  color: BrokaColors.textHigh, fontSize: 34,
+                  fontWeight: FontWeight.w900, height: 1.0)),
+              const SizedBox(height: 4),
+              _stars((summary.average ?? 0).round(), 13),
+              const SizedBox(height: 3),
+              Text(summary.count == 1 ? '1 review' : '${summary.count} reviews',
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+            ]),
+            const SizedBox(width: 18),
+            Expanded(child: Column(children: [
+              for (final star in const [5, 4, 3, 2, 1])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Row(children: [
+                    SizedBox(width: 10, child: Text('$star', style: const TextStyle(
+                        color: BrokaColors.textMid, fontSize: 10))),
+                    const Icon(Icons.star_rounded, color: BrokaColors.gold, size: 10),
+                    const SizedBox(width: 6),
+                    Expanded(child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: summary.countFor(star) / summary.count,
+                        backgroundColor: BrokaColors.bgMid,
+                        valueColor: AlwaysStoppedAnimation(
+                            star >= 4 ? BrokaColors.neonGreen
+                            : star == 3 ? BrokaColors.warning : BrokaColors.danger),
+                        minHeight: 6,
+                      ),
+                    )),
+                    const SizedBox(width: 6),
+                    SizedBox(width: 20, child: Text('${summary.countFor(star)}',
+                        textAlign: TextAlign.end,
+                        style: const TextStyle(color: BrokaColors.textMid, fontSize: 10))),
+                  ]),
+                ),
+            ])),
+          ]),
+          if (reply != null) ...[
+            const SizedBox(height: 12),
+            _replyLine(reply, band),
+          ],
+        ]),
+      ),
+      for (final review in data.reviews) _ReviewCard(review: review),
+      if (summary.count > data.reviews.length)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+              'Showing ${data.reviews.length} of ${summary.count} reviews',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+        ),
+    ]);
+  }
+
+  Widget _replyLine(String reply, StandingBand band) {
+    final color = SellerStandingTiles.bandColor(band);
+    return Row(key: const Key('store-response-time'), children: [
+      Icon(Icons.schedule_rounded, size: 15, color: color),
+      const SizedBox(width: 6),
+      Flexible(child: Text(reply, style: TextStyle(
+          color: color, fontSize: 12.5, fontWeight: FontWeight.w600))),
+    ]);
+  }
+
+  static Widget _stars(int filled, double size) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(5, (i) => Icon(
+            i < filled ? Icons.star_rounded : Icons.star_outline_rounded,
+            color: BrokaColors.gold, size: size)),
+      );
+}
+
+class _ReviewCard extends StatelessWidget {
+  const _ReviewCard({required this.review});
+  final SellerReview review;
+
+  @override
+  Widget build(BuildContext context) {
+    final when = review.createdAt?.toLocal();
+    final name = review.reviewerName;
+    return Container(
+      key: Key('store-review-${review.id}'),
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 30, height: 30,
+            decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: BrokaColors.brandGradient)),
+            child: Center(child: Text(name.isEmpty ? 'B' : name[0].toUpperCase(),
+                style: const TextStyle(color: Colors.white,
+                    fontWeight: FontWeight.w800, fontSize: 12))),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: BrokaColors.textHigh,
+                    fontWeight: FontWeight.w700, fontSize: 12)),
+            if (when != null)
+              Text('${when.day}/${when.month}/${when.year}',
+                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+          ])),
+          _ReviewsSection._stars(review.rating, 13),
+        ]),
+        if (review.comment.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(review.comment, style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 12, height: 1.45)),
+        ],
+      ]),
+    );
+  }
 }
 
 class _PhotoStrip extends StatelessWidget {

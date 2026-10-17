@@ -281,10 +281,11 @@ class _Banner extends StatelessWidget {
           left: 12,
           right: 12,
           child: Row(children: [
-            if (store.category != null)
+            if (store.categories.isNotEmpty)
               Flexible(
                 child: _Glass(
-                  child: Text('${CategoryVisuals.emojiFor(store.category)}  ${store.category}',
+                  child: Text('${CategoryVisuals.emojiFor(store.categories.first)}  '
+                      '${store.categories.join(', ')}',
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white, fontSize: 11.5,
                           fontWeight: FontWeight.w700)),

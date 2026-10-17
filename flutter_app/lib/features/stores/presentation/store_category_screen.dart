@@ -18,8 +18,10 @@ import '../../../widgets/constellation_background.dart';
 import '../../categories/domain/category_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
+import '../domain/store_categories.dart';
 import 'store_home_screen.dart';
 import 'widgets/store_card.dart';
+import 'widgets/store_details_view.dart' show showStoreDetails;
 
 /// Opens the one-category store screen, with no transition.
 void openStoreCategory(BuildContext context, String categoryName) {
@@ -48,7 +50,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   final _searchCtrl = TextEditingController();
   final _scrollController = ScrollController();
 
-  CategoryVisual get _visual => CategoryVisuals.resolve(widget.categoryName);
+  CategoryVisual get _visual => StoreCategories.visualFor(widget.categoryName);
 
   @override
   void initState() {
@@ -173,6 +175,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
     }
     if (_stores.isEmpty) {
       final searching = _searchCtrl.text.trim().isNotEmpty;
+      final wholesale = StoreCategories.isWholesaleFacet(widget.categoryName);
       return [
         SliverFillRemaining(
           hasScrollBody: false,
@@ -182,10 +185,14 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
               gradient: visual.gradient,
               headline: searching
                   ? 'No stores match "${_searchCtrl.text.trim()}"'
-                  : 'No ${widget.categoryName} stores yet',
+                  : wholesale
+                      ? 'No wholesale stores yet'
+                      : 'No ${widget.categoryName} stores yet',
               body: searching
                   ? 'Try a shorter or different search'
-                  : 'Shops selling ${widget.categoryName} will show up here.',
+                  : wholesale
+                      ? 'Shops selling across several categories will show up here.'
+                      : 'Shops selling ${widget.categoryName} will show up here.',
             ),
           ),
         ),
@@ -202,6 +209,8 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
                   context,
                   MaterialPageRoute(
                       builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
+              onDetails: () => showStoreDetails(context, _stores[i],
+                  repository: storesRepository),
             ),
             childCount: _stores.length,
           ),

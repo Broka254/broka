@@ -402,7 +402,8 @@ class _Header extends StatelessWidget {
               _StatusPill(active: store.isActive),
               const SizedBox(width: 8),
               Flexible(child: Text(
-                  [live, if (store.category != null) store.category!].join(' · '),
+                  [live, if (store.categories.isNotEmpty) store.categories.join(', ')]
+                      .join(' · '),
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
             ]),
@@ -2152,9 +2153,11 @@ class _SettingsTab extends StatelessWidget {
     return _tabList(context, key: const Key('settings-list'), children: [
       group('How buyers see it', [
         row(Icons.storefront_outlined, 'Store name', store.name, StoreSetupStep.name),
-        row(Icons.category_outlined, 'Category and description',
-            [store.category ?? 'Not set', if ((store.description ?? '').isNotEmpty) store.description!]
-                .join(' · '),
+        row(Icons.category_outlined, 'Categories and description',
+            [
+              store.categories.isEmpty ? 'Not set' : store.categories.join(', '),
+              if ((store.description ?? '').isNotEmpty) store.description!,
+            ].join(' · '),
             StoreSetupStep.category),
         row(Icons.account_circle_outlined, 'Logo',
             store.logoSource != null ? 'Added' : "None - BROKA's logo is shown",

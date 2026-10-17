@@ -10,6 +10,7 @@ import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
 import '../../domain/models/store_billing.dart';
 import '../../domain/models/store_product.dart';
+import '../../domain/models/store_reviews.dart';
 import '../../../../core/errors/user_facing_error.dart';
 
 /// Store catalogue sort orders the backend accepts.
@@ -167,6 +168,18 @@ class StoresRepository {
         final data = await _client.get('/stores/$storeId/categories') as List;
         return data.map((e) => StoreCategoryCount.fromJson(e as Map<String, dynamic>)).toList();
       });
+
+  /// A store's buyer reviews and the owner's published standing. Public:
+  /// the store page shows them to anyone, signed in or not.
+  Future<Result<StoreReviews>> getStoreReviews(
+    String storeId, {
+    int limit = 20,
+    int offset = 0,
+  }) =>
+      _guard(() async => StoreReviews.fromJson(await _client.get(
+            '/stores/$storeId/reviews',
+            queryParams: {'limit': limit.toString(), 'offset': offset.toString()},
+          ) as Map<String, dynamic>));
 
   /// The setup wizard's live check of a link name.
   Future<Result<LinkNameCheck>> checkLinkName(String name) => _guard(() async =>

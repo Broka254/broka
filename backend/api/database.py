@@ -1243,12 +1243,12 @@ async def init_db():
     _init_log = _logging.getLogger(__name__)
     for _module, _names in (
         ("api.models.dispute", ("DisputeCase", "DisputeEvent", "DisputeEvidence", "DisputeTimer")),
-        ("api.models.store", ("Store", "StoreDailyCount")),
+        ("api.models.store", ("Store", "StoreDailyCount", "StoreCategoryLink")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
         ("api.models.listing_payment", ("ListingPayment",)),
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
-        ("api.models.store_billing", ("StoreSubscription", "StorePayment")),
+        ("api.models.store_billing", ("StoreSubscription", "StorePayment", "StoreBillingMeta")),
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
@@ -1656,6 +1656,17 @@ async def init_db():
             print(f"✅ Store categories filled in for {updated} store(s)")
     except Exception as e:
         print(f"⚠️ Store category backfill failed (non-fatal): {e!r}")
+
+    # Online Stores phase 3: stores made before a store could sell across
+    # several categories get their single category as its one link row, so
+    # the directory's link-based filter still finds them.
+    try:
+        from api.domains.stores.categories import backfill_store_category_links
+        created = await backfill_store_category_links()
+        if created:
+            print(f"✅ Store category links filled in for {created} store(s)")
+    except Exception as e:
+        print(f"⚠️ Store category link backfill failed (non-fatal): {e!r}")
 
     # Store billing (PRICING.md §9): when billing turns on, every store
     # already open gets its grace time as a subscription row, so switching

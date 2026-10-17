@@ -28,7 +28,6 @@ import '../../../core/utils/result.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
-import '../../categories/domain/category_visual.dart';
 import '../../categories/presentation/widgets/category_art_card.dart';
 import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
@@ -37,6 +36,7 @@ import '../domain/store_categories.dart';
 import 'store_category_screen.dart';
 import 'store_home_screen.dart';
 import 'widgets/store_card.dart';
+import 'widgets/store_details_view.dart' show showStoreDetails;
 
 class StoreListScreen extends StatefulWidget {
   const StoreListScreen({super.key});
@@ -146,11 +146,13 @@ class _StoreListScreenState extends State<StoreListScreen> {
         ),
       );
 
-  /// Every top-level category as Home draws one (CategoryArtCard), so a
-  /// directory of many shops narrows the way products do: pick the kind of
-  /// shop and its screen opens with only those stores. All 21 stay on the
-  /// rail whether or not a category has shops yet - the same promise Home
-  /// makes with its category row.
+  /// Every rail entry as Home draws one (CategoryArtCard), so a directory
+  /// of many shops narrows the way products do: pick the kind of shop and
+  /// its screen opens with only those stores. StoreCategories.rail is a
+  /// store-directory order - the categories buyers shop first, with the
+  /// "Wholesale and General" facet fourth (stores selling across several
+  /// categories). The whole rail stays visible whether or not a category
+  /// has shops yet - the same promise Home makes with its category row.
   Widget _categoryRail() {
     final narrow = MediaQuery.sizeOf(context).width < 360;
     final cardWidth = narrow ? 112.0 : 122.0;
@@ -174,11 +176,11 @@ class _StoreListScreenState extends State<StoreListScreen> {
           key: const Key('store-category-rail'),
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-          itemCount: StoreCategories.all.length,
+          itemCount: StoreCategories.rail.length,
           separatorBuilder: (_, __) => const SizedBox(width: 10),
           itemBuilder: (_, i) {
-            final name = StoreCategories.all[i];
-            final visual = CategoryVisuals.resolve(name);
+            final name = StoreCategories.rail[i];
+            final visual = StoreCategories.visualFor(name);
             return CategoryArtCard(
               key: Key('store-category-$name'),
               label: name,
@@ -268,6 +270,8 @@ class _StoreListScreenState extends State<StoreListScreen> {
                   context,
                   MaterialPageRoute(
                       builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
+              onDetails: () => showStoreDetails(context, _stores[i],
+                  repository: storesRepository),
             ),
             childCount: _stores.length,
           ),

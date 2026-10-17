@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:broka/core/network/api_client.dart';
+import 'package:broka/features/categories/domain/category_visual.dart';
 import 'package:broka/features/listings/data/repositories/listings_repository.dart';
 import 'package:broka/features/stores/data/repositories/stores_repository.dart';
 import 'package:broka/features/stores/data/store_share.dart';
@@ -62,13 +63,15 @@ Map<String, dynamic> _storeJson({
   bool active = true,
   String? email,
   bool emailVerified = false,
+  List<String> categories = const ['Electronics'],
 }) =>
     {
       'id': 's1',
       'name': 'Clanix Electronics',
       'slug': slug,
       'url': 'https://broka.co.ke/store/$slug',
-      'category': 'Electronics',
+      'category': categories.first,
+      'categories': categories,
       'description': 'Phones',
       'county': 'Nairobi',
       'subcounty': 'Starehe',
@@ -245,12 +248,37 @@ void main() {
       expect(StoreCategories.fromAny('Supermarket'), 'Other');
       expect(StoreCategories.fromAny(''), isNull);
     });
+
+    test('the directory rail: the wholesale facet fourth, every category once', () {
+      expect(StoreCategories.rail, hasLength(StoreCategories.all.length + 1));
+      expect(StoreCategories.rail[3], StoreCategories.wholesale);
+      for (final name in StoreCategories.all) {
+        expect(StoreCategories.rail.where((r) => r == name), hasLength(1), reason: name);
+      }
+      expect(StoreCategories.rail.where((r) => r == StoreCategories.wholesale), hasLength(1));
+    });
+
+    test('the wholesale facet is derived, never chosen', () {
+      expect(StoreCategories.isWholesaleFacet('Wholesale and General'), isTrue);
+      expect(StoreCategories.isWholesaleFacet(' wholesale and general '), isTrue);
+      // The signup category that maps to Business & Industrial is not it.
+      expect(StoreCategories.isWholesaleFacet('Wholesale'), isFalse);
+      expect(StoreCategories.isWholesaleFacet('Business & Industrial'), isFalse);
+      expect(StoreCategories.isWholesaleFacet(null), isFalse);
+      expect(StoreCategories.all, isNot(contains(StoreCategories.wholesale)),
+          reason: 'the facet is a directory facet, not a taxonomy category');
+      // Its card carries its own artwork, and canonical names keep theirs.
+      final visual = StoreCategories.visualFor(StoreCategories.wholesale);
+      expect(visual.assetPath, contains('wholesale-bulk-stock.webp'));
+      expect(StoreCategories.visualFor('Electronics'), CategoryVisuals.resolve('Electronics'));
+    });
   });
 
   group('Store model', () {
-    test('parses the phase 2 payload', () {
+    test('parses the phase 3 payload', () {
       final s = Store.fromJson(_storeJson(email: 'a@b.co', emailVerified: true));
       expect(s.category, 'Electronics');
+      expect(s.categories, ['Electronics']);
       expect(s.displayUrl, 'broka.co.ke/store/clanix');
       expect(s.shareUrl('whatsapp'), 'https://broka.co.ke/store/clanix?via=whatsapp');
       expect(s.owner!.completedDeals, 12);
@@ -258,11 +286,27 @@ void main() {
       expect(s.locationLine, 'Starehe, Nairobi');
     });
 
+    test('a store selling in several categories keeps them in order', () {
+      final s = Store.fromJson(_storeJson(categories: ['Gaming', 'Electronics', 'Fashion']));
+      expect(s.category, 'Gaming', reason: 'the first is the primary');
+      expect(s.categories, ['Gaming', 'Electronics', 'Fashion']);
+    });
+
+    test('a phase 2 backend: one category and no list', () {
+      final json = _storeJson()..remove('categories');
+      final s = Store.fromJson(json);
+      expect(s.categories, ['Electronics'], reason: 'the single category is the whole set');
+    });
+
     test('an older backend: specialization and no url', () {
-      final json = _storeJson()..remove('url')..remove('category');
+      final json = _storeJson()
+        ..remove('url')
+        ..remove('category')
+        ..remove('categories');
       json['specialization'] = 'Electronics';
       final s = Store.fromJson(json);
       expect(s.category, 'Electronics');
+      expect(s.categories, ['Electronics']);
       expect(s.url, 'https://broka.co.ke/store/clanix');
     });
 
@@ -334,7 +378,7 @@ void main() {
       expect(c.steps.first, StoreSetupStep.name);
       expect(c.name, 'Clanix Electronics');
       expect(c.slug, 'clanix-electronics');
-      expect(c.category, 'Electronics');
+      expect(c.categories, ['Electronics'], reason: "from the signup category");
       expect(c.county, 'Nairobi');
       expect(c.description, contains('genuine'));
       await pumpEventQueue();
@@ -510,6 +554,7 @@ void main() {
       final body = backend.bodiesFor('POST', '/stores').single;
       expect(body['slug'], 'clanix-electronics');
       expect(body['category'], 'Electronics');
+      expect(body['categories'], ['Electronics']);
       expect(body['county'], 'Nairobi');
       expect(body['subcounty'], 'Starehe');
       expect(body['location_description'], 'Moi Avenue');
@@ -596,7 +641,7 @@ void main() {
       first
         ..setName('Clanix Phones')
         ..setSlug('clanix-phones')
-        ..setCategory('Gaming')
+        ..toggleCategory('Gaming')
         ..setSubcounty('Starehe');
       await first.saveDraft();
       first.dispose();
@@ -607,8 +652,52 @@ void main() {
       expect(second.name, 'Clanix Phones');
       expect(second.slug, 'clanix-phones');
       expect(second.slugEdited, isTrue);
-      expect(second.category, 'Gaming');
+      expect(second.categories, ['Electronics', 'Gaming'],
+          reason: 'the prefilled category and the one she added, in order');
       expect(second.subcounty, 'Starehe');
+    });
+
+    test('several categories go to the server in order, primary first', () async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json(_owner()),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+        'POST /stores': (_) => _json(_storeJson(), 201),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      await pumpEventQueue();
+      c
+        ..toggleCategory('Gaming')
+        ..toggleCategory('Fashion')
+        ..toggleCategory('Gaming') // tapped again: taken off
+        ..setSubcounty('Starehe')
+        ..photos = [const DraftImage(id: 'p1')];
+      expect(c.categories, ['Electronics', 'Fashion']);
+
+      final (store, problem) = await c.launch();
+      expect(problem, isNull);
+      expect(store, isNotNull);
+      final body = backend.bodiesFor('POST', '/stores').single;
+      expect(body['categories'], ['Electronics', 'Fashion']);
+      expect(body['category'], 'Electronics', reason: 'the primary, for older backends');
+      c.dispose();
+    });
+
+    test('with nothing chosen the category step blocks, until one is picked', () async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json({..._owner(), 'business_category': null}),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      expect(c.categories, isEmpty);
+      expect(c.validate(StoreSetupStep.category), 'Choose what your store sells.');
+      c.toggleCategory('Gaming');
+      expect(c.categories, ['Gaming']);
+      expect(c.validate(StoreSetupStep.category), isNull);
+      c.dispose();
     });
 
     test('settings save only the part being edited', () async {
@@ -755,6 +844,42 @@ void main() {
       await tester.tap(find.text('Back'));
       await tester.pumpAndSettle();
       expect(find.text('Choose your link'), findsOneWidget);
+      c.dispose();
+    });
+
+    testWidgets('the category step takes several categories, in the order tapped',
+        (tester) async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json(_owner()),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      // As the wizard screen does: the step redraws when the draft does.
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+          child: ListenableBuilder(listenable: c, builder: (_, __) => CategoryStep(c))))));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.check_rounded), findsOneWidget,
+          reason: 'the prefilled Electronics is ticked');
+      await tester.ensureVisible(find.byKey(const Key('store-category-chip-Gaming')));
+      await tester.tap(find.byKey(const Key('store-category-chip-Gaming')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('store-category-chip-Fashion')));
+      await tester.tap(find.byKey(const Key('store-category-chip-Fashion')));
+      await tester.pumpAndSettle();
+      expect(c.categories, ['Electronics', 'Gaming', 'Fashion'],
+          reason: 'tapped order: Electronics was prefilled first');
+      expect(find.byIcon(Icons.check_rounded), findsNWidgets(3));
+
+      await tester.ensureVisible(find.byKey(const Key('store-category-chip-Gaming')));
+      await tester.tap(find.byKey(const Key('store-category-chip-Gaming')));
+      await tester.pumpAndSettle();
+      expect(c.categories, ['Electronics', 'Fashion'], reason: 'tapped again: taken off');
+
+      // Wholesale and General is derived from two or more, never chosen.
+      expect(find.text(StoreCategories.wholesale), findsNothing);
       c.dispose();
     });
 

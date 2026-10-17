@@ -158,15 +158,15 @@ class _SyncedFieldState extends State<_SyncedField> {
 }
 
 class _CategoryChips extends StatelessWidget {
-  const _CategoryChips({required this.selected, required this.onSelected});
-  final String? selected;
-  final ValueChanged<String> onSelected;
+  const _CategoryChips({required this.selected, required this.onToggled});
+  final List<String> selected;
+  final ValueChanged<String> onToggled;
 
   @override
   Widget build(BuildContext context) {
     return Wrap(spacing: 8, runSpacing: 10, children: [
       for (final name in StoreCategories.all)
-        _chip(name, CategoryVisuals.resolve(name), selected == name),
+        _chip(name, StoreCategories.visualFor(name), selected.contains(name)),
     ]);
   }
 
@@ -174,7 +174,8 @@ class _CategoryChips extends StatelessWidget {
         selected: isSelected,
         button: true,
         child: GestureDetector(
-          onTap: () => onSelected(name),
+          key: Key('store-category-chip-$name'),
+          onTap: () => onToggled(name),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -202,6 +203,12 @@ class _CategoryChips extends StatelessWidget {
                         fontSize: 13,
                         fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500)),
               ),
+              // A tick as well as the gold rim: multi-select shouldn't
+              // hinge on one visual cue.
+              if (isSelected) ...[
+                const SizedBox(width: 5),
+                const Icon(Icons.check_rounded, size: 14, color: BrokaColors.gold),
+              ],
             ]),
           ),
         ),
@@ -385,8 +392,8 @@ class CategoryStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _label('Main category'),
-      _CategoryChips(selected: c.category, onSelected: c.setCategory),
+      _label('What your store sells'),
+      _CategoryChips(selected: c.categories, onToggled: c.toggleCategory),
       const SizedBox(height: 24),
       _SyncedField(
         value: c.description,
@@ -398,8 +405,9 @@ class CategoryStep extends StatelessWidget {
         textCapitalization: TextCapitalization.sentences,
       ),
       const SizedBox(height: 4),
-      const _Hint('Products from any category can go in your store. This is the '
-          'one it is listed under.'),
+      const _Hint('Choose every category your store sells in - one or more. '
+          'Shops selling across several are listed as Wholesale and General. '
+          'Products from any category can go in your store.'),
     ]);
   }
 }
@@ -901,7 +909,7 @@ class ReviewStep extends StatelessWidget {
               child: cover != null
                   ? image(cover)
                   : Container(decoration: BoxDecoration(gradient: LinearGradient(
-                      colors: CategoryVisuals.gradientFor(c.category)
+                      colors: CategoryVisuals.gradientFor(c.categories.firstOrNull)
                           .map((col) => col.withOpacity(0.6)).toList()))),
             ),
             Padding(
@@ -920,7 +928,7 @@ class ReviewStep extends StatelessWidget {
                           fontWeight: FontWeight.w800)),
                   const SizedBox(height: 2),
                   Text([
-                    if (c.category != null) c.category!,
+                    if (c.categories.isNotEmpty) c.categories.join(', '),
                     if ((c.subcounty ?? '').isNotEmpty) c.subcounty!,
                     if ((c.county ?? '').isNotEmpty) c.county!,
                   ].join(' · '), style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
@@ -939,7 +947,9 @@ class ReviewStep extends StatelessWidget {
       ],
       _row('Name', c.name.trim(), StoreSetupStep.name),
       _row('Link', '${c.linkPrefix}${c.slug}', StoreSetupStep.link, locked: true),
-      _row('Category', c.category ?? '-', StoreSetupStep.category),
+      _row(c.categories.length > 1 ? 'Categories' : 'Category',
+          c.categories.isEmpty ? '-' : c.categories.join(', '),
+          StoreSetupStep.category),
       if (c.description.trim().isNotEmpty)
         _row('About', c.description.trim(), StoreSetupStep.category),
       _row('Location', [

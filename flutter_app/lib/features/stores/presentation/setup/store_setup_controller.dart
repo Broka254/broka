@@ -120,7 +120,7 @@ class StoreSetupController extends ChangeNotifier {
           .substring(0, s.url.length - s.slug.length)
           .replaceFirst(RegExp(r'^https?://'), '');
     }
-    category = s.category;
+    categories = [...s.categories];
     description = s.description ?? '';
     county = KenyaLocations.canonicalCounty(s.county) ?? s.county;
     subcounty = s.subcounty;
@@ -172,7 +172,11 @@ class StoreSetupController extends ChangeNotifier {
   /// Whether the owner typed the link themselves. Until they do, it
   /// follows the store name.
   bool slugEdited = false;
-  String? category;
+
+  /// Every category the store sells in, in the order chosen: the first is
+  /// the store's primary (what older clients read as `category`). A second
+  /// one lists the shop under "Wholesale and General" too.
+  List<String> categories = [];
   String description = '';
   String? county;
   String? subcounty;
@@ -251,7 +255,8 @@ class StoreSetupController extends ChangeNotifier {
   void _prefill(StoreOwnerProfile o) {
     name = (o.businessName ?? '').trim();
     slug = suggestLink(name);
-    category = StoreCategories.fromAny(o.businessCategory);
+    final mapped = StoreCategories.fromAny(o.businessCategory);
+    categories = [if (mapped != null) mapped];
     description = (o.businessDescription ?? '').trim();
     county = KenyaLocations.guessCounty(o.businessLocation);
     landmark = '';
@@ -266,7 +271,12 @@ class StoreSetupController extends ChangeNotifier {
       name = d['name'] as String? ?? '';
       slug = d['slug'] as String? ?? '';
       slugEdited = d['slugEdited'] as bool? ?? false;
-      category = d['category'] as String?;
+      categories = (d['categories'] as List? ?? const []).whereType<String>().toList();
+      // Drafts written before stores could sell in several categories kept
+      // one string; it becomes the single chosen category.
+      if (categories.isEmpty && d['category'] is String) {
+        categories = [d['category'] as String];
+      }
       description = d['description'] as String? ?? '';
       county = d['county'] as String?;
       subcounty = d['subcounty'] as String?;
@@ -321,7 +331,7 @@ class StoreSetupController extends ChangeNotifier {
         'name': name,
         'slug': slug,
         'slugEdited': slugEdited,
-        'category': category,
+        'categories': categories,
         'description': description,
         'county': county,
         'subcounty': subcounty,
@@ -457,7 +467,15 @@ class StoreSetupController extends ChangeNotifier {
 
   // ── Category, location ───────────────────────────────────────────────────
 
-  void setCategory(String v) { category = v; _changed(); }
+  /// Adds [name] if it wasn't chosen, removes it if it was. Order is kept,
+  /// so the first category stays the store's primary.
+  void toggleCategory(String name) {
+    categories = categories.contains(name)
+        ? ([...categories]..remove(name))
+        : [...categories, name];
+    _changed();
+  }
+
   void setDescription(String v) { description = v; _changed(); }
 
   void setCounty(String? v) {
@@ -658,7 +676,7 @@ class StoreSetupController extends ChangeNotifier {
           _ => linkMessage ?? linkProblem(slug) ?? 'Choose an available link.',
         };
       case StoreSetupStep.category:
-        if (category == null) return 'Choose what your store sells.';
+        if (categories.isEmpty) return 'Choose what your store sells.';
         if (description.trim().length > maxDescriptionLength) {
           return 'Keep the description under $maxDescriptionLength characters.';
         }
@@ -747,7 +765,11 @@ class StoreSetupController extends ChangeNotifier {
       final payload = <String, dynamic>{
         'name': name.trim(),
         'slug': slug,
-        'category': category,
+        // `category` is what backends before phase 3 read; keeping both
+        // means a store opened against an older server still records the
+        // primary the seller chose.
+        'category': categories.first,
+        'categories': categories,
         'description': _clean(description),
         'county': county,
         'subcounty': _clean(subcounty ?? ''),
@@ -808,7 +830,8 @@ class StoreSetupController extends ChangeNotifier {
       final Map<String, dynamic> payload = switch (step) {
         StoreSetupStep.name => {'name': name.trim()},
         StoreSetupStep.category => {
-            'category': category,
+            'category': categories.first,
+            'categories': categories,
             'description': _clean(description) ?? '',
           },
         StoreSetupStep.location => {

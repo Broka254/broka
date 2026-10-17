@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:broka/features/auctions/presentation/auction_house_screen.dart';
 import 'package:broka/features/discovery/domain/destination_visual.dart';
 import 'package:broka/features/stores/presentation/store_list_screen.dart';
+import 'package:broka/features/stores/presentation/widgets/store_details_view.dart';
 import 'package:broka/features/traders/presentation/trader_list_screen.dart';
 import 'package:broka/features/trending/presentation/trending_screen.dart';
 import 'package:broka/widgets/broka_image.dart';
@@ -404,22 +405,33 @@ void main() {
         (tester) async {
       const cover = '/media/c1/medium.webp';
       const logo = '/media/l1/thumb.webp';
-      setFakeRoute((uri) => uri.path.startsWith('/stores')
-          ? [
-              {
-                ...fakeStoreJson(0),
-                'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
-                'logo': {'id': 'l1', 'thumb': logo, 'medium': logo, 'large': logo},
-                'owner': {'verified': true, 'rating': 4.7, 'completed_deals': 9,
-                    'online': true, 'last_active': 'Active now'},
-              },
-              {
-                ...fakeStoreJson(1),
-                'owner': {'verified': false, 'completed_deals': 0, 'online': false,
-                    'last_active': 'Active 2d ago'},
-              },
-            ]
-          : null);
+      setFakeRoute((uri) {
+        if (uri.path == '/stores/store-0/reviews') {
+          return {
+            'summary': {'avg': 4.0, 'count': 1, 'distribution': {'4': 1}},
+            'reviews': [
+              {'id': 'r1', 'rating': 4, 'comment': 'Fair seller.',
+                  'created_at': '2026-10-01T00:00:00', 'reviewer_name': 'Kevin M.'},
+            ],
+            'seller_standing': null,
+          };
+        }
+        if (!uri.path.startsWith('/stores')) return null;
+        return [
+          {
+            ...fakeStoreJson(0),
+            'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+            'logo': {'id': 'l1', 'thumb': logo, 'medium': logo, 'large': logo},
+            'owner': {'verified': true, 'rating': 4.7, 'completed_deals': 9,
+                'online': true, 'last_active': 'Active now'},
+          },
+          {
+            ...fakeStoreJson(1),
+            'owner': {'verified': false, 'completed_deals': 0, 'online': false,
+                'last_active': 'Active 2d ago'},
+          },
+        ];
+      });
       await tester.pumpWidget(host(const StoreListScreen()));
       await _settle(tester);
 
@@ -447,6 +459,16 @@ void main() {
       expect(find.descendant(of: first,
           matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == logo)),
           findsOneWidget);
+
+      // Details is its own pill on the picture: it opens the details
+      // screen (reviews and all), not the store's home.
+      await tester.tap(find.byKey(const Key('store-details-store-0')));
+      await _settle(tester);
+      expect(find.byType(StoreDetailsScreen), findsOneWidget);
+      expect(find.byKey(const Key('store-reviews-summary')), findsOneWidget);
+      expect(find.text('Kevin M.'), findsOneWidget);
+      await tester.pageBack();
+      await _settle(tester);
 
       // The category rail sits above the list, so the second card starts
       // below the fold; bring it in before reading it.

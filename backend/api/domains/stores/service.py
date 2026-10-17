@@ -31,7 +31,7 @@ import uuid
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, desc, func, not_, or_, select
+from sqlalchemy import and_, case, delete, desc, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,7 @@ from api.core.text_search import matches_all_terms, search_terms, term_matches
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import is_live, live_clause
 from api.domains.categories.seed import CANONICAL_CATEGORIES, canonical_category_name
-from api.models.store import Store
+from api.models.store import Store, StoreCategoryLink
 from api.domains.listings.service import ListingService, load_listing_media
 from api.security import decode_email_verify_token
 from . import billing as store_billing
@@ -113,9 +113,15 @@ class StoreService:
                     status_code=409, detail="That store link is already taken. Choose another.",
                 )
 
-        category = self._category_from(data)
-        if category is None:
-            category = store_categories.from_legacy(owner.business_category)
+        categories = self._categories_from(data)
+        if categories is None:
+            # A client that sends none keeps the one mapped from the
+            # owner's signup business category.
+            mapped = store_categories.from_legacy(owner.business_category)
+            categories = [mapped] if mapped else []
+        # The store's primary category is the first chosen; the links
+        # written below are what the directory's category filter reads.
+        category = categories[0] if categories else None
 
         logo_url = self._safe_normalize_single_media(data.get("logo_url"))
         photos = self._safe_normalize_photo_list(data.get("photos"))
@@ -162,6 +168,16 @@ class StoreService:
 
             self.db.add(store)
             try:
+                # Flush before the billing row so a slug collision (the only
+                # unique index on stores) fails on the store alone; and so
+                # the store has its id. Billing on: the store opens with
+                # its own unpaid subscription row in the same commit, so
+                # nothing later has to guess whether it predates billing.
+                await self.db.flush()
+                for name in categories:
+                    self.db.add(StoreCategoryLink(store_id=store.id, category=name))
+                if store_billing.enabled():
+                    store_billing.create_unpaid_subscription(self.db, store.id)
                 await self.db.commit()
             except IntegrityError:
                 # The only unique constraint on this table is slug: someone
@@ -268,18 +284,29 @@ class StoreService:
             # text made "_" or "%" match every store in the directory.
             q = q.where(term_matches(search.strip(), (Store.name,)))
         if category:
-            # Old stores' categories are filled in at startup
-            # (categories.backfill_store_categories).
-            wanted = store_categories.canonical(category) or store_categories.from_legacy(category)
-            # A store's `category` is only where it is listed - the setup
-            # screen has always said products from any category can go in
-            # it. Matching the column alone hid every wholesaler from
-            # every category they stock but aren't listed under, so a
-            # store also matches through a live listing in the category.
-            q = q.where(or_(
-                Store.category == wanted,
-                Store.id.in_(self._stores_stocking(wanted)),
-            ))
+            if store_categories.is_wholesale_facet(category):
+                # "Wholesale and General": stores selling across more than
+                # one category, wherever they are otherwise listed.
+                q = q.where(Store.id.in_(self._wholesale_stores()))
+            else:
+                # Old stores' categories are filled in at startup
+                # (categories.backfill_store_categories).
+                wanted = store_categories.canonical(category) or store_categories.from_legacy(category)
+                # A store's `category` is only where it is listed - the setup
+                # screen has always said products from any category can go in
+                # it. Matching the column alone hid every wholesaler from
+                # every category they stock but aren't listed under, so a
+                # store also matches through its chosen categories
+                # (StoreCategoryLink) and through a live listing in the
+                # category.
+                q = q.where(or_(
+                    Store.category == wanted,
+                    Store.id.in_(
+                        select(StoreCategoryLink.store_id)
+                        .where(StoreCategoryLink.category == wanted)
+                    ),
+                    Store.id.in_(self._stores_stocking(wanted)),
+                ))
         if county:
             q = q.where(Store.county == county)
 
@@ -291,17 +318,19 @@ class StoreService:
         q = q.order_by(Store.created_at.desc()).limit(limit).offset(offset)
         stores = (await self.db.execute(q)).scalars().all()
 
-        # One grouped count, one owners query, one assets query and one
-        # subscriptions query for the whole page - never one per store.
+        # One grouped count, one owners query, one assets query, one
+        # subscriptions query and one category-links query for the whole
+        # page - never one per store.
         counts = await self._listing_counts_for([s.id for s in stores])
         assets = await self._assets_for(stores)
         owners = await self._owners_for(stores)
+        links = await self._categories_for([s.id for s in stores])
         subs = (await store_billing.subscriptions_for(self.db, [s.id for s in stores])
                 if store_billing.enabled() else {})
         items = [
             await self._store_dict(
                 s, listing_count=counts.get(s.id, 0), assets=assets, owner=owners.get(s.owner_id),
-                billing_subs=subs,
+                billing_subs=subs, category_names=links.get(s.id, []),
             )
             for s in stores
         ]
@@ -336,6 +365,30 @@ class StoreService:
                    Listing.status == ListingStatus.active, live_clause(),
                    or_(*conditions))
         )
+
+    @staticmethod
+    def _wholesale_stores():
+        """Store ids holding two or more category links - what the
+        "Wholesale and General" rail entry lists."""
+        return (
+            select(StoreCategoryLink.store_id)
+            .group_by(StoreCategoryLink.store_id)
+            .having(func.count(StoreCategoryLink.id) >= 2)
+        )
+
+    async def _categories_for(self, store_ids: list[str]) -> dict[str, list[str]]:
+        """Store id -> its category links, in one query for the whole page
+        (single reads pass one id). Primary first, the rest alphabetical."""
+        if not store_ids:
+            return {}
+        rows = (await self.db.execute(
+            select(StoreCategoryLink.store_id, StoreCategoryLink.category)
+            .where(StoreCategoryLink.store_id.in_(store_ids))
+        )).all()
+        links: dict[str, list[str]] = defaultdict(list)
+        for store_id, name in rows:
+            links[store_id].append(name)
+        return {store_id: sorted(names) for store_id, names in links.items()}
 
     async def _listing_counts_for(self, store_ids: list[str]) -> dict[str, int]:
         """Active-listing counts for many stores in one grouped query. A
@@ -532,6 +585,40 @@ class StoreService:
             for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], order.get(kv[0], 99)))
         ]
 
+    async def store_reviews(self, store_id: str, limit: int = 20, offset: int = 0) -> dict:
+        """A store's buyer reviews plus its owner's published standing.
+
+        A store has no reviews of its own: trust shown with a store is the
+        owner's real, seller-level record (this module's note), so these
+        are the owner's reviews. The owner is resolved from the store here,
+        and the payload carries reviewer names, never ids - a store page is
+        public and indexed. Reviews are the owner's public record already
+        (reviews/router.py), so a paused or unpaid store still reports
+        them; the store's own visibility governs the shop, not the person.
+        """
+        from api.domains.reviews.service import ReviewService
+        from api.domains.trust.public_standing import public_seller_standing
+
+        store = await self._get_or_404(store_id)
+        reviews_service = ReviewService(self.db)
+        rows = await reviews_service.get_seller_reviews(
+            store.owner_id, limit=limit, offset=offset)
+        return {
+            "summary": await reviews_service.get_summary(store.owner_id),
+            # Only what a review card shows: no reviewer, seller or deal id.
+            "reviews": [
+                {
+                    "id": row["id"],
+                    "rating": row["rating"],
+                    "comment": row["comment"],
+                    "created_at": row["created_at"],
+                    "reviewer_name": row["reviewer_name"],
+                }
+                for row in rows
+            ],
+            "seller_standing": await public_seller_standing(self.db, store.owner_id),
+        }
+
     # ── Update ────────────────────────────────────────────────────────────
 
     async def update_store(self, store_id: str, requester_id: str, data: dict) -> dict:
@@ -546,9 +633,17 @@ class StoreService:
         if "name" in data:
             store.name = self._clean_name(data["name"])
 
-        category = self._category_from(data)
-        if category is not None:
-            store.category = category
+        categories = self._categories_from(data)
+        if categories is not None:
+            # The set the request chose replaces the previous set: the
+            # first category is the store's primary (what old clients
+            # read), and the links are what the directory searches.
+            store.category = categories[0]
+            await self.db.execute(
+                delete(StoreCategoryLink).where(StoreCategoryLink.store_id == store.id)
+            )
+            for name in categories:
+                self.db.add(StoreCategoryLink(store_id=store.id, category=name))
         for field in _TEXT_FIELDS:
             if field in data:
                 setattr(store, field, self._clean_text(field, data[field]))
@@ -663,6 +758,44 @@ class StoreService:
         if data.get("specialization"):
             return store_categories.from_legacy(data["specialization"])
         return None
+
+    @staticmethod
+    def _categories_from(data: dict) -> Optional[list[str]]:
+        """The canonical categories a request sets, primary first, or None
+        when it sets none.
+
+        Phase 3 sends `categories` - one or more, because a store may sell
+        across several and the "Wholesale and General" rail entry is the
+        view of stores with two or more. The singular `category`/
+        `specialization` older clients send becomes a one-element list. A
+        name that isn't one of BROKA's is refused, not mapped: this is a
+        choice from a list the app shows, and quietly filing a typo under
+        "Other" is how a seller ends up invisible in the category they
+        meant."""
+        if "categories" in data:
+            raw = data.get("categories")
+            if not isinstance(raw, list) or not raw:
+                raise HTTPException(
+                    status_code=400, detail="Choose at least one of BROKA's categories")
+            names: list[str] = []
+            for value in raw:
+                category = store_categories.canonical(value)
+                if category is None:
+                    raise HTTPException(
+                        status_code=400, detail="Choose one of BROKA's categories")
+                if category not in names:
+                    names.append(category)
+            return names
+        single = StoreService._category_from(data)
+        return [single] if single is not None else None
+
+    @staticmethod
+    def _ordered_categories(primary: Optional[str], names: list[str]) -> list[str]:
+        """A store's categories, primary first, the rest alphabetical -
+        the payload's `categories`, so index 0 always equals `category`
+        for clients that read one."""
+        rest = sorted(n for n in names if n != primary)
+        return ([primary] if primary else []) + rest
 
     @staticmethod
     def _business_email(owner, data: dict, current: tuple) -> Optional[tuple]:
@@ -815,6 +948,7 @@ class StoreService:
         owner: Optional[User] = None,
         owner_view: bool = False,
         billing_subs: Optional[dict] = None,
+        category_names: Optional[list[str]] = None,
     ) -> dict:
         """The store payload. owner_view=True only for responses to the
         owner themselves (create, update, status, /stores/mine); every other
@@ -848,6 +982,8 @@ class StoreService:
             asset_urls(assets[i]) for i in parse_id_list(store.photo_ids) if i in assets
         ]
         category = store.category or store_categories.from_legacy(store.specialization)
+        if category_names is None:
+            category_names = (await self._categories_for([store.id])).get(store.id, [])
         active = bool(store.is_active)
         billing_state = None
         if store_billing.enabled():
@@ -877,6 +1013,9 @@ class StoreService:
             "cover": cover,
             "photo_images": photo_images,
             "category": category,
+            # Every category the store chose, primary first; `category`
+            # above stays the first element for app builds that read one.
+            "categories": self._ordered_categories(category, category_names),
             # What app builds before phase 2 display.
             "specialization": category,
             "description": store.description,

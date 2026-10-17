@@ -7,6 +7,7 @@ import 'package:broka/core/network/api_client.dart';
 import 'package:broka/features/safe_payment/escrow_callout.dart';
 import 'package:broka/features/stores/data/repositories/stores_repository.dart';
 import 'package:broka/features/stores/domain/models/store.dart';
+import 'package:broka/features/stores/domain/models/store_reviews.dart';
 import 'package:broka/features/stores/data/store_cart.dart';
 import 'package:broka/features/stores/presentation/store_cart_screen.dart';
 import 'package:broka/features/stores/presentation/store_home_screen.dart';
@@ -65,10 +66,25 @@ Map<String, dynamic> _listing(String id, String name, double price, String categ
       'store_id': 's1', 'store_name': 'Clanix Electronics', 'store_slug': 'clanix',
     };
 
+// The store's buyer reviews, as GET /stores/s1/reviews returns them.
+Map<String, dynamic> _reviews() => {
+      'summary': {'avg': 4.5, 'count': 2,
+          'distribution': {'5': 1, '4': 1, '3': 0, '2': 0, '1': 0}},
+      'reviews': [
+        {'id': 'r1', 'rating': 5, 'comment': 'Fast and genuine.',
+            'created_at': '2026-10-01T09:00:00', 'reviewer_name': 'Amina W.'},
+        {'id': 'r2', 'rating': 4, 'comment': 'Good price.',
+            'created_at': '2026-09-20T09:00:00', 'reviewer_name': 'Brian O.'},
+      ],
+      'seller_standing': {'overall_rating': 8.4, 'dcr': 92.0, 'dcr_provisional': false,
+          'median_response_minutes': 25.0, 'completed_deals': 12, 'as_of': '2026-10-15'},
+    };
+
 class _Backend {
   _Backend({bool active = true, String? description, bool photos = false,
-      int? failListingsTimes, bool online = true}) {
+      int? failListingsTimes, int? failReviewsTimes, bool online = true}) {
     _failListings = failListingsTimes ?? 0;
+    _failReviews = failReviewsTimes ?? 0;
     client = ApiClient(client: MockClient((req) async {
       requests.add(req);
       final path = req.url.path;
@@ -80,6 +96,13 @@ class _Backend {
       if (path == '/stores/mine') return _json(null);
       if (path == '/stores/s1/categories') {
         return _json([{'name': 'Electronics', 'count': 2}, {'name': 'Gaming', 'count': 1}]);
+      }
+      if (path == '/stores/s1/reviews') {
+        if (_failReviews > 0) {
+          _failReviews--;
+          return _json({'detail': 'Server busy'}, 503);
+        }
+        return _json(_reviews());
       }
       if (path == '/stores/s1/visit') return _json({'counted': true}, 202);
       if (path == '/listings/l1') return _json(_listing('l1', 'Samsung A15', 18000, 'Electronics', quantity: 5));
@@ -123,6 +146,7 @@ class _Backend {
   late final ApiClient client;
   late final StoresRepository repo;
   late int _failListings;
+  late int _failReviews;
   final List<http.Request> requests = [];
 
   List<Map<String, String>> listingQueries() => requests
@@ -328,6 +352,68 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsNWidgets(3));
+    });
+
+    testWidgets("Store details: the store's buyer reviews and reply time", (tester) async {
+      final backend = _Backend();
+      await _pumpStore(tester, backend);
+      await tester.tap(find.byKey(const Key('store-details-button')));
+      await tester.pumpAndSettle();
+
+      Future<void> show(Finder f) => tester.dragUntilVisible(
+          f, find.byKey(const Key('store-details-list')), const Offset(0, -200));
+      await show(find.byKey(const Key('store-reviews-summary')));
+      final summary = find.byKey(const Key('store-reviews-summary'));
+      expect(find.descendant(of: summary, matching: find.text('4.5')), findsOneWidget);
+      expect(find.descendant(of: summary, matching: find.text('2 reviews')), findsOneWidget);
+      // The owner's own reply time - too little conversation to measure
+      // means no line at all, never a made-up "fast".
+      expect(find.descendant(of: summary, matching: find.byKey(const Key('store-response-time'))),
+          findsOneWidget);
+      expect(find.text('Usually replies in about 25m'), findsOneWidget);
+
+      await show(find.byKey(const Key('store-review-r1')));
+      final first = find.byKey(const Key('store-review-r1'));
+      expect(find.descendant(of: first, matching: find.text('Amina W.')), findsOneWidget);
+      expect(find.descendant(of: first, matching: find.text('Fast and genuine.')), findsOneWidget);
+      expect(find.descendant(of: first, matching: find.textContaining('2026')), findsOneWidget);
+      expect(find.byKey(const Key('store-review-r2')), findsOneWidget);
+      // The details screen fetches the reviews, not the store again.
+      expect(backend.requests.where((r) => r.url.path == '/stores/s1/reviews'), hasLength(1));
+    });
+
+    testWidgets('reviews that fail to load say so, and Retry brings them in', (tester) async {
+      final backend = _Backend(failReviewsTimes: 1);
+      await _pumpStore(tester, backend);
+      await tester.tap(find.byKey(const Key('store-details-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('store-reviews-error')), findsOneWidget);
+      expect(find.byKey(const Key('store-reviews-summary')), findsNothing);
+      await tester.ensureVisible(find.byKey(const Key('store-reviews-retry')));
+      await tester.tap(find.byKey(const Key('store-reviews-retry')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('store-reviews-summary')), findsOneWidget);
+      expect(find.text('Amina W.'), findsOneWidget);
+    });
+
+    testWidgets('a store nobody has reviewed yet says how reviews happen', (tester) async {
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+        child: StoreDetailsView(
+          store: Store.fromJson(_store()),
+          reviews: StoreReviews.fromJson({
+            'summary': {'avg': null, 'count': 0, 'distribution': {}},
+            'reviews': [],
+            'seller_standing': null,
+          }),
+        ),
+      ))));
+      expect(find.byKey(const Key('store-reviews-empty')), findsOneWidget);
+      expect(find.text('No reviews yet'), findsOneWidget);
+      expect(find.textContaining('after a completed deal'), findsOneWidget);
+      expect(find.byKey(const Key('store-reviews-summary')), findsNothing);
+      // No reply time either: nothing recent enough to publish.
+      expect(find.byKey(const Key('store-response-time')), findsNothing);
     });
 
     testWidgets("a new seller's record says so instead of inventing numbers", (tester) async {
@@ -827,6 +913,34 @@ void main() {
       await tester.pumpAndSettle();
       expect(seen, isEmpty);
       expect(links.pending, isNull);
+    });
+  });
+
+  group('Store reviews payload', () {
+    test('reads the summary, the reviews and the standing', () {
+      final reviews = StoreReviews.fromJson(_reviews());
+      expect(reviews.summary.average, 4.5);
+      expect(reviews.summary.count, 2);
+      expect(reviews.summary.countFor(5), 1);
+      expect(reviews.reviews.map((r) => r.id), ['r1', 'r2']);
+      expect(reviews.reviews.first.reviewerName, 'Amina W.');
+      expect(reviews.sellerStanding?.responseMinutes, 25.0);
+    });
+
+    test('a store with nothing yet: no average, no reviews, no standing', () {
+      final reviews = StoreReviews.fromJson(
+          {'summary': {'avg': null, 'count': 0}, 'reviews': [], 'seller_standing': null});
+      expect(reviews.summary.average, isNull);
+      expect(reviews.reviews, isEmpty);
+      expect(reviews.sellerStanding, isNull);
+      expect(reviews.sellerStanding?.responseMinutes, isNull);
+    });
+
+    test('the reply time reads as a sentence, or not at all', () {
+      expect(responseTimeLabel(25.0), 'Usually replies in about 25m');
+      expect(responseTimeLabel(150.0), 'Usually replies in about 2.5h');
+      // Too few conversations to measure is not "fast".
+      expect(responseTimeLabel(null), isNull);
     });
   });
 }

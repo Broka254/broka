@@ -34,7 +34,13 @@ import 'broka_default_logo.dart';
 class StoreCard extends StatefulWidget {
   final Store store;
   final VoidCallback onTap;
-  const StoreCard({super.key, required this.store, required this.onTap});
+
+  /// Opens the store's details screen (reviews, seller record, location).
+  /// A chip on the picture, not another bar: the card itself still opens
+  /// the store, and this is the secondary thing a buyer does from here.
+  /// Null hides it.
+  final VoidCallback? onDetails;
+  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails});
 
   @override
   State<StoreCard> createState() => _StoreCardState();
@@ -156,12 +162,29 @@ class _StoreCardState extends State<StoreCard> {
                           color: owner.online ? BrokaColors.success : Colors.white70,
                         ),
                       ),
-                    if (store.category != null)
+                    if (widget.onDetails != null)
+                      Positioned(
+                        top: 10,
+                        right: 10,
+                        child: _Pill(
+                          key: Key('store-details-${store.id}'),
+                          icon: Icons.info_outline_rounded,
+                          label: 'Details',
+                          color: Colors.white,
+                          tooltip: 'View store details',
+                          onTap: widget.onDetails,
+                        ),
+                      ),
+                    if (store.categories.isNotEmpty)
                       Positioned(
                         right: 10,
                         bottom: 10,
                         child: _Pill(
-                          label: '${CategoryVisuals.emojiFor(store.category)}  ${store.category}',
+                          // The primary, plus how many more: the full set
+                          // belongs on the store's own page, not a caption.
+                          label: '${CategoryVisuals.emojiFor(store.categories.first)}  '
+                              '${store.categories.first}'
+                              '${store.categories.length > 1 ? ' +${store.categories.length - 1}' : ''}',
                           color: Colors.white,
                         ),
                       ),
@@ -310,33 +333,53 @@ class _Logo extends StatelessWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({super.key, required this.label, required this.color, this.dot});
+  const _Pill({super.key, required this.label, required this.color, this.dot, this.icon,
+      this.onTap, this.tooltip});
   final String label;
   final Color color;
   final Color? dot;
+  final IconData? icon;
+
+  /// When set the pill is a button of its own; without it, a label.
+  final VoidCallback? onTap;
+
+  /// What the pill means to a screen reader; defaults to the label.
+  final String? tooltip;
 
   @override
-  Widget build(BuildContext context) => Container(
-        constraints: const BoxConstraints(maxWidth: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.18)),
+  Widget build(BuildContext context) {
+    final pill = Container(
+      constraints: const BoxConstraints(maxWidth: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.18)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (dot != null) ...[
+          Container(width: 7, height: 7, decoration: BoxDecoration(color: dot,
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: dot!, blurRadius: 5)])),
+          const SizedBox(width: 5),
+        ],
+        if (icon != null) ...[
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+        ],
+        Flexible(
+          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (dot != null) ...[
-            Container(width: 7, height: 7, decoration: BoxDecoration(color: dot,
-                shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: dot!, blurRadius: 5)])),
-            const SizedBox(width: 5),
-          ],
-          Flexible(
-            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
-          ),
-        ]),
-      );
+      ]),
+    );
+    if (onTap == null) return pill;
+    return Semantics(
+      button: true,
+      label: tooltip ?? label,
+      child: GestureDetector(onTap: onTap, child: pill),
+    );
+  }
 }
 
 class _Fact extends StatelessWidget {

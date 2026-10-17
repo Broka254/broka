@@ -14,7 +14,7 @@ What must hold:
     the dearer plan, a downgrade and an over-a-year payment wait;
   * a car yard pays only once it holds its card's stock of live listings;
   * a store that predates billing gets grace time when it switches on - but
-    not a free opening;
+    not a free opening, and never a store created after billing was on;
   * store plans settle through ZetuPay the same way when it is enabled.
 
 Same fixture shape as test_premium.py.
@@ -38,7 +38,7 @@ from api.database import (
 )
 from api.domains.payments import service as zetupay_service
 from api.domains.stores import billing as store_billing
-from api.models.store_billing import StorePayment, StoreSubscription
+from api.models.store_billing import StoreBillingMeta, StorePayment, StoreSubscription
 from api.models.zetupay import Purpose
 
 SECRET = "store-callback-secret"
@@ -170,6 +170,16 @@ async def _sub(store_id) -> StoreSubscription | None:
     async with AsyncSessionLocal() as db:
         return (await db.execute(select(StoreSubscription).where(
             StoreSubscription.store_id == store_id))).scalar_one_or_none()
+
+
+async def _forget_grace_round():
+    """Clear the one-time marker, as a deployment that has never started
+    would: lets a test run ensure_grace_subscriptions again."""
+    async with AsyncSessionLocal() as db:
+        marker = await db.get(StoreBillingMeta, store_billing.GRACE_MARKER_ID)
+        if marker is not None:
+            await db.delete(marker)
+            await db.commit()
 
 
 async def _listing_row(listing_id) -> Listing:
@@ -356,7 +366,8 @@ class TestPaying:
         _, h = await _register(client)
         sid = (await _store(client, h))["id"]
         started = await _pay(client, h, sid, months=1, amount=1)
-        assert await _sub(sid) is None, "a forged amount must buy nothing"
+        sub = await _sub(sid)  # the row a billing-on store opens with
+        assert sub is not None and sub.paid_until is None, "a forged amount must buy nothing"
         assert (await client.get(f"/stores/{sid}")).json()["is_active"] is False
         status = (await client.get(
             f"/stores/{sid}/billing/payments/{started['payment_id']}", headers=h)).json()
@@ -487,6 +498,7 @@ class TestGrace:
     @pytest.mark.asyncio
     async def test_stores_that_predate_billing_get_grace_but_owe_the_opening(
             self, client, monkeypatch, mpesa):
+        await _forget_grace_round()
         _, h = await _register(client)
         sid = (await _store(client, h))["id"]  # created while billing was off
 
@@ -507,6 +519,33 @@ class TestGrace:
         assert quote["setup_fee"] == 299
         started = await _pay(client, h, sid, months=1)
         assert started["amount"] == 898
+
+    @pytest.mark.asyncio
+    async def test_a_store_created_while_billing_is_on_gets_no_grace(
+            self, client, billing_on, mpesa):
+        # The bug this pins down: a store created while billing was on used
+        # to have no subscription row, so the next startup's grace round
+        # read it as a pre-billing store and gave a shop that never paid a
+        # free month in the directory.
+        await _forget_grace_round()
+        _, h = await _register(client)
+        sid = (await _store(client, h))["id"]
+
+        sub = await _sub(sid)
+        assert sub is not None, "a store created while billing is on opens with its own row"
+        assert sub.plan_id is None and sub.paid_until is None
+        assert sub.setup_fee_paid is False
+
+        # A fresh round - marker cleared, as if billing had just been
+        # switched on - must not reach it: it is not rowless.
+        await store_billing.ensure_grace_subscriptions()
+        still = await _sub(sid)
+        assert still.paid_until is None, "grace reached a store created after billing was on"
+        assert not await _in_directory(client, sid)
+        assert (await client.get(f"/stores/{sid}")).json()["is_active"] is False
+
+        await _pay(client, h, sid, months=1)
+        assert await _in_directory(client, sid)
 
 
 # ── ZetuPay ──────────────────────────────────────────────────────────────────

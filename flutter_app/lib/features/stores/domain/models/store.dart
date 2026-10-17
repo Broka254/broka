@@ -62,8 +62,15 @@ class Store {
   /// The full shareable link, built by the backend.
   final String url;
 
-  /// One of BROKA's top-level categories.
+  /// One of BROKA's top-level categories. The primary: the first category
+  /// the store chose (index 0 of [categories]).
   final String? category;
+
+  /// Every category the store sells in, primary first (backend phase 3).
+  /// A store with two or more is listed under the "Wholesale and General"
+  /// facet. Older responses carry only [category], which becomes the
+  /// single entry here.
+  final List<String> categories;
   final String? description;
   final String country;
   final String? county;
@@ -102,6 +109,7 @@ class Store {
     required this.slug,
     this.url = '',
     this.category,
+    this.categories = const [],
     this.description,
     this.country = 'Kenya',
     this.county,
@@ -124,13 +132,18 @@ class Store {
 
   factory Store.fromJson(Map<String, dynamic> json) {
     final slug = json['slug'] as String;
+    // `specialization` is what backends before phase 2 send.
+    final category = json['category'] as String? ?? json['specialization'] as String?;
     return Store(
       id:   json['id']   as String,
       name: json['name'] as String,
       slug: slug,
       url:  json['url'] as String? ?? 'https://broka.co.ke/store/$slug',
-      // `specialization` is what backends before phase 2 send.
-      category: json['category'] as String? ?? json['specialization'] as String?,
+      category: category,
+      // Backends before phase 3 send no `categories`; the single category
+      // is then the store's whole set.
+      categories: (json['categories'] as List?)?.whereType<String>().toList(growable: false) ??
+          [if (category != null) category],
       description: json['description'] as String?,
       country:   json['country']   as String? ?? 'Kenya',
       county:    json['county']    as String?,

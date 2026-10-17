@@ -134,6 +134,25 @@ class Store(Base):
     # async lazy-load surprise from an unused relationship attribute.
 
 
+class StoreCategoryLink(Base):
+    """One category a store sells in; a store has one row per category it
+    chose. `Store.category` stays the primary (the first chosen) for app
+    builds and payloads that predate this table; these links are what the
+    directory's category filter reads, so a shop that sells across several
+    categories is found in each of them. Two or more links is also what
+    the "Wholesale and General" rail entry lists - a storefront facet,
+    not a taxonomy category: the canonical list in
+    api/domains/categories/seed.py is untouched."""
+    __tablename__ = "store_category_links"
+    __table_args__ = (
+        UniqueConstraint("store_id", "category", name="uq_store_category_link"),
+    )
+
+    id       = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id = Column(String, ForeignKey("stores.id"), nullable=False, index=True)
+    category = Column(String, nullable=False, index=True)
+
+
 class StoreDailyCount(Base):
     """Per-day counters behind a store owner's stats: storefront visits
     and share-button taps.

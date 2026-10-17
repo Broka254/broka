@@ -3,7 +3,8 @@ Online Stores phase 2: setting a store up, and what its owner sees.
 
   - who can open a store (long-term sellers; others upgrade first)
   - the link name: rules, the live availability check, fixed after setup
-  - category (BROKA's own taxonomy, legacy values mapped)
+  - category (BROKA's own taxonomy, legacy values mapped, one or more per
+    store - several put a store in the "Wholesale and General" facet)
   - the business email (optional, and only ever saved verified)
   - contact fields that are gone
   - the store payload's owner trust facts
@@ -21,7 +22,9 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 
 from main import app
-from api.database import AsyncSessionLocal, User, init_db, reset_engine
+from api.database import (
+    AsyncSessionLocal, Review, SellerMetricSnapshot, User, init_db, reset_engine,
+)
 from api.domains.stores import naming, stats as store_stats
 from api.domains.stores import categories as store_categories
 from api.models.store import StoreDailyCount
@@ -283,6 +286,94 @@ class TestCategory:
         r = await client.patch(f"/stores/{store['id']}", json={"category": "Gaming"}, headers=headers)
         assert r.json()["category"] == "Gaming"
 
+    async def test_several_categories_find_the_store_in_each(self, client):
+        """A store may sell across several categories. It is listed under
+        every one it chose, and the first chosen stays the primary for
+        clients that read a single category."""
+        _, headers = await _register(client)
+        store = await _store(client, headers, categories=["Fashion", "Electronics"])
+        assert store["category"] == "Fashion"
+        assert store["categories"] == ["Fashion", "Electronics"]
+
+        async def directory(category):
+            found = (await client.get(
+                "/stores", params={"category": category, "limit": 100})).json()
+            return [s["id"] for s in found]
+
+        assert store["id"] in await directory("Fashion")
+        assert store["id"] in await directory("Electronics")
+
+    async def test_the_wholesale_facet_lists_stores_with_two_or_more_categories(self, client):
+        _, headers = await _register(client)
+        both = await _store(client, headers, categories=["Electronics", "Fashion"])
+        _, other = await _register(client)
+        one = await _store(client, other, categories=["Electronics"])
+
+        async def facet():
+            found = (await client.get(
+                "/stores", params={"category": "Wholesale and General", "limit": 100})).json()
+            return [s["id"] for s in found]
+
+        assert both["id"] in await facet()
+        assert one["id"] not in await facet()
+
+    async def test_a_list_with_an_unknown_category_is_refused(self, client):
+        _, headers = await _register(client)
+        r = await client.post("/stores", json={
+            "name": "Bad List", "categories": ["Electronics", "Gadgets"]}, headers=headers)
+        assert r.status_code == 400
+
+    async def test_an_empty_category_list_is_refused(self, client):
+        _, headers = await _register(client)
+        r = await client.post("/stores", json={
+            "name": "Empty List", "categories": []}, headers=headers)
+        assert r.status_code == 400
+
+    async def test_updating_replaces_the_chosen_set(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, categories=["Fashion", "Electronics"])
+        r = await client.patch(f"/stores/{store['id']}", json={"categories": ["Gaming"]},
+                               headers=headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["category"] == "Gaming" and body["categories"] == ["Gaming"]
+
+        async def directory(category):
+            found = (await client.get(
+                "/stores", params={"category": category, "limit": 100})).json()
+            return [s["id"] for s in found]
+
+        assert store["id"] in await directory("Gaming")
+        assert store["id"] not in await directory("Fashion")
+        assert store["id"] not in await directory("Electronics")
+
+    async def test_a_store_without_links_is_backfilled(self, client):
+        """Stores that predate multi-category carry `category` but no link
+        rows; the startup backfill gives each its one link so the
+        directory's link-based filter finds them."""
+        from api.domains.stores.categories import backfill_store_category_links
+        from api.models.store import Store, StoreCategoryLink
+
+        owner_id, _ = await _register(client)
+        async with AsyncSessionLocal() as db:
+            store = Store(owner_id=owner_id, name="Old Timer", slug="old-timer",
+                          category="Gaming")
+            db.add(store)
+            await db.commit()
+            await db.refresh(store)
+            store_id = store.id
+
+        created = await backfill_store_category_links()
+        assert created >= 1
+        async with AsyncSessionLocal() as db:
+            names = (await db.execute(
+                select(StoreCategoryLink.category)
+                .where(StoreCategoryLink.store_id == store_id))).scalars().all()
+        assert list(names) == ["Gaming"]
+
+        found = (await client.get("/stores", params={"category": "Gaming", "limit": 100})).json()
+        assert store_id in [s["id"] for s in found]
+
     async def test_a_wholesaler_is_found_under_every_category_it_stocks(self, client):
         """A wholesaler is listed under one category but sells in many.
         Matching only Store.category hid it from every category it stocks;
@@ -522,6 +613,57 @@ class TestStorePayload:
         page = (await client.get("/store/no-phones", headers=ON_LINK_HOST)).text
         assert "0700123456" not in page and "wa.me" not in page and "tel:" not in page
         assert "0700123456" not in (await client.get(f"/stores/{store['id']}")).text
+
+
+# ── Store details: buyer reviews and the owner's standing ────────────────────
+
+@pytest.mark.asyncio
+class TestStoreReviews:
+    async def test_the_reviews_and_owner_standing_are_public(self, client):
+        owner_id, headers = await _register(client)
+        store = await _store(client, headers, category="Gaming")
+        # The reviews are written directly: the review flow itself is
+        # tested where it lives; this endpoint is about what a store's
+        # details screen reads.
+        buyer_id, _ = await _register(client)
+        async with AsyncSessionLocal() as db:
+            db.add(Review(deal_id=None, reviewer_id=buyer_id, seller_id=owner_id,
+                          rating=4, comment="Quick delivery, as described"))
+            db.add(SellerMetricSnapshot(
+                seller_id=owner_id, snapshot_date=datetime.utcnow().date(),
+                overall_rating=4.5, dcr_score=90.0, median_response_min=12.5,
+                completed_deals=12))
+            await db.commit()
+
+        body = (await client.get(f"/stores/{store['id']}/reviews")).json()
+        assert body["summary"]["avg"] == 4.0 and body["summary"]["count"] == 1
+        assert body["summary"]["distribution"]["4"] == 1
+        assert body["reviews"][0]["rating"] == 4
+        assert body["reviews"][0]["comment"] == "Quick delivery, as described"
+        from api.domains.reviews.service import ReviewService
+
+        async with AsyncSessionLocal() as db:
+            buyer_name = (await db.get(User, buyer_id)).name
+        assert body["reviews"][0]["reviewer_name"] == ReviewService._public_name(buyer_name)
+        assert body["seller_standing"]["median_response_minutes"] == 12.5
+        # A store page is public and indexed: no seller, reviewer or deal
+        # ids ride along, and no phone numbers either.
+        assert owner_id not in str(body) and buyer_id not in str(body)
+        assert "seller_id" not in body["reviews"][0]
+
+    async def test_an_unknown_store_404s(self, client):
+        assert (await client.get("/stores/nope/reviews")).status_code == 404
+
+    async def test_a_store_without_reviews_reports_none_not_zero_ratings(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers)
+        body = (await client.get(f"/stores/{store['id']}/reviews")).json()
+        assert body["summary"] == {
+            "avg": None, "count": 0,
+            "distribution": {str(s): 0 for s in range(1, 6)},
+        }
+        assert body["reviews"] == []
+        assert body["seller_standing"] is None   # no snapshot: unmeasured, not zero
 
 
 # ── Storefront: categories and catalogue ─────────────────────────────────────

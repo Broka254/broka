@@ -15,6 +15,9 @@ StoreSubscription  one row per store. plan_id is the plan in force
                    still carries the opening fee.
 StorePayment       one M-Pesa payment for a store plan, settled once
                    (`processed`), exactly like SubscriptionPayment.
+StoreBillingMeta   one row of bookkeeping that must happen exactly once,
+                   not on every startup: today, the one-time grace round
+                   (stores/billing.ensure_grace_subscriptions).
 
 Statuses are plain strings, not database enums, so a new one never needs
 ALTER TYPE on PostgreSQL. Timestamps are naive UTC.
@@ -80,3 +83,18 @@ class StorePayment(Base):
     created_at          = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)
     paid_at             = sa.Column(sa.DateTime, nullable=True)
     period_end          = sa.Column(sa.DateTime, nullable=True)   # the store's paid_until after this
+
+
+class StoreBillingMeta(Base):
+    """Bookkeeping rows for one-time work, keyed by a fixed id.
+
+    The grace row's story starts here: `grace_backfilled_at` is set when
+    ensure_grace_subscriptions ran its round, so a later startup doesn't
+    mistake stores created since - which open with their own
+    paid_until=None row - for stores that predate billing, and hand a shop
+    that never paid a free month in front of buyers.
+    """
+    __tablename__ = "store_billing_meta"
+
+    id                  = sa.Column(sa.String, primary_key=True)
+    grace_backfilled_at = sa.Column(sa.DateTime, nullable=True)

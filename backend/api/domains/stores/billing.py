@@ -19,10 +19,12 @@ callback or by the status poll asking Safaricom itself. The amount reported
 is checked against the amount asked for - this is the route an
 unauthenticated forged callback would take.
 
-A store created before billing was switched on gets a grace row
-(ensure_grace_subscriptions) when the setting first turns on, so enabling
-billing never blanks a seller's shop the same afternoon. The opening fee is
-still owed: the grace row keeps setup_fee_paid=False.
+A store created before billing was switched on gets a grace row when the
+setting first turns on (ensure_grace_subscriptions) - once, not every
+startup, so the round can't reach stores created since. Those open with
+their own row instead: plan_id=None and paid_until=None, made in
+create_store's transaction. The opening fee is still owed either way: the
+grace row keeps setup_fee_paid=False.
 """
 from __future__ import annotations
 
@@ -47,7 +49,7 @@ from api.domains.pricing.plans import (
 )
 from api.models.store import Store
 from api.models.store_billing import (
-    StorePayment, StorePaymentStatus as S, StoreSubscription,
+    StoreBillingMeta, StorePayment, StorePaymentStatus as S, StoreSubscription,
 )
 from api.models.zetupay import Purpose
 
@@ -66,6 +68,11 @@ PENDING_WINDOW = timedelta(minutes=2)
 QUERY_AFTER = timedelta(seconds=20)
 
 _DEFAULT_API_BASE = "https://api.broka.co.ke"
+
+# The single row in store_billing_meta that records the one-time grace
+# round (ensure_grace_subscriptions). Fixed id: there is nothing to key
+# the row on, only one round to remember.
+GRACE_MARKER_ID = "store-billing"
 
 
 def enabled() -> bool:
@@ -489,15 +496,41 @@ async def payment_status(db: AsyncSession, owner_id: str, store_id: str, payment
     }
 
 
-async def ensure_grace_subscriptions() -> int:
-    """When billing first turns on, give every store with no subscription
-    row its grace time, so a seller who opened a store while billing was
-    off keeps their shop running instead of finding it dark. The opening
-    fee is NOT waived for them (PRICING.md): setup_fee_paid stays False.
+def create_unpaid_subscription(
+    db: AsyncSession, store_id: str, now: Optional[datetime] = None,
+) -> StoreSubscription:
+    """The row a store opens with while billing is on: no plan, no paid
+    time, opening fee still owed. Made in create_store's transaction, so a
+    store created since billing was switched on is never mistaken for one
+    that predates it - the one-time grace round keys on the row's absence,
+    and would have put this shop in front of buyers for free."""
+    now = now or datetime.utcnow()
+    sub = StoreSubscription(
+        store_id=store_id, plan_id=None, listings=0,
+        setup_fee_paid=False, paid_until=None, created_at=now, updated_at=now,
+    )
+    db.add(sub)
+    return sub
 
-    Idempotent, and safe against several workers starting at once: each
-    insert is its own savepoint and the unique index on store_id settles
-    any race. Returns how many rows were created.
+
+async def ensure_grace_subscriptions() -> int:
+    """When billing first turns on, give every store that predates it its
+    grace time, so a seller who opened a store while billing was off keeps
+    their shop running instead of finding it dark. The opening fee is NOT
+    waived for them (PRICING.md §9): setup_fee_paid stays False.
+
+    A one-time round, not a startup sweep: the marker row in
+    store_billing_meta is claimed before anything is granted. That matters
+    because a paid_until=None row now also means "created while billing is
+    on, hasn't paid" (create_unpaid_subscription); without the marker every
+    restart would read those stores as pre-billing and hand out grace,
+    which is a free month for shops that never paid. Pre-billing stores
+    are the ones with no row at all, which is what this round keys on.
+
+    Safe against several workers starting at once - the marker's primary
+    key settles that race, each subscription insert is its own savepoint,
+    and the unique index on store_id settles the rest. Returns how many
+    rows were created.
     """
     from api.database import AsyncSessionLocal
 
@@ -505,6 +538,18 @@ async def ensure_grace_subscriptions() -> int:
     paid_until = now + timedelta(days=settings.store_billing_grace_days)
     created = 0
     async with AsyncSessionLocal() as db:
+        claimed = (await db.execute(
+            select(StoreBillingMeta.id).where(StoreBillingMeta.id == GRACE_MARKER_ID)
+        )).scalar_one_or_none()
+        if claimed is not None:
+            return 0
+        try:
+            async with db.begin_nested():
+                db.add(StoreBillingMeta(id=GRACE_MARKER_ID, grace_backfilled_at=now))
+        except IntegrityError:
+            # Another worker claimed the round between our SELECT and this
+            # INSERT. The grace is that worker's to grant; ours would double it.
+            return 0
         rows = (await db.execute(
             select(Store.id)
             .outerjoin(StoreSubscription, StoreSubscription.store_id == Store.id)

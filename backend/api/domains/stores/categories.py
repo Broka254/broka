@@ -11,12 +11,18 @@ from __future__ import annotations
 from typing import Optional
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from api.domains.categories.seed import (
     CANONICAL_CATEGORIES, RENAMED_CATEGORIES, canonical_category_name,
 )
 
 OTHER = "Other"
+
+# The directory facet for a store that sells across several categories.
+# Not a taxonomy category - the canonical list is untouched - it names the
+# view of stores with two or more category links (StoreCategoryLink).
+WHOLESALE = "Wholesale and General"
 
 _CANONICAL_BY_LOWER = {c.lower(): c for c in CANONICAL_CATEGORIES}
 
@@ -52,6 +58,12 @@ def from_legacy(value: Optional[str]) -> Optional[str]:
         return None
     key = value.strip().lower()
     return canonical(value) or _LEGACY.get(key) or "Other"
+
+
+def is_wholesale_facet(value: Optional[str]) -> bool:
+    """Whether a directory filter is asking for the multi-category facet,
+    not a category named that (no canonical category is)."""
+    return bool(value) and value.strip().lower() == WHOLESALE.lower()
 
 
 def for_listing(value: Optional[str]) -> str:
@@ -92,3 +104,38 @@ async def backfill_store_categories() -> int:
             )
         await db.commit()
     return len(rows)
+
+
+async def backfill_store_category_links() -> int:
+    """Give every store that has a category but no link rows its one link.
+    Stores created before a store could hold several categories only carry
+    `category` (or its legacy `specialization`); the directory's filter
+    reads the links, so without this it would find none of them.
+    Idempotent: only stores with no link row at all are touched. Runs
+    after backfill_store_categories() above, so `category` is filled in
+    first. Returns how many links were created."""
+    from api.database import AsyncSessionLocal
+    from api.models.store import Store, StoreCategoryLink
+
+    created = 0
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(Store.id, Store.category, Store.specialization)
+            .outerjoin(StoreCategoryLink, StoreCategoryLink.store_id == Store.id)
+            .where(StoreCategoryLink.id.is_(None))
+        )).all()
+        for store_id, category, specialization in rows:
+            name = category or from_legacy(specialization)
+            if not name:
+                continue
+            try:
+                # Each insert its own savepoint: several workers starting
+                # at once race here, and the unique index on
+                # (store_id, category) settles it.
+                async with db.begin_nested():
+                    db.add(StoreCategoryLink(store_id=store_id, category=name))
+                created += 1
+            except IntegrityError:
+                continue
+        await db.commit()
+    return created

@@ -42,6 +42,11 @@ class StoreIn(BaseModel):
     # derived from the name.
     slug: Optional[str] = Field(default=None, max_length=64)
     category: Optional[str] = None
+    # Phase 3: every category the store sells in, primary first. A store
+    # with two or more is the "Wholesale and General" directory entry;
+    # `category` stays accepted for older app builds and means the same
+    # as a one-element list.
+    categories: Optional[List[str]] = None
     description: Optional[str] = None
     county: Optional[str] = None
     subcounty: Optional[str] = None
@@ -70,6 +75,8 @@ class StorePatch(BaseModel):
     # Accepted only when unchanged: a store's link is fixed once it opens.
     slug: Optional[str] = Field(default=None, max_length=64)
     category: Optional[str] = None
+    # The full set that replaces the store's categories; see StoreIn.
+    categories: Optional[List[str]] = None
     description: Optional[str] = None
     county: Optional[str] = None
     subcounty: Optional[str] = None
@@ -385,6 +392,19 @@ async def get_owner_listings(
 async def get_store_categories(store_id: str, db: AsyncSession = Depends(get_db)):
     """[{name, count}] - the categories this store has products in."""
     return await StoreService(db).list_categories(store_id)
+
+
+@router.get("/{store_id}/reviews")
+async def get_store_reviews(
+    store_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """{summary, reviews, seller_standing} - the owner's buyer reviews and
+    published figures, for the store's details screen. Public; reviewer
+    names only, no ids."""
+    return await StoreService(db).store_reviews(store_id, limit=limit, offset=offset)
 
 
 @router.post("/{store_id}/visit", status_code=202)
