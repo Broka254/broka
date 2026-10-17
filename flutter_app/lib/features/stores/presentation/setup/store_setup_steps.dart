@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../../../main.dart' show BrokaColors;
 import '../../../../services/photo_capture.dart';
@@ -164,8 +165,10 @@ class _CategoryChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Online stores only: the dealer/agent trades the directory excludes
+    // (Property, Automobiles, Land, Services, Other) are not offered here.
     return Wrap(spacing: 8, runSpacing: 10, children: [
-      for (final name in StoreCategories.all)
+      for (final name in StoreCategories.onlineRail)
         _chip(name, StoreCategories.visualFor(name), selected.contains(name)),
     ]);
   }
@@ -407,7 +410,8 @@ class CategoryStep extends StatelessWidget {
       const SizedBox(height: 4),
       const _Hint('Choose every category your store sells in - one or more. '
           'Shops selling across several are listed as Wholesale and General. '
-          'Products from any category can go in your store.'),
+          'Cars, land and property are sold through their own BROKA areas, '
+          'not online stores.'),
     ]);
   }
 }
@@ -425,8 +429,43 @@ class LocationStep extends StatefulWidget {
 class _LocationStepState extends State<LocationStep> {
   late bool _typingArea = widget.c.subcounty != null &&
       KenyaLocations.canonicalSubcounty(widget.c.county, widget.c.subcounty) == null;
+  bool _locating = false;
+  String? _pinError;
 
   StoreSetupController get c => widget.c;
+
+  Future<void> _useMyLocation() async {
+    setState(() {
+      _locating = true;
+      _pinError = null;
+    });
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        await Geolocator.openLocationSettings();
+        throw StateError('off');
+      }
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        throw StateError('denied');
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 12),
+        ),
+      );
+      if (!mounted) return;
+      c.setStorePin(pos.latitude, pos.longitude);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _pinError = 'Could not get your location. Stand at your shop and try again.');
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
 
   Future<void> _pickCounty() async {
     final picked = await pickFromList(context,
@@ -493,6 +532,64 @@ class _LocationStepState extends State<LocationStep> {
         icon: Icons.signpost_outlined,
         maxLength: 160,
         textCapitalization: TextCapitalization.sentences,
+      ),
+      const SizedBox(height: 20),
+      _label('Shop pin for Near you'),
+      Container(
+        key: const Key('store-pin-card'),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(c.hasStorePin ? Icons.location_on_rounded : Icons.location_searching_rounded,
+                size: 20, color: c.hasStorePin ? BrokaColors.success : BrokaColors.gold),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                c.hasStorePin
+                    ? 'Pin set - buyers nearby will find this shop'
+                    : 'No pin yet - Near you will guess from your account',
+                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13.5,
+                    fontWeight: FontWeight.w700, height: 1.35),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          const Text(
+            'Stand at your shop and tap below. Buyers only ever see an approximate area (about 1 km), never the exact spot.',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.45),
+          ),
+          if (_pinError != null) ...[
+            const SizedBox(height: 8),
+            Text(_pinError!, style: const TextStyle(color: BrokaColors.danger, fontSize: 12.5)),
+          ],
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                key: const Key('store-pin-use-location'),
+                onPressed: _locating ? null : _useMyLocation,
+                icon: _locating
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.my_location_rounded, size: 17),
+                label: Text(c.hasStorePin ? 'Update pin' : 'Use my location'),
+              ),
+            ),
+            if (c.hasStorePin) ...[
+              const SizedBox(width: 8),
+              TextButton(
+                key: const Key('store-pin-remove'),
+                onPressed: c.clearStorePin,
+                child: const Text('Remove'),
+              ),
+            ],
+          ]),
+        ]),
       ),
     ]);
   }

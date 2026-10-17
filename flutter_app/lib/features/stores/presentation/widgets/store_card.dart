@@ -40,7 +40,10 @@ class StoreCard extends StatefulWidget {
   /// the store, and this is the secondary thing a buyer does from here.
   /// Null hides it.
   final VoidCallback? onDetails;
-  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails});
+
+  /// Opens the store on the map. Null hides the Map action.
+  final VoidCallback? onMap;
+  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails, this.onMap});
 
   @override
   State<StoreCard> createState() => _StoreCardState();
@@ -53,8 +56,8 @@ class _StoreCardState extends State<StoreCard> {
     if (_down != down) setState(() => _down = down);
   }
 
-  static const _pictureHeight = 150.0;
-  static const _logoSize = 58.0;
+  static const _pictureHeight = 168.0;
+  static const _logoSize = 62.0;
 
   @override
   Widget build(BuildContext context) {
@@ -175,6 +178,15 @@ class _StoreCardState extends State<StoreCard> {
                           color: Colors.white,
                         ),
                       ),
+                    if (store.nearLabel != null)
+                      Positioned(
+                        left: 10,
+                        bottom: 10,
+                        child: _DistancePill(
+                          key: const Key('store-card-distance'),
+                          label: store.nearLabel!,
+                        ),
+                      ),
                   ]),
                 ),
                 // The logo sits over the picture's lower edge - the sign on
@@ -259,6 +271,13 @@ class _StoreCardState extends State<StoreCard> {
                                   fontWeight: FontWeight.w700)),
                         ),
                         const SizedBox(width: 10),
+                        if (widget.onMap != null) ...[
+                          _MapButton(
+                            key: Key('store-map-${store.id}'),
+                            onTap: widget.onMap!,
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         _VisitButton(key: Key('visit-store-${store.id}')),
                       ]),
                     ]),
@@ -277,6 +296,60 @@ class _StoreCardState extends State<StoreCard> {
       ),
     );
   }
+}
+
+/// Distance on the picture: the buyer's first question about a shop,
+/// given the strongest seat on the card after the shop's own name.
+class _DistancePill extends StatelessWidget {
+  const _DistancePill({super.key, required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [BrokaColors.gold, BrokaColors.neonBlue]),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.35), blurRadius: 10)],
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.near_me_rounded, size: 13, color: Colors.white),
+          const SizedBox(width: 5),
+          Text(label,
+              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+        ]),
+      );
+}
+
+/// Map: the quiet sibling of Visit store - an outline pill that opens
+/// the shop's approximate point on the in-app map.
+class _MapButton extends StatelessWidget {
+  const _MapButton({super.key, required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: 'View store on map',
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 13),
+            decoration: BoxDecoration(
+              color: BrokaColors.neonCyan.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(19),
+              border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.65)),
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.map_outlined, size: 16, color: BrokaColors.neonCyan),
+              SizedBox(width: 6),
+              Text('Map',
+                  style: TextStyle(color: BrokaColors.neonCyan, fontSize: 13, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+        ),
+      );
 }
 
 /// Visit store: a pill as wide as its words (the whole card is the tap

@@ -456,6 +456,65 @@ class TestStoreDiscovery:
         assert resp.status_code == 200
         assert any(s["name"] == "Searchable Widgets Co" for s in resp.json())
 
+    @pytest.mark.asyncio
+    async def test_store_pin_drives_distance_not_owner_point(self, client, owner):
+        # The owner signed up in Nairobi, but the shop pin is in Mombasa:
+        # "near you" must measure to the shop, not to the owner - the bug
+        # where a store in your town failed the 25 km filter (and the
+        # reverse, a far shop passing it) came from using the owner point.
+        _, owner_token = owner
+        created = await client.post("/stores", json={
+            "name": "Pinned Far Away", "lat": -4.05, "lng": 39.67,
+        }, headers=_auth(owner_token))
+        assert created.status_code == 201, created.text
+        store_id = created.json()["id"]
+        # The owner's own read carries the exact pin back.
+        assert created.json()["lat"] == -4.05
+
+        near_nairobi = await client.get("/stores", params={
+            "lat": -1.286, "lng": 36.817, "max_distance_km": 25, "nearest_first": True,
+        })
+        assert store_id not in [s["id"] for s in near_nairobi.json()]
+
+        listed = await client.get("/stores", params={"lat": -1.286, "lng": 36.817})
+        row = next(s for s in listed.json() if s["id"] == store_id)
+        assert row["distance_km"] > 300
+        assert row["has_location"] is True
+        # Public reads never carry the exact pin, only the ±1 km point.
+        assert "lat" not in row
+        assert abs(row["approx_lat"] - -4.05) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_store_without_pin_falls_back_to_owner_point(self, client, owner):
+        _, owner_token = owner
+        created = await client.post("/stores", json={"name": "No Pin Shop"},
+                                    headers=_auth(owner_token))
+        store_id = created.json()["id"]
+        near_nairobi = await client.get("/stores", params={
+            "lat": -1.286, "lng": 36.817, "max_distance_km": 25, "nearest_first": True,
+        })
+        assert store_id in [s["id"] for s in near_nairobi.json()]
+
+    @pytest.mark.asyncio
+    async def test_half_a_pin_is_refused(self, client, owner):
+        _, owner_token = owner
+        resp = await client.post("/stores", json={"name": "Half Pin", "lat": -1.286},
+                                 headers=_auth(owner_token))
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_list_stores_subcounty_filter(self, client, owner):
+        _, owner_token = owner
+        created = await client.post("/stores", json={
+            "name": "Westlands Widgets", "county": "Nairobi", "subcounty": "Westlands",
+        }, headers=_auth(owner_token))
+        store_id = created.json()["id"]
+
+        inside = await client.get("/stores", params={"subcounty": "Westlands"})
+        assert store_id in [s["id"] for s in inside.json()]
+        outside = await client.get("/stores", params={"subcounty": "Ruiru"})
+        assert store_id not in [s["id"] for s in outside.json()]
+
 
 class TestStorePublicWebPage:
     @pytest.mark.asyncio

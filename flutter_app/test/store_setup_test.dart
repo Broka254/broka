@@ -880,6 +880,30 @@ void main() {
 
       // Wholesale and General is derived from two or more, never chosen.
       expect(find.text(StoreCategories.wholesale), findsNothing);
+      // Dealer/agent trades are not online-store categories: the wizard
+      // offers exactly the directory's online rail.
+      for (final excluded in ['Automobiles', 'Property', 'Land', 'Services', 'Other']) {
+        expect(find.byKey(Key('store-category-chip-$excluded')), findsNothing,
+            reason: '$excluded must not be offered for an online store');
+      }
+      expect(find.byKey(const Key('store-category-chip-Electronics')), findsOneWidget);
+      c.dispose();
+    });
+
+    test('the store pin rides the launch payload and the draft', () async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json(_owner()),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      expect(c.hasStorePin, isFalse);
+      c.setStorePin(-1.286, 36.817);
+      expect(c.hasStorePin, isTrue);
+      await c.saveDraft();
+      c.clearStorePin();
+      expect(c.hasStorePin, isFalse);
       c.dispose();
     });
 

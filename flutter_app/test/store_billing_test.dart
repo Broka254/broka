@@ -355,11 +355,13 @@ void main() {
       expect(find.textContaining("Buyers can't see Clanix Electronics"), findsOneWidget);
       expect(find.byKey(const Key('store-billing-plan')), findsOneWidget);
       expect(find.text('Goods store · 20 listings'), findsOneWidget);
-      // No monthly or per-listing price anywhere - only the real charge
-      // in the period rows below. Any size in one gesture: type, drag, tap.
+      // The period rows show the total charged plus its monthly cost, so
+      // a 2-month total never reads as a monthly price. Any size in one
+      // gesture: type, drag, tap.
       expect(find.text('2 live now'), findsOneWidget);
-      expect(find.textContaining('a month'), findsNothing);
-      expect(find.textContaining('a listing'), findsNothing);
+      expect(find.byKey(const Key('store-billing-per-month-2')), findsOneWidget);
+      expect(find.textContaining('/month'), findsWidgets);
+      expect(find.textContaining('for 2 months'), findsOneWidget);
       expect(find.byKey(const Key('store-billing-size-field')), findsOneWidget);
       expect(find.byKey(const Key('store-billing-size-slider')), findsOneWidget);
       expect(find.byKey(const Key('store-billing-size-150')), findsOneWidget);
@@ -373,6 +375,32 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Continue to payment · KES 2,109'), findsOneWidget);
       expect(find.text('KES 2,109'), findsOneWidget);
+    });
+
+    testWidgets('dragging the size slider and typing a size both re-price the plan',
+        (tester) async {
+      final backend = _BillingBackend()..wire();
+      await _openBilling(tester, backend);
+      expect(backend.listingsAsked, [null, 20]);
+
+      // Regression: the drag used to update _size on every tick, so the
+      // release handler saw "already at that size" and never asked the
+      // server - the plans stayed priced for the old size.
+      await tester.ensureVisible(find.byKey(const Key('store-billing-size-slider')));
+      await tester.drag(find.byKey(const Key('store-billing-size-slider')), const Offset(120, 0));
+      await tester.pumpAndSettle();
+      expect(backend.listingsAsked.length, greaterThan(2),
+          reason: 'releasing the slider must ask the server to price the dragged size');
+      expect(backend.listingsAsked.last, isNot(20));
+
+      // Typing a size prices it too (after the debounce), without the
+      // field being rewritten mid-type.
+      backend.listingsAsked.clear();
+      await tester.ensureVisible(find.byKey(const Key('store-billing-size-field')));
+      await tester.enterText(find.byKey(const Key('store-billing-size-field')), '150');
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pumpAndSettle();
+      expect(backend.listingsAsked, contains(150));
     });
 
     testWidgets('pays through the shared checkout and pops true once M-Pesa confirms',

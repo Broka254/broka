@@ -43,7 +43,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint,
+    Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint,
 )
 from api.database import Base
 
@@ -110,6 +110,12 @@ class Store(Base):
     county               = Column(String, nullable=True)
     subcounty            = Column(String, nullable=True)
     location_description = Column(String, nullable=True)
+    # The shop's own pin, captured in the setup wizard. Stores used to
+    # borrow their owner's account point for "near you", so a shop read
+    # as wherever its owner happened to sign up. NULL = no pin set; reads
+    # fall back to the owner's point (see stores/service.py).
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
 
     # No longer read or written: buyers reach a store through BROKA's own
     # chat and checkout. Kept so existing rows aren't disturbed.

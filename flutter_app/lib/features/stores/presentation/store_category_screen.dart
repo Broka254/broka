@@ -21,6 +21,7 @@ import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import '../domain/store_categories.dart';
 import 'store_home_screen.dart';
+import 'store_map_screen.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
 
@@ -237,6 +238,8 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
                       builder: (_) => StoreHomeScreen(storeId: _nearby[i].id))),
               onDetails: () => showStoreDetails(context, _nearby[i],
                   repository: storesRepository),
+              onMap: () => openStoreMap(context, _nearby[i],
+                  viewerLat: _userLat, viewerLng: _userLng),
             ),
             childCount: _nearby.length,
           ),
@@ -314,6 +317,8 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
                       builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
               onDetails: () => showStoreDetails(context, _stores[i],
                   repository: storesRepository),
+              onMap: () => openStoreMap(context, _stores[i],
+                  viewerLat: _userLat, viewerLng: _userLng),
             ),
             childCount: _stores.length,
           ),

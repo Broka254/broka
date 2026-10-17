@@ -125,6 +125,8 @@ class StoreSetupController extends ChangeNotifier {
     county = KenyaLocations.canonicalCounty(s.county) ?? s.county;
     subcounty = s.subcounty;
     landmark = s.locationDescription ?? '';
+    storeLat = s.lat;
+    storeLng = s.lng;
     logo = s.logo != null
         ? DraftImage(id: s.logo!.id, url: s.logo!.thumb)
         : (s.logoUrl != null ? DraftImage(url: s.logoUrl) : null);
@@ -181,6 +183,12 @@ class StoreSetupController extends ChangeNotifier {
   String? county;
   String? subcounty;
   String landmark = '';
+
+  /// The shop's own pin for "Near you". Null until the owner sets it at
+  /// their shop; the county/subcounty above stay the fallback.
+  double? storeLat;
+  double? storeLng;
+  bool get hasStorePin => storeLat != null && storeLng != null;
   DraftImage? logo;
   DraftImage? cover;
   List<DraftImage> photos = [];
@@ -281,6 +289,8 @@ class StoreSetupController extends ChangeNotifier {
       county = d['county'] as String?;
       subcounty = d['subcounty'] as String?;
       landmark = d['landmark'] as String? ?? '';
+      storeLat = (d['lat'] as num?)?.toDouble();
+      storeLng = (d['lng'] as num?)?.toDouble();
       logo = DraftImage.fromJson(d['logo']);
       cover = DraftImage.fromJson(d['cover']);
       photos = [
@@ -336,6 +346,8 @@ class StoreSetupController extends ChangeNotifier {
         'county': county,
         'subcounty': subcounty,
         'landmark': landmark,
+        'lat': storeLat,
+        'lng': storeLng,
         'logo': logo?.toJson(),
         'cover': cover?.toJson(),
         'photos': [for (final p in photos) p.toJson()],
@@ -487,6 +499,18 @@ class StoreSetupController extends ChangeNotifier {
 
   void setSubcounty(String? v) { subcounty = v; _changed(); }
   void setLandmark(String v) { landmark = v; _changed(); }
+
+  void setStorePin(double lat, double lng) {
+    storeLat = lat;
+    storeLng = lng;
+    _changed();
+  }
+
+  void clearStorePin() {
+    storeLat = null;
+    storeLng = null;
+    _changed();
+  }
 
   // ── Images ───────────────────────────────────────────────────────────────
 
@@ -774,6 +798,8 @@ class StoreSetupController extends ChangeNotifier {
         'county': county,
         'subcounty': _clean(subcounty ?? ''),
         'location_description': _clean(landmark),
+        'lat': storeLat,
+        'lng': storeLng,
         ...await _imagePayload(),
         if (email.trim().isNotEmpty) ..._emailPayload(),
       };
@@ -838,6 +864,8 @@ class StoreSetupController extends ChangeNotifier {
             'county': county,
             'subcounty': _clean(subcounty ?? ''),
             'location_description': _clean(landmark) ?? '',
+            'lat': storeLat,
+            'lng': storeLng,
           },
         StoreSetupStep.logo => await _imagePayload(photosPart: false),
         StoreSetupStep.photos => await _imagePayload(logoPart: false),

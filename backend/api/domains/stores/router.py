@@ -51,6 +51,10 @@ class StoreIn(BaseModel):
     county: Optional[str] = None
     subcounty: Optional[str] = None
     location_description: Optional[str] = None
+    # The shop's own pin for "near you". Both or neither; the service
+    # refuses a half-pin.
+    lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    lng: Optional[float] = Field(default=None, ge=-180, le=180)
     # Optional. A new address needs business_email_token from
     # POST /stores/email/verify, unless it's the owner's verified account
     # email.
@@ -81,6 +85,8 @@ class StorePatch(BaseModel):
     county: Optional[str] = None
     subcounty: Optional[str] = None
     location_description: Optional[str] = None
+    lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    lng: Optional[float] = Field(default=None, ge=-180, le=180)
     business_email: Optional[str] = None
     business_email_token: Optional[str] = None
     logo_id: Optional[str] = None
@@ -161,6 +167,7 @@ async def list_stores(
     # Old name of `category`, still sent by app builds before phase 2.
     specialization: Optional[str] = None,
     county: Optional[str] = None,
+    subcounty: Optional[str] = None,
     limit: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
     with_total: bool = False,
@@ -174,7 +181,7 @@ async def list_stores(
     distance_km and distance_label ('6 km from you'); with max_distance_km
     only nearby stores; with nearest_first nearest first."""
     return await StoreService(db).list_stores(
-        search=search, category=category or specialization, county=county,
+        search=search, category=category or specialization, county=county, subcounty=subcounty,
         limit=limit, offset=offset, with_total=with_total,
         viewer_lat=lat, viewer_lng=lng,
         max_distance_km=max_distance_km, nearest_first=nearest_first,

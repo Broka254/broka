@@ -1414,6 +1414,10 @@ async def init_db():
             # take an integer default for a boolean column.
             "ALTER TABLE stores ADD COLUMN category VARCHAR",
             "ALTER TABLE stores ADD COLUMN business_email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+            # The shop's own pin for "near you" (Store.lat/lng). NULL on
+            # every existing row: those shops keep the owner-point fallback.
+            "ALTER TABLE stores ADD COLUMN lat FLOAT",
+            "ALTER TABLE stores ADD COLUMN lng FLOAT",
             # Upload clean-up (api/domains/media/cleanup.py). Every asset
             # that exists when the column is added becomes 'legacy' and is
             # never cleaned up; only uploads made after it can be.

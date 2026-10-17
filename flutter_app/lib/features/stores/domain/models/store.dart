@@ -107,6 +107,17 @@ class Store {
   final double? distanceKm;
   /// '6 km from you' label for the card, null with distanceKm.
   final String? distanceLabel;
+
+  /// The shop's own pin, exactly as set - only on the owner's own reads.
+  final double? lat;
+  final double? lng;
+
+  /// Where the map may put the shop: the pin (or the owner's point) at
+  /// ±1 km rounding, never exact. Null when the shop has no mappable
+  /// point at all.
+  final double? approxLat;
+  final double? approxLng;
+  final bool hasLocation;
   final String? createdAt;
   final String? updatedAt;
 
@@ -135,6 +146,11 @@ class Store {
     this.listingCount = 0,
     this.distanceKm,
     this.distanceLabel,
+    this.lat,
+    this.lng,
+    this.approxLat,
+    this.approxLng,
+    this.hasLocation = false,
     this.createdAt,
     this.updatedAt,
   });
@@ -171,9 +187,23 @@ class Store {
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
       distanceLabel: json['distance_label'] as String?,
+      lat: (json['lat'] as num?)?.toDouble(),
+      lng: (json['lng'] as num?)?.toDouble(),
+      approxLat: (json['approx_lat'] as num?)?.toDouble(),
+      approxLng: (json['approx_lng'] as num?)?.toDouble(),
+      hasLocation: json['has_location'] as bool? ?? false,
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,
     );
+  }
+
+  /// The point the in-app map opens at, or null when there is none.
+  ({double lat, double lng})? get mapPoint {
+    if (approxLat != null && approxLng != null) {
+      return (lat: approxLat!, lng: approxLng!);
+    }
+    if (lat != null && lng != null) return (lat: lat!, lng: lng!);
+    return null;
   }
 
   /// "Subcounty, County", or null when neither is set.

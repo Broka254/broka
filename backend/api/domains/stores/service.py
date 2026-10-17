@@ -128,6 +128,7 @@ class StoreService:
         photos = self._safe_normalize_photo_list(data.get("photos"))
         email = self._business_email(owner, data, current=(None, False))
         text_values = {field: self._clean_text(field, data.get(field)) for field in _TEXT_FIELDS}
+        coords = self._clean_coords(data)
 
         attempts = 1 if chosen_slug else _MAX_SLUG_RETRIES
         for attempt in range(attempts):
@@ -160,6 +161,8 @@ class StoreService:
                 owner_id=owner_id, name=name, slug=slug, category=category,
                 logo_url=logo_url, photos=photos,
             )
+            if coords is not None:
+                store.lat, store.lng = coords
             if email is not None:
                 store.official_email, store.business_email_verified = email
             for field, value in text_values.items():
@@ -270,6 +273,7 @@ class StoreService:
         search: Optional[str] = None,
         category: Optional[str] = None,
         county: Optional[str] = None,
+        subcounty: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
         with_total: bool = False,
@@ -323,6 +327,8 @@ class StoreService:
                 ))
         if county:
             q = q.where(Store.county == county)
+        if subcounty:
+            q = q.where(Store.subcounty == subcounty)
 
         total = None
         if with_total:
@@ -366,25 +372,57 @@ class StoreService:
         return {"items": items, "total": total} if with_total else items
 
     @staticmethod
-    def _store_distance_km(owner, viewer_lat: Optional[float], viewer_lng: Optional[float]) -> Optional[float]:
-        """A store's distance: its owner's approximate point, not the exact fix.
+    def _clean_coords(data: dict) -> Optional[tuple]:
+        """The shop pin a request sets: (lat, lng), (None, None) to clear
+        it, or None when the request doesn't mention it. A half-pin or an
+        off-globe point is refused, never guessed at."""
+        if "lat" not in data and "lng" not in data:
+            return None
+        lat, lng = data.get("lat"), data.get("lng")
+        if lat is None and lng is None:
+            return (None, None)
+        try:
+            lat, lng = float(lat), float(lng)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="That shop location looks wrong. Try again.")
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            raise HTTPException(status_code=400, detail="That shop location looks wrong. Try again.")
+        return (lat, lng)
 
-        Stores hold no coordinates of their own - only county/subcounty text -
-        so nearness comes from who runs the shop. The point is rounded to two
-        decimals (~1 km, the same rule auth uses for people) so a distance
-        asked for from three made-up places cannot triangulate a home to
-        ~100 m; product cards already warn '±1km'. Respects the owner's
-        location switch and drops bad coordinates to None instead of 0 km -
-        a missing point is unknown, never next door."""
-        if viewer_lat is None or viewer_lng is None or owner is None:
-            return None
-        if not getattr(owner, "location_visible", True):
-            return None
-        lat, lng = getattr(owner, "lat", None), getattr(owner, "lng", None)
+    @staticmethod
+    def _approx_point(lat, lng):
+        """A mappable point at the same ±1 km rounding distances use, so
+        the map can never show a shop (or home) more precisely than the
+        distance beside it already does."""
         if lat is None or lng is None:
+            return (None, None)
+        try:
+            return (round(float(lat), 2), round(float(lng), 2))
+        except (TypeError, ValueError):
+            return (None, None)
+
+    @staticmethod
+    def _store_distance_km(store, owner, viewer_lat: Optional[float], viewer_lng: Optional[float]) -> Optional[float]:
+        """A store's distance: its own pin first, its owner's point second.
+
+        The shop pin is where the shop is; the owner's account point is
+        only the fallback for shops set up before stores held one (and it
+        respects the owner's location switch - the shop pin is given for
+        the shop, so it doesn't). Either point is rounded to two decimals
+        (~1 km) so a distance asked for from three made-up places cannot
+        triangulate it to ~100 m. Bad coordinates drop to None instead of
+        0 km - a missing point is unknown, never next door."""
+        if viewer_lat is None or viewer_lng is None:
+            return None
+        point = None
+        if store is not None and getattr(store, "lat", None) is not None and getattr(store, "lng", None) is not None:
+            point = (store.lat, store.lng)
+        elif owner is not None and getattr(owner, "location_visible", True):
+            point = (getattr(owner, "lat", None), getattr(owner, "lng", None))
+        if point is None or point[0] is None or point[1] is None:
             return None
         try:
-            approx = (round(float(lat), 2), round(float(lng), 2))
+            approx = (round(float(point[0]), 2), round(float(point[1]), 2))
             viewer = (float(viewer_lat), float(viewer_lng))
         except (TypeError, ValueError):
             return None
@@ -710,6 +748,9 @@ class StoreService:
         for field in _TEXT_FIELDS:
             if field in data:
                 setattr(store, field, self._clean_text(field, data[field]))
+        coords = self._clean_coords(data)
+        if coords is not None:
+            store.lat, store.lng = coords
 
         await self._check_legacy_media(requester_id, data)
         image_columns = await self._image_columns(requester_id, data)
@@ -1059,6 +1100,17 @@ class StoreService:
             elif not store_billing.is_live(sub):
                 active = False
 
+        distance_km = self._store_distance_km(store, owner, viewer_lat, viewer_lng)
+        # The mappable point: the shop pin, else the owner's point while
+        # their location is visible - always at ±1 km rounding.
+        if getattr(store, "lat", None) is not None and getattr(store, "lng", None) is not None:
+            approx_lat, approx_lng = self._approx_point(store.lat, store.lng)
+        elif owner is not None and getattr(owner, "location_visible", True):
+            approx_lat, approx_lng = self._approx_point(
+                getattr(owner, "lat", None), getattr(owner, "lng", None))
+        else:
+            approx_lat, approx_lng = (None, None)
+
         return {
             "id": store.id,
             "name": store.name,
@@ -1103,10 +1155,14 @@ class StoreService:
             # non-null and not active.
             "billing": billing_state,
             "listing_count": listing_count,
-            "distance_km": self._store_distance_km(owner, viewer_lat, viewer_lng),
-            "distance_label": format_distance_km(
-                self._store_distance_km(owner, viewer_lat, viewer_lng)
-            ),
+            "distance_km": distance_km,
+            "distance_label": format_distance_km(distance_km),
+            # Where the map may put the shop (±1 km, never exact), and -
+            # for the owner only - the pin exactly as they set it.
+            "approx_lat": approx_lat,
+            "approx_lng": approx_lng,
+            "has_location": approx_lat is not None,
+            **({"lat": store.lat, "lng": store.lng} if owner_view else {}),
             "created_at": store.created_at.isoformat() if store.created_at else None,
             "updated_at": store.updated_at.isoformat() if store.updated_at else None,
         }

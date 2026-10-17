@@ -37,8 +37,10 @@ import '../domain/store_categories.dart';
 import 'nearby_stores_screen.dart';
 import 'store_category_screen.dart';
 import 'store_home_screen.dart';
+import 'store_map_screen.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
+import 'widgets/store_location_filter.dart';
 
 class StoreListScreen extends StatefulWidget {
   const StoreListScreen({super.key});
@@ -54,6 +56,8 @@ class _StoreListScreenState extends State<StoreListScreen> {
   final List<Store> _nearby = [];
   double? _userLat;
   double? _userLng;
+  String? _county;
+  String? _subcounty;
 
   @override
   void initState() {
@@ -67,6 +71,8 @@ class _StoreListScreenState extends State<StoreListScreen> {
     final query = _searchCtrl.text.trim();
     final result = await storesRepository.listStores(
         search: query.isEmpty ? null : query,
+        county: _county,
+        subcounty: _subcounty,
         lat: _userLat,
         lng: _userLng);
     if (!mounted) return;
@@ -180,6 +186,19 @@ class _StoreListScreenState extends State<StoreListScreen> {
                   ),
                   SliverToBoxAdapter(child: _searchBar()),
                   SliverToBoxAdapter(child: _categoryRail()),
+                  SliverToBoxAdapter(
+                    child: StoreLocationFilter(
+                      county: _county,
+                      subcounty: _subcounty,
+                      onChanged: (county, subcounty) {
+                        setState(() {
+                          _county = county;
+                          _subcounty = subcounty;
+                        });
+                        _load();
+                      },
+                    ),
+                  ),
                   ..._nearbySlivers(),
                   SliverToBoxAdapter(child: _listHeading()),
                   ..._bodySlivers(),
@@ -325,6 +344,8 @@ class _StoreListScreenState extends State<StoreListScreen> {
                       builder: (_) => StoreHomeScreen(storeId: _nearby[i].id))),
               onDetails: () => showStoreDetails(context, _nearby[i],
                   repository: storesRepository),
+              onMap: () => openStoreMap(context, _nearby[i],
+                  viewerLat: _userLat, viewerLng: _userLng),
             ),
             childCount: _nearby.length,
           ),
@@ -396,6 +417,8 @@ class _StoreListScreenState extends State<StoreListScreen> {
                       builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
               onDetails: () => showStoreDetails(context, _stores[i],
                   repository: storesRepository),
+              onMap: () => openStoreMap(context, _stores[i],
+                  viewerLat: _userLat, viewerLng: _userLng),
             ),
             childCount: _stores.length,
           ),

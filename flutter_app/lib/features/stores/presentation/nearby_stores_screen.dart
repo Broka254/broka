@@ -1,24 +1,32 @@
 // BROKA — Stores near you
 //
-// Browsable exactly like a store category, except the filter is where you
-// are standing: shops within 25 km of your current position, nearest first.
-// The position is a live GPS fix, never the saved signup point - near you
-// from a stale point is worse than no list at all (a shop in your own town
-// reading tens of km away). No fix, no list: the screen asks for location
-// instead of guessing.
+// The store directory (Image 3's Stores screen) scoped to where you are
+// standing: shops within 25 km of a live GPS fix, nearest first, with
+// the same search, category rail and place filters as the directory -
+// picking "Electronics" here shows only nearby electronics shops.
+//
+// The position is a live GPS fix, never the saved signup point - near
+// you from a stale point is worse than no list at all. No fix, no list:
+// the screen asks for location instead of guessing. A shop's distance
+// comes from its own pin when it has one (setup wizard), else its
+// owner's point - see backend _store_distance_km.
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../../core/utils/result.dart';
 import '../../../main.dart';
+import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
+import '../domain/store_categories.dart';
 import 'store_home_screen.dart';
+import 'store_map_screen.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
+import 'widgets/store_location_filter.dart';
 
 class NearbyStoresScreen extends StatefulWidget {
   const NearbyStoresScreen({super.key, this.repository});
@@ -37,6 +45,17 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
   _Stage _stage = _Stage.locating;
   final List<Store> _stores = [];
   final _scrollController = ScrollController();
+  final _searchCtrl = TextEditingController();
+
+  double? _userLat;
+  double? _userLng;
+  String? _category;
+  String? _county;
+  String? _subcounty;
+  bool _fetching = false;
+
+  bool get _filtersActive =>
+      _category != null || _county != null || _searchCtrl.text.trim().isNotEmpty;
 
   @override
   void initState() {
@@ -47,6 +66,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -83,7 +103,24 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
       setState(() => _stage = _Stage.needsLocation);
       return;
     }
+    _userLat = lat;
+    _userLng = lng;
+    await _fetch();
+  }
+
+  /// (Re)runs the nearby query with the current filters. Needs the fix
+  /// from [_load]; filter changes call this directly.
+  Future<void> _fetch() async {
+    final lat = _userLat;
+    final lng = _userLng;
+    if (lat == null || lng == null) return;
+    setState(() => _fetching = true);
+    final query = _searchCtrl.text.trim();
     final result = await _repo.listStores(
+      search: query.isEmpty ? null : query,
+      category: _category,
+      county: _county,
+      subcounty: _subcounty,
       lat: lat,
       lng: lng,
       maxDistanceKm: Store.nearRadiusKm,
@@ -95,9 +132,23 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
       onSuccess: (data) => setState(() {
         _stores..clear()..addAll(data);
         _stage = _Stage.ready;
+        _fetching = false;
       }),
-      onFailure: (_, __) => setState(() => _stage = _Stage.loadFailed),
+      onFailure: (_, __) => setState(() {
+        _stage = _Stage.loadFailed;
+        _fetching = false;
+      }),
     );
+  }
+
+  void _clearFilters() {
+    _searchCtrl.clear();
+    setState(() {
+      _category = null;
+      _county = null;
+      _subcounty = null;
+    });
+    _fetch();
   }
 
   @override
@@ -128,6 +179,23 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                     textScale: media.textScaler.scale(1.0).clamp(1.0, 1.35).toDouble(),
                   ),
                 ),
+                if (_stage == _Stage.ready) ...[
+                  SliverToBoxAdapter(child: _searchBar()),
+                  SliverToBoxAdapter(child: _categoryRail()),
+                  SliverToBoxAdapter(
+                    child: StoreLocationFilter(
+                      county: _county,
+                      subcounty: _subcounty,
+                      onChanged: (county, subcounty) {
+                        setState(() {
+                          _county = county;
+                          _subcounty = subcounty;
+                        });
+                        _fetch();
+                      },
+                    ),
+                  ),
+                ],
                 ..._bodySlivers(),
                 const SliverToBoxAdapter(child: SizedBox(height: 12)),
               ],
@@ -137,6 +205,47 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
       ),
     );
   }
+
+  Widget _searchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+        child: BrokaSearchField(
+          controller: _searchCtrl,
+          hintText: 'Search nearby stores',
+          onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => _fetch(),
+          onCleared: _fetch,
+        ),
+      );
+
+  /// Nearby, by kind of shop: "All" plus the online-store categories.
+  Widget _categoryRail() => SizedBox(
+        height: 40,
+        child: ListView(
+          key: const Key('nearby-category-rail'),
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
+          children: [
+            _CategoryChip(
+              label: 'All',
+              selected: _category == null,
+              onTap: () {
+                setState(() => _category = null);
+                _fetch();
+              },
+            ),
+            for (final name in StoreCategories.onlineRail)
+              _CategoryChip(
+                key: Key('nearby-category-$name'),
+                label: '${StoreCategories.visualFor(name).emoji}  $name',
+                selected: _category == name,
+                onTap: () {
+                  setState(() => _category = name);
+                  _fetch();
+                },
+              ),
+          ],
+        ),
+      );
 
   List<Widget> _bodySlivers() {
     switch (_stage) {
@@ -202,23 +311,46 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
           ),
         ];
       case _Stage.ready:
-        if (_stores.isEmpty) {
+        if (_fetching && _stores.isEmpty) {
           return const [
             SliverFillRemaining(
               hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator(color: BrokaColors.gold)),
+            ),
+          ];
+        }
+        if (_stores.isEmpty) {
+          return [
+            SliverFillRemaining(
+              hasScrollBody: false,
               child: Padding(
-                padding: EdgeInsets.fromLTRB(24, 0, 24, 16),
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
                 child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.storefront_outlined, size: 44, color: BrokaColors.textMid),
-                  SizedBox(height: 14),
-                  Text('No stores within 25 km of you',
+                  const Icon(Icons.storefront_outlined, size: 44, color: BrokaColors.textMid),
+                  const SizedBox(height: 14),
+                  Text(
+                      _filtersActive
+                          ? 'No nearby stores match those filters'
+                          : 'No stores within 25 km of you',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: BrokaColors.textHigh, fontSize: 16,
+                      style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16,
                           fontWeight: FontWeight.w800)),
-                  SizedBox(height: 6),
-                  Text('Shops further away are under Shop by category.',
+                  const SizedBox(height: 6),
+                  Text(
+                      _filtersActive
+                          ? 'Try a different category or place - or clear the filters.'
+                          : 'Shops further away are under Shop by category. A shop '
+                              'only shows here once its owner sets its location.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45)),
+                  if (_filtersActive) ...[
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      key: const Key('nearby-clear-filters'),
+                      onPressed: _clearFilters,
+                      child: const Text('Clear filters'),
+                    ),
+                  ],
                 ]),
               ),
             ),
@@ -227,13 +359,21 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
         return [
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
               child: Row(children: [
                 const Icon(Icons.near_me_rounded, size: 16, color: BrokaColors.gold),
                 const SizedBox(width: 6),
                 Text('${_stores.length} within 25 km of you',
                     style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
                         fontWeight: FontWeight.w700)),
+                if (_fetching) ...[
+                  const SizedBox(width: 10),
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(color: BrokaColors.gold, strokeWidth: 2),
+                  ),
+                ],
               ]),
             ),
           ),
@@ -249,6 +389,8 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                           builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
                   onDetails: () => showStoreDetails(context, _stores[i],
                       repository: _repo),
+                  onMap: () => openStoreMap(context, _stores[i],
+                      viewerLat: _userLat, viewerLng: _userLng),
                 ),
                 childCount: _stores.length,
               ),
@@ -257,4 +399,43 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
         ];
     }
   }
+}
+
+class _CategoryChip extends StatelessWidget {
+  const _CategoryChip({super.key, required this.label, required this.selected, required this.onTap});
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: Semantics(
+          selected: selected,
+          button: true,
+          child: GestureDetector(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 13),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected
+                    ? BrokaColors.gold.withOpacity(0.18)
+                    : BrokaColors.bgCard.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: selected ? BrokaColors.gold : BrokaColors.border.withOpacity(0.8),
+                  width: selected ? 1.5 : 1,
+                ),
+              ),
+              child: Text(label,
+                  style: TextStyle(
+                      color: selected ? BrokaColors.textHigh : BrokaColors.textMid,
+                      fontSize: 12.5,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600)),
+            ),
+          ),
+        ),
+      );
 }

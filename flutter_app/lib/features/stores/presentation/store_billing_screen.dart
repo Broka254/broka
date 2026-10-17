@@ -62,11 +62,20 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   bool _sizing = false;
   String? _error;
   final _sizeCtrl = TextEditingController();
+  final _sizeFocus = FocusNode();
   Timer? _sizeDebounce;
 
   @override
   void initState() {
     super.initState();
+    _sizeFocus.addListener(() {
+      // Leaving the field settles it on the priced size, so a half-typed
+      // number never lingers beside prices for another size.
+      if (!_sizeFocus.hasFocus && _quote?.plan != null) {
+        final priced = _quote!.plan!.listings.toString();
+        if (_sizeCtrl.text != priced) _sizeCtrl.text = priced;
+      }
+    });
     _load();
   }
 
@@ -74,6 +83,7 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   void dispose() {
     _sizeDebounce?.cancel();
     _sizeCtrl.dispose();
+    _sizeFocus.dispose();
     super.dispose();
   }
 
@@ -110,7 +120,11 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
         setState(() {
           _quote = data;
           _size = data.plan?.listings ?? size;
-          if (_sizeCtrl.text != _size.toString()) _sizeCtrl.text = _size.toString();
+          // Never rewrite the field under the person's fingers: typing
+          // settles on blur/submit, the slider and chips sync it directly.
+          if (!_sizeFocus.hasFocus && _sizeCtrl.text != _size.toString()) {
+            _sizeCtrl.text = _size.toString();
+          }
           if (!options.contains(_months)) {
             _months = options.contains(2) ? 2 : options.first;
           }
@@ -129,12 +143,15 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   }
 
   /// Pick any size in one gesture and price it: drag, tap a common size,
-  /// or type the number - all three land here.
+  /// or type the number - all three land here. Skips only when that exact
+  /// size is already priced: the slider's drag updates [_size] on every
+  /// tick, so comparing against [_size] alone (the old check) made every
+  /// drag look "already there" and no price ever came back.
   void _setSize(int size) {
     final q = _quote;
     if (q == null) return;
     final clamped = size.clamp(q.rateCard.minListings, q.rateCard.maxListings);
-    if (clamped == _size && !_sizing) return;
+    if (clamped == q.plan?.listings && !_sizing) return;
     HapticFeedback.selectionClick();
     setState(() => _size = clamped);
     _priceSize(q, clamped);
@@ -142,7 +159,7 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
 
   void _onSizeTyped(String raw) {
     _sizeDebounce?.cancel();
-    _sizeDebounce = Timer(const Duration(milliseconds: 500), () {
+    _sizeDebounce = Timer(const Duration(milliseconds: 600), () {
       final parsed = int.tryParse(raw.replaceAll(RegExp(r'[^0-9]'), ''));
       if (parsed != null && mounted) _setSize(parsed);
     });
@@ -307,6 +324,7 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
                   child: TextField(
                     key: const Key('store-billing-size-field'),
                     controller: _sizeCtrl,
+                    focusNode: _sizeFocus,
                     keyboardType: TextInputType.number,
                     textInputAction: TextInputAction.done,
                     onChanged: _onSizeTyped,
@@ -339,14 +357,22 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
                 min: q.rateCard.minListings.toDouble(),
                 max: q.rateCard.maxListings.toDouble(),
                 activeColor: BrokaColors.gold,
-                onChanged: _sizing
-                    ? null
-                    : (v) => setState(() {
-                          _size = v.round();
-                          _sizeCtrl.text = _size.toString();
-                        }),
+                inactiveColor: BrokaColors.border,
+                // Dragging only moves the thumb; releasing prices it. The
+                // slider stays live while a price loads so a drag is
+                // never cut off mid-gesture.
+                onChanged: (v) => setState(() {
+                      _size = v.round();
+                      if (!_sizeFocus.hasFocus) _sizeCtrl.text = _size.toString();
+                    }),
                 onChangeEnd: (v) => _setSize(v.round()),
               ),
+              if (_sizing)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 4),
+                  child: Text('Pricing that size...',
+                      style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+                ),
               Wrap(spacing: 6, runSpacing: 6, children: [
                 for (final n in const [20, 30, 50, 100, 150, 250, 500, 1000])
                   if (n >= q.rateCard.minListings && n <= q.rateCard.maxListings)
@@ -375,7 +401,12 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4),
           ),
           const SizedBox(height: 22),
-          const CheckoutLabel('How long should it run? Every 2 months.'),
+          const CheckoutLabel('Billed every 2 months - how far ahead?'),
+          const SizedBox(height: 4),
+          const Text(
+            'Prices below are totals for the whole period, with the monthly cost beside them.',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
+          ),
           const SizedBox(height: 10),
           for (final months in q.monthsOptions)
             if (plan.period(months) != null)
@@ -495,20 +526,29 @@ class _MonthOption extends StatelessWidget {
                                     fontWeight: FontWeight.w800)),
                           ),
                       ]),
-                  // No monthly equivalent: the charge is the total on the
-                  // right, and a monthly figure only invites "why is the
-                  // total higher than that?" (the owner's request).
+                  // Total first, monthly cost second: the total is what
+                  // leaves the phone, and the per-month figure is what
+                  // stops it reading as a monthly price.
+                  Text(
+                      'KES ${formatKesAmount(period.perMonth.round())}/month'
+                      '${period.savingPercent > 0 ? '  ·  Save ${period.savingPercent}%' : ''}',
+                      key: Key('store-billing-per-month-${period.months}'),
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
                   if (period.setupFee > 0)
                     Text(
                         '+ KES ${formatKesAmount(period.setupFee)} opening fee',
                         style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
                 ]),
               ),
-              Text('KES ${formatKesAmount(period.amount)}',
-                  style: TextStyle(
-                      color: selected ? BrokaColors.gold : BrokaColors.textHigh,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900)),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text('KES ${formatKesAmount(period.amount)}',
+                    style: TextStyle(
+                        color: selected ? BrokaColors.gold : BrokaColors.textHigh,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900)),
+                Text('for $months',
+                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+              ]),
             ]),
           ),
         ),
