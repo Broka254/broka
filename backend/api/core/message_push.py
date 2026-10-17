@@ -62,6 +62,12 @@ _inflight: set = set()
 # same newest message is never announced twice. Bounded.
 _last_pushed: "OrderedDict[tuple, str]" = OrderedDict()
 _LAST_PUSHED_MAX = 20000
+# (listing_id, buyer_id) -> how many times the thread was scheduled. Every
+# schedule() bumps it, so a send built from an older read can tell a newer
+# message re-armed the thread while it was being built - and stand down
+# instead of delivering stale text after the fresh push (the re-arm's own
+# task sends the fresh state).
+_generations: dict = {}
 
 
 def thread_tag(listing_id: str, buyer_id: str) -> str:
@@ -145,6 +151,7 @@ def push_enabled() -> bool:
 
 def schedule(loop, listing_id: str, buyer_id: str, roles) -> None:
     key = (listing_id, buyer_id)
+    _generations[key] = _generations.get(key, 0) + 1
     _pending_roles.setdefault(key, set()).update(roles)
     task = _pending_tasks.get(key)
     if task is not None and not task.done():
@@ -166,10 +173,13 @@ async def _push_after_debounce(key: tuple) -> None:
     finally:
         _pending_tasks.pop(key, None)
         roles = _pending_roles.pop(key, set())
+    # What this run may send: anything scheduled after this point re-arms
+    # the thread and gets its own task, which sends the fresh state.
+    generation = _generations.get(key, 0)
     listing_id, buyer_id = key
     for role in sorted(roles):
         try:
-            await push_thread(listing_id, buyer_id, role)
+            await push_thread(listing_id, buyer_id, role, generation=generation)
         except Exception as exc:
             logger.warning("[message_push] thread %s:%s role=%s failed: %s",
                            listing_id, buyer_id, role, exc)
@@ -286,14 +296,26 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
     }
 
 
-async def push_thread(listing_id: str, buyer_id: str, role: str) -> int:
+async def push_thread(
+    listing_id: str, buyer_id: str, role: str,
+    generation: Optional[int] = None,
+) -> int:
     """Send `role` this thread's notification if there is news for them.
-    Returns how many phones accepted it."""
+    Returns how many phones accepted it.
+
+    `generation` is the schedule count `_push_after_debounce` saw when this
+    run fired. When a newer message re-armed the thread while the note was
+    being built, the run stands down without sending: its note is stale,
+    and the re-arm's own task sends the fresh state. That keeps a slow
+    first send from landing after - and overwriting, by tag - the fresh
+    notification."""
     from api.core import push_devices
 
     async with AsyncSessionLocal() as db:
         note = await build_notification(db, listing_id, buyer_id, role)
     if note is None:
+        return 0
+    if generation is not None and _generations.get((listing_id, buyer_id), 0) != generation:
         return 0
     dedupe_key = (listing_id, buyer_id, role)
     if _last_pushed.get(dedupe_key) == note["message_id"]:
