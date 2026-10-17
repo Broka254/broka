@@ -110,6 +110,29 @@ async def _open_store(client, token: str, name: str) -> dict:
     return r.json()
 
 
+class TestAreaPoints:
+    def test_county_point_by_any_spelling(self):
+        from api.domains.stores.area_points import county_point
+        lat, lng = county_point("nairobi")
+        assert abs(lat - -1.286) < 0.05 and abs(lng - 36.817) < 0.05
+        assert county_point("Muranga") == county_point("Murang'a")
+        assert county_point("Not A County") is None
+
+    def test_subcounty_point_beats_county_point(self):
+        from api.domains.stores.area_points import area_point
+        lat, lng = area_point("Nairobi", "Westlands")
+        assert abs(lat - -1.263) < 0.02 and abs(lng - 36.808) < 0.02
+
+    def test_unknown_area_has_no_point(self):
+        from api.domains.stores.area_points import area_point
+        assert area_point(None, None) is None
+        assert area_point("Nowhere", "Somewhere") is None
+
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
 class TestStoresNearYou:
     @pytest.mark.asyncio
     async def test_only_shops_within_25km_are_near(self, client):
@@ -140,3 +163,79 @@ class TestStoresNearYou:
         by_name = {s["name"]: s for s in everything["items"]}
         assert by_name["Far Shop"]["distance_km"] > 25
         assert far["id"] == by_name["Far Shop"]["id"]
+
+class TestPinlessStoresNearYou:
+    @pytest.mark.asyncio
+    async def test_area_fallback_finds_pinless_shop(self, client):
+        # The owner registered far away (Mombasa) and never set a shop pin:
+        # the shop's declared area is the only true shop location there is.
+        token = await _register_at(client, "0722000011", "Coast Owner", -4.05, 39.67)
+        created = await client.post("/stores", json={
+            "name": "Kisumu Gadgets", "county": "Kisumu", "subcounty": "Kisumu Central",
+        }, headers=_auth(token))
+        assert created.status_code == 201, created.text
+        store_id = created.json()["id"]
+
+        nearby = (await client.get("/stores", params={
+            "lat": -0.10, "lng": 34.76, "with_total": True,
+            "max_distance_km": 25, "nearest_first": True, "limit": 100,
+        })).json()
+        row = next((s for s in nearby["items"] if s["id"] == store_id), None)
+        assert row is not None, "pin-less shop in the viewer's area must be near"
+        assert row["distance_approximate"] is True
+        assert row["distance_label"].startswith("≈")
+        assert row["has_location"] is True
+        assert abs(row["approx_lat"] - -0.092) < 0.02
+
+    @pytest.mark.asyncio
+    async def test_raw_pin_distance_is_not_rounded_away(self, client):
+        viewer = (0.515, 35.27)
+        token = await _register_at(client, "0722000012", "Border Owner", *viewer)
+        # 24.9 km due north raw; rounding the pin to 2 decimals (0.74)
+        # would push it past 25 km and hide a shop that is in range.
+        created = await client.post("/stores", json={
+            "name": "Borderline Shop", "lat": 0.73894, "lng": 35.27,
+        }, headers=_auth(token))
+        assert created.status_code == 201, created.text
+        store_id = created.json()["id"]
+
+        nearby = (await client.get("/stores", params={
+            "lat": viewer[0], "lng": viewer[1], "with_total": True,
+            "max_distance_km": 25, "nearest_first": True, "limit": 100,
+        })).json()
+        row = next((s for s in nearby["items"] if s["id"] == store_id), None)
+        assert row is not None, "24.9 km away must count as within 25 km"
+        assert row["distance_km"] <= 25
+        assert row["distance_approximate"] is False
+
+
+class TestOnlineCategoryChoice:
+    @pytest.mark.asyncio
+    async def test_excluded_categories_are_refused_for_online_stores(self, client):
+        token = await _register_at(client, "0722000013", "Choice Owner", -1.286, 36.817)
+        for categories in (["Land"], ["Electronics", "Property"], ["Automobiles"]):
+            r = await client.post("/stores", json={
+                "name": "Wrong Shelf", "categories": categories,
+            }, headers=_auth(token))
+            assert r.status_code == 400, (categories, r.text)
+            assert "online store" in r.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_dealer_store_survives(self, client):
+        token = await _register_at(client, "0722000014", "Dealer Owner", -1.286, 36.817)
+        created = await client.post("/stores", json={
+            "name": "Legacy Cars", "specialization": "Vehicles",
+        }, headers=_auth(token))
+        assert created.status_code == 201, created.text
+        store = created.json()
+        assert store["category"] == "Automobiles"
+        # Keeping the category it already has is fine; adding another
+        # excluded trade is not.
+        kept = await client.patch(f"/stores/{store['id']}", json={
+            "categories": ["Automobiles"]}, headers=_auth(token))
+        assert kept.status_code == 200, kept.text
+        added = await client.patch(f"/stores/{store['id']}", json={
+            "categories": ["Automobiles", "Land"]}, headers=_auth(token))
+        assert added.status_code == 400, added.text
+
+

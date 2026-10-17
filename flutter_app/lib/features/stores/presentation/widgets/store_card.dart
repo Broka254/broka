@@ -43,7 +43,13 @@ class StoreCard extends StatefulWidget {
 
   /// Opens the store on the map. Null hides the Map action.
   final VoidCallback? onMap;
-  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails, this.onMap});
+
+  /// Show the distance even beyond the 25 km "near" radius - for
+  /// "nearest to you" lists, where the honest distance is the point.
+  /// Directory cards leave this off: far shops show their place instead.
+  final bool showAnyDistance;
+  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails, this.onMap,
+      this.showAnyDistance = false});
 
   @override
   State<StoreCard> createState() => _StoreCardState();
@@ -62,6 +68,7 @@ class _StoreCardState extends State<StoreCard> {
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
+    final distLabel = widget.showAnyDistance ? store.anyDistanceLabel : store.nearLabel;
     final owner = store.owner;
     final colors = CategoryVisuals.gradientFor(store.category);
     final picture = store.coverSource ?? store.logo?.medium ?? store.logoUrl;
@@ -178,13 +185,13 @@ class _StoreCardState extends State<StoreCard> {
                           color: Colors.white,
                         ),
                       ),
-                    if (store.nearLabel != null)
+                    if (distLabel != null)
                       Positioned(
                         left: 10,
                         bottom: 10,
                         child: _DistancePill(
                           key: const Key('store-card-distance'),
-                          label: store.nearLabel!,
+                          label: distLabel,
                         ),
                       ),
                   ]),
@@ -211,7 +218,7 @@ class _StoreCardState extends State<StoreCard> {
                                   color: BrokaColors.success, semanticLabel: 'Verified seller'),
                             ],
                           ]),
-                          if (store.locationLine != null || store.nearLabel != null) ...[
+                          if (store.locationLine != null || distLabel != null) ...[
                             const SizedBox(height: 4),
                             Row(children: [
                               const Icon(Icons.location_on_outlined, size: 15,
@@ -223,12 +230,12 @@ class _StoreCardState extends State<StoreCard> {
                                       TextSpan(text: store.locationLine!,
                                           style: const TextStyle(
                                               color: BrokaColors.textMid, fontSize: 13)),
-                                    if (store.locationLine != null && store.nearLabel != null)
+                                    if (store.locationLine != null && distLabel != null)
                                       const TextSpan(text: ' · ',
                                           style: TextStyle(
                                               color: BrokaColors.textMid, fontSize: 13)),
-                                    if (store.nearLabel != null)
-                                      TextSpan(text: store.nearLabel!,
+                                    if (distLabel != null)
+                                      TextSpan(text: distLabel,
                                           style: const TextStyle(
                                               color: BrokaColors.gold, fontSize: 13,
                                               fontWeight: FontWeight.w700)),

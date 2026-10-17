@@ -166,9 +166,10 @@ class _CategoryChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Online stores only: the dealer/agent trades the directory excludes
-    // (Property, Automobiles, Land, Services, Other) are not offered here.
+    // (Property, Automobiles, Land, Services, Other) are not offered here,
+    // and neither is the Wholesale facet - it is derived, never chosen.
     return Wrap(spacing: 8, runSpacing: 10, children: [
-      for (final name in StoreCategories.onlineRail)
+      for (final name in StoreCategories.onlineChoices)
         _chip(name, StoreCategories.visualFor(name), selected.contains(name)),
     ]);
   }
@@ -552,7 +553,7 @@ class _LocationStepState extends State<LocationStep> {
               child: Text(
                 c.hasStorePin
                     ? 'Pin set - buyers nearby will find this shop'
-                    : 'No pin yet - Near you will guess from your account',
+                    : 'No pin yet - Near you will guess from your area',
                 style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13.5,
                     fontWeight: FontWeight.w700, height: 1.35),
               ),

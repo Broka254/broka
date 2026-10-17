@@ -60,6 +60,11 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   int _months = 2;
   int _size = 20;
   bool _sizing = false;
+
+  /// Which quote request is newest. Sizes are priced by the server, and
+  /// a slow earlier response must never overwrite a newer size's price:
+  /// only the response whose sequence is still latest may land.
+  int _quoteSeq = 0;
   String? _error;
   final _sizeCtrl = TextEditingController();
   final _sizeFocus = FocusNode();
@@ -112,8 +117,9 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
 
   Future<void> _priceSize(StoreBillingQuote base, int size, {bool first = false}) async {
     if (!first) setState(() => _sizing = true);
+    final seq = ++_quoteSeq;
     final priced = await _repo.billingQuote(widget.storeId, listings: size);
-    if (!mounted) return;
+    if (!mounted || seq != _quoteSeq) return;
     switch (priced) {
       case Success(:final data):
         final options = data.monthsOptions;

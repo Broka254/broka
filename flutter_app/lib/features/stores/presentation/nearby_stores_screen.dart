@@ -44,6 +44,12 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
 
   _Stage _stage = _Stage.locating;
   final List<Store> _stores = [];
+
+  /// The nearest shops overall, shown only when none is within 25 km:
+  /// an honest "nearest to you" beats a dead end (the shops exist - they
+  /// are just further away, or their distance is not known yet).
+  final List<Store> _nearest = [];
+  bool _nearestLoading = false;
   final _scrollController = ScrollController();
   final _searchCtrl = TextEditingController();
 
@@ -129,15 +135,40 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
     );
     if (!mounted) return;
     result.fold(
-      onSuccess: (data) => setState(() {
-        _stores..clear()..addAll(data);
-        _stage = _Stage.ready;
-        _fetching = false;
-      }),
+      onSuccess: (data) {
+        setState(() {
+          _stores..clear()..addAll(data);
+          _stage = _Stage.ready;
+          _fetching = false;
+          if (data.isNotEmpty || _filtersActive) _nearest.clear();
+        });
+        if (data.isEmpty && !_filtersActive) _fetchNearest();
+      },
       onFailure: (_, __) => setState(() {
         _stage = _Stage.loadFailed;
         _fetching = false;
       }),
+    );
+  }
+
+  /// Nearest shops at any distance, for the empty-25 km fallback. Same
+  /// viewer point, no radius: the server sorts nearest first and shops
+  /// with no known distance last.
+  Future<void> _fetchNearest() async {
+    final lat = _userLat;
+    final lng = _userLng;
+    if (lat == null || lng == null) return;
+    setState(() => _nearestLoading = true);
+    final result = await _repo.listStores(
+      lat: lat, lng: lng, nearestFirst: true, limit: 10,
+    );
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (data) => setState(() {
+        _nearest..clear()..addAll(data);
+        _nearestLoading = false;
+      }),
+      onFailure: (_, __) => setState(() => _nearestLoading = false),
     );
   }
 
@@ -311,11 +342,50 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
           ),
         ];
       case _Stage.ready:
-        if (_fetching && _stores.isEmpty) {
+        if ((_fetching || _nearestLoading) && _stores.isEmpty && _nearest.isEmpty) {
           return const [
             SliverFillRemaining(
               hasScrollBody: false,
               child: Center(child: CircularProgressIndicator(color: BrokaColors.gold)),
+            ),
+          ];
+        }
+        if (_stores.isEmpty && _nearest.isNotEmpty) {
+          return [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                child: Row(children: [
+                  const Icon(Icons.storefront_outlined, size: 16, color: BrokaColors.gold),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text('No stores within 25 km - nearest to you',
+                        key: Key('nearby-nearest-header'),
+                        style: TextStyle(color: BrokaColors.gold, fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => StoreCard(
+                    store: _nearest[i],
+                    showAnyDistance: true,
+                    onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => StoreHomeScreen(storeId: _nearest[i].id))),
+                    onDetails: () => showStoreDetails(context, _nearest[i],
+                        repository: _repo),
+                    onMap: () => openStoreMap(context, _nearest[i],
+                        viewerLat: _userLat, viewerLng: _userLng),
+                  ),
+                  childCount: _nearest.length,
+                ),
+              ),
             ),
           ];
         }
@@ -339,8 +409,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                   Text(
                       _filtersActive
                           ? 'Try a different category or place - or clear the filters.'
-                          : 'Shops further away are under Shop by category. A shop '
-                              'only shows here once its owner sets its location.',
+                          : 'Shops further away are under Shop by category.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.45)),
                   if (_filtersActive) ...[

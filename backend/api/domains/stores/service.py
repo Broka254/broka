@@ -47,6 +47,7 @@ from api.domains.listings.service import ListingService, load_listing_media
 from api.security import decode_email_verify_token
 from . import billing as store_billing
 from . import categories as store_categories
+from .area_points import area_point
 from . import naming
 from .media import (
     normalize_photo_list, parse_photo_list, normalize_single_media, MediaTooLargeError,
@@ -287,13 +288,13 @@ class StoreService:
         on, a store whose plan is unpaid is left out the same way.
 
         With viewer_lat/lng every item also carries distance_km (one
-        decimal, to the owner's approximate point - see _store_distance_km)
-        and distance_label ('6 km from you'). With max_distance_km only
-        stores within that range are returned; with nearest_first they come
-        nearest first for the 'Stores near you' rail. A store's distance
-        comes from its owner's location - stores hold no coordinates of
-        their own - so a store whose owner hid their location or never set
-        one has no distance and is left out of a max-distance filter."""
+        decimal - see _store_distance for which point it measures to)
+        and distance_label ('6 km from you', '≈ …' when approximate).
+        With max_distance_km only stores within that range are returned;
+        with nearest_first they come nearest first for the 'Stores near
+        you' rail. A store with no pin, no declared county and no visible
+        owner point has no distance and is left out of a max-distance
+        filter."""
         q = select(Store).where(Store.is_active == True)  # noqa: E712
         if store_billing.enabled():
             q = q.where(store_billing.live_subscription_clause(Store.id))
@@ -402,31 +403,66 @@ class StoreService:
             return (None, None)
 
     @staticmethod
-    def _store_distance_km(store, owner, viewer_lat: Optional[float], viewer_lng: Optional[float]) -> Optional[float]:
-        """A store's distance: its own pin first, its owner's point second.
-
-        The shop pin is where the shop is; the owner's account point is
-        only the fallback for shops set up before stores held one (and it
-        respects the owner's location switch - the shop pin is given for
-        the shop, so it doesn't). Either point is rounded to two decimals
-        (~1 km) so a distance asked for from three made-up places cannot
-        triangulate it to ~100 m. Bad coordinates drop to None instead of
-        0 km - a missing point is unknown, never next door."""
-        if viewer_lat is None or viewer_lng is None:
-            return None
-        point = None
-        if store is not None and getattr(store, "lat", None) is not None and getattr(store, "lng", None) is not None:
-            point = (store.lat, store.lng)
-        elif owner is not None and getattr(owner, "location_visible", True):
-            point = (getattr(owner, "lat", None), getattr(owner, "lng", None))
-        if point is None or point[0] is None or point[1] is None:
+    def _valid_point(lat, lng) -> Optional[tuple[float, float]]:
+        """(lat, lng) as floats when they are a real place on the globe,
+        else None. (0, 0) is the Gulf of Guinea, not a shop: coordinates
+        that were never set arrive as 0 often enough that the pair reads
+        as missing, never as next door."""
+        if lat is None or lng is None:
             return None
         try:
-            approx = (round(float(point[0]), 2), round(float(point[1]), 2))
-            viewer = (float(viewer_lat), float(viewer_lng))
+            point = (float(lat), float(lng))
         except (TypeError, ValueError):
             return None
-        return round_distance_km(haversine_km(viewer[0], viewer[1], approx[0], approx[1]))
+        if point == (0.0, 0.0):
+            return None
+        if not (-90 <= point[0] <= 90 and -180 <= point[1] <= 180):
+            return None
+        return point
+
+    @classmethod
+    def _store_point(cls, store, owner) -> tuple[Optional[tuple[float, float]], bool]:
+        """Where a store is, best first, and whether that is approximate.
+
+        1. The shop's own pin - where the owner stood at the shop. Exact.
+        2. The shop's declared county/subcounty, at that area's point
+           (area_points). Approximate - flagged, never exact - and the
+           repair for shops opened before pins existed: their owners
+           registered wherever they happened to be, but the shop's
+           county was typed for the shop.
+        3. The owner's account point, while their location is visible -
+           for shops that declared no county at all.
+
+        The distance itself is computed from the raw point: rounding the
+        point to two decimals first (~1 km) pushed shops at 24.9 km past
+        a 25 km filter. Rounding survives only in the mappable point the
+        payload hands out, so no read can triangulate an exact spot."""
+        if store is not None:
+            pin = cls._valid_point(getattr(store, "lat", None), getattr(store, "lng", None))
+            if pin is not None:
+                return pin, False
+            area = area_point(getattr(store, "county", None), getattr(store, "subcounty", None))
+            if area is not None:
+                return area, True
+        if owner is not None and getattr(owner, "location_visible", True):
+            point = cls._valid_point(getattr(owner, "lat", None), getattr(owner, "lng", None))
+            if point is not None:
+                return point, False
+        return None, False
+
+    @classmethod
+    def _store_distance(cls, store, owner, viewer_lat: Optional[float], viewer_lng: Optional[float]):
+        """(distance_km, approximate) from the viewer to _store_point's
+        point. Distance is None when either side has no real point - a
+        missing distance is unknown, never 0 km, so a max-distance
+        filter leaves the store out rather than guessing."""
+        if viewer_lat is None or viewer_lng is None:
+            return None, False
+        viewer = cls._valid_point(viewer_lat, viewer_lng)
+        point, approximate = cls._store_point(store, owner)
+        if viewer is None or point is None:
+            return None, approximate
+        return round_distance_km(haversine_km(viewer[0], viewer[1], point[0], point[1])), approximate
 
     @staticmethod
     def _stores_stocking(category: str):
@@ -734,7 +770,16 @@ class StoreService:
         if "name" in data:
             store.name = self._clean_name(data["name"])
 
-        categories = self._categories_from(data)
+        keep = frozenset()
+        if "categories" in data:
+            # Excluded trades the store already holds may stay (a dealer
+            # store predating the online-store rail); adding one may not.
+            held = (await self.db.execute(
+                select(StoreCategoryLink.category)
+                .where(StoreCategoryLink.store_id == store.id)
+            )).scalars().all()
+            keep = frozenset(n for n in [store.category, *held] if n)
+        categories = self._categories_from(data, keep=keep)
         if categories is not None:
             # The set the request chose replaces the previous set: the
             # first category is the store's primary (what old clients
@@ -864,7 +909,7 @@ class StoreService:
         return None
 
     @staticmethod
-    def _categories_from(data: dict) -> Optional[list[str]]:
+    def _categories_from(data: dict, keep: frozenset = frozenset()) -> Optional[list[str]]:
         """The canonical categories a request sets, primary first, or None
         when it sets none.
 
@@ -875,7 +920,16 @@ class StoreService:
         name that isn't one of BROKA's is refused, not mapped: this is a
         choice from a list the app shows, and quietly filing a typo under
         "Other" is how a seller ends up invisible in the category they
-        meant."""
+        meant.
+
+        A phase-3 choice also refuses the trades an online store doesn't
+        sell (categories.ONLINE_STORE_EXCLUDED: Property, Automobiles,
+        Land, Services, Other) - the setup screen no longer offers them,
+        so a client still sending one is out of date or hand-built.
+        `keep` grandfathers excluded names a store already holds (a
+        dealer store opened through the legacy singular fields): keeping
+        one is fine, adding a new one is not. The singular legacy path
+        below is untouched for the same reason."""
         if "categories" in data:
             raw = data.get("categories")
             if not isinstance(raw, list) or not raw:
@@ -887,6 +941,11 @@ class StoreService:
                 if category is None:
                     raise HTTPException(
                         status_code=400, detail="Choose one of BROKA's categories")
+                if category in store_categories.ONLINE_STORE_EXCLUDED and category not in keep:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{category} isn't sold through an online store. "
+                               "Choose from the online store categories.")
                 if category not in names:
                     names.append(category)
             return names
@@ -1100,16 +1159,15 @@ class StoreService:
             elif not store_billing.is_live(sub):
                 active = False
 
-        distance_km = self._store_distance_km(store, owner, viewer_lat, viewer_lng)
-        # The mappable point: the shop pin, else the owner's point while
-        # their location is visible - always at ±1 km rounding.
-        if getattr(store, "lat", None) is not None and getattr(store, "lng", None) is not None:
-            approx_lat, approx_lng = self._approx_point(store.lat, store.lng)
-        elif owner is not None and getattr(owner, "location_visible", True):
-            approx_lat, approx_lng = self._approx_point(
-                getattr(owner, "lat", None), getattr(owner, "lng", None))
-        else:
-            approx_lat, approx_lng = (None, None)
+        distance_km, distance_approximate = self._store_distance(
+            store, owner, viewer_lat, viewer_lng)
+        # The mappable point is _store_point's point at ±1 km rounding:
+        # pin, declared area, or owner's point - never more precise.
+        point, _ = self._store_point(store, owner)
+        approx_lat, approx_lng = self._approx_point(*(point or (None, None)))
+        distance_label = format_distance_km(distance_km)
+        if distance_label is not None and distance_approximate:
+            distance_label = f"≈ {distance_label}"
 
         return {
             "id": store.id,
@@ -1156,7 +1214,11 @@ class StoreService:
             "billing": billing_state,
             "listing_count": listing_count,
             "distance_km": distance_km,
-            "distance_label": format_distance_km(distance_km),
+            "distance_label": distance_label,
+            # True when the distance is measured to the shop's declared
+            # area (county/subcounty point), not to a real pin - clients
+            # show those as approximate ("≈ 6 km from you").
+            "distance_approximate": bool(distance_approximate and distance_km is not None),
             # Where the map may put the shop (±1 km, never exact), and -
             # for the owner only - the pin exactly as they set it.
             "approx_lat": approx_lat,

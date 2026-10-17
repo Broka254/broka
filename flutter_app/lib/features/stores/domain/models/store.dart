@@ -105,8 +105,15 @@ class Store {
   /// the owner hid theirs, or either side has none. Backends before store
   /// distances send none.
   final double? distanceKm;
-  /// '6 km from you' label for the card, null with distanceKm.
+  /// '6 km from you' label for the card, null with distanceKm. The
+  /// server prefixes '≈ ' when the distance is [distanceApproximate].
   final String? distanceLabel;
+
+  /// The distance was measured to the shop's declared area
+  /// (county/subcounty point), not to a shop pin or the owner's point:
+  /// true for shops opened before pins existed that never set one.
+  /// Backends before area distances send none (false).
+  final bool distanceApproximate;
 
   /// The shop's own pin, exactly as set - only on the owner's own reads.
   final double? lat;
@@ -146,6 +153,7 @@ class Store {
     this.listingCount = 0,
     this.distanceKm,
     this.distanceLabel,
+    this.distanceApproximate = false,
     this.lat,
     this.lng,
     this.approxLat,
@@ -187,6 +195,7 @@ class Store {
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
       distanceLabel: json['distance_label'] as String?,
+      distanceApproximate: json['distance_approximate'] as bool? ?? false,
       lat: (json['lat'] as num?)?.toDouble(),
       lng: (json['lng'] as num?)?.toDouble(),
       approxLat: (json['approx_lat'] as num?)?.toDouble(),
@@ -222,17 +231,31 @@ class Store {
   /// formatted locally from distanceKm so older backends still read right.
   /// Null beyond [nearRadiusKm], and when neither is known - a missing
   /// distance is unknown, never 0 km.
-  String? get nearLabel {
+  String? get nearLabel => _distanceLabel(capped: true);
+
+  /// The same label without the near cap, for "nearest to you" lists
+  /// where every shop is honestly beyond [nearRadiusKm] and the distance
+  /// is the point. Null only when the distance itself is unknown.
+  String? get anyDistanceLabel => _distanceLabel(capped: false);
+
+  String? _distanceLabel({required bool capped}) {
     final km = distanceKm;
-    if (km != null && (km.isNaN || km.isInfinite || km < 0 || km > nearRadiusKm)) return null;
+    if (km != null && (km.isNaN || km.isInfinite || km < 0)) return null;
+    if (capped && km != null && km > nearRadiusKm) return null;
     if (distanceLabel != null && distanceLabel!.trim().isNotEmpty) return distanceLabel;
     if (km == null) return null;
+    final String body;
     if (km < 1.0) {
       final m = (km * 1000).round();
-      return m == 1 ? '1 m from you' : '$m m from you';
+      body = m == 1 ? '1 m from you' : '$m m from you';
+    } else if (km < 10) {
+      body = '${km.toStringAsFixed(1)} km from you';
+    } else {
+      body = '${km.toStringAsFixed(0)} km from you';
     }
-    if (km < 10) return '${km.toStringAsFixed(1)} km from you';
-    return '${km.toStringAsFixed(0)} km from you';
+    // Locally formatted labels carry the approximation mark themselves;
+    // the server's labels already arrive with it.
+    return distanceApproximate ? '≈ $body' : body;
   }
 
   /// The link without the scheme, for display: "broka.co.ke/store/clanix".

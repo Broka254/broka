@@ -403,6 +403,40 @@ void main() {
       expect(backend.listingsAsked, contains(150));
     });
 
+    testWidgets('a slow earlier quote never overwrites a newer size', (tester) async {
+      final backend = _BillingBackend()..wire();
+      backend.routes['GET /stores/s1/billing'] = (r) async {
+        final raw = r.url.queryParameters['listings'];
+        final n = raw == null ? null : int.parse(raw);
+        // The 100-listing quote is slow on purpose: it must lose to the
+        // 30 typed after it, however late it lands.
+        if (n == 100) await Future<void>.delayed(const Duration(milliseconds: 1500));
+        final q = _quote(listings: n);
+        if (n != null) {
+          final plan = q['plan'] as Map<String, dynamic>;
+          plan['listings'] = n;
+          plan['name'] = 'Goods store, $n listings';
+        }
+        return _json(q);
+      };
+      await _openBilling(tester, backend);
+      expect(find.text('Goods store · 20 listings'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const Key('store-billing-size-field')));
+      await tester.enterText(find.byKey(const Key('store-billing-size-field')), '100');
+      await tester.pump(const Duration(milliseconds: 700)); // debounce fires, quote starts
+      await tester.enterText(find.byKey(const Key('store-billing-size-field')), '30');
+      await tester.pump(const Duration(milliseconds: 700)); // 30 prices and lands
+      await tester.pump();
+      expect(find.text('Goods store · 30 listings'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 1200)); // slow 100 lands now
+      await tester.pump();
+      expect(find.text('Goods store · 30 listings'), findsOneWidget,
+          reason: 'the stale 100 quote must not overwrite the newer 30');
+      expect(find.text('Goods store · 100 listings'), findsNothing);
+    });
+
     testWidgets('pays through the shared checkout and pops true once M-Pesa confirms',
         (tester) async {
       final backend = _BillingBackend()..wire();

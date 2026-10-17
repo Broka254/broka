@@ -71,6 +71,13 @@ class StoreCategories {
   static List<String> get onlineRail =>
       rail.where((name) => !onlineExcluded.contains(name)).toList(growable: false);
 
+  /// What the setup wizard may offer as a choice: [onlineRail] without
+  /// the Wholesale facet. The facet is derived from selling in two or
+  /// more categories, never chosen - and it is not a canonical category,
+  /// so a store "choosing" it could not even be created.
+  static List<String> get onlineChoices =>
+      onlineRail.where((name) => !isWholesaleFacet(name)).toList(growable: false);
+
   /// A store catalogue rail without the excluded trades (store_home's pills,
   /// the web CategoryPills, and the backend list_categories for goods).
   static bool isOnlineListingCategory(String? name) =>

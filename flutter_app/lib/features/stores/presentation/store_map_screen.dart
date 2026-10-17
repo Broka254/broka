@@ -28,8 +28,9 @@ Future<void> openStoreMap(
         storeLng: point.lng,
         viewerLat: viewerLat,
         viewerLng: viewerLng,
-        distanceLabel: store.nearLabel ?? store.distanceLabel,
+        distanceLabel: store.nearLabel ?? store.anyDistanceLabel ?? store.distanceLabel,
         placeLabel: store.locationLine,
+        approximateArea: store.distanceApproximate,
       ),
     ));
     return;
@@ -55,6 +56,7 @@ class StoreMapScreen extends StatelessWidget {
     this.viewerLng,
     this.distanceLabel,
     this.placeLabel,
+    this.approximateArea = false,
   });
 
   final String storeName;
@@ -64,6 +66,10 @@ class StoreMapScreen extends StatelessWidget {
   final double? viewerLng;
   final String? distanceLabel;
   final String? placeLabel;
+
+  /// The point is the shop's declared area (county/subcounty), not a
+  /// pin: the footer must say the area is approximate, not "about 1 km".
+  final bool approximateArea;
 
   Future<void> _directions() async {
     await launchUrl(
@@ -153,8 +159,11 @@ class StoreMapScreen extends StatelessWidget {
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
             ],
             const SizedBox(height: 4),
-            const Text('Approximate area (about 1 km) - ask the store for the exact spot.',
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+            Text(
+                approximateArea
+                    ? 'Approximate area - the shop has not set an exact pin. Ask the store for the exact spot.'
+                    : 'Approximate area (about 1 km) - ask the store for the exact spot.',
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
