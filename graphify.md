@@ -683,7 +683,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-110 files in `backend/tests/`.
+111 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -743,6 +743,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_media_assets.py` — Image assets: processing, storage, upload, and what listings and stores do with them (Online Stores phase 1).
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
 - `test_media_hardening.py` — Image processing and the media backfill under hostile or broken input.
+- `test_message_push_ordering.py` — Message-push ordering: a slow first send must not land after the fresh one.
 - `test_message_visibility_guard.py` — Structural guard: no NegotiationMessage read may leak across the audience line.
 - `test_native_parity.py` — The Rust extension and the Python reference agree, and the loader only hands out an extension it can trust.
 - `test_negotiate_deepseek.py` — Tests for DeepSeek V4 Flash in api/routers/negotiate.py's own (separate from ai_broker/service.py) AI-provider fallback chain.
