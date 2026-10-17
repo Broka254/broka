@@ -416,6 +416,7 @@ Counts: admin 20, optional 2, public 63, token 4, user 143.
 
 ### `backend/api/domains/stores/`
 
+- `area_points.py` — Approximate points for a store's declared county / subcounty.
 - `billing.py` — Running a store: its plan, the M-Pesa prompt that pays for it, and what a payment buys.
 - `categories.py` — A store's category: one of BROKA's top-level categories.
 - `media.py` — Store Media — small abstraction over Store.logo_url / Store.photos.
