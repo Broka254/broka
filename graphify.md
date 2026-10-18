@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-232 endpoints served by `backend/main.py`. **Auth** is read from each
+233 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 2, public 63, token 4, user 143.
+Counts: admin 20, optional 4, public 61, token 4, user 144.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -252,26 +252,27 @@ Counts: admin 20, optional 2, public 63, token 4, user 143.
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
 | GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:164) |
 | POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:151) |
-| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:272) |
-| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:280) |
+| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:280) |
+| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:288) |
 | POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:213) |
 | POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:232) |
 | GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:192) |
 | GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:201) |
-| GET | `/stores/slug/{slug}` | public | `get_store_by_slug` (backend/api/domains/stores/router.py:249) |
-| GET | `/stores/{store_id}` | public | `get_store` (backend/api/domains/stores/router.py:289) |
-| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:294) |
-| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:318) |
-| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:332) |
-| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:356) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:407) |
-| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:366) |
-| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:390) |
-| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:413) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:465) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:484) |
-| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:308) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:426) |
+| GET | `/stores/slug/{slug}` | optional | `get_store_by_slug` (backend/api/domains/stores/router.py:249) |
+| GET | `/stores/{store_id}` | optional | `get_store` (backend/api/domains/stores/router.py:297) |
+| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:311) |
+| DELETE | `/stores/{store_id}` | user | `delete_store` (backend/api/domains/stores/router.py:335) |
+| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:346) |
+| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:360) |
+| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:384) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:435) |
+| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:394) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:418) |
+| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:441) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:493) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:512) |
+| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:325) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:454) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -598,8 +599,8 @@ Counts: admin 20, optional 2, public 63, token 4, user 143.
 | `seller_metrics` | `SellerMetrics` | backend/api/database.py:881 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_billing_meta` | `StoreBillingMeta` | backend/api/models/store_billing.py:88 |
-| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:143 |
-| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:162 |
+| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:150 |
+| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:169 |
 | `store_payments` | `StorePayment` | backend/api/models/store_billing.py:62 |
 | `store_subscriptions` | `StoreSubscription` | backend/api/models/store_billing.py:39 |
 | `stores` | `Store` | backend/api/models/store.py:64 |
@@ -1293,7 +1294,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — The sign-up sheet and voice mode look like BROKA, words and voice arrive together, a livelier voice (2026-10-14)
+- `CHANGES.md` — Store search finds products, unpaid stores go dark, and a store can be deleted (2026-10-18)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
