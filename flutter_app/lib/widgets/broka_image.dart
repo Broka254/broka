@@ -65,6 +65,15 @@ class BrokaImage extends StatelessWidget {
     return bytes != null ? MemoryImage(bytes) : null;
   }
 
+  /// Drawn while a network image downloads, and when the source is missing
+  /// or unreadable. Callers that supply a placeholder (an emoji, BROKA's
+  /// mark, a silhouette) get it in both cases.
+  ///
+  /// The loading case used to be a flat bgMid rectangle regardless of what
+  /// the caller passed, so every card painted a dark blank - the same look
+  /// as "this listing has no photo" - for as long as the fetch took, and
+  /// forever if it never completed. A slow or stuck image now reads as
+  /// loading rather than as missing.
   Widget _fallback() =>
       placeholder ??
       Container(width: width, height: height, color: BrokaColors.bgMid);
@@ -79,8 +88,7 @@ class BrokaImage extends StatelessWidget {
         width: width,
         height: height,
         fadeInDuration: const Duration(milliseconds: 150),
-        placeholder: (_, __) =>
-            Container(width: width, height: height, color: BrokaColors.bgMid),
+        placeholder: (_, __) => _fallback(),
         errorWidget: (_, __, ___) => _fallback(),
       );
     }

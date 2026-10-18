@@ -388,6 +388,13 @@ class ProductCard extends StatelessWidget {
     }
     final showcase = _showcaseImageUrl;
     if (showcase != null) {
+      // A showcase can be a stored URL (newer responses) as well as the
+      // inline data URI that path was written for. Only the latter needs
+      // decoding; a URL goes through BrokaImage, which also caches it.
+      if (BrokaImage.networkUrl(showcase) != null) {
+        return BrokaImage(showcase,
+            placeholder: _placeholder(), fit: BoxFit.cover);
+      }
       final payload = _dataUriPayload(showcase);
       if (payload != null) {
         try {
@@ -406,12 +413,38 @@ class ProductCard extends StatelessWidget {
     return _buildActualPhotoOrPlaceholder();
   }
 
+  /// The listing's stored photos, as asset records. Empty on a listing whose
+  /// images the backend has not converted yet.
+  ///
+  /// This is the source a converted listing has and `verifiedPhotos` is not:
+  /// the API sends `verified_photos: null` in card mode once a listing's
+  /// photos are assets (listings/service.py), so a card that only reads the
+  /// legacy field shows its placeholder on every converted listing.
+  List<ListingPhoto> get _assetPhotos {
+    try {
+      final p = item.photos;
+      if (p is List<ListingPhoto>) return p;
+    } catch (_) {}
+    return const [];
+  }
+
   Widget _buildActualPhotoOrPlaceholder() {
+    final assets = _assetPhotos;
+    if (assets.isNotEmpty) {
+      return BrokaImage(assets.first.thumb, placeholder: _placeholder());
+    }
     final photos = _photos;
     if (photos.isNotEmpty) {
+      final first = photos.first;
+      // A legacy value is documented as "base64 or URLs". Decoding a URL as
+      // base64 throws and used to land straight on the placeholder, so hand
+      // anything URL-shaped to BrokaImage, which fetches it.
+      if (BrokaImage.networkUrl(first) != null) {
+        return BrokaImage(first, placeholder: _placeholder());
+      }
       try {
         return Image.memory(
-          base64Decode(photos.first),
+          base64Decode(first),
           fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => _placeholder(),
         );

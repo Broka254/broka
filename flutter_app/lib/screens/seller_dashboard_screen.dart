@@ -39,6 +39,7 @@ import '../core/utils/result.dart';
 import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/presentation/change_price.dart';
+import '../features/listings/presentation/replace_photos.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../features/stores/presentation/widgets/menu_store_section.dart';
 
@@ -2272,22 +2273,25 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
           // one selling", which is the question a seller opens the app with.
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-            child: Row(children: [
-              Expanded(
-                child: PressableScale(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+              PressableScale(
                   onTap: () {
                     HapticFeedback.selectionClick();
                     Navigator.pushNamed(context, '/listing-insights', arguments: l);
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 14),
                     decoration: BoxDecoration(
                       color: BrokaColors.neonBlue.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.32)),
                     ),
                     child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.insights_rounded,
                             size: 14, color: BrokaColors.neonBlue),
@@ -2299,11 +2303,37 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                     ),
                   ),
                 ),
+              // Photos, beside Price: the two things a seller changes on a
+              // listing that isn't selling. Photos are unlimited and
+              // unrestricted, so this sits outside the auction check below.
+              //
+              // A Wrap, not a Row: with four actions a narrow phone ran out
+              // of width and Flutter threw the overflow stripe over them.
+              Semantics(
+                button: true,
+                label: 'Change the photos of ${l.name}',
+                child: PressableScale(
+                  key: Key('change-photos-${l.id}'),
+                  onTap: () => _changePhotos(l),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: BrokaColors.neonCyan.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.35)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.photo_camera_outlined, size: 14, color: BrokaColors.neonCyan),
+                      SizedBox(width: 5),
+                      Text('Photos', style: TextStyle(color: BrokaColors.neonCyan,
+                          fontSize: 12, fontWeight: FontWeight.w700)),
+                    ]),
+                  ),
+                ),
               ),
               // An auction's starting price is one of its terms, changed
               // with the rest of them before bidding (PATCH /auctions/{id}/terms).
-              if (l.listingType != 'auction') ...[
-                const SizedBox(width: 8),
+              if (l.listingType != 'auction')
                 Semantics(
                   button: true,
                   label: 'Change the price of ${l.name}',
@@ -2326,8 +2356,6 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                     ),
                   ),
                 ),
-              ],
-              const SizedBox(width: 8),
               // Smaller and red, beside the thing a seller taps most: it
               // should be findable, not the obvious tap.
               Semantics(
@@ -2359,6 +2387,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         ]),
       ),
     );
+  }
+
+  /// Swaps the photos buyers see. New ones are taken with the camera - a
+  /// listing photo is the item in the seller's hands, not a gallery file.
+  Future<void> _changePhotos(Listing l) async {
+    HapticFeedback.selectionClick();
+    final changed = await replaceListingPhotos(context,
+        repo: listingsRepository, listing: l);
+    if (changed && mounted) await _load();
   }
 
   /// The server's rules decide (change_price.dart); a change reloads the

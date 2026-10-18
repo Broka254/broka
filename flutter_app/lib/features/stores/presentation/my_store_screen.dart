@@ -747,6 +747,15 @@ class _OverviewTabState extends State<_OverviewTab> {
           const SizedBox(height: 14),
           _NeedsAttention(counts: counts, onShow: _showProducts),
         ],
+        const SizedBox(height: 14),
+        // Pictures, on the dashboard itself: the checklist below disappears
+        // once every item is done, and until now the only way back to the
+        // logo and shop photos was the Settings tab. A seller who thinks a
+        // picture isn't drawing buyers needs it to be visible, not buried.
+        _PicturesCard(
+          store: store,
+          onEdit: (step) => _editStore(context, store, step, widget.onStoreChanged),
+        ),
         _SetupChecklist(
           store: store,
           productCount: counts?.all ?? store.listingCount,
@@ -1061,6 +1070,117 @@ class _NeedsAttention extends StatelessWidget {
 
 /// What's left to make the store look finished, each a tap away from the
 /// page that does it. Gone once everything is done.
+/// The store's pictures, with a way to change each one from the dashboard.
+///
+/// The setup checklist below covers these only while they are missing; once
+/// a store has a logo and photos it disappears, so a seller who wants to
+/// swap a picture that isn't selling had no route except the Settings tab.
+class _PicturesCard extends StatelessWidget {
+  const _PicturesCard({required this.store, required this.onEdit});
+
+  final Store store;
+  final ValueChanged<StoreSetupStep> onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    // The strip shows stored (asset) photos only. A store created before
+    // images were assets carries bare base64 in `photos`, which the media
+    // backfill converts; those are shown on the edit page instead. Keeping
+    // them out of here also keeps the dashboard header's promise that a raw
+    // `photos` string is never painted twice on this screen.
+    final shop = [
+      for (final p in store.photoImages) (thumb: p.medium, large: p.large),
+    ];
+    final legacyCount = store.photoImages.isEmpty ? store.photos.length : 0;
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Expanded(child: Text('Your pictures', style: TextStyle(
+            color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 15))),
+        TextButton(
+          key: const Key('edit-photos'),
+          onPressed: () => onEdit(StoreSetupStep.photos),
+          child: const Text('Change photos', style: TextStyle(
+              color: BrokaColors.gold, fontWeight: FontWeight.w700, fontSize: 12.5)),
+        ),
+      ]),
+      const SizedBox(height: 2),
+      Row(children: [
+        // Logo, at the size it appears on the store.
+        Semantics(
+          button: true,
+          label: 'Change your logo',
+          child: GestureDetector(
+            key: const Key('edit-logo'),
+            onTap: () => onEdit(StoreSetupStep.logo),
+            child: Stack(children: [
+              StoreLogo(store: store, size: 56),
+              Positioned(
+                right: 0, bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(
+                      color: BrokaColors.bgMid, shape: BoxShape.circle),
+                  child: const Icon(Icons.edit_rounded,
+                      size: 11, color: BrokaColors.gold),
+                ),
+              ),
+            ]),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: shop.isEmpty
+              ? TextButton.icon(
+                  key: const Key('add-shop-photos'),
+                  onPressed: () => onEdit(StoreSetupStep.photos),
+                  icon: Icon(legacyCount > 0
+                          ? Icons.photo_library_outlined
+                          : Icons.add_a_photo_outlined,
+                      size: 16, color: BrokaColors.gold),
+                  label: Text(
+                      legacyCount > 0
+                          ? '$legacyCount shop photo${legacyCount == 1 ? '' : 's'} '
+                              '- change them'
+                          : 'Add photos of your shop',
+                      textAlign: TextAlign.start,
+                      style: const TextStyle(color: BrokaColors.gold, fontSize: 12.5)),
+                )
+              : SizedBox(
+                  height: 56,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: shop.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (_, i) => GestureDetector(
+                      key: Key('shop-photo-$i'),
+                      onTap: () => onEdit(StoreSetupStep.photos),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: 74, height: 56,
+                          child: BrokaImage(shop[i].thumb, fit: BoxFit.cover),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+      ]),
+      const SizedBox(height: 10),
+      Text(
+        shop.isNotEmpty
+            ? '${shop.length} picture${shop.length == 1 ? '' : 's'} of your shop. '
+                'A dull or unclear one is often why a listing is not selling.'
+            : legacyCount > 0
+                ? 'Your shop photos were uploaded by an older version of BROKA. '
+                    'Take new ones to replace them.'
+                : "Buyers see BROKA's logo and no photos of your shop yet.",
+        style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
+      ),
+    ]));
+  }
+}
+
 class _SetupChecklist extends StatelessWidget {
   const _SetupChecklist({
     required this.store,

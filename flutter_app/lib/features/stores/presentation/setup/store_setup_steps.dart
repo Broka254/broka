@@ -624,6 +624,7 @@ class _DraftImageTile extends StatelessWidget {
     required this.state,
     required this.onRemove,
     required this.onRetry,
+    this.onReplace,
     this.radius = 14,
   });
 
@@ -631,6 +632,10 @@ class _DraftImageTile extends StatelessWidget {
   final PhotoUploadState? state;
   final VoidCallback onRemove;
   final VoidCallback onRetry;
+
+  /// Swaps this image for another in the same slot. Absent where there is
+  /// already a "Change" control (the logo).
+  final VoidCallback? onReplace;
   final double radius;
 
   @override
@@ -683,6 +688,31 @@ class _DraftImageTile extends StatelessWidget {
             ),
           ),
         ),
+        if (onReplace != null)
+          Positioned(
+            bottom: 6, left: 6,
+            child: Semantics(
+              button: true,
+              label: 'Replace image',
+              child: GestureDetector(
+                onTap: onReplace,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withOpacity(0.35)),
+                  ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.swap_horiz_rounded, color: Colors.white, size: 13),
+                    SizedBox(width: 4),
+                    Text('Replace', style: TextStyle(color: Colors.white,
+                        fontSize: 10.5, fontWeight: FontWeight.w700)),
+                  ]),
+                ),
+              ),
+            ),
+          ),
       ]),
     );
   }
@@ -815,6 +845,7 @@ class PhotosStep extends StatelessWidget {
                 state: c.uploadState(cover, c.coverUploads),
                 onRemove: c.removeCover,
                 onRetry: c.retryUploads,
+                onReplace: pickCover,
               ),
       ),
       const SizedBox(height: 24),
@@ -832,6 +863,15 @@ class PhotosStep extends StatelessWidget {
               state: c.uploadState(c.photos[i], c.photoUploads),
               onRemove: () => c.removePhoto(i),
               onRetry: c.retryUploads,
+              // Swaps in place: the first shop photo is the one a store
+              // card shows, so replacing must not shuffle a picture to
+              // the end of the grid.
+              onReplace: () async {
+                final f = await pickStoreImage(context,
+                    hint: 'A clearer photo of this part of your shop - it '
+                        'takes the place of this one.');
+                if (f != null) c.replacePhoto(i, f);
+              },
             ),
           if (c.canAddPhoto)
             _AddImageTile(key: const Key('add-photo'), label: 'Add photo',

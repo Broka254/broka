@@ -259,6 +259,25 @@ class ListingsRepository {
     }
   }
 
+  /// Replaces the listing's photos with [photoIds], in this order (first
+  /// one is the card photo). The server refuses while a buyer's money is
+  /// held on the listing, and says so - shown as it comes.
+  Future<Result<void>> replacePhotos(
+      String listingId, List<String> photoIds) async {
+    try {
+      // The reply is a summary of what changed, not the listing itself, so
+      // nothing here reads it: the caller reloads its own list afterwards.
+      await _client.patch('/listings/$listingId', {
+        'photo_ids': photoIds,
+      }, timeout: const Duration(seconds: 120));
+      return const Success(null);
+    } on ApiException catch (e) {
+      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
   /// Inverse of setListingStore - returns a listing to personal.
   Future<Result<BrokaListing>> removeListingStore(String listingId) async {
     try {

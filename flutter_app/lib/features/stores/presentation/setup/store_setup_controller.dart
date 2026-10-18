@@ -590,6 +590,20 @@ class StoreSetupController extends ChangeNotifier {
     _changed();
   }
 
+  /// Puts [file] in place of the photo at [index], keeping its position -
+  /// the first photo is what the store card shows, so replacing must not
+  /// move a picture to the end. The old one is dropped (and its upload
+  /// forgotten) once the new one takes its slot.
+  void replacePhoto(int index, File file) {
+    if (index < 0 || index >= photos.length) return;
+    _forget(photos[index], photoUploads);
+    final next = [...photos];
+    next[index] = DraftImage(path: file.path);
+    photos = next;
+    photoUploads.start(file);
+    _changed();
+  }
+
   /// Uploads again whatever failed.
   void retryUploads() {
     for (final (tracker, image) in [
