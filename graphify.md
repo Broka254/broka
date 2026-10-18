@@ -926,6 +926,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/models/listing.dart` — BROKA v3.0 - Listing domain model
 - `domain/models/listing_engagement.dart` — What the signed-in user has done with a listing - liked it, saved it and, on their own listing, how many people have (GET /listings/{id} en…
 - `presentation/change_price.dart` — Changing a listing's price, from the seller dashboard and My Store.
+- `presentation/replace_photos.dart` — Replacing a listing's photos, from the seller dashboard.
 
 ### `flutter_app/lib/features/payments/`
 
