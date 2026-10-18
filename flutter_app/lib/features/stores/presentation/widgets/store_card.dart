@@ -89,21 +89,23 @@ class _StoreCardState extends State<StoreCard> {
     // to the shop's place (openStoreMap).
     final canMap = widget.onMap != null;
 
-    final fallback = DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            BrokaColors.gold.withOpacity(0.45),
-            BrokaColors.bgCard,
-            colors.last.withOpacity(0.40),
-          ],
-        ),
+    final gradient = BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          BrokaColors.gold.withOpacity(0.45),
+          BrokaColors.bgCard,
+          colors.last.withOpacity(0.40),
+        ],
       ),
-      // A shop with no picture shows BROKA's mark, not its category emoji:
-      // the emoji read as clip-art standing in for a photo, and the mark is
-      // what the store's own logo falls back to everywhere else.
+    );
+
+    // A shop with no picture at all shows BROKA's mark, not its category
+    // emoji: the emoji read as clip-art standing in for a photo, and the
+    // mark is what the store's own logo falls back to everywhere else.
+    final fallback = DecoratedBox(
+      decoration: gradient,
       child: Center(
         child: SizedBox(
           width: 64,
@@ -115,6 +117,14 @@ class _StoreCardState extends State<StoreCard> {
         ),
       ),
     );
+
+    // The slot a picture downloads into, or lands in when its URL fails.
+    // It carries the mark only when the card has no sign: with a cover the
+    // sign below the picture already wears BROKA's mark, and repeating it
+    // here put two marks on one shopfront (the regression the directory
+    // test caught after BrokaImage started drawing caller placeholders
+    // while loading).
+    final pictureFallback = showLogo ? DecoratedBox(decoration: gradient) : fallback;
 
     return Semantics(
       button: true,
@@ -155,7 +165,10 @@ class _StoreCardState extends State<StoreCard> {
                   child: Stack(fit: StackFit.expand, children: [
                     picture == null
                         ? fallback
-                        : StoreMediaImage(dataUri: picture, placeholderBuilder: (_) => fallback),
+                        : StoreMediaImage(
+                            dataUri: picture,
+                            placeholderBuilder: (_) => pictureFallback,
+                          ),
                     // Dark at the top and foot, so the chips on the picture
                     // stay legible whatever the photo is.
                     const DecoratedBox(
