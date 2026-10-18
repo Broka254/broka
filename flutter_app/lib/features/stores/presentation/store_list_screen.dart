@@ -4,9 +4,9 @@
 // four other screens, so a list layout for this one screen is a smaller,
 // safer duplication than adding a layout mode to a shared component.
 //
-// A store card shows its owner's real seller record (rating once there
-// are deals behind it, deals done) - never a store rating, which nothing
-// computes (spec §7/§19: never fabricate one).
+// A store card shows the shop itself, its distance when known, and a way
+// onto the map. The owner's seller record lives in Store details - never a
+// store rating, which nothing computes (spec §7/§19).
 //
 // Destination-alignment pass (2026-09-18): restyled onto the same system as
 // Home and the Category Zones - ConstellationBackground, one CustomScrollView
@@ -22,6 +22,8 @@
 // CategoryArtCard (category_visual artwork, 21 categories), and tapping one
 // opens StoreCategoryScreen, scoped to that category. The search stays
 // here for every store; a category screen has its own.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../main.dart';
@@ -53,6 +55,11 @@ class _StoreListScreenState extends State<StoreListScreen> {
   bool _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
+  /// Search-as-you-type, on the same 400 ms the store page uses: this
+  /// screen used to search only when the keyboard's Search key was
+  /// pressed, and the shared field has no visible button, so typing
+  /// looked like it did nothing at all.
+  Timer? _searchDebounce;
   final List<Store> _nearby = [];
   double? _userLat;
   double? _userLng;
@@ -66,8 +73,18 @@ class _StoreListScreenState extends State<StoreListScreen> {
     _loadNearby();
   }
 
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      _load();
+    });
+  }
+
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    // A spinner only on the first load: a search keystroke must not
+    // replace the list being narrowed with a full-screen spinner.
+    setState(() { _loading = _stores.isEmpty; _error = null; });
     final query = _searchCtrl.text.trim();
     final result = await storesRepository.listStores(
         search: query.isEmpty ? null : query,
@@ -219,10 +236,16 @@ class _StoreListScreenState extends State<StoreListScreen> {
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
         child: BrokaSearchField(
           controller: _searchCtrl,
-          hintText: 'Search stores',
-          onChanged: (_) => setState(() {}),
-          onSubmitted: (_) => _load(),
-          onCleared: _load,
+          hintText: 'Search stores and their products',
+          onChanged: _onSearchChanged,
+          onSubmitted: (_) {
+            _searchDebounce?.cancel();
+            _load();
+          },
+          onCleared: () {
+            _searchDebounce?.cancel();
+            _load();
+          },
         ),
       );
 
@@ -429,6 +452,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _scrollController.dispose();
     super.dispose();

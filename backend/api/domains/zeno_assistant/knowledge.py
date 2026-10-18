@@ -209,7 +209,8 @@ async def _store(db: AsyncSession, user_id: str) -> Optional[str]:
     from api.models.store import Store
 
     store = (await db.execute(
-        select(Store).where(Store.owner_id == user_id, Store.is_active.is_(True))
+        select(Store).where(Store.owner_id == user_id, Store.is_active.is_(True),
+                              Store.deleted_at.is_(None))
         .order_by(Store.created_at.desc()).limit(1)
     )).scalar_one_or_none()
     if store is None:

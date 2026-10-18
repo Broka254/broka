@@ -11,6 +11,8 @@
 // comes from its own pin when it has one (setup wizard), else its
 // owner's point - see backend _store_distance_km.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -52,6 +54,10 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
   bool _nearestLoading = false;
   final _scrollController = ScrollController();
   final _searchCtrl = TextEditingController();
+  /// Search-as-you-type, on the store page's 400 ms. Filtering by place
+  /// also runs through here, so a typed or cleared search never leaves
+  /// the list showing the previous query's shops.
+  Timer? _searchDebounce;
 
   double? _userLat;
   double? _userLng;
@@ -71,9 +77,17 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _scrollController.dispose();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _fetch();
+    });
   }
 
   Future<void> _load() async {
@@ -173,6 +187,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
   }
 
   void _clearFilters() {
+    _searchDebounce?.cancel();
     _searchCtrl.clear();
     setState(() {
       _category = null;
@@ -241,10 +256,16 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
         child: BrokaSearchField(
           controller: _searchCtrl,
-          hintText: 'Search nearby stores',
-          onChanged: (_) => setState(() {}),
-          onSubmitted: (_) => _fetch(),
-          onCleared: _fetch,
+          hintText: 'Search nearby shops and products',
+          onChanged: _onSearchChanged,
+          onSubmitted: (_) {
+            _searchDebounce?.cancel();
+            _fetch();
+          },
+          onCleared: () {
+            _searchDebounce?.cancel();
+            _fetch();
+          },
         ),
       );
 
@@ -373,7 +394,6 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                 delegate: SliverChildBuilderDelegate(
                   (_, i) => StoreCard(
                     store: _nearest[i],
-                    showAnyDistance: true,
                     onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(

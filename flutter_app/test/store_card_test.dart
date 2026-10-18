@@ -24,16 +24,14 @@ Store _store({double? distanceKm, String? distanceLabel, bool distanceApproximat
       hasLocation: approxLat != null,
     );
 
-Future<void> _pump(WidgetTester tester, Store store,
-    {VoidCallback? onMap, bool showAnyDistance = false}) async {
+Future<void> _pump(WidgetTester tester, Store store, {VoidCallback? onMap}) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
     home: Scaffold(
       body: SingleChildScrollView(
-        child: StoreCard(store: store, onTap: () {}, onMap: onMap,
-            showAnyDistance: showAnyDistance),
+        child: StoreCard(store: store, onTap: () {}, onMap: onMap),
       ),
     ),
   ));
@@ -60,14 +58,34 @@ void main() {
     expect(opened, 1);
   });
 
-  testWidgets('a far shop hides distance by default, shows it when asked', (tester) async {
+  testWidgets('a far shop still shows its distance - 42 km is worth knowing',
+      (tester) async {
     await _pump(tester, _store(distanceKm: 42, distanceLabel: '42 km from you'));
-    expect(find.byKey(const Key('store-card-distance')), findsNothing);
-
-    await _pump(tester, _store(distanceKm: 42, distanceLabel: '42 km from you'),
-        showAnyDistance: true);
     expect(find.byKey(const Key('store-card-distance')), findsOneWidget);
     expect(find.text('42 km from you'), findsWidgets);
+  });
+
+  testWidgets('no distance known, no distance text anywhere', (tester) async {
+    await _pump(tester, _store());
+    expect(find.textContaining('km'), findsNothing);
+    expect(find.textContaining('from you'), findsNothing);
+  });
+
+  testWidgets('View on map sits in the chip row, not only at the foot',
+      (tester) async {
+    var opened = 0;
+    await _pump(tester, _store(approxLat: -1.29, approxLng: 36.82), onMap: () => opened++);
+    expect(find.text('View on map'), findsOneWidget);
+    expect(find.text('Map'), findsNothing);
+    await tester.tap(find.byKey(const Key('store-map-s1')));
+    expect(opened, 1);
+  });
+
+  testWidgets('the seller record is gone from the directory card', (tester) async {
+    await _pump(tester, _store(distanceKm: 3));
+    expect(find.text('New seller'), findsNothing);
+    expect(find.textContaining('deal'), findsNothing);
+    expect(find.textContaining('done'), findsNothing);
   });
 
   test('approximate distances are marked, near and far', () {

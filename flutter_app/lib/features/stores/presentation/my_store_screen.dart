@@ -141,6 +141,7 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
         productFilter: _productFilter,
         onStoreChanged: _replaceStore,
         onRefresh: _refreshStore,
+        onDeleted: _load,
       );
     }
     return Scaffold(
@@ -286,6 +287,7 @@ class _Dashboard extends StatelessWidget {
     required this.productFilter,
     required this.onStoreChanged,
     required this.onRefresh,
+    required this.onDeleted,
   });
 
   final Store store;
@@ -297,6 +299,10 @@ class _Dashboard extends StatelessWidget {
 
   /// Fetches the store again, quietly.
   final Future<void> Function() onRefresh;
+
+  /// The store was deleted: go back to the dashboard's own empty state,
+  /// which re-reads /stores/mine and finds none.
+  final Future<void> Function() onDeleted;
 
   static const _tabs = ['Overview', 'Products', 'Settings'];
 
@@ -359,7 +365,12 @@ class _Dashboard extends StatelessWidget {
               onStoreChanged: onStoreChanged, onRefresh: onRefresh),
           _ProductsTab(store: store, repo: repo, listings: listings, share: share,
               filter: productFilter, onProductsChanged: onRefresh),
-          _SettingsTab(store: store, onStoreChanged: onStoreChanged),
+          _SettingsTab(
+            store: store,
+            repo: repo,
+            onStoreChanged: onStoreChanged,
+            onDeleted: onDeleted,
+          ),
         ]),
       ),
     );
@@ -2099,13 +2110,82 @@ class _AddExistingSheetState extends State<_AddExistingSheet> {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-class _SettingsTab extends StatelessWidget {
-  const _SettingsTab({required this.store, required this.onStoreChanged});
+class _SettingsTab extends StatefulWidget {
+  const _SettingsTab({
+    required this.store,
+    required this.repo,
+    required this.onStoreChanged,
+    required this.onDeleted,
+  });
+
   final Store store;
+  final StoresRepository repo;
   final ValueChanged<Store> onStoreChanged;
 
+  /// Called once the store is gone, so My Store can show its empty state
+  /// instead of a dashboard for a store that no longer exists.
+  final Future<void> Function() onDeleted;
+
+  @override
+  State<_SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<_SettingsTab> {
+  Store get store => widget.store;
+
+  bool _deleting = false;
+
   Future<void> _edit(BuildContext context, StoreSetupStep step) =>
-      _editStore(context, store, step, onStoreChanged);
+      _editStore(context, store, step, widget.onStoreChanged);
+
+  /// Deleting a store is not a switch that can be flipped back: the link
+  /// dies and every product is archived. So it asks first, and the button
+  /// in the dialog says exactly what happens.
+  Future<void> _confirmDelete(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: BrokaColors.bgMid,
+        title: const Text('Delete this store?',
+            style: TextStyle(color: BrokaColors.textHigh)),
+        content: Text(
+            '${store.name} will disappear for buyers and its link '
+            '${store.displayUrl} will stop working. Its '
+            '${store.listingCount} product${store.listingCount == 1 ? '' : 's'} '
+            'will be archived - no longer for sale anywhere on BROKA. '
+            'This cannot be undone.',
+            style: const TextStyle(color: BrokaColors.textMid, height: 1.45)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+          TextButton(
+            key: const Key('confirm-delete-store'),
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Delete store',
+                style: TextStyle(color: BrokaColors.danger, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+
+    setState(() => _deleting = true);
+    final result = await widget.repo.deleteStore(store.id);
+    if (!context.mounted) return;
+    switch (result) {
+      case Success(:final data):
+        // The dashboard re-reads /stores/mine and lands on "no store yet".
+        await widget.onDeleted();
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(data > 0
+              ? 'Store deleted. ${data} product${data == 1 ? '' : 's'} archived.'
+              : 'Store deleted.'),
+        ));
+      case Failure(:final message):
+        setState(() => _deleting = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2188,6 +2268,33 @@ class _SettingsTab extends StatelessWidget {
       ]),
       _sectionLabel('Your selling'),
       const SellerDashboardLink(),
+      const SizedBox(height: 24),
+      _sectionLabel('Deleting your store'),
+      Material(
+        color: BrokaColors.danger.withOpacity(0.08),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: BrokaColors.danger.withOpacity(0.35)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          key: const Key('delete-store'),
+          leading: const Icon(Icons.delete_forever_outlined, color: BrokaColors.danger),
+          title: const Text('Delete this store',
+              style: TextStyle(color: BrokaColors.danger, fontSize: 14.5,
+                  fontWeight: FontWeight.w700)),
+          subtitle: const Text(
+              'Closes the shop and its link for good, and archives its products. '
+              'You can open a new store afterwards.',
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.35)),
+          trailing: _deleting
+              ? const SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.2, color: BrokaColors.danger))
+              : const Icon(Icons.chevron_right_rounded, color: BrokaColors.danger),
+          onTap: _deleting ? null : () => _confirmDelete(context),
+        ),
+      ),
     ]);
   }
 }

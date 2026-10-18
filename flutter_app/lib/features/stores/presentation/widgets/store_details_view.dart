@@ -398,16 +398,37 @@ class _Summary extends StatelessWidget {
                 style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
           ],
           const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: color.withOpacity(0.6)),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: color.withOpacity(0.6)),
+              ),
+              child: Text(store.isActive ? 'Open' : 'Taking a break', style: TextStyle(
+                  color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
             ),
-            child: Text(store.isActive ? 'Open' : 'Taking a break', style: TextStyle(
-                color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
-          ),
+            // The buyer's first question about a shop, in the one place a
+            // buyer goes to judge it. Nothing at all when the distance is
+            // unknown - a guess is worse than silence.
+            if (store.anyDistanceLabel != null)
+              Container(
+                key: const Key('store-details-distance'),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                decoration: BoxDecoration(
+                  color: BrokaColors.gold.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: BrokaColors.gold.withOpacity(0.6)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.near_me_rounded, size: 12, color: BrokaColors.gold),
+                  const SizedBox(width: 4),
+                  Text(store.anyDistanceLabel!, style: const TextStyle(
+                      color: BrokaColors.gold, fontSize: 11.5, fontWeight: FontWeight.w700)),
+                ]),
+              ),
+          ]),
         ])),
       ]),
     );

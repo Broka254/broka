@@ -706,6 +706,44 @@ class TestCatalogue:
                                   params={"with_total": True, "limit": 2})).json()
         assert paged["total"] == 5 and len(paged["items"]) == 2
 
+    async def test_directory_search_reaches_a_store_through_its_products(self, client):
+        # Typing "router" used to match only a store NAME, so a shop selling
+        # routers was invisible to the search that the storefronts offer.
+        _, headers = await _register(client)
+        store = await _store(client, headers, slug=f"router-shop-{next(_n)}")
+        sid = store["id"]
+        await _listing(client, headers, sid, "Airtel 5G router", price=1500)
+
+        async def found(text):
+            r = await client.get("/stores", params={"search": text, "limit": 100})
+            assert r.status_code == 200, r.text
+            return {s["id"] for s in r.json()}
+
+        assert sid in await found("router")
+        assert sid in await found("5g router")
+        assert sid not in await found("cement mixer")
+
+    async def test_directory_search_also_matches_place_and_category(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name=f"Nyali Traders {next(_n)}",
+                             county="Mombasa", subcounty="Nyali")
+        sid = store["id"]
+        assert sid in {s["id"] for s in (await client.get(
+            "/stores", params={"search": "nyali"})).json()}
+        assert sid in {s["id"] for s in (await client.get(
+            "/stores", params={"search": "mombasa electronics"})).json()}
+
+    async def test_a_store_cannot_lose_its_last_shop_photo(self, client):
+        # Settings could take every photo away, leaving a shopfront with
+        # nothing to show - the state the setup wizard already refuses.
+        _, headers = await _register(client)
+        store = await _store(client, headers, slug=f"photo-keep-{next(_n)}")
+        r = await client.patch(f"/stores/{store['id']}",
+                               json={"photos": []}, headers=headers)
+        assert r.status_code == 400
+        assert "photo" in r.json()["detail"].lower()
+        assert (await client.get(f"/stores/{store['id']}")).json()["photos"] == [_SHOP_PHOTO]
+
     async def test_condition_and_price_filters(self, client):
         # The storefront's filter panel: condition and a price range, as on
         # Home. Before them the store's catalogue took only search, category
@@ -777,6 +815,12 @@ class TestCatalogue:
 
 
 # ── My Store: the owner's product list ───────────────────────────────────────
+
+async def _listing_row(listing_id: str):
+    from api.database import Listing
+    async with AsyncSessionLocal() as db:
+        return await db.get(Listing, listing_id)
+
 
 async def _set_listing(listing_id: str, **fields) -> None:
     """Puts a listing into a state the API reaches through deals and fees."""
@@ -1052,6 +1096,120 @@ async def test_old_stores_get_a_category_at_startup(client):
     found = (await client.get("/stores", params={"category": "Fashion", "limit": 100})).json()
     assert store["id"] in [s["id"] for s in found]
     assert await backfill_store_categories() == 0
+
+
+# ── Deleting a store ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestDeletingAStore:
+    async def test_the_owner_can_delete_and_the_link_dies(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, slug=f"doomed-{next(_n)}")
+        sid, slug = store["id"], store["slug"]
+
+        r = await client.delete(f"/stores/{sid}", headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"] is True
+
+        # Gone from every public read: the directory, both id and link, the
+        # catalogue, and the owner's own "my store".
+        assert sid not in {s["id"] for s in (await client.get("/stores", params={"limit": 100})).json()}
+        assert (await client.get(f"/stores/{sid}")).status_code == 404
+        assert (await client.get(f"/stores/slug/{slug}")).status_code == 404
+        assert (await client.get("/stores/mine", headers=headers)).json() is None
+
+    async def test_deleting_archives_the_products_instead_of_losing_them(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, slug=f"archived-{next(_n)}")
+        sid = store["id"]
+        listing = await _listing(client, headers, sid, "Archived Chair")
+
+        r = await client.delete(f"/stores/{sid}", headers=headers)
+        assert r.json()["archived_listings"] == 1
+
+        # The row is still there, cancelled: no buyer-facing list shows it.
+        row = await _listing_row(listing["id"])
+        assert getattr(row.status, "value", row.status) == "cancelled"
+        assert listing["id"] not in {
+            i["id"] for i in (await client.get("/listings/", params={"limit": 100})).json()}
+
+    async def test_only_the_owner_can_delete(self, client):
+        _, headers = await _register(client)
+        _, other = await _register(client)
+        sid = (await _store(client, headers, slug=f"mine-only-{next(_n)}"))["id"]
+        assert (await client.delete(f"/stores/{sid}", headers=other)).status_code == 403
+        assert (await client.delete(f"/stores/{sid}")).status_code == 401
+
+    async def test_an_owner_may_open_another_store_after_deleting(self, client):
+        _, headers = await _register(client)
+        sid = (await _store(client, headers, slug=f"first-{next(_n)}"))["id"]
+        assert (await client.delete(f"/stores/{sid}", headers=headers)).status_code == 200
+        second = await _store(client, headers, slug=f"second-{next(_n)}")
+        assert second["id"] != sid
+
+    async def test_a_deleted_slug_stays_reserved_for_its_old_link(self, client):
+        _, headers = await _register(client)
+        slug = f"reserved-{next(_n)}"
+        sid = (await _store(client, headers, slug=slug))["id"]
+        await client.delete(f"/stores/{sid}", headers=headers)
+
+        _, other = await _register(client)
+        r = await client.post("/stores", json={
+            "name": "Claiming The Old Link", "slug": slug,
+            "photos": [_SHOP_PHOTO]}, headers=other)
+        assert r.status_code == 409
+
+
+# ── Removing photo-less stores (one-off cleanup) ────────────────────────────
+
+@pytest.mark.asyncio
+class TestPhotoLessCleanup:
+    async def test_it_finds_and_removes_only_stores_without_a_photo(self, client):
+        # Shops opened before the photo rule existed can sit in the
+        # directory with only BROKA's placeholder. The one-off script
+        # removes them the same way an owner deleting a store does.
+        from cleanup_photoless_stores import has_shop_photo, photo_less
+        from api.models.store import Store
+
+        # Two owners: one store per account.
+        _, bare_owner = await _register(client)
+        _, photo_owner = await _register(client)
+        # No slug -> an old build's store, which create_store still allows
+        # without a photo (test_an_old_build_without_a_link_name_is_never_refused).
+        bare = await _store(client, bare_owner, name=f"Bare {next(_n)}")
+        await _listing(client, bare_owner, bare["id"], "Orphan Product")
+        with_photo = await _store(client, photo_owner, slug=f"snapped-{next(_n)}")
+
+        async with AsyncSessionLocal() as db:
+            found = {s.id for s in await photo_less(db)}
+            assert bare["id"] in found
+            assert with_photo["id"] not in found
+            bare_row = await db.get(Store, bare["id"])
+            assert has_shop_photo(bare_row) is False
+
+        r = await client.delete(f"/stores/{bare['id']}", headers=bare_owner)
+        assert r.status_code == 200
+        assert r.json()["archived_listings"] == 1
+
+        async with AsyncSessionLocal() as db:
+            row = await db.get(Store, bare["id"])
+            assert row.deleted_at is not None
+            assert row.id not in {s.id for s in await photo_less(db)}
+        # The shop with a photo is untouched.
+        assert (await client.get(f"/stores/{with_photo['id']}")).status_code == 200
+
+    async def test_the_script_archives_listings_and_keeps_the_row(self, client):
+        from cleanup_photoless_stores import main as cleanup_main
+
+        _, headers = await _register(client)
+        store = await _store(client, headers, name=f"Untouched {next(_n)}")
+        listing = await _listing(client, headers, store["id"], "Gone With The Shop")
+
+        await cleanup_main([store["slug"]], apply=True)
+
+        row = await _listing_row(listing["id"])
+        assert getattr(row.status, "value", row.status) == "cancelled"
+        assert (await client.get(f"/stores/{store['id']}")).status_code == 404
 
 
 # ── Web storefront support (phase 3) ────────────────────────────────────────

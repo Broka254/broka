@@ -246,8 +246,16 @@ async def verify_business_email_code(
 
 
 @router.get("/slug/{slug}")
-async def get_store_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
-    return await StoreService(db).get_store_by_slug(slug)
+async def get_store_by_slug(
+    slug: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+):
+    """A store by its link name. Public; the owner (signed in) also gets
+    their own unpaid store back rather than a 404."""
+    return await StoreService(db).get_store_by_slug(
+        slug, viewer_id=current_user["id"] if current_user else None,
+    )
 
 
 # Registered before the dynamic "/{store_id}" routes, per this module's
@@ -286,8 +294,17 @@ async def store_billing_callback_secured(
 
 
 @router.get("/{store_id}")
-async def get_store(store_id: str, db: AsyncSession = Depends(get_db)):
-    return await StoreService(db).get_store(store_id)
+async def get_store(
+    store_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+):
+    """A store by id. Public; the owner (signed in) sees their own unpaid
+    store, which everyone else gets as a 404 - the link is dead until the
+    plan is paid (stores/billing.py)."""
+    return await StoreService(db).get_store(
+        store_id, viewer_id=current_user["id"] if current_user else None,
+    )
 
 
 @router.patch("/{store_id}")
@@ -312,6 +329,17 @@ async def set_store_status(
     db: AsyncSession = Depends(get_db),
 ):
     return await StoreService(db).set_store_status(store_id, current_user["id"], body.is_active)
+
+
+@router.delete("/{store_id}")
+async def delete_store(
+    store_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete your own store. The shop and its link go dark; its products
+    are archived (cancelled), never deleted - see StoreService.delete_store."""
+    return await StoreService(db).delete_store(store_id, current_user["id"])
 
 
 @router.get("/{store_id}/billing")

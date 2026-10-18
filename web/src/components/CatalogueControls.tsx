@@ -45,8 +45,14 @@ export function CatalogueControls({
             enterKeyHint="search"
           />
         </label>
-        <button type="submit" className={styles.searchGo}>
-          Search
+        <button type="submit" className={styles.searchGo} aria-label={`Search ${storeName}`}>
+          {/* The word on wide screens; the arrow alone on phones, where
+              the button used to be hidden entirely and the pill had no
+              visible way to search at all. */}
+          <span className={styles.searchGoText}>Search</span>
+          <span className={styles.searchGoIcon} aria-hidden="true">
+            <Icon name="chevron" size={17} />
+          </span>
         </button>
       </form>
       {filters && <FilterPanel basePath={basePath} filters={filters} />}

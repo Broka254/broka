@@ -8,6 +8,8 @@
 // Opened with a zero-duration transition (openStoreCategory), the same
 // rule as category_navigation.dart: choosing a category should feel like
 // the page changing in place, not a screen sliding over it.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -50,6 +52,10 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   bool _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
+  /// Search-as-you-type: the same 400 ms rule the store page and the
+  /// directory use now, so typing narrows the list instead of waiting for
+  /// a Search key this field never showed.
+  Timer? _searchDebounce;
   final _scrollController = ScrollController();
   final List<Store> _nearby = [];
   double? _userLat;
@@ -64,8 +70,17 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
     _loadNearby();
   }
 
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _load();
+    });
+  }
+
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    // A spinner only on the first load: a search keystroke must not
+    // replace the list being narrowed with a full-screen spinner.
+    setState(() { _loading = _stores.isEmpty; _error = null; });
     final query = _searchCtrl.text.trim();
     final result = await storesRepository.listStores(
       search: query.isEmpty ? null : query,
@@ -194,10 +209,16 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
         child: BrokaSearchField(
           controller: _searchCtrl,
-          hintText: 'Search stores',
-          onChanged: (_) => setState(() {}),
-          onSubmitted: (_) => _load(),
-          onCleared: _load,
+          hintText: 'Search stores and their products',
+          onChanged: _onSearchChanged,
+          onSubmitted: (_) {
+            _searchDebounce?.cancel();
+            _load();
+          },
+          onCleared: () {
+            _searchDebounce?.cancel();
+            _load();
+          },
         ),
       );
 
@@ -329,6 +350,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _scrollController.dispose();
     super.dispose();

@@ -1,6 +1,12 @@
 // A store in the directory, as a shop window: the picture its owner chose
 // to show (the cover, else a shop photo, else the logo), whether the owner
-// is online, what and where it is, the seller's record, and Visit store.
+// is online, what and where it is, how far away it is, and Visit store.
+//
+// The seller's record (rating, deals done) is not on this card: a buyer
+// judging a shop reads it in Store details. Where the shop is matters
+// here, so "View on map" sits in the chip row, and the distance is shown
+// whenever it is known - a shop 40 km away is a fact, not something to
+// hide.
 //
 // Shared by the directory and a category's screen of its own
 // (store_category_screen.dart), so a shop looks the same however it was
@@ -44,12 +50,7 @@ class StoreCard extends StatefulWidget {
   /// Opens the store on the map. Null hides the Map action.
   final VoidCallback? onMap;
 
-  /// Show the distance even beyond the 25 km "near" radius - for
-  /// "nearest to you" lists, where the honest distance is the point.
-  /// Directory cards leave this off: far shops show their place instead.
-  final bool showAnyDistance;
-  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails, this.onMap,
-      this.showAnyDistance = false});
+  const StoreCard({super.key, required this.store, required this.onTap, this.onDetails, this.onMap});
 
   @override
   State<StoreCard> createState() => _StoreCardState();
@@ -68,7 +69,11 @@ class _StoreCardState extends State<StoreCard> {
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
-    final distLabel = widget.showAnyDistance ? store.anyDistanceLabel : store.nearLabel;
+    // The distance a buyer wants first, at any range: a shop 40 km away is
+    // a fact worth knowing, not one to hide because it isn't "near".
+    // Unknown stays unknown - nothing is shown at all (there is no honest
+    // number to invent).
+    final distLabel = store.anyDistanceLabel;
     final owner = store.owner;
     final colors = CategoryVisuals.gradientFor(store.category);
     final picture = store.coverSource ?? store.logo?.medium ?? store.logoUrl;
@@ -78,9 +83,11 @@ class _StoreCardState extends State<StoreCard> {
     // still shows BROKA's mark full width; with one, the sign is BROKA's
     // mark until the owner uploads their own.
     final showLogo = store.coverSource != null;
-    final rating = owner?.shownRating;
-    final deals = owner?.completedDeals ?? 0;
     final products = '${store.listingCount} product${store.listingCount == 1 ? '' : 's'}';
+    // The pill shows whenever the screen wired a map action: with a real
+    // pin it opens the in-app map, and without one the action falls back
+    // to the shop's place (openStoreMap).
+    final canMap = widget.onMap != null;
 
     final fallback = DecoratedBox(
       decoration: BoxDecoration(
@@ -250,15 +257,18 @@ class _StoreCardState extends State<StoreCard> {
                       // under it when there's no location line.
                       SizedBox(height: showLogo && store.locationLine == null ? 16 : 10),
                       Wrap(spacing: 6, runSpacing: 6, children: [
-                        _Fact(icon: Icons.star_rounded, color: BrokaColors.zoneAmber,
-                            text: rating != null ? rating.toStringAsFixed(1) : 'New seller'),
-                        _Fact(icon: Icons.handshake_outlined, color: BrokaColors.neonCyan,
-                            text: '$deals deal${deals == 1 ? '' : 's'} done'),
-                        // Details lives here, in the card's own chip row -
-                        // the quiet sibling of Visit store below. (The
-                        // "Delivery or pickup" fact that sat here moved to
-                        // Store details, with the buying-safely text - see
-                        // store_details_view.dart.)
+                        // The shop's place on the map, where the seller's
+                        // record used to be. "View on map" is a real action
+                        // and most people missed the small Map pill at the
+                        // foot; the seller's record lives in Store details,
+                        // where a buyer goes when they are judging a shop.
+                        if (canMap)
+                          _MapPill(
+                            key: Key('store-map-${store.id}'),
+                            onTap: widget.onMap!,
+                          ),
+                        // Details sits here, in the card's own chip row -
+                        // the quiet sibling of Visit store below.
                         if (widget.onDetails != null)
                           _DetailsPill(
                             key: Key('store-details-${store.id}'),
@@ -268,10 +278,10 @@ class _StoreCardState extends State<StoreCard> {
                       const SizedBox(height: 12),
                       Container(height: 1, color: BrokaColors.border.withOpacity(0.8)),
                       const SizedBox(height: 10),
-                      // One line at every width: under 360dp the Map pill
-                      // is icon-only and Visit shortens, so the product
-                      // count keeps room instead of overflowing the row
-                      // (a 320dp phone's card is ~260dp inside).
+                      // One line at every width: under 360dp Visit shortens,
+                      // so the product count keeps room instead of
+                      // overflowing the row (a 320dp phone's card is ~260dp
+                      // inside).
                       LayoutBuilder(builder: (context, row) {
                         final compact = row.maxWidth < 360;
                         return Row(children: [
@@ -284,14 +294,6 @@ class _StoreCardState extends State<StoreCard> {
                                     fontWeight: FontWeight.w700)),
                           ),
                           const SizedBox(width: 10),
-                          if (widget.onMap != null) ...[
-                            _MapButton(
-                              key: Key('store-map-${store.id}'),
-                              onTap: widget.onMap!,
-                              iconOnly: compact,
-                            ),
-                            const SizedBox(width: 8),
-                          ],
                           _VisitButton(key: Key('visit-store-${store.id}'), short: compact),
                         ]);
                       }),
@@ -336,15 +338,15 @@ class _DistancePill extends StatelessWidget {
       );
 }
 
-/// Map: the quiet sibling of Visit store - an outline pill that opens
-/// the shop's approximate point on the in-app map.
-class _MapButton extends StatelessWidget {
-  const _MapButton({super.key, required this.onTap, this.iconOnly = false});
+/// View on map: the shop's place, as a chip in the card's own row.
+///
+/// This replaced the seller's record here (rating / deals done): most
+/// buyers never noticed the small Map button at the foot of the card, and
+/// where a shop actually is matters more to a buyer than a deal count,
+/// which Store details still shows in full.
+class _MapPill extends StatelessWidget {
+  const _MapPill({super.key, required this.onTap});
   final VoidCallback onTap;
-
-  /// Icon without the word, on narrow cards (see the footer's
-  /// LayoutBuilder). The semantics label still says what it does.
-  final bool iconOnly;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -353,22 +355,18 @@ class _MapButton extends StatelessWidget {
         child: GestureDetector(
           onTap: onTap,
           child: Container(
-            height: 38,
-            width: iconOnly ? 38 : null,
-            padding: iconOnly ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 13),
-            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             decoration: BoxDecoration(
               color: BrokaColors.neonCyan.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(19),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.65)),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.map_outlined, size: 16, color: BrokaColors.neonCyan),
-              if (!iconOnly) ...[
-                const SizedBox(width: 6),
-                const Text('Map',
-                    style: TextStyle(color: BrokaColors.neonCyan, fontSize: 13, fontWeight: FontWeight.w800)),
-              ],
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.map_outlined, size: 15, color: BrokaColors.neonCyan),
+              SizedBox(width: 5),
+              Text('View on map',
+                  style: TextStyle(color: BrokaColors.neonCyan, fontSize: 12.5,
+                      fontWeight: FontWeight.w800, letterSpacing: -0.1)),
             ]),
           ),
         ),
@@ -497,28 +495,5 @@ class _DetailsPill extends StatelessWidget {
             ]),
           ),
         ),
-      );
-}
-
-class _Fact extends StatelessWidget {
-  const _Fact({required this.icon, required this.color, required this.text});
-  final IconData icon;
-  final Color color;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.10),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.28)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 13, color: color),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 11.5,
-              fontWeight: FontWeight.w700)),
-        ]),
       );
 }

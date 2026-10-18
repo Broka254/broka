@@ -1418,6 +1418,10 @@ async def init_db():
             # every existing row: those shops keep the owner-point fallback.
             "ALTER TABLE stores ADD COLUMN lat FLOAT",
             "ALTER TABLE stores ADD COLUMN lng FLOAT",
+            # Deleting a store is a soft delete (Store.deleted_at): the row
+            # stays so its listings, payments and audit trail keep pointing
+            # at something real, while every buyer-facing read leaves it out.
+            "ALTER TABLE stores ADD COLUMN deleted_at TIMESTAMP",
             # Upload clean-up (api/domains/media/cleanup.py). Every asset
             # that exists when the column is added becomes 'legacy' and is
             # never cleaned up; only uploads made after it can be.

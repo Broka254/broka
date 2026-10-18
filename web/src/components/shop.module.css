@@ -282,15 +282,34 @@
   font-weight: 700;
   font-size: 13.5px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.searchGoIcon {
+  display: none;
 }
 
 @media (max-width: 560px) {
+  /* A round button, not no button: with the word hidden and nothing in
+     its place, a phone user saw a search field with no way to submit it
+     but the keyboard's own key. */
   .searchGo {
+    width: 36px;
+    padding: 0;
+  }
+
+  .searchGoText {
     display: none;
   }
 
+  .searchGoIcon {
+    display: inline-flex;
+  }
+
   .searchPill {
-    padding-right: 14px;
+    padding-right: 5px;
   }
 }
 

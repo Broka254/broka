@@ -1,3 +1,53 @@
+# Store search finds products, unpaid stores go dark, and a store can be deleted (2026-10-18)
+
+Five things the owner asked for after walking the Online Stores feature.
+
+**Search actually searches.** The store directory's only criterion was
+`Store.name`, so typing "router" - a word that exists only in a product
+title - returned nothing at all, and the three app screens that carry a
+search box (`store_list_screen`, `store_category_screen`,
+`nearby_stores_screen`) fired only when the keyboard's Search key was
+pressed. The shared field has no visible button, so on a phone the box
+looked dead. Directory search now matches every typed word against the
+store's name, category, county, subcounty **or any of its live products**,
+and all three screens search as you type on the store page's own 400 ms
+debounce. On the web storefront the submit button was `display: none`
+below 560px; it is now a round button carrying the same arrow.
+
+**An unpaid store has no link.** `create_store` used to commit a store as
+live, with a working slug, and only *then* hand the owner to the billing
+screen - and with `STORE_BILLING_ENABLED` off nothing gated it at all. A
+public read of a store whose plan is unpaid (or has lapsed) is now a 404
+from both `/stores/{id}` and `/stores/slug/{slug}`, so the URL is dead
+until it pays and dead again when the subscription ends. The owner still
+sees their own store with its `billing` object, so the app can send them
+to the plan screen instead of a 404.
+
+**No photo, no store.** A new store has needed a shop photo for months,
+but Settings could take every photo away afterwards, and shops opened
+before the rule were still listed. `update_store` now refuses to remove
+the last photo, and `backend/cleanup_photoless_stores.py` removes the
+older ones the way an owner deleting a store does: soft delete, listings
+archived, slug reserved. Dry run by default; `--apply` writes.
+
+**The card stops showing the seller's record.** Rating / "N deals done"
+are gone from the directory card - the record is in Store details, where
+a buyer goes to judge a shop. "View on map" takes their place in the chip
+row, where it can be seen (the old foot-of-card Map pill was easy to
+miss), and the distance now shows at any range: a shop 40 km away is a
+fact worth knowing. Unknown distance shows nothing at all rather than a
+guess. Store details carries the same distance beside Open / Taking a
+break.
+
+**Deleting a store.** `DELETE /stores/{id}`: owner-checked, row-locked,
+soft delete under `Store.deleted_at`, audit row written. Its active
+listings are archived (cancelled) rather than deleted, so an open deal or
+a buyer's history survives; a completed sale stays completed. The slug
+stays reserved, because a link printed on a flyer must never start
+showing another shop's goods. My Store → Settings carries the action
+behind a dialog that says exactly what happens, and the owner may open a
+new store afterwards.
+
 # The sign-up sheet and voice mode look like BROKA, words and voice arrive together, a livelier voice (2026-10-14)
 
 Raised by the owner with three screenshots: the "Create a free account"

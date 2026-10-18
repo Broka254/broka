@@ -261,9 +261,10 @@ class TestUnpaidStoreIsDark:
         assert quote["current"]["active"] is False
         assert quote["live_listings"] == 1
 
-        public = (await client.get(f"/stores/{sid}")).json()
-        assert public["is_active"] is False
-        assert public["billing"] is None
+        # The link is dead, not merely "closed": a public read is a 404
+        # until the plan is paid, so nobody can browse an unpaid shop.
+        assert (await client.get(f"/stores/{sid}")).status_code == 404
+        assert (await client.get(f"/stores/slug/{store['slug']}")).status_code == 404
         assert not await _in_directory(client, sid)
         assert (await client.get(f"/stores/{sid}/listings")).json() == []
         assert (await client.get(f"/stores/{sid}/categories")).json() == []
@@ -374,7 +375,7 @@ class TestPaying:
         started = await _pay(client, h, sid, months=2, amount=1)
         sub = await _sub(sid)  # the row a billing-on store opens with
         assert sub is not None and sub.paid_until is None, "a forged amount must buy nothing"
-        assert (await client.get(f"/stores/{sid}")).json()["is_active"] is False
+        assert (await client.get(f"/stores/{sid}")).status_code == 404
         status = (await client.get(
             f"/stores/{sid}/billing/payments/{started['payment_id']}", headers=h)).json()
         assert status["status"] == "failed" and status["failure_reason"] == "amount_mismatch"
@@ -548,7 +549,7 @@ class TestGrace:
         still = await _sub(sid)
         assert still.paid_until is None, "grace reached a store created after billing was on"
         assert not await _in_directory(client, sid)
-        assert (await client.get(f"/stores/{sid}")).json()["is_active"] is False
+        assert (await client.get(f"/stores/{sid}")).status_code == 404
 
         await _pay(client, h, sid, months=2)
         assert await _in_directory(client, sid)

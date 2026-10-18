@@ -442,7 +442,9 @@ void main() {
           findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('S')), findsNothing);
       expect(find.descendant(of: first, matching: find.text('Online now')), findsOneWidget);
-      expect(find.descendant(of: first, matching: find.text('4.7')), findsOneWidget);
+      // The seller's record (rating, deals done) is not on the directory
+      // card any more: it lives in Store details.
+      expect(find.descendant(of: first, matching: find.text('4.7')), findsNothing);
       expect(find.descendant(of: first, matching: find.text('9 products')), findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('Visit store')), findsOneWidget);
       // No escrow promise: BROKA holds no payments while they are paused.
@@ -478,7 +480,8 @@ void main() {
       await _scroll(tester, -260);
       final second = find.byKey(const Key('store-card-store-1'));
       expect(find.descendant(of: second, matching: find.text('Active 2d ago')), findsOneWidget);
-      expect(find.descendant(of: second, matching: find.text('New seller')), findsOneWidget);
+      expect(find.descendant(of: second, matching: find.text('New seller')), findsNothing);
+      expect(find.descendant(of: second, matching: find.textContaining('deals done')), findsNothing);
     });
   });
 }

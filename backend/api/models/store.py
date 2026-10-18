@@ -128,6 +128,13 @@ class Store(Base):
     business_email_verified = Column(Boolean, default=False, nullable=False)
 
     is_active  = Column(Boolean, default=True, nullable=False)
+    # Deleting a store is a soft delete, exactly like a listing's
+    # (ListingService.delete_listing): the row stays so its listings,
+    # payments and audit trail keep pointing at something real, while the
+    # store itself is gone from every buyer-facing read. The slug stays
+    # reserved too - a dead link must never start showing a different
+    # shop's goods.
+    deleted_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

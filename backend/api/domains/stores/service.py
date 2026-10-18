@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.core.config import settings
 from api.core.geo import format_distance_km, haversine_km, round_distance_km
 from api.core.presence import online_status
-from api.core.text_search import matches_all_terms, search_terms, term_matches
+from api.core.text_search import matches_all_terms, search_terms
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import is_live, live_clause
 from api.domains.categories.seed import CANONICAL_CATEGORIES, canonical_category_name
@@ -218,7 +218,9 @@ class StoreService:
         if not self._is_long_term_seller(owner):
             raise HTTPException(status_code=403, detail=LONG_TERM_REQUIRED)
         existing = (await self.db.execute(
-            select(Store.id).where(Store.owner_id == owner_id).limit(1)
+            select(Store.id).where(
+                Store.owner_id == owner_id, Store.deleted_at.is_(None),
+            ).limit(1)
         )).scalar_one_or_none()
         if existing:
             raise HTTPException(
@@ -294,14 +296,36 @@ class StoreService:
         with nearest_first they come nearest first for the 'Stores near
         you' rail. A store with no pin, no declared county and no visible
         owner point has no distance and is left out of a max-distance
-        filter."""
-        q = select(Store).where(Store.is_active == True)  # noqa: E712
+        filter.
+
+        A deleted store (Store.deleted_at) never appears: deleting is a
+        soft delete, so the row survives for its listings and payments
+        while the shop itself is gone.
+
+        A store with no photo of the shop should not exist at all: the
+        setup wizard refuses one, update_store refuses to let the last
+        photo go, and shops opened before that rule were removed by
+        backend/cleanup_photoless_stores.py."""
+        q = select(Store).where(
+            Store.is_active == True,  # noqa: E712
+            Store.deleted_at.is_(None),
+        )
         if store_billing.enabled():
             q = q.where(store_billing.live_subscription_clause(Store.id))
-        if search and search.strip():
-            # term_matches escapes LIKE's own wildcards: a bare ILIKE of the
-            # text made "_" or "%" match every store in the directory.
-            q = q.where(term_matches(search.strip(), (Store.name,)))
+        search_terms_ = search_terms(search)
+        if search_terms_:
+            # Every typed word has to appear somewhere a buyer would look
+            # for it: the shop's own name, the trade it is listed under,
+            # where it is, or one of its live products. Searching only
+            # Store.name meant "router" - a word in a product's title -
+            # returned nothing at all, which read as a dead search box.
+            # Matching stays LIKE-based and portable (api/core/text_search.py).
+            q = q.where(or_(
+                matches_all_terms(search_terms_, (
+                    Store.name, Store.category, Store.county, Store.subcounty,
+                )),
+                Store.id.in_(self._stores_selling_matching(search_terms_)),
+            ))
         if category:
             if store_categories.is_wholesale_facet(category):
                 # "Wholesale and General": stores selling across more than
@@ -465,6 +489,36 @@ class StoreService:
         return round_distance_km(haversine_km(viewer[0], viewer[1], point[0], point[1])), approximate
 
     @staticmethod
+    def _has_shop_photo(store: Store) -> bool:
+        """Whether a store still has a real photo of the shop (not only a
+        logo or cover): the same rule create_store applies to a new one."""
+        from api.domains.media.service import parse_id_list
+        if parse_id_list(store.photo_ids):
+            return True
+        return bool(parse_photo_list(store.photos))
+
+    @staticmethod
+    def _stores_selling_matching(terms: list[str]):
+        """Store ids with a live product matching every typed word.
+
+        The directory's search reaches a shop through its goods as well
+        as its name: someone typing "router" means the thing, and the
+        word only appears in a listing title. Same words, same escaping,
+        same live-listing rule as the category filter (_stores_stocking).
+        """
+        return (
+            select(Listing.store_id)
+            .where(
+                Listing.store_id.is_not(None),
+                Listing.status == ListingStatus.active,
+                live_clause(),
+                matches_all_terms(terms, (
+                    Listing.name, Listing.category, Listing.description,
+                )),
+            )
+        )
+
+    @staticmethod
     def _stores_stocking(category: str):
         """The subquery of store ids with a live listing filed under
         `category` - the wholesaler's second way into the directory.
@@ -531,33 +585,51 @@ class StoreService:
         )).all()
         return {row[0]: row[1] for row in rows}
 
-    async def get_store(self, store_id: str) -> dict:
+    async def get_store(self, store_id: str, viewer_id: Optional[str] = None) -> dict:
         store = await self._get_or_404(store_id)
-        return await self._store_dict(store)
+        return await self._public_or_owner(store, viewer_id)
 
-    async def get_store_by_slug(self, slug: str) -> dict:
+    async def get_store_by_slug(self, slug: str, viewer_id: Optional[str] = None) -> dict:
         store = await self.find_by_slug(slug)
-        if not store:
+        if not store or store.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Store not found")
+        return await self._public_or_owner(store, viewer_id)
+
+    async def _public_or_owner(self, store: Store, viewer_id: Optional[str]) -> dict:
+        """A store's payload for a public read - which, while billing is
+        on and the plan is unpaid or has lapsed, is no store at all: the
+        link, the catalogue and the storefront go dark until it pays.
+        The owner still sees their own store, with the billing object, so
+        the app can send them to the plan screen instead of a 404."""
+        if store.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Store not found")
+        if viewer_id and store.owner_id == viewer_id:
+            return await self._store_dict(store, owner_view=True)
+        if store_billing.enabled() and not await store_billing.store_live(self.db, store):
             raise HTTPException(status_code=404, detail="Store not found")
         return await self._store_dict(store)
 
     async def find_by_slug(self, slug: str) -> Optional[Store]:
         # Links are case-insensitive: someone typing BROKA.co.ke/store/Clanix
-        # from a flyer still arrives.
+        # from a flyer still arrives. A deleted store is not found - its
+        # slug stays reserved, but the link is dead for good.
         return (await self.db.execute(
-            select(Store).where(Store.slug == naming.normalize(slug))
+            select(Store).where(
+                Store.slug == naming.normalize(slug), Store.deleted_at.is_(None),
+            )
         )).scalar_one_or_none()
 
     async def get_my_store(self, owner_id: str) -> Optional[dict]:
         """The owner's store, or None when they haven't opened one - a
         normal state for most users, not an error. The schema allows more
-        than one per owner, so this takes the newest."""
+        than one per owner, so this takes the newest; a deleted one never
+        counts, so an owner who deleted their store can open another."""
         store = await self._my_store(owner_id)
         return await self._store_dict(store, owner_view=True) if store else None
 
     async def _my_store(self, owner_id: str) -> Optional[Store]:
         return (await self.db.execute(
-            select(Store).where(Store.owner_id == owner_id)
+            select(Store).where(Store.owner_id == owner_id, Store.deleted_at.is_(None))
             .order_by(Store.created_at.desc()).limit(1)
         )).scalar_one_or_none()
 
@@ -813,6 +885,16 @@ class StoreService:
         elif "photos" in data:
             store.photos = self._safe_normalize_photo_list(data["photos"])
             store.photo_ids = None    # the media backfill converts them
+        # A shop is only a shop with a photo of itself. The wizard has
+        # required one at setup since phase 2, but the Settings page could
+        # take them all away afterwards, which left a storefront with
+        # nothing to show. A removal that would take the last photo is
+        # refused; adding, replacing or reordering still goes through.
+        if ("photo_ids" in data or "photos" in data) and not self._has_shop_photo(store):
+            raise HTTPException(
+                status_code=400,
+                detail="Keep at least one photo of your shop - buyers need to see it.",
+            )
 
         if "business_email" in data or "official_email" in data:
             owner = await self.db.get(User, requester_id)
@@ -845,6 +927,61 @@ class StoreService:
         await self.db.refresh(store)
         return await self._store_dict(store, owner_view=True)
 
+    async def delete_store(self, store_id: str, requester_id: str) -> dict:
+        """Delete the owner's store, and archive what it held.
+
+        A soft delete, exactly like a listing's (ListingService.delete_listing):
+        the row stays under Store.deleted_at so its payments, audit trail
+        and product history keep pointing at something real, while the
+        shop is gone from every buyer-facing read - directory, storefront,
+        catalogue, categories - and its link is dead for good. The slug
+        stays reserved too: a link printed on a flyer must never start
+        showing a different shop's goods.
+
+        The store's products are archived, not deleted: every listing
+        under it becomes `cancelled` (the status every buyer-facing query
+        already excludes), the same state delete_listing uses. A deal on
+        one of them keeps its row, so a conversation or money in escrow
+        carries on; nothing new can start.
+
+        After this the owner has no store (get_my_store returns null), so
+        they are free to open another.
+        """
+        from api.core.audit import record_audit
+
+        store = (await self.db.execute(
+            select(Store).where(Store.id == store_id, Store.deleted_at.is_(None))
+            .with_for_update().execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if store is None:
+            raise HTTPException(status_code=404, detail="Store not found")
+        self._require_owner(store, requester_id)
+
+        now = datetime.utcnow()
+        # Only what buyers could still see is archived: an active listing
+        # becomes cancelled. A sold listing keeps "completed" and a deal's
+        # "pending" keeps its state, so a buyer's history and an open deal
+        # are not rewritten by the shop closing.
+        listings = (await self.db.execute(
+            select(Listing).where(
+                Listing.store_id == store.id,
+                Listing.status == ListingStatus.active,
+            )
+        )).scalars().all()
+        for listing in listings:
+            listing.status = ListingStatus.cancelled
+            listing.is_featured = False
+
+        store.deleted_at = now
+        store.is_active = False
+        store.updated_at = now
+        await record_audit(
+            self.db, requester_id, "store_deleted", "store", store.id,
+            detail=f"slug={store.slug!r} name={store.name!r} archived_listings={len(listings)}",
+        )
+        await self.db.commit()
+        return {"deleted": True, "store_id": store.id, "archived_listings": len(listings)}
+
     async def get_row(self, store_id: str) -> Store:
         return await self._get_or_404(store_id)
 
@@ -857,7 +994,10 @@ class StoreService:
 
     async def _get_or_404(self, store_id: str) -> Store:
         store = await self.db.get(Store, store_id)
-        if not store:
+        if not store or store.deleted_at is not None:
+            # A deleted store is gone from every read, owner included: the
+            # link is dead, and nothing can be managed through an id that
+            # no longer names a shop.
             raise HTTPException(status_code=404, detail="Store not found")
         return store
 

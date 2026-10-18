@@ -114,6 +114,14 @@ class StoresRepository {
   Future<Result<Store>> setStoreStatus(String storeId, bool isActive) => _guard(() async =>
       Store.fromJson(await _client.post('/stores/$storeId/status', {'is_active': isActive})));
 
+  /// Deletes the caller's store: the shop and its link go dark, and its
+  /// products are archived (cancelled) rather than deleted. See
+  /// StoreService.delete_store on the backend.
+  Future<Result<int>> deleteStore(String storeId) => _guard(() async {
+        final data = await _client.delete('/stores/$storeId') as Map<String, dynamic>;
+        return (data['archived_listings'] as num?)?.toInt() ?? 0;
+      });
+
   /// A store's catalogue, in the same card format as Home - render with
   /// ProductCard.
   Future<Result<List<BrokaListing>>> getStoreListings(
