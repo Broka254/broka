@@ -418,9 +418,18 @@ async def update_listing(
         listing.verified_photos = None
         changed["photos"] = True
     elif body.verified_photos is not None:
-        listing.verified_photos = body.verified_photos
-        # NULL = convert again: the media backfill picks this up.
-        listing.photo_ids = None
+        # Inline photos from an older build. Only real image content may
+        # replace what the listing has: an empty value ("") is a build
+        # saying "I am not sending inline photos", not "delete the photos
+        # you have". It used to null photo_ids as well, so a blank legacy
+        # field left the listing with no photos at all - the images were
+        # still stored, but nothing pointed at them.
+        if split_legacy_photos(body.verified_photos):
+            listing.verified_photos = body.verified_photos
+            # NULL = convert again: the media backfill picks this up.
+            listing.photo_ids = None
+        else:
+            listing.verified_photos = None
         changed["verified_photos"] = True
 
     if body.showcase_id is not None:
@@ -437,8 +446,13 @@ async def update_listing(
             listing.showcase_image_url = None
         changed["showcase"] = True
     elif body.showcase_image_url is not None:
-        listing.showcase_image_url = body.showcase_image_url
-        listing.showcase_id = None
+        listing.showcase_image_url = body.showcase_image_url or None
+        # Same rule as the photos above: a blank legacy value clears the
+        # legacy column only. Dropping showcase_id here removed an asset
+        # the request never named. An asset showcase is removed by sending
+        # showcase_id: "", which is the documented way (ListingEdit).
+        if listing.showcase_image_url:
+            listing.showcase_id = None
         changed["showcase_image_url"] = True
 
     # ── Price: gated ────────────────────────────────────────────────────

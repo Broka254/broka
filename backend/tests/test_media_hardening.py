@@ -404,3 +404,135 @@ class TestInlineImageCheck:
         for _ in range(50):
             assert is_inline_image(big)
         assert time.perf_counter() - start < 0.5
+
+
+class TestBlankLegacyFieldsKeepTheStoredImages:
+    """A blank legacy image field used to delete the stored image.
+
+    `verified_photos: ""`, `showcase_image_url: ""` and `logo_url: ""` are
+    what an older app build sends when it simply has no inline image to
+    give: the value is empty, not a request to remove anything. Overwriting
+    the legacy column was right; nulling the asset column beside it was
+    not. That left a listing with no photos and a shop with no logo while
+    every byte of the images was still stored and still paid for - the
+    "all our images were deleted" state, with nothing deleted.
+    """
+
+    async def test_a_blank_verified_photos_keeps_the_listing_photo(self, client):
+        _, headers = await _user()
+        up = await client.post(
+            "/media/images", headers=headers, data={"purpose": "listing_photo"},
+            files={"file": ("p.png", _png(), "image/png")},
+        )
+        assert up.status_code == 201, up.text
+        asset_id = up.json()["id"]
+        lid = (await client.post(
+            "/listings/", headers=headers, json=_listing(photo_ids=[asset_id]),
+        )).json()["id"]
+
+        r = await client.patch(f"/listings/{lid}", headers=headers,
+                               json={"verified_photos": ""})
+        assert r.status_code == 200, r.text
+        async with AsyncSessionLocal() as db:
+            row = await db.get(Listing, lid)
+        assert asset_id in (row.photo_ids or ""), "the blank field dropped the photo"
+        body = (await client.get(f"/listings/{lid}")).json()
+        assert [p["id"] for p in body["photos"]] == [asset_id]
+        assert body["cover"] is not None
+
+    async def test_a_blank_showcase_url_keeps_the_showcase_image(self, client):
+        _, headers = await _user()
+        up = await client.post(
+            "/media/images", headers=headers, data={"purpose": "listing_showcase"},
+            files={"file": ("p.png", _png(), "image/png")},
+        )
+        assert up.status_code == 201, up.text
+        asset_id = up.json()["id"]
+        r = await client.post("/listings/", headers=headers, json=_listing(
+            showcase_id=asset_id, showcase_image_source="gallery"))
+        assert r.status_code == 201, r.text
+        lid = r.json()["id"]
+
+        r = await client.patch(f"/listings/{lid}", headers=headers,
+                               json={"showcase_image_url": ""})
+        assert r.status_code == 200, r.text
+        async with AsyncSessionLocal() as db:
+            row = await db.get(Listing, lid)
+        assert row.showcase_id == asset_id, "the blank field dropped the showcase"
+        assert row.showcase_image_url is None
+
+    async def test_an_empty_showcase_id_still_removes_the_showcase(self, client):
+        # The documented way to remove it must keep working: only the
+        # legacy field is treated as "no change".
+        _, headers = await _user()
+        up = await client.post(
+            "/media/images", headers=headers, data={"purpose": "listing_showcase"},
+            files={"file": ("p.png", _png(), "image/png")},
+        )
+        asset_id = up.json()["id"]
+        lid = (await client.post("/listings/", headers=headers, json=_listing(
+            showcase_id=asset_id, showcase_image_source="gallery"))).json()["id"]
+        r = await client.patch(f"/listings/{lid}", headers=headers, json={"showcase_id": ""})
+        assert r.status_code == 200, r.text
+        async with AsyncSessionLocal() as db:
+            row = await db.get(Listing, lid)
+        assert row.showcase_id is None
+
+    async def test_a_blank_logo_url_keeps_the_store_logo(self, client):
+        owner, headers = await _store_owner()
+        up = await client.post(
+            "/media/images", headers=headers, data={"purpose": "store_logo"},
+            files={"file": ("p.png", _png(), "image/png")},
+        )
+        assert up.status_code == 201, up.text
+        asset_id = up.json()["id"]
+        r = await client.post("/stores", headers=headers, json={
+            "name": "Shop", "slug": f"logo-keep-{uuid.uuid4().hex[:8]}",
+            "logo_id": asset_id, "photos": [_data_uri(_png())],
+        })
+        assert r.status_code == 201, r.text
+        store_id = r.json()["id"]
+
+        r = await client.patch(f"/stores/{store_id}", headers=headers, json={"logo_url": ""})
+        assert r.status_code == 200, r.text
+        row = await _store_row(store_id)
+        assert row.logo_id == asset_id, "the blank field dropped the logo"
+        assert row.logo_url is None
+
+    async def test_an_empty_logo_id_still_removes_the_logo(self, client):
+        _, headers = await _store_owner()
+        up = await client.post(
+            "/media/images", headers=headers, data={"purpose": "store_logo"},
+            files={"file": ("p.png", _png(), "image/png")},
+        )
+        asset_id = up.json()["id"]
+        r = await client.post("/stores", headers=headers, json={
+            "name": "Shop", "slug": f"logo-drop-{uuid.uuid4().hex[:8]}",
+            "logo_id": asset_id, "photos": [_data_uri(_png())],
+        })
+        store_id = r.json()["id"]
+        r = await client.patch(f"/stores/{store_id}", headers=headers, json={"logo_id": ""})
+        assert r.status_code == 200, r.text
+        assert (await _store_row(store_id)).logo_id is None
+
+    async def test_a_real_inline_photo_still_replaces_the_stored_ones(self, client):
+        # Legitimate conversion must still happen: a build that sends real
+        # base64 hands over to the media backfill.
+        _, headers = await _user()
+        up = await client.post(
+            "/media/images", headers=headers, data={"purpose": "listing_photo"},
+            files={"file": ("p.png", _png(), "image/png")},
+        )
+        asset_id = up.json()["id"]
+        lid = (await client.post(
+            "/listings/", headers=headers, json=_listing(photo_ids=[asset_id]),
+        )).json()["id"]
+
+        inline = base64.b64encode(_png((10, 200, 30))).decode()
+        r = await client.patch(f"/listings/{lid}", headers=headers,
+                               json={"verified_photos": inline})
+        assert r.status_code == 200, r.text
+        async with AsyncSessionLocal() as db:
+            row = await db.get(Listing, lid)
+        assert row.verified_photos == inline
+        assert row.photo_ids is None, "the backfill must be asked to convert again"

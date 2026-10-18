@@ -875,8 +875,12 @@ class StoreService:
             store.logo_id = image_columns["logo_id"]
             store.logo_url = None
         elif "logo_url" in data:
+            # A blank legacy value clears only the legacy column. An older
+            # build that sends "" is not asking to lose the logo that is
+            # stored as an asset; logo_id is the field that removes one.
             store.logo_url = self._safe_normalize_single_media(data["logo_url"])
-            store.logo_id = None      # the media backfill converts it
+            if store.logo_url:
+                store.logo_id = None      # the media backfill converts it
         if "cover_id" in data:
             store.cover_id = image_columns["cover_id"]
         if "photo_ids" in data:
