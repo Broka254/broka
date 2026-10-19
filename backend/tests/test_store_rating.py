@@ -24,7 +24,6 @@ from api.database import (
 )
 from api.models.store import Store
 from api.domains.stores import rating as store_rating
-from api.domains.stores import stats as store_stats
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -352,13 +351,20 @@ class TestStoreInsights:
         listing_id = await _create_listing(client, headers, store["id"], "Popular item")
         _, buyer_headers = await _register(client)
 
-        for _ in range(3):
-            # Different visitors: the same one would count once, by design.
+        # Three distinct visitors, because three visits by the same one
+        # would count once - by design. Clearing seen() between requests
+        # only forgot this process's memory cache; with Redis the SET NX
+        # key survived, so the second and third visits were (correctly)
+        # de-duplicated and the KPI read 1.
+        visitors = [buyer_headers]
+        for _ in range(2):
+            _, extra_headers = await _register(client)
+            visitors.append(extra_headers)
+        for visitor_headers in visitors:
             r = await client.post(f"/stores/{store['id']}/visit", json={"via": "whatsapp"},
-                                  headers=buyer_headers)
+                                  headers=visitor_headers)
             assert r.status_code == 202
-            # Clear the de-dupe window between "visitors".
-            store_stats.seen.clear()
+            assert r.json()["counted"] is True
 
         await client.post(f"/listings/{listing_id}/save", headers=buyer_headers)
 
@@ -366,6 +372,27 @@ class TestStoreInsights:
         assert body["kpis"]["visits"]["value"] == 3
         assert body["sources"]["visits_by_source"]["whatsapp"] == 3
         assert body["kpis"]["saves"]["value"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_repeat_visit_by_the_same_visitor_is_not_counted_twice(self, client):
+        # The de-duplication the test above exists beside: same signed-in
+        # buyer, same shop, inside VISIT_WINDOW. This runs against Redis
+        # whenever REDIS_URL is set (both CI jobs set it), so it also
+        # guards that SET NX path rather than just the memory fallback.
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Repeat Shop")
+        _, buyer_headers = await _register(client)
+
+        first = await client.post(f"/stores/{store['id']}/visit", json={"via": "whatsapp"},
+                                  headers=buyer_headers)
+        again = await client.post(f"/stores/{store['id']}/visit", json={"via": "whatsapp"},
+                                  headers=buyer_headers)
+        assert first.json()["counted"] is True
+        assert again.json()["counted"] is False
+
+        body = (await client.get(f"/stores/{store['id']}/insights", headers=headers)).json()
+        assert body["kpis"]["visits"]["value"] == 1
+        assert body["sources"]["visits_by_source"]["whatsapp"] == 1
 
     @pytest.mark.asyncio
     async def test_live_visitors_counts_appearances_in_the_last_five_minutes(self, client):
