@@ -190,6 +190,10 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
         except Exception as exc:
             logger.error("[sweep] DCR/leak recompute failed: %s", exc)
         try:
+            await task_refresh_store_ratings()
+        except Exception as exc:
+            logger.error("[sweep] store rating refresh failed: %s", exc)
+        try:
             await task_retrain_ml_models()
         except Exception as exc:
             logger.error("[sweep] ML retrain failed: %s", exc)
@@ -1212,6 +1216,42 @@ async def task_retrain_ml_models() -> None:
 
     await cache_set_json(_ML_RETRAIN_KEY, {"computed_at": _dt.utcnow().isoformat(), "results": results}, ttl_seconds=14 * 86400)
     logger.info("[worker] ML retrain pass complete: %s", results)
+
+
+# ── Store ratings ─────────────────────────────────────────────────────────────
+
+async def task_refresh_store_ratings() -> None:
+    """Recompute every store's rating, and write today's snapshot.
+
+    Response time is a rolling 30-day window and tenure grows daily, so a
+    rating written only when a review lands would go stale for a shop that
+    keeps answering quickly. The snapshot is why this runs daily rather
+    than on demand: yesterday's rating cannot be recomputed from today's
+    messages, and the dashboard's trend line needs it.
+
+    Self-gated to ~24 h, like task_recompute_dcr_and_leaks and for the same
+    reason: this codebase's only periodic mechanism is the five-minute
+    sweep. The gate reads the stored ratings themselves, not a Redis key -
+    the rating drives the directory's order, so a Redis flush must not make
+    the pass rerun every five minutes (or skip a night).
+    """
+    from datetime import datetime as _dt, timedelta as _timedelta
+    from sqlalchemy import select as _select
+    from api.database import AsyncSessionLocal
+    from api.models.store import Store
+
+    async with AsyncSessionLocal() as session:
+        last = (await session.execute(
+            _select(Store.rating_updated_at)
+            .where(Store.rating_updated_at.is_not(None))
+            .order_by(Store.rating_updated_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        if last and (_dt.utcnow() - last) < _timedelta(hours=24):
+            return
+
+        from api.domains.stores.rating import refresh_all_store_ratings
+        written = await refresh_all_store_ratings(session)
+        logger.info("[worker] store ratings refreshed for %d stores", written)
 
 
 async def task_recompute_dcr_and_leaks() -> None:

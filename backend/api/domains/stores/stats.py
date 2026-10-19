@@ -93,6 +93,11 @@ MAX_STATS_DAYS = 90
 MAX_VISITORS_PER_CLIENT = 20
 MAX_SHARES_PER_CLIENT = 30
 
+# How long a visitor counts as "viewing now". Five minutes is the chat
+# header's own presence window (api/core/presence.py), so "3 viewing now"
+# beside a shop means the same thing as "online" beside a person.
+LIVE_WINDOW_SECONDS = 300
+
 
 def today() -> date:
     return datetime.now(KENYA).date()
@@ -214,6 +219,63 @@ class _Seen:
         self._memory = _MemorySeen()
         self._client = None
         self._client_loop = None
+        # In-process fallback for "who is here now": store_id -> {visitor:
+        # expires_at}, pruned on read. Only used without Redis.
+        self._live: dict[str, dict[str, float]] = {}
+        self._live_lock: asyncio.Lock | None = None
+
+    def _live_memory_lock(self) -> asyncio.Lock:
+        # Created lazily: an asyncio.Lock bound to no loop at import time is
+        # fine on modern Python, but creating it inside the running loop
+        # keeps it honest for older runtimes and for tests.
+        if self._live_lock is None:
+            self._live_lock = asyncio.Lock()
+        return self._live_lock
+
+    async def mark_live(self, store_id: str, visitor: str, ttl: int) -> None:
+        """Remember this visitor as present for `ttl` seconds. Best-effort:
+        a failure here must never affect the visit itself."""
+        try:
+            client = self._redis()
+            if client is not None:
+                key = f"broka:store:live:{store_id}"
+                now = time.time()
+                pipe = client.pipeline(transaction=True)
+                pipe.zadd(key, {visitor: now})
+                pipe.zremrangebyscore(key, 0, now - ttl)
+                pipe.expire(key, ttl)
+                await pipe.execute()
+                return
+            async with self._live_memory_lock():
+                bucket = self._live.setdefault(store_id, {})
+                now = time.monotonic()
+                for key, expires in list(bucket.items()):
+                    if expires <= now:
+                        bucket.pop(key, None)
+                bucket[visitor] = now + ttl
+                if len(self._live) > 5000:  # bounded like _MemorySeen
+                    self._live.pop(next(iter(self._live)), None)
+        except Exception as e:
+            logger.debug("[store_stats] could not mark live visitor: %s", e)
+
+    async def live_count(self, store_id: str, ttl: int) -> int:
+        """How many visitors were seen in the last `ttl` seconds."""
+        try:
+            client = self._redis()
+            if client is not None:
+                key = f"broka:store:live:{store_id}"
+                await client.zremrangebyscore(key, 0, time.time() - ttl)
+                return int(await client.zcard(key))
+            async with self._live_memory_lock():
+                bucket = self._live.get(store_id, {})
+                now = time.monotonic()
+                for key, expires in list(bucket.items()):
+                    if expires <= now:
+                        bucket.pop(key, None)
+                return len(bucket)
+        except Exception as e:
+            logger.debug("[store_stats] could not count live visitors: %s", e)
+            return 0
 
     def _redis(self):
         """This event loop's Redis client, or None without Redis."""
@@ -319,6 +381,9 @@ async def record_visit(
             if n > MAX_VISITORS_PER_CLIENT:
                 return False
         await _increment(db, store_id, "visit", surface, source)
+        # Only a counted visit is a live visitor: the caps above are what
+        # stop one script refreshing the page being shown as a crowd.
+        await seen.mark_live(store_id, visitor, LIVE_WINDOW_SECONDS)
         return True
     except Exception:
         logger.exception("[store_stats] could not record a visit to %s", store_id)
@@ -352,6 +417,12 @@ async def record_share(
 
 
 # ── Reading ──────────────────────────────────────────────────────────────────
+
+async def live_visitors(store_id: str) -> int:
+    """How many distinct visitors opened this store in the last five
+    minutes. A real count, not an estimate; 0 when nobody has."""
+    return await seen.live_count(store_id, LIVE_WINDOW_SECONDS)
+
 
 async def stats_for(db: AsyncSession, store_id: str, days: int) -> dict:
     """The owner's numbers for the last `days` days, today included. Every

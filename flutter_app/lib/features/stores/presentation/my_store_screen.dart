@@ -47,6 +47,7 @@ import 'setup/store_setup_controller.dart';
 import 'store_billing_screen.dart';
 import 'store_edit_screen.dart';
 import 'widgets/broka_default_logo.dart';
+import 'widgets/store_performance.dart';
 import 'widgets/store_share_card.dart';
 
 class MyStoreScreen extends StatefulWidget {
@@ -142,6 +143,7 @@ class _MyStoreScreenState extends State<MyStoreScreen> {
         onStoreChanged: _replaceStore,
         onRefresh: _refreshStore,
         onDeleted: _load,
+        animate: widget.animateBackground,
       );
     }
     return Scaffold(
@@ -288,6 +290,7 @@ class _Dashboard extends StatelessWidget {
     required this.onStoreChanged,
     required this.onRefresh,
     required this.onDeleted,
+    this.animate = true,
   });
 
   final Store store;
@@ -303,6 +306,10 @@ class _Dashboard extends StatelessWidget {
   /// The store was deleted: go back to the dashboard's own empty state,
   /// which re-reads /stores/mine and finds none.
   final Future<void> Function() onDeleted;
+
+  /// False in tests: the performance card must not start a refresh timer
+  /// that outlives the test's pump cycle.
+  final bool animate;
 
   static const _tabs = ['Overview', 'Products', 'Settings'];
 
@@ -362,7 +369,7 @@ class _Dashboard extends StatelessWidget {
         ],
         body: TabBarView(children: [
           _OverviewTab(store: store, repo: repo, share: share, productFilter: productFilter,
-              onStoreChanged: onStoreChanged, onRefresh: onRefresh),
+              onStoreChanged: onStoreChanged, onRefresh: onRefresh, animate: animate),
           _ProductsTab(store: store, repo: repo, listings: listings, share: share,
               filter: productFilter, onProductsChanged: onRefresh),
           _SettingsTab(
@@ -593,6 +600,7 @@ class _OverviewTab extends StatefulWidget {
     required this.productFilter,
     required this.onStoreChanged,
     required this.onRefresh,
+    this.animate = true,
   });
 
   final Store store;
@@ -604,14 +612,24 @@ class _OverviewTab extends StatefulWidget {
   final ValueChanged<Store> onStoreChanged;
   final Future<void> Function() onRefresh;
 
+  /// False in tests: no self-refresh timer on the performance card.
+  final bool animate;
+
   @override
   State<_OverviewTab> createState() => _OverviewTabState();
 }
 
 class _OverviewTabState extends State<_OverviewTab> {
+  /// The at-a-glance strip's numbers (visits and shares for the week).
+  /// Deliberately kept to two counters from one endpoint: the deeper
+  /// analytics - rating, rank, trends, top products, advice - live in
+  /// StorePerformanceSection, which loads its own payload.
   StoreStats? _stats;
-  String? _statsError;
   bool _toggling = false;
+
+  /// Bumped on every pull-to-refresh, so the performance card reloads with
+  /// the rest of the screen from one gesture.
+  int _performanceTick = 0;
 
   /// How many products are in each state. Null until loaded (or if that
   /// failed): the cards that need it just don't show.
@@ -649,18 +667,13 @@ class _OverviewTabState extends State<_OverviewTab> {
     if (mounted) await widget.onRefresh();
   }
 
+  /// The week's visits and shares, for the strip under the setup
+  /// checklist. A failure here hides the strip's numbers, never the screen:
+  /// the performance card above is independent of it.
   Future<void> _loadStats() async {
     final result = await widget.repo.getStats(widget.store.id);
     if (!mounted) return;
-    setState(() {
-      switch (result) {
-        case Success(:final data):
-          _stats = data;
-          _statsError = null;
-        case Failure(:final message):
-          _statsError = message;
-      }
-    });
+    if (result case Success(:final data)) setState(() => _stats = data);
   }
 
   Future<void> _setActive(bool active) async {
@@ -708,6 +721,7 @@ class _OverviewTabState extends State<_OverviewTab> {
     return RefreshIndicator(
       color: BrokaColors.gold,
       onRefresh: () async {
+        setState(() => _performanceTick++);
         await Future.wait([_loadStats(), _loadCounts(), widget.onRefresh()]);
       },
       child: _tabList(context, key: const Key('overview-list'), children: [
@@ -763,6 +777,20 @@ class _OverviewTabState extends State<_OverviewTab> {
           onAddProduct: _addProduct,
         ),
         const SizedBox(height: 22),
+        // The store's command centre: rating, rank, period KPIs, a trend
+        // card, top products and advice (widgets/store_performance.dart).
+        // It sits above the simple counters because it IS the answer to
+        // "how is my shop doing", and a seller should not have to scroll
+        // past pictures to reach it.
+        StorePerformanceSection(
+          storeId: store.id,
+          repo: widget.repo,
+          refreshTick: _performanceTick,
+          animate: widget.animate,
+          onOpenProduct: (listingId) => Navigator.of(context)
+              .pushNamed('/product', arguments: {'listingId': listingId}),
+        ),
+        const SizedBox(height: 22),
         _sectionLabel('This week'),
         // A dash, never a zero, for a number that hasn't loaded: a zero
         // says nobody came.
@@ -815,9 +843,6 @@ class _OverviewTabState extends State<_OverviewTab> {
         ]),
         const SizedBox(height: 22),
         StoreShareCard(store: store, share: widget.share),
-        const SizedBox(height: 22),
-        _sectionLabel('Visits, last 7 days'),
-        _StatsCard(stats: stats, error: _statsError, onRetry: _loadStats),
         const SizedBox(height: 22),
         _sectionLabel('Your selling'),
         const SellerDashboardLink(),
@@ -1291,108 +1316,6 @@ class _SetupChecklist extends StatelessWidget {
   }
 }
 
-class _StatsCard extends StatelessWidget {
-  const _StatsCard({required this.stats, required this.error, required this.onRetry});
-  final StoreStats? stats;
-  final String? error;
-  final VoidCallback onRetry;
-
-  static const _sourceLabels = {
-    'whatsapp': 'WhatsApp',
-    'tiktok': 'TikTok',
-    'instagram': 'Instagram',
-    'facebook': 'Facebook',
-    'x': 'X',
-    'qr': 'QR code',
-    'direct': 'Direct / typed',
-    'other': 'Other',
-  };
-
-  static const _weekdays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-  @override
-  Widget build(BuildContext context) {
-    final s = stats;
-    if (s == null) {
-      return _card(child: SizedBox(
-        height: 120,
-        child: Center(child: error == null
-            ? const CircularProgressIndicator(color: BrokaColors.gold)
-            : Column(mainAxisSize: MainAxisSize.min, children: [
-                Text(error!, textAlign: TextAlign.center,
-                    style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-                TextButton(onPressed: onRetry, child: const Text('Retry')),
-              ])),
-      ));
-    }
-    final maxDay = s.visitsByDay.fold<int>(0, (m, d) => d.count > m ? d.count : m);
-    final sources = s.visitsBySource.entries.where((e) => e.value > 0).toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    // The week's totals are the "This week" tiles above; this is how they
-    // spread over the days, and where the visitors came from.
-    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(
-        // Count label + tallest bar (55) + weekday label, with room for
-        // larger system text.
-        height: 104,
-        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          for (final d in s.visitsByDay)
-            Expanded(child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
-                if (d.count > 0)
-                  Text('${d.count}', style: const TextStyle(color: BrokaColors.textMid,
-                      fontSize: 10)),
-                const SizedBox(height: 2),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 400),
-                  height: maxDay == 0 ? 3 : 3 + 52 * d.count / maxDay,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(5),
-                    gradient: const LinearGradient(colors: kWizardCtaGradient,
-                        begin: Alignment.bottomCenter, end: Alignment.topCenter),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(_weekdays[d.date.weekday - 1], style: const TextStyle(
-                    color: BrokaColors.textLow, fontSize: 10.5)),
-              ]),
-            )),
-        ]),
-      ),
-      const SizedBox(height: 14),
-      if (sources.isEmpty)
-        const Text('No visitors yet. Share your link on WhatsApp or your socials to '
-            'bring in your first customers.',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4))
-      else ...[
-        const Text('Where visitors came from', style: TextStyle(color: BrokaColors.textMid,
-            fontSize: 12, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        for (final e in sources.take(5))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(children: [
-              SizedBox(width: 110, child: Text(_sourceLabels[e.key] ?? e.key,
-                  style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5))),
-              Expanded(child: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: s.visits == 0 ? 0 : e.value / s.visits,
-                  minHeight: 6,
-                  backgroundColor: BrokaColors.border,
-                  valueColor: const AlwaysStoppedAnimation(BrokaColors.gold),
-                ),
-              )),
-              SizedBox(width: 36, child: Text('${e.value}', textAlign: TextAlign.right,
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 12))),
-            ]),
-          ),
-      ],
-    ]));
-  }
-}
 
 // ── Products ─────────────────────────────────────────────────────────────────
 

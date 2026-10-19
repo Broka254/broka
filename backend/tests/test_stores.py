@@ -132,9 +132,17 @@ class TestStoreCRUD:
         assert "official_whatsapp" not in data
         # Fields never set at creation must be absent, not fabricated -
         # spec §7/§19: no invented reputation numbers.
-        assert "rating" not in data
         assert "completed_deals" not in data
         assert "dcr" not in data
+        # A store rating now EXISTS, and is the one reputation number that
+        # is not invented: it is computed from the shop's own reviews, its
+        # own reply time and its tenure (stores/rating.py). A brand-new
+        # store has none of the first two measured, so it sits exactly on
+        # the documented neutral anchor - 6.5, the same start the seller
+        # rating gives a newcomer. "Unproven" must not read as "bad".
+        assert data["rating"] == 6.5
+        assert data["review_count"] == 0
+        assert data["response_minutes"] is None
         # Hardening pass: owner_id is intentionally no longer exposed -
         # nothing in the app reads it, and it was unnecessary internal-id
         # exposure on every public read (spec §9/§10).

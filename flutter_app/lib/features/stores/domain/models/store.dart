@@ -1,8 +1,10 @@
 // BROKA — Store domain model
 //
-// Mirrors backend/api/domains/stores/service.py's _store_dict(). Trust
-// shown with a store is its owner's real seller record ([StoreOwnerFacts]);
-// there is no separate store rating because nothing computes one.
+// Mirrors backend/api/domains/stores/service.py's _store_dict(). A store
+// carries its OWN rating ([rating], from stores/rating.py) and its owner's
+// seller record ([StoreOwnerFacts]). Two different numbers on purpose: the
+// shop is judged on its own reviews, reply speed and tenure; the owner's
+// record says who is behind the counter.
 import '../../../../models/listing_photo.dart';
 import 'store_billing.dart';
 
@@ -94,6 +96,26 @@ class Store {
   final StoreOwnerFacts? owner;
   final bool isActive;
 
+  /// The store's own rating, 0-10, from its reviews, its own reply time and
+  /// its tenure (backend stores/rating.py). Null only from a backend that
+  /// predates the rating - and then the card shows nothing rather than a
+  /// guess. It is deliberately NOT [StoreOwnerFacts.rating]: a shop's record
+  /// is about the shop, not the person behind it.
+  final double? rating;
+
+  /// How many reviews the rating counts. Zero is honest: "no reviews yet",
+  /// not "rated 0".
+  final int reviewCount;
+
+  /// The store's measured average reply time in minutes. Null means
+  /// unmeasured, which is not the same as fast.
+  final double? responseMinutes;
+
+  /// Owner-only: the working behind the rating, so the dashboard can explain
+  /// it. Null on every public read.
+  final StoreRatingBreakdown? ratingBreakdown;
+  final String? ratingExplanation;
+
   /// The store's plan state on the owner's own reads, and null everywhere
   /// else: public reads carry null, and so does every read while
   /// STORE_BILLING_ENABLED is off. The app shows billing surfaces only
@@ -149,6 +171,11 @@ class Store {
     this.photos = const [],
     this.owner,
     this.isActive = true,
+    this.rating,
+    this.reviewCount = 0,
+    this.responseMinutes,
+    this.ratingBreakdown,
+    this.ratingExplanation,
     this.billing,
     this.listingCount = 0,
     this.distanceKm,
@@ -191,6 +218,11 @@ class Store {
       photos:  (json['photos'] as List?)?.whereType<String>().toList() ?? const [],
       owner: StoreOwnerFacts.fromJson(json['owner']),
       isActive:     json['is_active']     as bool? ?? true,
+      rating: (json['rating'] as num?)?.toDouble(),
+      reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
+      responseMinutes: (json['response_minutes'] as num?)?.toDouble(),
+      ratingBreakdown: StoreRatingBreakdown.fromJson(json['rating_breakdown']),
+      ratingExplanation: json['rating_explanation'] as String?,
       billing:      StoreBilling.fromJson(json['billing']),
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
@@ -300,6 +332,35 @@ class Store {
 
   /// When the store opened, or null when the response has no date.
   DateTime? get openedAt => DateTime.tryParse(createdAt ?? '');
+}
+
+/// The working behind a store rating, as the owner sees it.
+///
+/// Each component is 0..1; the weights say how much of the headline number
+/// it carries. The server computes both sides, so the bars on the screen
+/// add up to the number beside them rather than being re-derived here.
+class StoreRatingBreakdown {
+  final double review;
+  final double response;
+  final double tenure;
+  final double confidence;
+
+  const StoreRatingBreakdown({
+    this.review = 0,
+    this.response = 0,
+    this.tenure = 0,
+    this.confidence = 0,
+  });
+
+  static StoreRatingBreakdown? fromJson(Object? json) {
+    if (json is! Map) return null;
+    return StoreRatingBreakdown(
+      review: (json['review'] as num?)?.toDouble() ?? 0,
+      response: (json['response'] as num?)?.toDouble() ?? 0,
+      tenure: (json['tenure'] as num?)?.toDouble() ?? 0,
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 0,
+    );
+  }
 }
 
 /// One entry of a store's category rail.

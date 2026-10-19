@@ -16,16 +16,19 @@ review it through the screen they have; its review row has no deal.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 from fastapi import HTTPException
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
 
 from api.database import Review, Deal, DealStatus, Listing, NegotiationMessage, User
 from api.core.config import settings
 from api.core.events import publish, ReviewSubmitted
 from api.core.audit import record_audit
+
+logger = logging.getLogger(__name__)
 
 # The deal statuses a buyer may review after, when reviews require a
 # completed deal. Released only: a refunded or cancelled deal is not a
@@ -77,10 +80,20 @@ class ReviewService:
         if await self._already_reviewed(deal_id, reviewer_id):
             raise HTTPException(status_code=409, detail="You have already reviewed this deal")
 
+        # Attribute the review to the store whose product was sold. This is
+        # what lets a store's own rating count only its own deals: a seller
+        # with two shops would otherwise have one record lift both. Looked up
+        # once, here, from the deal's listing - the review never carries a
+        # store chosen by the caller.
+        listing_store = (await self.db.execute(
+            select(Listing.store_id).where(Listing.id == deal.listing_id)
+        )).scalar_one_or_none() if deal.listing_id else None
+
         return await self._save(Review(
             deal_id=deal_id,
             reviewer_id=reviewer_id,
             seller_id=deal.seller_id,
+            store_id=listing_store,
             rating=rating,
             comment=comment[:1000],
         ))
@@ -127,6 +140,7 @@ class ReviewService:
     async def _save(self, review: Review) -> dict:
         seller_id, reviewer_id, deal_id = review.seller_id, review.reviewer_id, review.deal_id
         rating = review.rating
+        store_id = review.store_id
         # The check above is a courtesy; uq_reviews_deal_reviewer is the
         # guard. Two submissions sent together (a double tap, two phones)
         # both pass the check, and the second insert fails here - at the
@@ -143,6 +157,18 @@ class ReviewService:
             await self.db.rollback()
             raise HTTPException(status_code=409, detail="You have already reviewed this deal")
         await self.db.refresh(review)
+
+        # The store's number moves the moment a review lands, not the next
+        # time the nightly pass happens to run - a seller who just earned a
+        # bad review should see it before their next customer does. Failure
+        # here must not fail the review: the rating is recomputed nightly
+        # regardless, and the buyer's words are already committed.
+        if store_id:
+            try:
+                from api.domains.stores.rating import refresh_store_rating
+                await refresh_store_rating(self.db, store_id)
+            except Exception as exc:  # noqa: BLE001 - never lose the review
+                logger.warning("[reviews] store rating refresh failed: %s", exc)
 
         await publish(ReviewSubmitted(
             review_id=review.id,
@@ -164,8 +190,11 @@ class ReviewService:
     ) -> list[dict]:
         """Newest first, each with the reviewer's public name - the profile
         screen printed "Buyer" on every card without it."""
+        return await self._reviews(Review.seller_id == seller_id, limit, offset)
+
+    async def _reviews(self, condition, limit: int, offset: int) -> list[dict]:
         r = await self.db.execute(
-            select(Review).where(Review.seller_id == seller_id)
+            select(Review).where(condition)
             .order_by(Review.created_at.desc())
             .offset(offset).limit(limit)
         )
@@ -187,9 +216,41 @@ class ReviewService:
         avg is None, not 0 and not the 5.0 User.rating starts at, when there
         are no reviews: a seller nobody has reviewed has no average.
         distribution is keyed "1".."5", the keys JSON can carry."""
+        return await self._summary(Review.seller_id == seller_id)
+
+    async def get_store_reviews(
+        self, store_id: str, limit: int = 20, offset: int = 0,
+        *, owner_id: Optional[str] = None, include_seller_chat: bool = False,
+    ) -> list[dict]:
+        """The reviews a store's page shows.
+
+        `include_seller_chat` is the sole-store rule (stores/review_scope.py):
+        a chat-only review has no listing, so it belongs to the owner's shop
+        only when that owner has exactly one. The caller decides, because it
+        is the caller that knows how many shops the owner runs. The condition
+        itself lives in review_scope, shared with the rating - if the two
+        answered "which reviews are this shop's" differently, a shop would
+        show five reviews and be rated from three.
+        """
+        from api.domains.stores.review_scope import store_review_condition
+        condition = store_review_condition(
+            store_id, owner_id or "", include_seller_chat and bool(owner_id))
+        return await self._reviews(condition, limit, offset)
+
+    async def get_store_summary(
+        self, store_id: str, *,
+        owner_id: Optional[str] = None, include_seller_chat: bool = False,
+    ) -> dict:
+        """{avg, count, distribution} for one store's reviews."""
+        from api.domains.stores.review_scope import store_review_condition
+        condition = store_review_condition(
+            store_id, owner_id or "", include_seller_chat and bool(owner_id))
+        return await self._summary(condition)
+
+    async def _summary(self, condition) -> dict:
         r = await self.db.execute(
             select(Review.rating, func.count(Review.id))
-            .where(Review.seller_id == seller_id)
+            .where(condition)
             .group_by(Review.rating)
         )
         dist = {str(star): 0 for star in range(1, 6)}

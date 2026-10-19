@@ -43,7 +43,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint,
+    Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint,
 )
 from api.database import Base
 
@@ -128,6 +129,21 @@ class Store(Base):
     business_email_verified = Column(Boolean, default=False, nullable=False)
 
     is_active  = Column(Boolean, default=True, nullable=False)
+    # The store's own rating, 0-10, computed from its reviews, its own
+    # reply time and how long it has traded (api/domains/stores/rating.py).
+    # Deliberately a STORE number, not User.rating: a seller with two shops
+    # must not have one shop's record lift the other. Null only on rows
+    # created before the rating shipped; the startup backfill fills them.
+    rating                  = Column(Float, nullable=True, index=True)
+    rating_reviews          = Column(Integer, nullable=False, default=0)
+    rating_response_minutes = Column(Float, nullable=True)
+    # The components the number is built from, stored beside it so a store
+    # payload needs no extra query and the owner's breakdown cannot drift
+    # from the rating it explains.
+    rating_review_component   = Column(Float, nullable=True)
+    rating_response_component = Column(Float, nullable=True)
+    rating_tenure_component   = Column(Float, nullable=True)
+    rating_updated_at       = Column(DateTime, nullable=True)
     # Deleting a store is a soft delete, exactly like a listing's
     # (ListingService.delete_listing): the row stays so its listings,
     # payments and audit trail keep pointing at something real, while the
@@ -198,3 +214,31 @@ class StoreDailyCount(Base):
     surface  = Column(String(8), nullable=False)
     source   = Column(String(16), nullable=False)
     count    = Column(Integer, nullable=False, default=0)
+
+
+class StoreRatingSnapshot(Base):
+    """One row per store per day: the rating and the components behind it.
+
+    Same argument as SellerMetricSnapshot. The rating is computable today,
+    but not reconstructible tomorrow: response time is a rolling 30-day
+    window and review averages move with every new review, so yesterday's
+    line cannot be redrawn from today's tables. Written by the daily
+    refresh in api/domains/stores/rating.py.
+    """
+    __tablename__ = "store_rating_snapshots"
+    __table_args__ = (
+        UniqueConstraint("store_id", "snapshot_date", name="uq_store_rating_day"),
+        Index("ix_store_rating_snapshot", "store_id", "snapshot_date"),
+    )
+
+    id                  = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    store_id            = Column(String, ForeignKey("stores.id"), nullable=False, index=True)
+    snapshot_date       = Column(Date, nullable=False, index=True)
+
+    rating              = Column(Float, nullable=True)   # 0-10
+    review_component    = Column(Float, nullable=True)   # 0-1
+    response_component  = Column(Float, nullable=True)   # 0-1
+    tenure_component    = Column(Float, nullable=True)   # 0-1
+    review_count        = Column(Integer, nullable=True)
+    response_minutes    = Column(Float, nullable=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)

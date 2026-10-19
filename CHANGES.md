@@ -1,3 +1,82 @@
+# A store has its own rating, the directory lists each shop once, and My Store becomes a real dashboard (2026-10-19)
+
+Three things, from walking the Online Stores feature.
+
+**Why some stores appeared twice.** Two separate lists fed one screen. The
+directory's "Stores near you" rail (within 25 km) and its "All stores" list
+(everything) were fetched independently and rendered one after the other,
+and nothing removed the nearby ids from the main list - so every shop
+inside 25 km was drawn twice, once in the rail and again below it. The
+category screen had the same structure and the same bug. The rail is a
+shortcut, not a second catalogue now: the main list continues below it
+without repeating it, and the rail is hidden while a search or place
+filter is active, because an unfiltered shelf above filtered results
+contradicts what was asked for.
+
+`GET /stores` also stopped trusting ties. It ordered by `created_at`
+alone, and stores created in the same second could swap places between
+two `OFFSET` pages - a shop shown twice, or skipped, while paging. The
+order is now `rating DESC, created_at DESC, id ASC`, and the response is
+de-duplicated by id as a second line of defence.
+
+**A store's own rating, 0-10.** Trust on a store used to be its owner's
+seller record only - one number for a person, shown on every shop they
+run. A store is a business identity with its own customers, so it now has
+its own number (`backend/api/domains/stores/rating.py`):
+
+- **Reviews 55%** - the stars buyers gave *this* shop, Bayesian-smoothed
+  so three 5-star reviews cannot beat two years of 4.6.
+- **Response time 30%** - measured from threads about *this store's*
+  products. A busy shop's speed is not borrowed by a quiet one under the
+  same owner. Unanswered threads count (censored at 48 h), and fewer than
+  three observations stay "unmeasured", never "fast".
+- **Time on BROKA 15%** - `stores.created_at`, saturating at six months.
+- **Review volume** - shown as confidence to the owner, not another term.
+
+A brand-new store lands on exactly **6.5/10** - the same neutral anchor
+the seller rating uses, so "unproven" reads the same on both surfaces. A
+shop with ten 5-star reviews, ten-minute replies and a year of trading
+rates above 9; five 1-star reviews with day-long replies sits near 3.
+
+Reviews are attributed to the store whose product was sold
+(`reviews.store_id`, filled on review and backfilled on startup). A
+chat-only review - the only kind while in-app payments are off - belongs
+to the owner's shop when that owner runs exactly one shop; with two
+shops it stays on the person, because picking one would be a guess.
+
+The value is stored on `stores` and refreshed when a review lands and by
+a daily sweep, with a `StoreRatingSnapshot` row per store per day for the
+dashboard's history. The directory orders by it, so the highest-rated
+shops are the ones buyers meet first. The public store payload carries
+the rating, review count and reply time; the component breakdown is the
+owner's.
+
+**My Store is a dashboard now.** `GET /stores/{id}/insights` (owner only)
+returns, in one request: the rating with its breakdown and a plain-words
+explanation, rank among live stores, period-over-period KPIs (visitors,
+product views, saves, likes, interested buyers, chats, messages, shares),
+daily series, traffic sources, top products, and advice cards that each
+cite a real number. Product views come from daily snapshots and are
+labelled "since tracking began" when the history does not cover the whole
+period - a partial count is never presented as a total.
+
+"Realtime" means two honest things: a live-visitor count of distinct
+people in the last five minutes (Redis sorted set, with an in-process
+fallback), refreshed every 30 s while the app is in front; and today's
+counters, which move as visits happen. The Overview screen draws it all
+with the shared chart, themed on the seller dashboard's system, above the
+existing pictures, checklist, share card and quick actions.
+
+The store card now wears the shop's rating beside its name, and Store
+details shows the shop rating above the owner's seller record - the two
+numbers are labelled as what they are.
+
+Tests: `backend/tests/test_store_rating.py` (rating ladder, store-scoped
+reply time, review attribution, stable paging, insights payload) and
+`flutter_app/test/store_directory_duplicates_test.dart` (one card per
+shop, rail hidden while filtering). Full backend suite: 2073 passed,
+87 skipped.
+
 # Store search finds products, unpaid stores go dark, and a store can be deleted (2026-10-18)
 
 Five things the owner asked for after walking the Online Stores feature.

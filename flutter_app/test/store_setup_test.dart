@@ -105,6 +105,79 @@ Map<String, dynamic> _stats() => {
       'shares': {'total': 4, 'by_channel': {'whatsapp': 4}},
     };
 
+Map<String, dynamic> _insights({int days = 7}) => {
+      'store': {
+        'id': 's1',
+        'name': 'Clanix Electronics',
+        'slug': 'clanix',
+        'is_active': true,
+        'rating': 8.4,
+        'review_count': 4,
+        'response_minutes': 25.0,
+        'rank': 3,
+        'stores_total': 37,
+        'products': 3,
+        'live_visitors': 2,
+        'rating_breakdown': {
+          'review': 0.88, 'response': 0.7492, 'tenure': 0.5, 'confidence': 0.4,
+          'weights': {'review': 0.55, 'response': 0.30, 'tenure': 0.15},
+        },
+        'rating_explanation': 'reviews score 88/100 across 4 reviews; you reply in about '
+            '25 min; time on BROKA contributes 50/100.',
+      },
+      'period': {
+        'days': days,
+        'from': '2026-09-18',
+        'to': '2026-09-24',
+        'previous_from': '2026-09-11',
+        'previous_to': '2026-09-17',
+      },
+      'kpis': {
+        'visits': {'value': 9, 'previous': 6, 'change_percent': 50.0},
+        'product_views': {'value': 14, 'previous': 10, 'change_percent': 40.0, 'exact': true},
+        'saves': {'value': 3, 'previous': 0, 'change_percent': null},
+        'likes': {'value': 5, 'previous': 5, 'change_percent': 0.0},
+        'interested_buyers': {'value': 2, 'previous': 1, 'change_percent': 100.0},
+        'chats': {'value': 2, 'previous': 4, 'change_percent': -50.0},
+        'messages': {'value': 12, 'previous': 9, 'change_percent': 33.3},
+        'shares': {'value': 4, 'previous': 2, 'change_percent': 100.0},
+      },
+      'series': {
+        'visits': [
+          for (var i = 0; i < days; i++)
+            {'date': '2026-09-18', 'count': i * 2},
+        ],
+        'product_views': [
+          for (var i = 0; i < days; i++)
+            {'date': '2026-09-18', 'count': i},
+        ],
+        'chats': [
+          for (var i = 0; i < days; i++)
+            {'date': '2026-09-18', 'count': i == 0 ? 1 : 0},
+        ],
+      },
+      'sources': {
+        'visits_by_source': {'whatsapp': 6, 'tiktok': 3, 'direct': 0},
+        'visits_by_surface': {'app': 2, 'web': 7},
+        'shares_by_channel': {'whatsapp': 4},
+      },
+      'top_products': [
+        {'id': 'l1', 'name': 'HP EliteBook', 'price': 45000, 'views': 14,
+            'saves': 2, 'likes': 3, 'interested_buyers': 1, 'state': 'active'},
+      ],
+      'advice': {
+        'positives': [
+          {'code': 'rating_high', 'title': 'Buyers rate this shop highly',
+              'detail': '8.4/10 from 4 reviews.', 'severity': 0},
+        ],
+        'negatives': [
+          {'code': 'slow_replies', 'title': 'Buyers wait too long for an answer',
+              'detail': 'About 25 min on average.', 'severity': 4},
+        ],
+      },
+      'generated_at': '2026-09-24T10:00:00',
+    };
+
 /// One product as GET /stores/{id}/manage/listings returns it.
 Map<String, dynamic> _product(
   String id,
@@ -980,6 +1053,8 @@ void main() {
       final backend = FakeBackend({
         'GET /stores/mine': (_) => _json(store ?? _storeJson()),
         'GET /stores/s1/stats': (_) => _json(_stats()),
+        'GET /stores/s1/insights': (r) => _json(_insights(
+            days: int.tryParse(r.url.queryParameters['days'] ?? '') ?? 7)),
         'GET /stores/s1/manage/listings': (r) => _manage(r, all),
         ...more,
       });

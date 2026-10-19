@@ -4,9 +4,14 @@
 // four other screens, so a list layout for this one screen is a smaller,
 // safer duplication than adding a layout mode to a shared component.
 //
-// A store card shows the shop itself, its distance when known, and a way
-// onto the map. The owner's seller record lives in Store details - never a
-// store rating, which nothing computes (spec §7/§19).
+// A store card shows the shop itself, its own rating, its distance when
+// known, and a way onto the map. The owner's seller record lives in Store
+// details, beside the shop's rating rather than instead of it - a shop and
+// the person behind it are two different records.
+//
+// Two lists feed this screen and both must respect one shop, one card: see
+// _nearbyRail and _mainList below, which is where the duplicate-shop bug
+// was fixed.
 //
 // Destination-alignment pass (2026-09-18): restyled onto the same system as
 // Home and the Category Zones - ConstellationBackground, one CustomScrollView
@@ -36,6 +41,7 @@ import '../../discovery/domain/destination_visual.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import '../domain/store_categories.dart';
+import '../domain/store_locator.dart';
 import 'nearby_stores_screen.dart';
 import 'store_category_screen.dart';
 import 'store_home_screen.dart';
@@ -45,12 +51,22 @@ import 'widgets/store_details_view.dart' show showStoreDetails;
 import 'widgets/store_location_filter.dart';
 
 class StoreListScreen extends StatefulWidget {
-  const StoreListScreen({super.key});
+  const StoreListScreen({super.key, this.repository, this.locate});
+
+  /// Injectable for tests; the app uses the shared repository. Same pattern
+  /// as NearbyStoresScreen, so a directory test never touches the network.
+  final StoresRepository? repository;
+
+  /// Injectable for tests; the app asks the device.
+  final StoreLocator? locate;
+
   @override
   State<StoreListScreen> createState() => _StoreListScreenState();
 }
 
 class _StoreListScreenState extends State<StoreListScreen> {
+  StoresRepository get _repo => widget.repository ?? storesRepository;
+
   final List<Store> _stores = [];
   bool _loading = true;
   String? _error;
@@ -86,7 +102,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
     // replace the list being narrowed with a full-screen spinner.
     setState(() { _loading = _stores.isEmpty; _error = null; });
     final query = _searchCtrl.text.trim();
-    final result = await storesRepository.listStores(
+    final result = await _repo.listStores(
         search: query.isEmpty ? null : query,
         county: _county,
         subcounty: _subcounty,
@@ -102,6 +118,30 @@ class _StoreListScreenState extends State<StoreListScreen> {
     );
   }
 
+  /// True while the user is narrowing the list. The nearby rail is a
+  /// shortcut, not a second catalogue: a shelf of unfiltered shops above a
+  /// filtered result set contradicts what was asked for, so it is hidden
+  /// for the duration.
+  bool get _filtersActive =>
+      _searchCtrl.text.trim().isNotEmpty || _county != null || _subcounty != null;
+
+  /// The shops shown in the 'Stores near you' rail, and therefore excluded
+  /// from 'All stores' below it.
+  ///
+  /// This is the duplicate fix. The two lists are fetched independently -
+  /// one with a 25 km radius, one without - and nothing used to remove the
+  /// nearby ids from the main list, so every shop within 25 km was drawn
+  /// twice on one screen: once in the rail, once under 'All stores'. The
+  /// rail is the same shops, presented earlier, so the main list continues
+  /// below it rather than repeating it.
+  List<Store> get _nearbyRail => _filtersActive ? const [] : _nearby.take(5).toList();
+
+  /// Every store in the main list except the ones already in the rail.
+  List<Store> get _mainList {
+    final shown = {for (final s in _nearbyRail) s.id};
+    return [for (final s in _stores) if (!shown.contains(s.id)) s];
+  }
+
   /// 'Stores near you' for the general directory: live GPS first, the
   /// saved session point as fallback - never a stale zero. A missing fix
   /// leaves the section hidden, not a 0 km list.
@@ -111,32 +151,38 @@ class _StoreListScreenState extends State<StoreListScreen> {
     // point is worse than no near you at all.
     double? lat;
     double? lng;
-    try {
-      if (await Geolocator.isLocationServiceEnabled()) {
-        var perm = await Geolocator.checkPermission();
-        if (perm == LocationPermission.denied) {
-          perm = await Geolocator.requestPermission();
+    if (widget.locate != null) {
+      final fix = await widget.locate!();
+      lat = fix?.lat;
+      lng = fix?.lng;
+    } else {
+      try {
+        if (await Geolocator.isLocationServiceEnabled()) {
+          var perm = await Geolocator.checkPermission();
+          if (perm == LocationPermission.denied) {
+            perm = await Geolocator.requestPermission();
+          }
+          if (perm != LocationPermission.denied &&
+              perm != LocationPermission.deniedForever) {
+            final pos = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.medium,
+                timeLimit: Duration(seconds: 10),
+              ),
+            );
+            lat = pos.latitude;
+            lng = pos.longitude;
+          }
         }
-        if (perm != LocationPermission.denied &&
-            perm != LocationPermission.deniedForever) {
-          final pos = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.medium,
-              timeLimit: Duration(seconds: 10),
-            ),
-          );
-          lat = pos.latitude;
-          lng = pos.longitude;
-        }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     if (!mounted) return;
     if (lat == null || lng == null) return;
     setState(() {
       _userLat = lat;
       _userLng = lng;
     });
-    final result = await storesRepository.listStores(
+    final result = await _repo.listStores(
         lat: lat, lng: lng,
         maxDistanceKm: Store.nearRadiusKm,
         nearestFirst: true, limit: 10);
@@ -330,8 +376,13 @@ class _StoreListScreenState extends State<StoreListScreen> {
   /// 'Stores near you': nearest first within 25 km, each with its distance.
   /// Hidden until a live fix arrives and something qualifies - no fix or
   /// nothing near means no section, never a guess.
+  /// 'Stores near you': nearest first within 25 km, each with its distance.
+  /// Hidden until a live fix arrives and something qualifies - no fix or
+  /// nothing near means no section, never a guess. Also hidden while a
+  /// filter is active: see [_nearbyRail].
   List<Widget> _nearbySlivers() {
-    if (_nearby.isEmpty) return const [];
+    final rail = _nearbyRail;
+    if (rail.isEmpty) return const [];
     return [
       SliverToBoxAdapter(
         child: Padding(
@@ -349,7 +400,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
                       letterSpacing: -0.1)),
             ]),
             const SizedBox(height: 2),
-            Text('${_nearby.length} within 25 km of you',
+            Text('${rail.length} within 25 km of you',
                 style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
                     fontWeight: FontWeight.w700)),
           ]),
@@ -360,17 +411,18 @@ class _StoreListScreenState extends State<StoreListScreen> {
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (_, i) => StoreCard(
-              store: _nearby[i],
+              key: Key('nearby-store-${rail[i].id}'),
+              store: rail[i],
               onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => StoreHomeScreen(storeId: _nearby[i].id))),
-              onDetails: () => showStoreDetails(context, _nearby[i],
-                  repository: storesRepository),
-              onMap: () => openStoreMap(context, _nearby[i],
+                      builder: (_) => StoreHomeScreen(storeId: rail[i].id))),
+              onDetails: () => showStoreDetails(context, rail[i],
+                  repository: _repo),
+              onMap: () => openStoreMap(context, rail[i],
                   viewerLat: _userLat, viewerLng: _userLng),
             ),
-            childCount: _nearby.length,
+            childCount: rail.length,
           ),
         ),
       ),
@@ -407,8 +459,14 @@ class _StoreListScreenState extends State<StoreListScreen> {
         ),
       ];
     }
-    if (_stores.isEmpty) {
+    final main = _mainList;
+    if (_stores.isEmpty || main.isEmpty) {
       final searching = _searchCtrl.text.trim().isNotEmpty;
+      // The rail can hold every shop when there are only a handful - but
+      // only when there ARE shops. An empty directory still says so.
+      if (_stores.isNotEmpty && main.isEmpty && !_loading && _error == null) {
+        return const [SliverToBoxAdapter(child: SizedBox(height: 8))];
+      }
       return [
         SliverFillRemaining(
           hasScrollBody: false,
@@ -433,17 +491,17 @@ class _StoreListScreenState extends State<StoreListScreen> {
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (_, i) => StoreCard(
-              store: _stores[i],
+              store: main[i],
               onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => StoreHomeScreen(storeId: _stores[i].id))),
-              onDetails: () => showStoreDetails(context, _stores[i],
-                  repository: storesRepository),
-              onMap: () => openStoreMap(context, _stores[i],
+                      builder: (_) => StoreHomeScreen(storeId: main[i].id))),
+              onDetails: () => showStoreDetails(context, main[i],
+                  repository: _repo),
+              onMap: () => openStoreMap(context, main[i],
                   viewerLat: _userLat, viewerLng: _userLng),
             ),
-            childCount: _stores.length,
+            childCount: main.length,
           ),
         ),
       ),

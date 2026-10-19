@@ -1078,6 +1078,13 @@ class Review(Base):
     deal_id     = Column(String, ForeignKey("deals.id"), nullable=True, index=True)
     reviewer_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     seller_id   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # Which store the reviewed deal's product was sold under. A review is
+    # about a person, but a STORE's rating must count only what was sold
+    # through that shop: a seller with two shops would otherwise have one
+    # record lift both. NULL = a chat-only review (no listing, so no honest
+    # store to name) or a row written before attribution shipped; the
+    # startup backfill fills the deal-backed ones from Deal -> Listing.
+    store_id    = Column(String, ForeignKey("stores.id"), nullable=True, index=True)
     rating      = Column(Integer, nullable=False)          # 1-5 stars
     comment     = Column(Text, default="")
     created_at  = Column(DateTime, default=datetime.utcnow)
@@ -1243,7 +1250,7 @@ async def init_db():
     _init_log = _logging.getLogger(__name__)
     for _module, _names in (
         ("api.models.dispute", ("DisputeCase", "DisputeEvent", "DisputeEvidence", "DisputeTimer")),
-        ("api.models.store", ("Store", "StoreDailyCount", "StoreCategoryLink")),
+        ("api.models.store", ("Store", "StoreDailyCount", "StoreCategoryLink", "StoreRatingSnapshot")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
         ("api.models.listing_payment", ("ListingPayment",)),
@@ -1422,6 +1429,24 @@ async def init_db():
             # stays so its listings, payments and audit trail keep pointing
             # at something real, while every buyer-facing read leaves it out.
             "ALTER TABLE stores ADD COLUMN deleted_at TIMESTAMP",
+            # Store rating (2026-10-19). The store's own number, from its
+            # reviews, store-scoped reply time and tenure - see
+            # api/domains/stores/rating.py. NULL on existing rows; the
+            # startup backfill (backfill_store_ratings) computes them once,
+            # so the directory's rating order is meaningful immediately.
+            "ALTER TABLE stores ADD COLUMN rating FLOAT",
+            "ALTER TABLE stores ADD COLUMN rating_reviews INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE stores ADD COLUMN rating_response_minutes FLOAT",
+            "ALTER TABLE stores ADD COLUMN rating_review_component FLOAT",
+            "ALTER TABLE stores ADD COLUMN rating_response_component FLOAT",
+            "ALTER TABLE stores ADD COLUMN rating_tenure_component FLOAT",
+            "ALTER TABLE stores ADD COLUMN rating_updated_at TIMESTAMP",
+            # Review attribution (2026-10-19): a deal review names the store
+            # whose product was sold, so one shop's record cannot lift
+            # another's. NULL on chat-only reviews (no listing, so no honest
+            # store) and on rows written before this shipped, which the
+            # startup backfill fills from Deal -> Listing.
+            "ALTER TABLE reviews ADD COLUMN store_id VARCHAR",
             # Upload clean-up (api/domains/media/cleanup.py). Every asset
             # that exists when the column is added becomes 'legacy' and is
             # never cleaned up; only uploads made after it can be.
@@ -1622,6 +1647,11 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN trader_cover_id VARCHAR",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_seller_reviewer_nodeal "
             "ON reviews (seller_id, reviewer_id) WHERE deal_id IS NULL",
+            # Store rating (2026-10-19): the directory orders by rating, and
+            # review attribution is looked up per store on every review and
+            # store page.
+            "CREATE INDEX IF NOT EXISTS ix_stores_rating ON stores (rating)",
+            "CREATE INDEX IF NOT EXISTS ix_reviews_store_id ON reviews (store_id)",
             # Partial payments (ExternalEscrow.payment_no): a deal may now
             # have several escrow rows, so the old one-per-deal unique index
             # goes, and (deal_id, payment_no) takes over both its lookups and
@@ -1675,6 +1705,24 @@ async def init_db():
             print(f"✅ Store category links filled in for {created} store(s)")
     except Exception as e:
         print(f"⚠️ Store category link backfill failed (non-fatal): {e!r}")
+
+    # Store rating (2026-10-19): attribute existing deal reviews to the
+    # store their product was sold in, then give every store that predates
+    # the rating a real value. Order matters - the rating counts attributed
+    # reviews. Both are idempotent and only touch rows that still need it,
+    # so a restart with nothing to do is two cheap queries.
+    try:
+        from api.domains.stores.rating import (
+            backfill_review_store_ids, backfill_store_ratings,
+        )
+        attributed = await backfill_review_store_ids()
+        if attributed:
+            print(f"✅ Reviews attributed to stores: {attributed}")
+        rated = await backfill_store_ratings()
+        if rated:
+            print(f"✅ Store ratings computed for {rated} store(s)")
+    except Exception as e:
+        print(f"⚠️ Store rating backfill failed (non-fatal): {e!r}")
 
     # Store billing (PRICING.md §9): when billing turns on, every store
     # already open gets its grace time as a subscription row, so switching

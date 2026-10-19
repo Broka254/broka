@@ -24,6 +24,12 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
   const deals = owner?.completed_deals ?? 0
   // A rating only means something once there are deals behind it.
   const rating = deals > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null
+  // The SHOP's own rating, 0-10, from its reviews, reply speed and tenure
+  // (backend stores/rating.py). Shown ahead of the owner's seller rating:
+  // a buyer is judging this shop, not the person's whole history. Absent
+  // from older API builds, which keeps the seller rating as the fallback.
+  const storeRating = store.rating ?? null
+  const reviewCount = store.review_count ?? 0
   const pictures = showcase.filter((p) => p.image).slice(0, 3)
   const [c1, c2] = view.gradient
 
@@ -84,7 +90,14 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
           <ul className={styles.heroFacts}>
             <li className={styles.glassChip}>
               <Icon name="star" size={15} className={styles.starIcon} />
-              {rating ?? 'New seller'}
+              {storeRating != null ? (
+                <span aria-label="Store rating">
+                  {storeRating.toFixed(1)}
+                  {reviewCount > 0 && <span className={styles.factMuted}> ({reviewCount})</span>}
+                </span>
+              ) : (
+                rating ?? 'New seller'
+              )}
             </li>
             <li className={styles.glassChip}>
               <Icon name="handshake" size={15} className={styles.dealIcon} />

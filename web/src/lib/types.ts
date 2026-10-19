@@ -47,6 +47,17 @@ export interface Store {
   owner: StoreOwner | null
   is_active: boolean
   listing_count: number
+  /**
+   * The STORE's own rating, 0-10 (backend stores/rating.py): its reviews,
+   * its reply time on its own products, and its tenure. Deliberately
+   * separate from `owner.rating`, which is the person's seller record.
+   * Absent from API versions before the store rating shipped.
+   */
+  rating?: number | null
+  /** How many reviews that rating counts. 0 means "no reviews yet". */
+  review_count?: number | null
+  /** Measured average reply time in minutes; null = not measured. */
+  response_minutes?: number | null
   created_at?: string | null
 }
 

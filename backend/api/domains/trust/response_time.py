@@ -108,8 +108,24 @@ def compute_response_times(rows: List[tuple], now: datetime) -> Dict[str, float]
     created_at), sorted by thread then time. Pure function — no DB — so the
     censoring and threading logic can be tested against fixtures without
     standing up a database.
+
+    The grouping key is whatever the first element is. `compute_response_times_by`
+    is the same walk for a different owner of the thread (a store), so the
+    store rating cannot drift from the seller rating's timing rules.
     """
-    per_seller: Dict[str, List[float]] = {}
+    return compute_response_times_by(rows, now)
+
+
+def compute_response_times_by(rows: List[tuple], now: datetime) -> Dict[str, float]:
+    """`compute_response_times`, grouping by the first tuple element.
+
+    Same algorithm, same censoring, same 48 h cap, same MIN_OBSERVATIONS
+    floor. Callers pass (seller_id, ...) for the seller record, or
+    (store_id, ...) for a store's own record - a shop's reply speed must be
+    measured from the threads about ITS products, not from everything its
+    owner happens to answer.
+    """
+    per_owner: Dict[str, List[float]] = {}
     # Thread state: the timestamp of the oldest inbound message still
     # waiting for a reply, or None if the seller is caught up.
     pending_since: Optional[datetime] = None
@@ -120,7 +136,7 @@ def compute_response_times(rows: List[tuple], now: datetime) -> Dict[str, float]
         """Charge the seller for anything still unanswered in this thread."""
         if pending_since is not None and current_seller is not None:
             waited = (now - pending_since).total_seconds() / 60.0
-            per_seller.setdefault(current_seller, []).append(
+            per_owner.setdefault(current_seller, []).append(
                 min(waited, MAX_OBSERVATION_MINUTES))
 
     for seller_id, listing_id, buyer_id, role, recipient_role, created_at in rows:
@@ -138,7 +154,7 @@ def compute_response_times(rows: List[tuple], now: datetime) -> Dict[str, float]
         elif role == "seller":
             if pending_since is not None:
                 gap = (created_at - pending_since).total_seconds() / 60.0
-                per_seller.setdefault(seller_id, []).append(
+                per_owner.setdefault(seller_id, []).append(
                     min(max(gap, 0.0), MAX_OBSERVATION_MINUTES))
                 pending_since = None
 
@@ -146,7 +162,7 @@ def compute_response_times(rows: List[tuple], now: datetime) -> Dict[str, float]
 
     return {
         sid: round(statistics.fmean(times), 1)
-        for sid, times in per_seller.items()
+        for sid, times in per_owner.items()
         if len(times) >= MIN_OBSERVATIONS
     }
 

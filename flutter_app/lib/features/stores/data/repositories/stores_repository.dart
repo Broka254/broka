@@ -8,6 +8,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/utils/result.dart';
 import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
+import '../../domain/models/store_insights.dart';
 import '../../domain/models/store_billing.dart';
 import '../../domain/models/store_product.dart';
 import '../../domain/models/store_reviews.dart';
@@ -181,6 +182,16 @@ class StoresRepository {
               (data['counts'] as Map?)?.cast<String, dynamic>() ?? const {}),
         );
       });
+
+  /// The store dashboard in one request: rating, rank, period KPIs, daily
+  /// series, sources, top products and advice (GET /stores/{id}/insights).
+  /// Owner only - the server refuses any other caller, so a failure here is
+  /// either offline or not the owner.
+  Future<Result<StoreInsights>> getInsights(String storeId, {int days = 7}) =>
+      _guard(() async => StoreInsights.fromJson(await _client.get(
+            '/stores/$storeId/insights',
+            queryParams: {'days': days.toString()},
+          ) as Map<String, dynamic>));
 
   /// The categories the store has products in, biggest first.
   Future<Result<List<StoreCategoryCount>>> getStoreCategories(String storeId) =>

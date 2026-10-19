@@ -237,6 +237,14 @@ class _StoreCardState extends State<StoreCard> {
                               const Icon(Icons.verified_rounded, size: 17,
                                   color: BrokaColors.success, semanticLabel: 'Verified seller'),
                             ],
+                            if (store.rating != null) ...[
+                              const SizedBox(width: 8),
+                              _RatingChip(
+                                key: Key('store-rating-${store.id}'),
+                                rating: store.rating!,
+                                reviews: store.reviewCount,
+                              ),
+                            ],
                           ]),
                           if (store.locationLine != null || distLabel != null) ...[
                             const SizedBox(height: 4),
@@ -326,6 +334,42 @@ class _StoreCardState extends State<StoreCard> {
       ),
     );
   }
+}
+
+/// The store's own rating, on the card beside its name.
+///
+/// Not the owner's seller rating: a shop is rated on its own reviews, its
+/// own reply time and how long it has traded (backend stores/rating.py).
+/// A shop with no reviews yet shows its neutral score with no count - the
+/// number is real, it just has no reviews behind it, and the card never
+/// claims otherwise.
+class _RatingChip extends StatelessWidget {
+  const _RatingChip({super.key, required this.rating, this.reviews = 0});
+  final double rating;
+  final int reviews;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: BrokaColors.gold.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.star_rounded, size: 13, color: BrokaColors.gold),
+          const SizedBox(width: 3),
+          Text(rating.toStringAsFixed(1),
+              style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
+                  fontWeight: FontWeight.w800, height: 1.2)),
+          if (reviews > 0) ...[
+            const SizedBox(width: 3),
+            Text('($reviews)',
+                style: TextStyle(color: BrokaColors.gold.withOpacity(0.75),
+                    fontSize: 10.5, fontWeight: FontWeight.w700, height: 1.2)),
+          ],
+        ]),
+      );
 }
 
 /// Distance on the picture: the buyer's first question about a shop,

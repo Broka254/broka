@@ -18,15 +18,25 @@ Only long-term sellers - sellers who gave BROKA a business name, category
 and location - can open a store. A short-term seller upgrades first
 (POST /auth/upgrade-to-seller with those details).
 
-Trust shown with a store is its owner's real, seller-level record
-(verified badge, rating, completed deals, member since). There is no
-separate store-level rating: nothing computes one, and inventing one
-would be a number with nothing behind it.
+Trust shown with a store now has two layers, and they are different
+records on purpose:
+
+  * the STORE's own rating (api/domains/stores/rating.py) - its reviews,
+    its reply time on threads about its own products, and its tenure;
+    this is what the directory orders by;
+  * the OWNER's seller record (verified badge, seller rating, deals done,
+    member since), still published on the storefront for buyers who want
+    to know who is behind the shop.
+
+Before 2026-10-19 there was only the second: one number for a person, used
+for every shop they might run. A store is a business identity with its own
+customers, so it now carries its own number.
 """
 from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+import logging
 import uuid
 from typing import Optional
 
@@ -52,6 +62,8 @@ from . import naming
 from .media import (
     normalize_photo_list, parse_photo_list, normalize_single_media, MediaTooLargeError,
 )
+
+logger = logging.getLogger(__name__)
 
 # Text fields a caller may set at creation and patch identically. One list
 # so create and update can't drift apart on which fields exist.
@@ -190,6 +202,17 @@ class StoreService:
                 await self.db.rollback()
                 continue
             await self.db.refresh(store)
+            # Give the new shop its stored rating straight away, so the
+            # directory can order it from its first second instead of
+            # sorting a NULL last until the nightly pass. A brand-new store
+            # lands on the neutral 6.5 (rating.py); failure here must not
+            # undo a successfully created store, so it is best-effort.
+            try:
+                from .rating import refresh_store_rating
+                await refresh_store_rating(self.db, store.id)
+                await self.db.refresh(store)
+            except Exception as exc:  # noqa: BLE001 - never lose the shop
+                logger.warning("[stores] initial rating failed for %s: %s", store.id, exc)
             return await self._store_dict(store, owner=owner, owner_view=True)
 
         if chosen_slug:
@@ -366,8 +389,24 @@ class StoreService:
         want_near = nearest_first and viewer_lat is not None and viewer_lng is not None
         fetch_limit, fetch_offset = (500, 0) if want_near else (limit, offset)
 
-        q = q.order_by(Store.created_at.desc()).limit(fetch_limit).offset(fetch_offset)
+        q = q.order_by(
+            # Highest-rated shops first - the position the store rating
+            # exists to earn. created_at and then id break ties: without a
+            # deterministic order, stores created in the same second can
+            # swap places between two OFFSET pages, so a shop appears twice
+            # (or not at all) while paging. id is unique, so the last key
+            # always decides.
+            Store.rating.desc().nulls_last(),
+            Store.created_at.desc(),
+            Store.id.asc(),
+        ).limit(fetch_limit).offset(fetch_offset)
         stores = (await self.db.execute(q)).scalars().all()
+
+        # One row per shop, even if a future join ever fans one out: the
+        # directory is a list of shops, and a duplicate here reads as a
+        # second branch of the same business.
+        seen_ids: set[str] = set()
+        stores = [s for s in stores if not (s.id in seen_ids or seen_ids.add(s.id))]
 
         # One grouped count, one owners query, one assets query, one
         # subscriptions query and one category-links query for the whole
@@ -386,6 +425,16 @@ class StoreService:
             )
             for s in stores
         ]
+        # Belt and braces on the payload side too: the client draws whatever
+        # it is given, so one shop in two rows is one shop drawn twice.
+        unique_items: list[dict] = []
+        seen_payload: set[str] = set()
+        for item in items:
+            if item.get("id") in seen_payload:
+                continue
+            seen_payload.add(item.get("id"))
+            unique_items.append(item)
+        items = unique_items
         if viewer_lat is not None and viewer_lng is not None and max_distance_km is not None:
             items = [d for d in items
                      if d.get("distance_km") is not None and d["distance_km"] <= max_distance_km]
@@ -795,25 +844,31 @@ class StoreService:
         ]
 
     async def store_reviews(self, store_id: str, limit: int = 20, offset: int = 0) -> dict:
-        """A store's buyer reviews plus its owner's published standing.
+        """A store's buyer reviews plus the owner's published standing.
 
-        A store has no reviews of its own: trust shown with a store is the
-        owner's real, seller-level record (this module's note), so these
-        are the owner's reviews. The owner is resolved from the store here,
-        and the payload carries reviewer names, never ids - a store page is
-        public and indexed. Reviews are the owner's public record already
-        (reviews/router.py), so a paused or unpaid store still reports
-        them; the store's own visibility governs the shop, not the person.
+        Store-scoped since 2026-10-19: these are the reviews of deals whose
+        product was sold THROUGH this store, which is what its rating is
+        built from. A seller with two shops would otherwise have one shop's
+        reviews shown - and counted - on the other.
+
+        Chat-only reviews have no listing to name and stay on the seller;
+        they appear on the seller's profile, not on any shop. A paused or
+        unpaid store still reports its reviews: the shop's visibility
+        governs the shop, not what buyers already said about it.
         """
         from api.domains.reviews.service import ReviewService
         from api.domains.trust.public_standing import public_seller_standing
 
         store = await self._get_or_404(store_id)
+        from .review_scope import sole_store_ids
+        sole = bool(await sole_store_ids(self.db, [store.id]))
         reviews_service = ReviewService(self.db)
-        rows = await reviews_service.get_seller_reviews(
-            store.owner_id, limit=limit, offset=offset)
+        rows = await reviews_service.get_store_reviews(
+            store.id, limit=limit, offset=offset,
+            owner_id=store.owner_id, include_seller_chat=sole)
         return {
-            "summary": await reviews_service.get_summary(store.owner_id),
+            "summary": await reviews_service.get_store_summary(
+                store.id, owner_id=store.owner_id, include_seller_chat=sole),
             # Only what a review card shows: no reviewer, seller or deal id.
             "reviews": [
                 {
@@ -825,6 +880,8 @@ class StoreService:
                 }
                 for row in rows
             ],
+            # The owner as a seller, unchanged - the person's record is
+            # still worth knowing, it is just no longer the shop's number.
             "seller_standing": await public_seller_standing(self.db, store.owner_id),
         }
 
@@ -1313,6 +1370,11 @@ class StoreService:
         if distance_label is not None and distance_approximate:
             distance_label = f"≈ {distance_label}"
 
+        # The store's own rating (stores/rating.py). Stored values, so a
+        # directory page costs one row read per shop, not an aggregate.
+        from .rating import rating_payload
+        rating_block = await rating_payload(self.db, store, owner_view=owner_view)
+
         return {
             "id": store.id,
             "name": store.name,
@@ -1351,6 +1413,15 @@ class StoreService:
             ),
             "business_email_verified": bool(store.business_email_verified),
             "owner": self._owner_facts(owner),
+            "rating": rating_block["rating"],
+            "review_count": rating_block["review_count"],
+            "response_minutes": rating_block["response_minutes"],
+            "rating_as_of": rating_block["as_of"],
+            # Owner only: the working behind the number, and one line
+            # saying what moves it. Never shown to a buyer.
+            **({"rating_breakdown": rating_block["breakdown"],
+                "rating_explanation": rating_block["explanation"]}
+               if owner_view and "breakdown" in rating_block else {}),
             "is_active": active,
             # Owner's view only, and only while billing is on: the app
             # routes a fresh store to the billing screen on this being

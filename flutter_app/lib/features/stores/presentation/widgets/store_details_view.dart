@@ -209,6 +209,11 @@ class StoreDetailsView extends StatelessWidget {
     return Column(key: const Key('store-details'),
         crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _Summary(store: store),
+      if (store.rating != null) ...[
+        const SizedBox(height: 22),
+        _label('Store rating'),
+        _StoreRatingCard(store: store),
+      ],
       const SizedBox(height: 22),
       _label('The seller'),
       _OwnerCard(store: store),
@@ -512,6 +517,75 @@ class _InfoRow extends StatelessWidget {
                 ]),
         ),
         if (trailing != null) trailing!,
+      ]),
+    );
+  }
+}
+
+/// The shop's own rating, shown above the seller's record.
+///
+/// Two different numbers, deliberately: the store is rated on its own
+/// reviews, its own reply time and how long it has traded (backend
+/// stores/rating.py); the seller card below is about the person. A buyer
+/// deciding whether to buy from this shop cares about the shop first.
+class _StoreRatingCard extends StatelessWidget {
+  const _StoreRatingCard({required this.store});
+  final Store store;
+
+  @override
+  Widget build(BuildContext context) {
+    final reviews = store.reviewCount;
+    final minutes = store.responseMinutes;
+    final reply = minutes == null
+        ? null
+        : minutes < 1
+            ? 'Usually replies straight away'
+            : minutes < 60
+                ? 'Usually replies in about ${minutes.round()} min'
+                : minutes < 1440
+                    ? 'Usually replies in about ${(minutes / 60).toStringAsFixed(1)} h'
+                    : 'Usually replies in about ${(minutes / 1440).toStringAsFixed(1)} days';
+
+    return _card(
+      key: const Key('store-rating'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(store.rating!.toStringAsFixed(1), style: const TextStyle(
+              color: BrokaColors.textHigh, fontSize: 32,
+              fontWeight: FontWeight.w900, height: 1.0)),
+          const SizedBox(width: 4),
+          const Padding(
+            padding: EdgeInsets.only(bottom: 4),
+            child: Text('out of 10', style: TextStyle(
+                color: BrokaColors.textMid, fontSize: 11.5)),
+          ),
+          const Spacer(),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            _ReviewsSection._stars(store.rating!.round(), 13),
+            const SizedBox(height: 3),
+            Text(
+                reviews == 0
+                    ? 'No reviews yet'
+                    : reviews == 1 ? '1 review' : '$reviews reviews',
+                key: const Key('store-rating-count'),
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11)),
+          ]),
+        ]),
+        if (reply != null) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            const Icon(Icons.schedule_rounded, size: 15, color: BrokaColors.neonCyan),
+            const SizedBox(width: 6),
+            Expanded(child: Text(reply,
+                key: const Key('store-rating-reply'),
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
+          ]),
+        ],
+        const SizedBox(height: 8),
+        const Text(
+            'Built from this shop\'s reviews, how fast it answers, and how long it has '
+            'traded on BROKA.',
+            style: TextStyle(color: BrokaColors.textLow, fontSize: 11, height: 1.4)),
       ]),
     );
   }

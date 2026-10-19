@@ -518,3 +518,27 @@ async def get_store_stats(
     """Visits and shares for the owner. Owner only."""
     await StoreService(db).get_owned(store_id, current_user["id"])
     return await store_stats.stats_for(db, store_id, days)
+
+
+@router.get("/{store_id}/insights")
+async def get_store_insights(
+    store_id: str,
+    days: int = Query(7, ge=1, le=store_stats.MAX_STATS_DAYS),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The store dashboard in one response. Owner only.
+
+    Ratings, rank, period-over-period KPIs, daily series, traffic sources,
+    top products and number-backed advice - everything My Store's Overview
+    draws, so the screen makes one request per refresh instead of a dozen
+    on a phone connection.
+
+    Competitive information stays with the owner for the same reason the
+    seller dashboard's does: product views and saves tell a rival exactly
+    which lines are moving, and rank says how far they have to climb.
+    """
+    from . import insights as store_insights
+
+    store = await StoreService(db).get_owned(store_id, current_user["id"])
+    return await store_insights.insights_for(db, store, days=days)
