@@ -12,7 +12,6 @@ import 'package:broka/models/listing_photo.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/widgets/broka_image.dart';
 import 'package:broka/widgets/product_card.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -98,7 +97,7 @@ void main() {
 
     testWidgets('the same file by its relative and absolute spelling is asked once', (tester) async {
       final n = serve(const []);
-      final absolute = '${ApiService.baseUrl}/media/i/img/p1/thumb.webp';
+      const absolute = '${ApiService.baseUrl}/media/i/img/p1/thumb.webp';
       await _show(tester, _image('/media/i/img/p1/thumb.webp', fallbacks: [absolute]));
 
       expect(n.requested, [absolute]);
@@ -237,19 +236,25 @@ void main() {
       final lines = <String>[];
       final original = debugPrint;
       debugPrint = (String? message, {int? wrapWidth}) => lines.add(message ?? '');
-      addTearDown(() => debugPrint = original);
-      serve({_medium});
-      const signed = 'https://media.test/img/p1/thumb.webp?X-Amz-Signature=sekrit&token=t0k3n';
+      try {
+        serve({_medium});
+        const signed = 'https://media.test/img/p1/thumb.webp?X-Amz-Signature=sekrit&token=t0k3n';
 
-      await _show(tester, _image(signed, fallbacks: [_medium]));
-      await _show(tester, _image(signed, fallbacks: [_medium])); // a rebuild: no second line
+        await _show(tester, _image(signed, fallbacks: [_medium]));
+        await _show(tester, _image(signed, fallbacks: [_medium])); // a rebuild: no second line
 
-      expect(lines, hasLength(1));
-      expect(lines.single, contains('media.test/img/p1/thumb.webp'));
-      expect(lines.single, contains('FakeHttpStatusException'));
-      expect(lines.single, contains('404'));
-      for (final secret in ['sekrit', 't0k3n', 'X-Amz', '?']) {
-        expect(lines.single, isNot(contains(secret)), reason: secret);
+        expect(lines, hasLength(1));
+        expect(lines.single, contains('media.test/img/p1/thumb.webp'));
+        expect(lines.single, contains('FakeHttpStatusException'));
+        expect(lines.single, contains('404'));
+        for (final secret in ['sekrit', 't0k3n', 'X-Amz', '?']) {
+          expect(lines.single, isNot(contains(secret)), reason: secret);
+        }
+      } finally {
+        // Flutter's test binding asserts that foundation debug variables are
+        // back at their defaults *before* tearDowns run, so debugPrint has to
+        // be restored here, inside the body, not in a tearDown.
+        debugPrint = original;
       }
     });
 
