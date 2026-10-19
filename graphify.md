@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-233 endpoints served by `backend/main.py`. **Auth** is read from each
+234 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 4, public 61, token 4, user 144.
+Counts: admin 20, optional 4, public 61, token 4, user 145.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -266,6 +266,7 @@ Counts: admin 20, optional 4, public 61, token 4, user 144.
 | POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:360) |
 | GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:384) |
 | GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:435) |
+| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:524) |
 | GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:394) |
 | GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:418) |
 | GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:441) |
@@ -420,8 +421,11 @@ Counts: admin 20, optional 4, public 61, token 4, user 144.
 - `area_points.py` — Approximate points for a store's declared county / subcounty.
 - `billing.py` — Running a store: its plan, the M-Pesa prompt that pays for it, and what a payment buys.
 - `categories.py` — A store's category: one of BROKA's top-level categories.
+- `insights.py` — What a store owner actually needs to know — the store dashboard's data.
 - `media.py` — Store Media — small abstraction over Store.logo_url / Store.photos.
 - `naming.py` — Store link names: the `clanix` in https://broka.co.ke/store/clanix.
+- `rating.py` — Store rating — a shop's own number, 0-10.
+- `review_scope.py` — Which reviews belong to a store.
 - `router.py` — Stores router.
 - `service.py` — Stores service.
 - `stats.py` — Store visit and share counting, and the owner's stats.
@@ -564,7 +568,7 @@ Counts: admin 20, optional 4, public 61, token 4, user 144.
 | Table | Model | Defined at |
 |---|---|---|
 | `auction_meta` | `AuctionMeta` | backend/api/database.py:561 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1137 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1144 |
 | `bids` | `Bid` | backend/api/database.py:550 |
 | `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:690 |
 | `categories` | `Category` | backend/api/database.py:290 |
@@ -578,8 +582,8 @@ Counts: admin 20, optional 4, public 61, token 4, user 144.
 | `email_otps` | `EmailOtp` | backend/api/database.py:267 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:74 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1098 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1156 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1105 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1163 |
 | `interests` | `Interest` | backend/api/database.py:438 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `listing_likes` | `ListingLike` | backend/api/database.py:660 |
@@ -599,17 +603,18 @@ Counts: admin 20, optional 4, public 61, token 4, user 144.
 | `seller_metrics` | `SellerMetrics` | backend/api/database.py:881 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_billing_meta` | `StoreBillingMeta` | backend/api/models/store_billing.py:88 |
-| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:150 |
-| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:169 |
+| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:166 |
+| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:185 |
 | `store_payments` | `StorePayment` | backend/api/models/store_billing.py:62 |
+| `store_rating_snapshots` | `StoreRatingSnapshot` | backend/api/models/store.py:219 |
 | `store_subscriptions` | `StoreSubscription` | backend/api/models/store_billing.py:39 |
-| `stores` | `Store` | backend/api/models/store.py:64 |
+| `stores` | `Store` | backend/api/models/store.py:65 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:515 |
 | `user_specializations` | `UserSpecialization` | backend/api/database.py:675 |
 | `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1117 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1124 |
 | `wishlists` | `Wishlist` | backend/api/database.py:648 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
@@ -637,7 +642,7 @@ of a change.
 - **payments** — domains: premium, pricing, stores; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **premium** — domains: buy_agent, payments, pricing; core: audit, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
 - **pricing** — domains: listings, payments, trust; core: audit, config, events, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
-- **reviews** — core: audit, config, events; database, security
+- **reviews** — domains: stores; core: audit, config, events; database, security
 - **showcase** — domains: media, premium; core: hf_image_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media, payments, pricing, reviews, trust; core: audit, client_ip, config, geo, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
 - **traders** — domains: listings, media, trust; core: geo, text_search; database, security
@@ -652,29 +657,30 @@ of a change.
 `task_*` functions in `backend/api/core/workers.py`: the in-process sweep
 (every 5 minutes) and ARQ workers.
 
-- `task_ai_summary` (backend/api/core/workers.py:1793)
-- `task_backfill_media` (backend/api/core/workers.py:290) — Convert a bounded batch of base64 images into image assets.
-- `task_check_call_expiry` (backend/api/core/workers.py:478) — Backstop cleanup for stale call sessions (api/core/call_state.py).
-- `task_check_deal_timers` (backend/api/core/workers.py:493) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
-- `task_check_dispute_timers` (backend/api/core/workers.py:1437) — Sweep for DisputeTimer objects whose fires_at has passed.
-- `task_check_interest_nudges` (backend/api/core/workers.py:1010) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
-- `task_close_due_auctions` (backend/api/core/workers.py:1871) — Close auctions whose ends_at has passed, and hand winners to Deal.
-- `task_collect_abandoned_media` (backend/api/core/workers.py:299) — Remove uploads no listing, store or profile ever used, a week after they were made.
-- `task_expire_buy_agent_watches` (backend/api/core/workers.py:307) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
-- `task_expire_featured_listings` (backend/api/core/workers.py:457)
-- `task_fraud_sweep` (backend/api/core/workers.py:1809)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2046) — Release listings whose winner never paid.
-- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:1964) — One reminder per auction, to everyone who has bid on it.
-- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1217) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
-- `task_recompute_trust_score` (backend/api/core/workers.py:427)
-- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:232) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
-- `task_reconcile_mpesa` (backend/api/core/workers.py:1832)
-- `task_reconcile_zetupay_payments` (backend/api/core/workers.py:275) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
-- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1424) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
-- `task_retrain_ml_models` (backend/api/core/workers.py:1177) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
-- `task_send_email_notification` (backend/api/core/workers.py:1788)
-- `task_send_fcm_notification` (backend/api/core/workers.py:439)
-- `task_sync_listing_stock` (backend/api/core/workers.py:219) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
+- `task_ai_summary` (backend/api/core/workers.py:1833)
+- `task_backfill_media` (backend/api/core/workers.py:294) — Convert a bounded batch of base64 images into image assets.
+- `task_check_call_expiry` (backend/api/core/workers.py:482) — Backstop cleanup for stale call sessions (api/core/call_state.py).
+- `task_check_deal_timers` (backend/api/core/workers.py:497) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
+- `task_check_dispute_timers` (backend/api/core/workers.py:1477) — Sweep for DisputeTimer objects whose fires_at has passed.
+- `task_check_interest_nudges` (backend/api/core/workers.py:1014) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
+- `task_close_due_auctions` (backend/api/core/workers.py:1911) — Close auctions whose ends_at has passed, and hand winners to Deal.
+- `task_collect_abandoned_media` (backend/api/core/workers.py:303) — Remove uploads no listing, store or profile ever used, a week after they were made.
+- `task_expire_buy_agent_watches` (backend/api/core/workers.py:311) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
+- `task_expire_featured_listings` (backend/api/core/workers.py:461)
+- `task_fraud_sweep` (backend/api/core/workers.py:1849)
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2086) — Release listings whose winner never paid.
+- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2004) — One reminder per auction, to everyone who has bid on it.
+- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1257) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
+- `task_recompute_trust_score` (backend/api/core/workers.py:431)
+- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:236) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
+- `task_reconcile_mpesa` (backend/api/core/workers.py:1872)
+- `task_reconcile_zetupay_payments` (backend/api/core/workers.py:279) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
+- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1464) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+- `task_refresh_store_ratings` (backend/api/core/workers.py:1223) — Recompute every store's rating, and write today's snapshot.
+- `task_retrain_ml_models` (backend/api/core/workers.py:1181) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
+- `task_send_email_notification` (backend/api/core/workers.py:1828)
+- `task_send_fcm_notification` (backend/api/core/workers.py:443)
+- `task_sync_listing_stock` (backend/api/core/workers.py:223) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
 
 ## Configuration (environment variables)
 
@@ -685,7 +691,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-112 files in `backend/tests/`.
+113 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -782,6 +788,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_sms.py` — BROKA - SMS Provider Tests (v6.2) Run: pytest backend/tests/test_sms.py -v
 - `test_sold_out_reports.py` — Sold out with payments outside BROKA: agreed deals no longer take a listing off sale (listings/stock.py), buyers report an item gone and it…
 - `test_store_billing.py` — Online store plans (PRICING.md §5; api/domains/stores/billing.py).
+- `test_store_rating.py` — Store rating, directory order, and the store insights endpoint.
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
 - `test_stores.py` — BROKA - Store Feature Tests Run: pytest backend/tests/test_stores.py -v
 - `test_stores_hardening.py` — Regression tests for the Store implementation audit (2026-09-14).
@@ -964,9 +971,11 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/kenya_locations.dart` — Kenya's 47 counties and their subcounties, for location pickers.
 - `domain/models/store.dart` — BROKA — Store domain model
 - `domain/models/store_billing.dart` — BROKA — Store billing domain model
+- `domain/models/store_insights.dart` — BROKA — the store dashboard's data
 - `domain/models/store_product.dart` — A product in the owner's own store, as My Store manages it (GET /stores/{id}/manage/listings): the listing, whether buyers can see it, and…
 - `domain/models/store_reviews.dart` — A store's buyer reviews, as GET /stores/{id}/reviews returns them (backend/api/domains/stores/service.py: store_reviews).
 - `domain/store_categories.dart` — A store's category is one of BROKA's top-level categories (the home screen's category rail).
+- `domain/store_locator.dart` — BROKA — a live location fix, as the store screens ask for one.
 - `presentation/my_store_screen.dart` — My Store - the owner's dashboard.
 - `presentation/nearby_stores_screen.dart` — BROKA — Stores near you
 - `presentation/setup/store_setup_controller.dart` — State behind the store setup wizard and the store's settings pages.
@@ -987,6 +996,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/widgets/store_card.dart` — A store in the directory, as a shop window: the picture its owner chose to show (the cover, else a shop photo, else the logo), whether the…
 - `presentation/widgets/store_details_view.dart` — "Store details" - its own screen, opened from "More details" under the store's name or the info button in its bar.
 - `presentation/widgets/store_location_filter.dart` — County / subcounty filter for store browsing: two pickers over KenyaLocations, shared by Near you and the store directory so a place means…
+- `presentation/widgets/store_performance.dart` — BROKA — My Store's performance section
 - `presentation/widgets/store_product_card.dart` — A product in a store's catalogue, as a shop shows it: the photo with its condition, the name, the price, and Add to cart - which turns into…
 - `presentation/widgets/store_share_card.dart` — The store's link, its QR code and one-tap sharing - on the "your store is live" screen and at the top of My Store.
 
@@ -1196,6 +1206,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `start_selling_test.dart` — A buyer who starts selling later is asked what signup asks (2026-09-26): a few items - nothing more to fill in - or a business, which goes…
 - `store_billing_test.dart` — Store billing in the app (PRICING.md §5; backend stores/billing.py): the plan a store's own stock prices at, paying it through the shared c…
 - `store_card_test.dart` — StoreCard: distance is prominent when known, the Map action shows only when wired, and the shop's approximate point parses for the map.
+- `store_directory_duplicates_test.dart` — The store directory must show each shop once.
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
@@ -1297,7 +1308,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Store search finds products, unpaid stores go dark, and a store can be deleted (2026-10-18)
+- `CHANGES.md` — A store has its own rating, the directory lists each shop once, and My Store becomes a real dashboard (2026-10-19)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
@@ -1317,6 +1328,7 @@ Modules:
 - `SECURITY.md` — Security Policy
 - `SELLER_METRICS.md` — Seller metrics — phased build
 - `STORES_PLAN.md` — Online Stores — build plan (2026-09-23)
+- `STORES_RATING_PLAN.md` — Stores: duplicate fix, store rating, and a real store dashboard
 - `STORES_REVIEW.md` — BROKA — Online Stores Review
 - `STORES_UI_REVIEW.md` — BROKA — Online Stores UI Review
 - `TERMS.md` — Terms of Use and Service
