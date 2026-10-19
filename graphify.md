@@ -194,9 +194,9 @@ Counts: admin 20, optional 4, public 61, token 4, user 144.
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1134) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1146) |
 | GET | `/live` | public | `live` (backend/main.py:550) |
-| GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:73) |
-| POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:40) |
-| GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:88) |
+| GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
+| POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
+| GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
 | POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:284) |
 | WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:90) |
 | POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:275) |
@@ -685,7 +685,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-111 files in `backend/tests/`.
+112 files in `backend/tests/`.
 
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
@@ -745,6 +745,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_media_assets.py` — Image assets: processing, storage, upload, and what listings and stores do with them (Online Stores phase 1).
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
 - `test_media_hardening.py` — Image processing and the media backfill under hostile or broken input.
+- `test_media_recovery.py` — Image sizes whose object is missing, and asset records that are damaged.
 - `test_message_push_ordering.py` — Message-push ordering: a slow first send must not land after the fresh one.
 - `test_message_visibility_guard.py` — Structural guard: no NegotiationMessage read may leak across the audience line.
 - `test_native_parity.py` — The Rust extension and the Python reference agree, and the loader only hands out an extension it can trust.
@@ -1143,6 +1144,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `answer_from_notification_test.dart` — Answering a call from its notification (2026-10-08).
 - `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
 - `auth_gate_test.dart` — The "Create a free account" sheet (2026-10-14).
+- `broka_image_fallback_test.dart` — A photo's small file going missing no longer blanks the photo (2026-10-19).
 - `broka_tts_parts_test.dart`
 - `buy_agent_ui_test.dart` — The Buying Agent's screen after the motion pass (2026-09-26): what it shows while it works, and the weak spots that pass found in the scree…
 - `call_answer_ring_and_video_test.dart` — Answering a call, its ring, and turning a voice call into video (2026-10-09).
