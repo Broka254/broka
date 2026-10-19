@@ -17,7 +17,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 http.Response _json(Object? body, [int status = 200]) =>
-    http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
+    http.Response(jsonEncode(body), status,
+        headers: {'content-type': 'application/json'});
 
 Map<String, dynamic> _store(String id, String name, {double? distanceKm}) => {
       'id': id,
@@ -28,7 +29,8 @@ Map<String, dynamic> _store(String id, String name, {double? distanceKm}) => {
       'county': 'Nairobi',
       'listing_count': 2,
       if (distanceKm != null) 'distance_km': distanceKm,
-      if (distanceKm != null) 'distance_label': '${distanceKm.toStringAsFixed(0)} km from you',
+      if (distanceKm != null)
+        'distance_label': '${distanceKm.toStringAsFixed(0)} km from you',
       'rating': 8.0,
       'review_count': 3,
     };
@@ -38,7 +40,8 @@ Map<String, dynamic> _store(String id, String name, {double? distanceKm}) => {
 ApiClient _client({List<http.Request>? requests}) => ApiClient(
       client: MockClient((req) async {
         requests?.add(req);
-        if (req.url.path != '/stores') return _json({'detail': 'no route'}, 404);
+        if (req.url.path != '/stores')
+          return _json({'detail': 'no route'}, 404);
         final q = req.url.queryParameters;
         final nearby = q.containsKey('max_distance_km');
         final shops = [
@@ -46,7 +49,8 @@ ApiClient _client({List<http.Request>? requests}) => ApiClient(
           _store('near-2', 'Second Near Shop', distanceKm: 5),
           _store('far-1', 'Far Shop', distanceKm: nearby ? null : 60),
         ];
-        if (nearby) return _json(shops.where((s) => s['distance_km'] != null).toList());
+        if (nearby)
+          return _json(shops.where((s) => s['distance_km'] != null).toList());
         return _json(shops);
       }),
     );
@@ -84,7 +88,8 @@ void main() {
         reason: 'a shop was drawn twice: $names');
   });
 
-  testWidgets('a search hides the nearby rail so the results are not contradicted',
+  testWidgets(
+      'a search hides the nearby rail so the results are not contradicted',
       (tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 3;
@@ -102,19 +107,20 @@ void main() {
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
 
     // With no filter, the rail is allowed to exist.
-    final railBefore = find.text('Stores near you').evaluate().length;
+    final railBefore = find.text('Nearby stores').evaluate().length;
 
     await tester.enterText(find.byType(TextField).first, 'far');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
 
     // While filtering, no unfiltered shelf sits above the results.
-    expect(find.text('Stores near you'), findsNothing);
+    expect(find.text('Nearby stores'), findsNothing);
     expect(railBefore, greaterThanOrEqualTo(1),
         reason: 'the rail should have been visible before typing');
   });
 
-  testWidgets('the category screen does not repeat a nearby shop either', (tester) async {
+  testWidgets('the category screen does not repeat a nearby shop either',
+      (tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);

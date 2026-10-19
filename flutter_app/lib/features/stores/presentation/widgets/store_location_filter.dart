@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../../../main.dart' show BrokaColors;
 import '../../../../widgets/list_picker.dart';
 import '../../domain/kenya_locations.dart';
+import '../../domain/models/store.dart';
 
 class StoreLocationFilter extends StatelessWidget {
   const StoreLocationFilter({
@@ -14,6 +15,9 @@ class StoreLocationFilter extends StatelessWidget {
     required this.county,
     required this.subcounty,
     required this.onChanged,
+    this.maxDistanceKm,
+    this.onDistanceChanged,
+    this.onClear,
   });
 
   final String? county;
@@ -21,6 +25,19 @@ class StoreLocationFilter extends StatelessWidget {
 
   /// (county, subcounty) after a pick or a clear.
   final void Function(String? county, String? subcounty) onChanged;
+
+  /// The radius filter, when the caller has a live location. Null with
+  /// [onDistanceChanged] means any distance.
+  final double? maxDistanceKm;
+
+  /// Null hides the distance control: without a fix, "within 25 km" has no
+  /// centre and offering it would be a button that cannot do what it says.
+  final ValueChanged<double?>? onDistanceChanged;
+
+  /// Clears county, area and distance in one state change. Without it the
+  /// two callbacks above still clear each half, which is what the older
+  /// nearby screen uses.
+  final VoidCallback? onClear;
 
   Future<void> _pickCounty(BuildContext context) async {
     final picked = await pickFromList(
@@ -43,9 +60,26 @@ class StoreLocationFilter extends StatelessWidget {
     if (picked != null) onChanged(county, picked);
   }
 
+  Future<void> _pickDistance(BuildContext context) async {
+    final options = ['Any distance', 'Within ${Store.nearRadiusKm.round()} km'];
+    final selected = maxDistanceKm == null
+        ? options.first
+        : 'Within ${Store.nearRadiusKm.round()} km';
+    final picked = await pickFromList(
+      context,
+      title: 'Filter by distance',
+      options: options,
+      selected: selected,
+    );
+    if (picked == null) return;
+    onDistanceChanged
+        ?.call(picked == options.first ? null : Store.nearRadiusKm);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final active = county != null;
+    final showDistance = onDistanceChanged != null;
+    final active = county != null || maxDistanceKm != null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
       child: Row(children: [
@@ -69,13 +103,32 @@ class StoreLocationFilter extends StatelessWidget {
             onTap: () => _pickSubcounty(context),
           ),
         ),
+        if (showDistance) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: _FilterChip(
+              key: const Key('store-filter-distance'),
+              icon: Icons.radar_rounded,
+              label: maxDistanceKm == null
+                  ? 'Distance'
+                  : 'Within ${maxDistanceKm!.round()} km',
+              active: maxDistanceKm != null,
+              onTap: () => _pickDistance(context),
+            ),
+          ),
+        ],
         if (active) ...[
           const SizedBox(width: 4),
           IconButton(
             key: const Key('store-filter-clear'),
-            tooltip: 'Clear place filter',
-            onPressed: () => onChanged(null, null),
-            icon: const Icon(Icons.close_rounded, size: 18, color: BrokaColors.textMid),
+            tooltip: 'Clear location filters',
+            onPressed: onClear ??
+                () {
+                  onChanged(null, null);
+                  onDistanceChanged?.call(null);
+                },
+            icon: const Icon(Icons.close_rounded,
+                size: 18, color: BrokaColors.textMid),
           ),
         ],
       ]),
@@ -114,7 +167,9 @@ class _FilterChip extends StatelessWidget {
                   : BrokaColors.bgCard.withOpacity(0.6),
               borderRadius: BorderRadius.circular(19),
               border: Border.all(
-                color: active ? BrokaColors.gold : BrokaColors.border.withOpacity(0.8),
+                color: active
+                    ? BrokaColors.gold
+                    : BrokaColors.border.withOpacity(0.8),
               ),
             ),
             child: Row(children: [
@@ -129,9 +184,12 @@ class _FilterChip extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                        color: enabled ? BrokaColors.textHigh : BrokaColors.textLow,
+                        color: enabled
+                            ? BrokaColors.textHigh
+                            : BrokaColors.textLow,
                         fontSize: 12.5,
-                        fontWeight: active ? FontWeight.w800 : FontWeight.w600)),
+                        fontWeight:
+                            active ? FontWeight.w800 : FontWeight.w600)),
               ),
               Icon(Icons.arrow_drop_down_rounded,
                   size: 18,

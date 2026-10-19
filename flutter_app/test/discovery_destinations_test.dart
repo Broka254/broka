@@ -177,7 +177,8 @@ void main() {
             p.startsWith('/stores')) {
           return <Object?>[];
         }
-        if (p.startsWith('/listings')) return {'items': <Object?>[], 'total': 0};
+        if (p.startsWith('/listings'))
+          return {'items': <Object?>[], 'total': 0};
         return null;
       });
 
@@ -337,7 +338,8 @@ void main() {
       expect(find.text('Trader 0'), findsOneWidget);
       expect(find.text('Search traders by name'), findsOneWidget);
 
-      await tester.enterText(find.byKey(const Key('trader-search-field')), 'nobody');
+      await tester.enterText(
+          find.byKey(const Key('trader-search-field')), 'nobody');
       await tester.testTextInput.receiveAction(TextInputAction.search);
       await _settle(tester);
 
@@ -353,10 +355,12 @@ void main() {
         if (!uri.path.startsWith('/traders')) return null;
         final q = uri.queryParameters['search'];
         if (q == 'gr') {
-          return FakeResponse([fakeTraderJson(1)..['business_name'] = 'Slow Greta'],
+          return FakeResponse(
+              [fakeTraderJson(1)..['business_name'] = 'Slow Greta'],
               delay: const Duration(seconds: 2));
         }
-        if (q == 'grace') return [fakeTraderJson(2)..['business_name'] = 'Grace Stores'];
+        if (q == 'grace')
+          return [fakeTraderJson(2)..['business_name'] = 'Grace Stores'];
         return null;
       });
       await tester.pumpWidget(host(const TraderListScreen()));
@@ -401,17 +405,27 @@ void main() {
       expect(find.text('No stores match "nothing"'), findsOneWidget);
     });
 
-    testWidgets("a store's card: its chosen picture, whether the owner is on, Visit store",
+    testWidgets(
+        "a store's card: its chosen picture, whether the owner is on, Visit store",
         (tester) async {
       const cover = '/media/c1/medium.webp';
       const logo = '/media/l1/thumb.webp';
       setFakeRoute((uri) {
         if (uri.path == '/stores/store-0/reviews') {
           return {
-            'summary': {'avg': 4.0, 'count': 1, 'distribution': {'4': 1}},
+            'summary': {
+              'avg': 4.0,
+              'count': 1,
+              'distribution': {'4': 1}
+            },
             'reviews': [
-              {'id': 'r1', 'rating': 4, 'comment': 'Fair seller.',
-                  'created_at': '2026-10-01T00:00:00', 'reviewer_name': 'Kevin M.'},
+              {
+                'id': 'r1',
+                'rating': 4,
+                'comment': 'Fair seller.',
+                'created_at': '2026-10-01T00:00:00',
+                'reviewer_name': 'Kevin M.'
+              },
             ],
             'seller_standing': null,
           };
@@ -420,15 +434,29 @@ void main() {
         return [
           {
             ...fakeStoreJson(0),
-            'cover': {'id': 'c1', 'thumb': cover, 'medium': cover, 'large': cover},
+            'cover': {
+              'id': 'c1',
+              'thumb': cover,
+              'medium': cover,
+              'large': cover
+            },
             'logo': {'id': 'l1', 'thumb': logo, 'medium': logo, 'large': logo},
-            'owner': {'verified': true, 'rating': 4.7, 'completed_deals': 9,
-                'online': true, 'last_active': 'Active now'},
+            'owner': {
+              'verified': true,
+              'rating': 4.7,
+              'completed_deals': 9,
+              'online': true,
+              'last_active': 'Active now'
+            },
           },
           {
             ...fakeStoreJson(1),
-            'owner': {'verified': false, 'completed_deals': 0, 'online': false,
-                'last_active': 'Active 2d ago'},
+            'owner': {
+              'verified': false,
+              'completed_deals': 0,
+              'online': false,
+              'last_active': 'Active 2d ago'
+            },
           },
         ];
       });
@@ -437,36 +465,59 @@ void main() {
 
       final first = find.byKey(const Key('store-card-store-0'));
       // The owner's cover picture, not a circle with the store's initial.
-      expect(find.descendant(of: first,
-          matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == cover)),
+      expect(
+          find.descendant(
+              of: first,
+              matching: find.byWidgetPredicate(
+                  (w) => w is BrokaImage && w.source == cover)),
           findsOneWidget);
-      expect(find.descendant(of: first, matching: find.text('S')), findsNothing);
-      expect(find.descendant(of: first, matching: find.text('Online now')), findsOneWidget);
+      expect(
+          find.descendant(of: first, matching: find.text('S')), findsNothing);
+      expect(find.descendant(of: first, matching: find.text('Online now')),
+          findsOneWidget);
       // The seller's record (rating, deals done) is not on the directory
       // card any more: it lives in Store details.
-      expect(find.descendant(of: first, matching: find.text('4.7')), findsNothing);
-      expect(find.descendant(of: first, matching: find.text('9 products')), findsOneWidget);
-      expect(find.descendant(of: first, matching: find.text('Visit store')), findsOneWidget);
+      expect(
+          find.descendant(of: first, matching: find.text('4.7')), findsNothing);
+      expect(find.descendant(of: first, matching: find.text('9 products')),
+          findsOneWidget);
+      // The compact directory card keeps the full label when it has room and
+      // shortens it on a two-column phone card, where Map and Details share
+      // the same footer. The action and its key stay the same either way.
+      expect(
+          find.descendant(
+              of: first,
+              matching: find.byWidgetPredicate((w) =>
+                  w is Text && (w.data == 'Visit' || w.data == 'Visit store'))),
+          findsOneWidget);
       // No escrow promise: BROKA holds no payments while they are paused.
       // Delivery/pickup moved into Store details; the card's fact row
       // carries Details instead.
-      expect(find.descendant(of: first, matching: find.text('Delivery or pickup')), findsNothing);
+      expect(
+          find.descendant(of: first, matching: find.text('Delivery or pickup')),
+          findsNothing);
       expect(find.byKey(const Key('store-details-store-0')), findsOneWidget);
       expect(find.textContaining('Escrow'), findsNothing);
-      // Taller than the old 80dp row, the same full-width shape.
+      // Still a substantial shopfront card, not the old 80dp row.
       expect(tester.getSize(first).height, greaterThan(240));
-      // Visit store is a pill as wide as its words at the card's foot, not
-      // the bar across the whole card it was (louder than the picture).
-      final visit = tester.getSize(find.byKey(const Key('visit-store-store-0')));
+      // Visit store remains a pill rather than a bar across the picture.
+      final visit =
+          tester.getSize(find.byKey(const Key('visit-store-store-0')));
       expect(visit.width, lessThan(tester.getSize(first).width / 2));
       expect(visit.height, inInclusiveRange(34, 44));
       // A cover and a logo: the logo is the sign over the picture's edge.
-      expect(find.descendant(of: first,
-          matching: find.byWidgetPredicate((w) => w is BrokaImage && w.source == logo)),
+      expect(
+          find.descendant(
+              of: first,
+              matching: find.byWidgetPredicate(
+                  (w) => w is BrokaImage && w.source == logo)),
           findsOneWidget);
 
       // Details sits in the card's fact row: it opens the details
       // screen (reviews and all), not the store's home.
+      await tester
+          .ensureVisible(find.byKey(const Key('store-details-store-0')));
+      await _settle(tester);
       await tester.tap(find.byKey(const Key('store-details-store-0')));
       await _settle(tester);
       expect(find.byType(StoreDetailsScreen), findsOneWidget);
@@ -479,9 +530,14 @@ void main() {
       // below the fold; bring it in before reading it.
       await _scroll(tester, -260);
       final second = find.byKey(const Key('store-card-store-1'));
-      expect(find.descendant(of: second, matching: find.text('Active 2d ago')), findsOneWidget);
-      expect(find.descendant(of: second, matching: find.text('New seller')), findsNothing);
-      expect(find.descendant(of: second, matching: find.textContaining('deals done')), findsNothing);
+      expect(find.descendant(of: second, matching: find.text('Active 2d ago')),
+          findsOneWidget);
+      expect(find.descendant(of: second, matching: find.text('New seller')),
+          findsNothing);
+      expect(
+          find.descendant(
+              of: second, matching: find.textContaining('deals done')),
+          findsNothing);
     });
   });
 }
