@@ -332,16 +332,16 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
                 ),
         ),
         const SizedBox(height: 10),
-        Row(children: [
+        // A phone with a large text scale can leave the three choices
+        // narrower than one row. Wrap keeps all of them reachable instead
+        // of clipping the last period; the card itself scrolls vertically.
+        Wrap(spacing: 6, runSpacing: 6, children: [
           for (final days in const [7, 30, 90])
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: _ChoiceChip(
-                key: Key('period-$days'),
-                label: '$days days',
-                selected: _days == days,
-                onTap: () => _setPeriod(days),
-              ),
+            _ChoiceChip(
+              key: Key('period-$days'),
+              label: '$days days',
+              selected: _days == days,
+              onTap: () => _setPeriod(days),
             ),
         ]),
       ]),

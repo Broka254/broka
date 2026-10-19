@@ -46,6 +46,7 @@ class StoreCategoryScreen extends StatefulWidget {
     required this.categoryName,
     this.repository,
     this.locate,
+    this.animateBackground = true,
   });
   final String categoryName;
 
@@ -54,6 +55,10 @@ class StoreCategoryScreen extends StatefulWidget {
 
   /// Injectable for tests; the app asks the device. See StoreLocator.
   final StoreLocator? locate;
+
+  /// False in tests: the constellation's repeating animation otherwise
+  /// keeps scheduling frames, so pumpAndSettle never reaches an idle state.
+  final bool animateBackground;
 
   @override
   State<StoreCategoryScreen> createState() => _StoreCategoryScreenState();
@@ -192,6 +197,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
     return Scaffold(
       backgroundColor: BrokaColors.bg,
       body: ConstellationBackground(
+        animate: widget.animateBackground,
         child: DecoratedBox(
           decoration: BoxDecoration(
             gradient: RadialGradient(

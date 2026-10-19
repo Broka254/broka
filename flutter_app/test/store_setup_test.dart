@@ -1156,6 +1156,32 @@ void main() {
       expect(find.byKey(const Key('setup-checklist')), findsNothing);
     });
 
+    testWidgets('every performance period stays reachable, and selecting one refetches it',
+        (tester) async {
+      final backend = await openMyStore(tester);
+      await tester.dragUntilVisible(find.byKey(const Key('period-90')),
+          find.byKey(const Key('overview-list')), const Offset(0, -200));
+      await tester.pumpAndSettle();
+      // dragUntilVisible stops at the top edge, which the pinned header
+      // covers. Pull the selector down into the viewport before tapping.
+      await tester.drag(find.byKey(const Key('overview-list')), const Offset(0, 150));
+      await tester.pumpAndSettle();
+
+      for (final days in [7, 30, 90]) {
+        expect(find.byKey(Key('period-$days')), findsOneWidget);
+      }
+
+      await tester.tap(find.byKey(const Key('period-90')));
+      await tester.pumpAndSettle();
+      expect(backend.requests.last.url.path, '/stores/s1/insights');
+      expect(backend.requests.last.url.queryParameters['days'], '90');
+      final selected = tester.widget<Semantics>(find.descendant(
+        of: find.byKey(const Key('period-90')),
+        matching: find.byType(Semantics),
+      ));
+      expect(selected.properties.selected, isTrue);
+    });
+
     testWidgets("changing a price sends it, and the server's refusal is shown as it is",
         (tester) async {
       final backend = await openMyStore(tester, more: {

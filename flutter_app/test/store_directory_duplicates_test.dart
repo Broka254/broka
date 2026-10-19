@@ -65,6 +65,7 @@ void main() {
         // A real fix, so the 'near you' rail actually loads. Without it the
         // rail never exists and the duplicate this test guards cannot occur.
         locate: () async => (lat: -1.286, lng: 36.817),
+        animateBackground: false,
       ),
     ));
     // Let the directory load and the location probe settle.
@@ -93,6 +94,7 @@ void main() {
       home: StoreListScreen(
         repository: StoresRepository(client: _client()),
         locate: () async => (lat: -1.286, lng: 36.817),
+        animateBackground: false,
       ),
     ));
     await tester.pump(const Duration(milliseconds: 50));
@@ -122,6 +124,7 @@ void main() {
         categoryName: 'Electronics',
         repository: StoresRepository(client: _client()),
         locate: () async => (lat: -1.286, lng: 36.817),
+        animateBackground: false,
       ),
     ));
     await tester.pump(const Duration(milliseconds: 50));

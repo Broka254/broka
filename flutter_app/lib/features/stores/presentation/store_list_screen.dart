@@ -51,7 +51,12 @@ import 'widgets/store_details_view.dart' show showStoreDetails;
 import 'widgets/store_location_filter.dart';
 
 class StoreListScreen extends StatefulWidget {
-  const StoreListScreen({super.key, this.repository, this.locate});
+  const StoreListScreen({
+    super.key,
+    this.repository,
+    this.locate,
+    this.animateBackground = true,
+  });
 
   /// Injectable for tests; the app uses the shared repository. Same pattern
   /// as NearbyStoresScreen, so a directory test never touches the network.
@@ -59,6 +64,10 @@ class StoreListScreen extends StatefulWidget {
 
   /// Injectable for tests; the app asks the device.
   final StoreLocator? locate;
+
+  /// False in tests: the constellation's repeating animation otherwise
+  /// keeps scheduling frames, so pumpAndSettle never reaches an idle state.
+  final bool animateBackground;
 
   @override
   State<StoreListScreen> createState() => _StoreListScreenState();
@@ -207,6 +216,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
     return Scaffold(
       backgroundColor: BrokaColors.bg,
       body: ConstellationBackground(
+        animate: widget.animateBackground,
         child: DecoratedBox(
           decoration: BoxDecoration(
             gradient: RadialGradient(
