@@ -238,6 +238,15 @@ class _ProductScreenState extends State<ProductScreen> {
     return raw.split(',').where((s) => s.isNotEmpty).toList();
   }
 
+  /// What photo [i] falls back to when its large file can't be loaded: the
+  /// same photo's other sizes, largest first. Legacy base64 photos have no
+  /// other sizes.
+  List<String> _photoFallbacks(int i) {
+    final stored = _listing?.photos ?? const [];
+    if (i < 0 || i >= stored.length) return const [];
+    return [stored[i].medium, stored[i].thumb];
+  }
+
   bool get _isMine => _listing?.sellerId == ApiService.currentUserId;
   bool get _isAuction => _listing?.listingType == 'auction';
 
@@ -587,7 +596,9 @@ class _ProductScreenState extends State<ProductScreen> {
           itemCount: photos.length,
           itemBuilder: (_, i) {
             final img = BrokaImage(photos[i],
-                width: double.infinity, placeholder: _photoFallback());
+                fallbacks: _photoFallbacks(i),
+                width: double.infinity,
+                placeholder: _photoFallback());
             final id = _listing?.id;
             return (i == 0 && id != null && id.isNotEmpty)
                 ? Hero(tag: 'listing-photo-$id', child: img)

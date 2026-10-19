@@ -1437,6 +1437,14 @@ class ListingService:
             verified_video = None
             advert_video = None
 
+        # asset_urls is None for an asset whose record lists no size at all
+        # (damaged metadata). Spreading or indexing that raised TypeError and
+        # failed every listing on the page, not just the one with the bad
+        # asset; now it is simply a listing without that image.
+        photo_urls = [u for u in (asset_urls(a) for a in photo_assets) if u]
+        cover_urls = asset_urls(cover_asset) if cover_asset is not None else None
+        avatar_urls = asset_urls(avatar_asset) if avatar_asset is not None else None
+
         return {
             "id": listing.id,
             "seller_id": listing.seller_id,
@@ -1473,12 +1481,12 @@ class ListingService:
             "verified_photos": verified_photos,
             "verified_video": verified_video,
             "advert_video": advert_video,
-            "photos": [asset_urls(a) for a in photo_assets],
+            "photos": photo_urls,
             # kind: "showcase" | "photo" - lets a card label an AI showcase.
             "cover": (
-                {**asset_urls(cover_asset),
+                {**cover_urls,
                  "kind": "showcase" if cover_asset is showcase_asset else "photo"}
-                if cover_asset is not None else None
+                if cover_urls else None
             ),
             "is_featured": bool(listing.is_featured),
             "featured_until": listing.featured_until.isoformat() if listing.featured_until else None,
@@ -1507,7 +1515,7 @@ class ListingService:
             # product card to show at all. Same optional-seller pattern as
             # the four fields above - no seller fetched, no photo, not an error.
             "seller_profile_photo": seller_profile_photo,
-            "seller_avatar_url": asset_urls(avatar_asset)["thumb"] if avatar_asset else None,
+            "seller_avatar_url": avatar_urls["thumb"] if avatar_urls else None,
             # Store feature. store_id is always present (None for a
             # personal listing); store_name/store_slug are only populated
             # when the caller passed the resolved Store in (matching the

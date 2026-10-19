@@ -384,7 +384,10 @@ class ProductCard extends StatelessWidget {
   Widget _buildImage() {
     final cover = _cover;
     if (cover != null) {
-      return BrokaImage(cover.thumb, placeholder: _placeholder());
+      // The small size first; if that one file is missing the same photo's
+      // other sizes are tried before the emoji.
+      return BrokaImage(cover.thumb,
+          fallbacks: [cover.medium, cover.large], placeholder: _placeholder());
     }
     final showcase = _showcaseImageUrl;
     if (showcase != null) {
@@ -431,7 +434,9 @@ class ProductCard extends StatelessWidget {
   Widget _buildActualPhotoOrPlaceholder() {
     final assets = _assetPhotos;
     if (assets.isNotEmpty) {
-      return BrokaImage(assets.first.thumb, placeholder: _placeholder());
+      final first = assets.first;
+      return BrokaImage(first.thumb,
+          fallbacks: [first.medium, first.large], placeholder: _placeholder());
     }
     final photos = _photos;
     if (photos.isNotEmpty) {

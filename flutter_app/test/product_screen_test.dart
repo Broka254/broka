@@ -14,12 +14,14 @@ import 'package:broka/main.dart' show BrokaColors, ZoneGlowText;
 import 'package:broka/features/stores/data/store_cart.dart';
 import 'package:broka/features/stores/presentation/store_cart_screen.dart';
 import 'package:broka/models/listing.dart';
+import 'package:broka/models/listing_photo.dart';
 import 'package:broka/screens/product_screen.dart';
 import 'package:broka/screens/zeno_screen.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/widgets/constellation_background.dart';
 
 import 'support/fake_api.dart';
+import 'support/fake_network_image.dart';
 
 Listing _listing({
   String sellerId = 'seller-1',
@@ -34,6 +36,7 @@ Listing _listing({
   String? storeId,
   String listingType = 'direct',
   String sellerName = 'Grace Akinyi',
+  List<ListingPhoto> photos = const [],
 }) => Listing(
       id: 'listing-1',
       name: 'iPhone 13 128GB',
@@ -53,6 +56,7 @@ Listing _listing({
       views: 42,
       sellerId: sellerId,
       sellerName: sellerName,
+      photos: photos,
       sellerCompletedDeals: 14,
       storeId: storeId,
       storeName: storeId == null ? null : 'Clanix Electronics',
@@ -438,6 +442,39 @@ void main() {
       expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
       await open(tester, _listing(storeId: 's1', listingType: 'auction'));
       expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
+    });
+  });
+
+  // The gallery asked for each photo's large file and nothing else, so one
+  // missing file was an emoji where the photo should be (2026-10-19).
+  group('the photo gallery', () {
+    const base = 'https://media.test/img/g1';
+    final photo = const ListingPhoto(
+      id: 'g1',
+      thumb: '$base/thumb.webp',
+      medium: '$base/medium.webp',
+      large: '$base/large.webp',
+    );
+
+    testWidgets('a photo whose large file is missing shows its medium size', (tester) async {
+      final net = FakeImageNetwork(available: {'$base/medium.webp'})..install();
+      addTearDown(net.uninstall);
+
+      await open(tester, _listing(photos: [photo]));
+
+      expect(tester.takeException(), isNull);
+      expect(net.requested.take(2), ['$base/large.webp', '$base/medium.webp']);
+      expect(net.loaded('$base/medium.webp'), findsOneWidget);
+      expect(net.requested, isNot(contains('$base/thumb.webp'))); // stops at the first file that works
+    });
+
+    testWidgets('with large and medium both missing it falls back to the thumbnail', (tester) async {
+      final net = FakeImageNetwork(available: {'$base/thumb.webp'})..install();
+      addTearDown(net.uninstall);
+
+      await open(tester, _listing(photos: [photo]));
+
+      expect(net.loaded('$base/thumb.webp'), findsOneWidget);
     });
   });
 

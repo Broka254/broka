@@ -155,6 +155,41 @@ def _fit(img: Image.Image, longest: int) -> Image.Image:
     )
 
 
+def variant_from_stored(stored_webp: bytes, name: str) -> tuple[bytes, int, int]:
+    """One size of an image, made from another stored size of the same image.
+
+    For putting back a size whose object has gone missing while a larger one
+    is still there (api/domains/media/service.py recover_variant). It does what
+    _encode does for a size: the same WebP settings and colour profile, the
+    longest side bounded by VARIANTS, never enlarged. _encode makes each size
+    from the next one up, so a `thumb` made from `medium` here is made the way
+    the original was. Stored sizes are already upright and carry no metadata,
+    so nothing is transposed or stripped.
+
+    Raises ValueError for a size that isn't in VARIANTS, and ImageRejected when
+    `stored_webp` can't be read as an image.
+    """
+    longest = dict(VARIANTS).get(name)
+    if longest is None:
+        raise ValueError(f"Unknown image size {name!r}.")
+    try:
+        img = Image.open(io.BytesIO(stored_webp))
+        img.load()
+        icc_profile = img.info.get("icc_profile")
+        has_alpha = img.mode in ("RGBA", "LA") or (
+            img.mode == "P" and "transparency" in img.info
+        )
+        img = _fit(img.convert("RGBA" if has_alpha else "RGB"), longest)
+        buf = io.BytesIO()
+        save_kwargs = {"format": "WEBP", "quality": WEBP_QUALITY, "method": 4}
+        if icc_profile:
+            save_kwargs["icc_profile"] = icc_profile
+        img.save(buf, **save_kwargs)
+    except Exception as exc:
+        raise ImageRejected("That file isn't an image we can read.") from exc
+    return buf.getvalue(), img.width, img.height
+
+
 def to_jpeg(webp_bytes: bytes, quality: int = 88) -> bytes:
     """Re-encode a stored variant as JPEG, for services that want JPEG
     input (the AI showcase generator is given the seller's first photo)."""

@@ -22,12 +22,15 @@ class ListingPhoto {
     if (j is! Map) return null;
     final thumb = j['thumb'], medium = j['medium'], large = j['large'];
     if (thumb is! String || medium is! String || large is! String) return null;
+    // `is String`, not `as String?`: a wrongly typed id or kind used to throw
+    // here and fail the whole listing, over fields no screen needs to show.
+    final id = j['id'], kind = j['kind'];
     return ListingPhoto(
-      id: j['id'] as String? ?? '',
+      id: id is String ? id : '',
       thumb: thumb,
       medium: medium,
       large: large,
-      kind: j['kind'] as String?,
+      kind: kind is String ? kind : null,
     );
   }
 

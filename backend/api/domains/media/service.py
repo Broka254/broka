@@ -5,6 +5,8 @@ The rest of the backend talks to images only through this module:
   * create_image_asset  - process an upload and store its sizes
   * asset_urls          - the public URL of each size, for a response
   * load_assets         - one query for every asset a page needs
+  * recover_variant     - the bytes of a size whose object has gone missing,
+                          rebuilt from a size that hasn't
   * require_owned_assets- the ids a client sent are theirs, live, and of
                           the right purpose (a store logo is not a listing
                           photo), in the order sent
@@ -19,14 +21,17 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.image_processing import VARIANTS, process_image
-from api.core.media_storage import current_storage, storage_named
+from api.core.image_processing import (
+    VARIANTS, ImageRejected, process_image, variant_from_stored,
+)
+from api.core.media_storage import StorageError, current_storage, storage_named
 from api.models.media import AttachState, MediaAsset, MediaPurpose
 
 logger = logging.getLogger(__name__)
@@ -152,6 +157,79 @@ async def read_variant(asset: MediaAsset, name: str = "large") -> Optional[bytes
             found = await storage_named(asset.storage).get(entry["key"])
             if found:
                 return found[0]
+    return None
+
+
+@dataclass(frozen=True)
+class RecoveredVariant:
+    data: bytes
+    content_type: str
+    stored: bool      # the object is in storage under its own key
+    source: str       # the size the bytes came from, for the log
+
+
+async def recover_variant(asset: MediaAsset, name: str) -> Optional[RecoveredVariant]:
+    """The bytes of size `name` of `asset` when the route that serves it found
+    no object, or None when nothing is left to make it from.
+
+    A size's URL is built from the asset's record (asset_urls) and nothing
+    checks the object is there, so a record can name a size whose object is
+    gone while its other sizes are fine. In order:
+
+      1. An asset kept by a driver other than the database, requested through
+         the database route (which reads only the database): the object is
+         read from the asset's own driver, if it is there.
+      2. A larger stored size exists: make this size from it with
+         variant_from_stored - the way process_image makes sizes - and put it
+         back under its own key, so the next request is a plain hit.
+      3. Only smaller sizes exist: return the nearest one as it is, not
+         stored. A smaller image kept under the larger size's key would stay
+         there as if it were the real one, and every client caches these URLs
+         as immutable, when the real one may yet be restored.
+
+    The record is left alone: it already names the key. Raises StorageError
+    when the asset's driver can't be read."""
+    stored = asset.variant_map()
+    entry = stored.get(name)
+    key = entry.get("key") if isinstance(entry, dict) else None
+    sizes = [n for n, _ in VARIANTS]          # smallest first
+    if not key or name not in sizes:
+        return None
+    storage = storage_named(asset.storage)
+    at = sizes.index(name)
+
+    async def read(size: str) -> Optional[tuple[bytes, str]]:
+        other = stored.get(size)
+        other_key = other.get("key") if isinstance(other, dict) else None
+        return await storage.get(other_key) if other_key else None
+
+    if asset.storage != "db":
+        found = await read(name)
+        if found is not None:
+            return RecoveredVariant(found[0], found[1], True, name)
+
+    for size in sizes[at + 1:]:
+        found = await read(size)
+        if found is None:
+            continue
+        try:
+            data, _, _ = await asyncio.to_thread(variant_from_stored, found[0], name)
+        except ImageRejected:
+            logger.warning("[media] size %s of asset %s is unreadable, so %s can't be rebuilt from it",
+                           size, asset.id, name)
+            continue
+        try:
+            await storage.put(key, data, "image/webp")
+            stored_again = True
+        except StorageError:
+            logger.error("[media] rebuilt %s of asset %s but couldn't store it", name, asset.id)
+            stored_again = False
+        return RecoveredVariant(data, "image/webp", stored_again, size)
+
+    for size in reversed(sizes[:at]):
+        found = await read(size)
+        if found is not None:
+            return RecoveredVariant(found[0], found[1], False, size)
     return None
 
 
