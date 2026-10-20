@@ -53,32 +53,35 @@ Where things usually are:
 
 ## Backend endpoints
 
-234 endpoints served by `backend/main.py`. **Auth** is read from each
+237 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 20, optional 4, public 61, token 4, user 145.
+Counts: admin 23, optional 4, public 61, token 4, user 145.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:466) |
-| GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:136) |
-| GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:224) |
-| POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:204) |
-| GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:366) |
-| GET | `/admin/diagnostics/econfirm` | admin | `econfirm_diagnostics` (backend/api/domains/admin/router.py:177) |
-| GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:335) |
-| GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:316) |
-| GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:254) |
-| GET | `/admin/ledger-integrity` | admin | `ledger_integrity` (backend/api/domains/admin/router.py:148) |
-| POST | `/admin/media/backfill` | admin | `run_media_backfill` (backend/api/domains/admin/router.py:354) |
-| GET | `/admin/summary` | admin | `admin_summary` (backend/api/domains/admin/router.py:25) |
-| GET | `/admin/transactions` | admin | `get_transactions` (backend/api/domains/admin/router.py:277) |
-| GET | `/admin/users` | admin | `list_users` (backend/api/domains/admin/router.py:49) |
-| POST | `/admin/users/{user_id}/flag` | admin | `flag_user` (backend/api/domains/admin/router.py:92) |
-| POST | `/admin/users/{user_id}/promote-admin` | admin | `promote_to_admin` (backend/api/domains/admin/router.py:77) |
-| POST | `/admin/users/{user_id}/recompute-trust` | admin | `recompute_trust` (backend/api/domains/admin/router.py:125) |
-| POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:108) |
-| GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:301) |
+| GET | `/` | public | `root` (backend/main.py:467) |
+| GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:361) |
+| GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:449) |
+| POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:429) |
+| GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:591) |
+| GET | `/admin/diagnostics/econfirm` | admin | `econfirm_diagnostics` (backend/api/domains/admin/router.py:402) |
+| GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:560) |
+| GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:541) |
+| GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:479) |
+| GET | `/admin/health/services` | admin | `service_health` (backend/api/domains/admin/router.py:125) |
+| GET | `/admin/ledger-integrity` | admin | `ledger_integrity` (backend/api/domains/admin/router.py:373) |
+| POST | `/admin/media/backfill` | admin | `run_media_backfill` (backend/api/domains/admin/router.py:579) |
+| GET | `/admin/ops-snapshot` | admin | `ops_snapshot` (backend/api/domains/admin/router.py:58) |
+| GET | `/admin/stores` | admin | `admin_stores` (backend/api/domains/admin/router.py:201) |
+| GET | `/admin/summary` | admin | `admin_summary` (backend/api/domains/admin/router.py:34) |
+| GET | `/admin/transactions` | admin | `get_transactions` (backend/api/domains/admin/router.py:502) |
+| GET | `/admin/users` | admin | `list_users` (backend/api/domains/admin/router.py:244) |
+| POST | `/admin/users/{user_id}/flag` | admin | `flag_user` (backend/api/domains/admin/router.py:294) |
+| POST | `/admin/users/{user_id}/promote-admin` | admin | `promote_to_admin` (backend/api/domains/admin/router.py:272) |
+| POST | `/admin/users/{user_id}/recompute-trust` | admin | `recompute_trust` (backend/api/domains/admin/router.py:343) |
+| POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:319) |
+| GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:526) |
 | WS | `/auction-ws/ws/{listing_id}` | token | `auction_ws` (backend/api/domains/auction_ws/router.py:15) |
 | POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:51) |
 | GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:114) |
@@ -105,8 +108,8 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 | POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:208) |
 | GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:439) |
 | POST | `/auth/token/refresh` | public | `refresh_access_token` (backend/api/domains/auth/refresh_router.py:93) |
-| POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:143) |
-| POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:161) |
+| POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:152) |
+| POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:170) |
 | POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:307) |
 | GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:453) |
 | POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:254) |
@@ -159,13 +162,13 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 | POST | `/escrow/confirm-delivery/{deal_id}` | user | `confirm_delivery` (backend/api/routers/escrow.py:32) |
 | POST | `/escrow/open-dispute/{deal_id}` | user | `freeze_for_dispute` (backend/api/routers/escrow.py:105) |
 | GET | `/escrow/state/{deal_id}` | user | `get_escrow_state` (backend/api/routers/escrow.py:129) |
-| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:102) |
-| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:156) |
-| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:177) |
-| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:74) |
-| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:68) |
-| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:234) |
-| GET | `/health` | public | `health` (backend/main.py:494) |
+| POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:105) |
+| POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:159) |
+| POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:180) |
+| GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:77) |
+| GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:71) |
+| GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:296) |
+| GET | `/health` | public | `health` (backend/main.py:495) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:196) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:254) |
 | GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:186) |
@@ -193,35 +196,35 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 | DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1180) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1134) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1146) |
-| GET | `/live` | public | `live` (backend/main.py:550) |
+| GET | `/live` | public | `live` (backend/main.py:578) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
 | POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:284) |
 | WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:90) |
-| POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:275) |
-| POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:306) |
-| POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:213) |
-| GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:485) |
-| POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:119) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4355) |
+| POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:421) |
+| POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:452) |
+| POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
+| GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
+| POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4361) |
 | POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1729) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4252) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3333) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4258) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3339) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3935) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3941) |
 | POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1805) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4319) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3178) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3433) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3799) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3843) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3890) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:3867) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4325) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3184) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3439) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3805) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3849) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3896) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:3873) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -242,7 +245,7 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 | GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:144) |
 | GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:176) |
 | GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:150) |
-| GET | `/ready` | public | `ready` (backend/main.py:500) |
+| GET | `/ready` | public | `ready` (backend/main.py:501) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:30) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:64) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:45) |
@@ -283,11 +286,11 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
 | POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:143) |
 | GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:328) |
-| POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:315) |
-| POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:338) |
-| POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:131) |
-| GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:397) |
-| GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:125) |
+| POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:427) |
+| POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:450) |
+| POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:156) |
+| GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:564) |
+| GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:150) |
 | POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:85) |
 | POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:300) |
 | POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:363) |
@@ -534,6 +537,7 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 - `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
 - `media.py` — Image assets - one uploaded image, stored as a few resized WebP files.
 - `payment.py` — FeaturedPayment and VerificationPayment models — re-exported from api.database (duplicate-table fix, see models/user.py).
+- `payment_callback.py` — Durable inbox for payment-provider callbacks that arrive before BROKA can match them to its own payment row.
 - `push_device.py` — Push devices - every phone a user is signed in on.
 - `review.py` — Review model — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `sold_out_report.py` — SoldOutReport - a buyer saying a listing is no longer available.
@@ -567,42 +571,43 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 
 | Table | Model | Defined at |
 |---|---|---|
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:561 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1144 |
-| `bids` | `Bid` | backend/api/database.py:550 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:690 |
-| `categories` | `Category` | backend/api/database.py:290 |
-| `category_filters` | `CategoryFilter` | backend/api/database.py:298 |
-| `deals` | `Deal` | backend/api/database.py:742 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:603 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1223 |
+| `bids` | `Bid` | backend/api/database.py:592 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:732 |
+| `categories` | `Category` | backend/api/database.py:332 |
+| `category_filters` | `CategoryFilter` | backend/api/database.py:340 |
+| `deals` | `Deal` | backend/api/database.py:784 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1057 |
-| `email_otps` | `EmailOtp` | backend/api/database.py:267 |
+| `disputes` | `Dispute` | backend/api/database.py:1123 |
+| `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
-| `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:74 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1105 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1163 |
-| `interests` | `Interest` | backend/api/database.py:438 |
+| `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1171 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1242 |
+| `interests` | `Interest` | backend/api/database.py:480 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:660 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:976 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:702 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1018 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:952 |
-| `listings` | `Listing` | backend/api/database.py:307 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:994 |
+| `listings` | `Listing` | backend/api/database.py:349 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:70 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:104 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1011 |
-| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:461 |
-| `phone_otps` | `PhoneOtp` | backend/api/database.py:248 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1053 |
+| `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:503 |
+| `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
+| `phone_otps` | `PhoneOtp` | backend/api/database.py:290 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1031 |
-| `reviews` | `Review` | backend/api/database.py:1072 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:902 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:881 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1093 |
+| `reviews` | `Review` | backend/api/database.py:1138 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:944 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:923 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
-| `store_billing_meta` | `StoreBillingMeta` | backend/api/models/store_billing.py:88 |
+| `store_billing_meta` | `StoreBillingMeta` | backend/api/models/store_billing.py:96 |
 | `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:166 |
 | `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:185 |
 | `store_payments` | `StorePayment` | backend/api/models/store_billing.py:62 |
@@ -611,11 +616,11 @@ Counts: admin 20, optional 4, public 61, token 4, user 145.
 | `stores` | `Store` | backend/api/models/store.py:65 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:515 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:675 |
-| `users` | `User` | backend/api/database.py:153 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1124 |
-| `wishlists` | `Wishlist` | backend/api/database.py:648 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:557 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:717 |
+| `users` | `User` | backend/api/database.py:195 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1191 |
+| `wishlists` | `Wishlist` | backend/api/database.py:690 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
@@ -625,7 +630,7 @@ What each `backend/api/domains/<area>` imports from other domains and from
 `api/core` (imports inside functions included). Useful for the blast radius
 of a change.
 
-- **admin** — domains: escrow, media; core: ai_cost, client_ip, config, econfirm_client, event_catalog, fraud, ledger, observability, permissions, workflow; database, security
+- **admin** — domains: escrow, media; core: ai_cost, audit, client_ip, config, econfirm_client, event_catalog, fraud, ledger, observability, permissions, workflow; database, security
 - **ai_broker** — domains: categories, listings, pricing; core: circuit_breaker, config, gemini, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
@@ -635,7 +640,7 @@ of a change.
 - **communication** — nothing outside itself
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, gemini, ledger, workers; database, security
-- **escrow** — domains: listings, pricing; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
+- **escrow** — domains: listings, pricing; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, ledger, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
 - **listings** — domains: auctions, categories, escrow, media, premium, pricing, stores, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
@@ -657,30 +662,30 @@ of a change.
 `task_*` functions in `backend/api/core/workers.py`: the in-process sweep
 (every 5 minutes) and ARQ workers.
 
-- `task_ai_summary` (backend/api/core/workers.py:1833)
-- `task_backfill_media` (backend/api/core/workers.py:294) — Convert a bounded batch of base64 images into image assets.
-- `task_check_call_expiry` (backend/api/core/workers.py:482) — Backstop cleanup for stale call sessions (api/core/call_state.py).
-- `task_check_deal_timers` (backend/api/core/workers.py:497) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
-- `task_check_dispute_timers` (backend/api/core/workers.py:1477) — Sweep for DisputeTimer objects whose fires_at has passed.
-- `task_check_interest_nudges` (backend/api/core/workers.py:1014) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
-- `task_close_due_auctions` (backend/api/core/workers.py:1911) — Close auctions whose ends_at has passed, and hand winners to Deal.
-- `task_collect_abandoned_media` (backend/api/core/workers.py:303) — Remove uploads no listing, store or profile ever used, a week after they were made.
-- `task_expire_buy_agent_watches` (backend/api/core/workers.py:311) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
-- `task_expire_featured_listings` (backend/api/core/workers.py:461)
-- `task_fraud_sweep` (backend/api/core/workers.py:1849)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2086) — Release listings whose winner never paid.
-- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2004) — One reminder per auction, to everyone who has bid on it.
-- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1257) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
-- `task_recompute_trust_score` (backend/api/core/workers.py:431)
-- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:236) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
-- `task_reconcile_mpesa` (backend/api/core/workers.py:1872)
-- `task_reconcile_zetupay_payments` (backend/api/core/workers.py:279) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
-- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1464) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
-- `task_refresh_store_ratings` (backend/api/core/workers.py:1223) — Recompute every store's rating, and write today's snapshot.
-- `task_retrain_ml_models` (backend/api/core/workers.py:1181) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
-- `task_send_email_notification` (backend/api/core/workers.py:1828)
-- `task_send_fcm_notification` (backend/api/core/workers.py:443)
-- `task_sync_listing_stock` (backend/api/core/workers.py:223) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
+- `task_ai_summary` (backend/api/core/workers.py:1899)
+- `task_backfill_media` (backend/api/core/workers.py:356) — Convert a bounded batch of base64 images into image assets.
+- `task_check_call_expiry` (backend/api/core/workers.py:544) — Backstop cleanup for stale call sessions (api/core/call_state.py).
+- `task_check_deal_timers` (backend/api/core/workers.py:559) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
+- `task_check_dispute_timers` (backend/api/core/workers.py:1539) — Sweep for DisputeTimer objects whose fires_at has passed.
+- `task_check_interest_nudges` (backend/api/core/workers.py:1076) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
+- `task_close_due_auctions` (backend/api/core/workers.py:2057) — Close auctions whose ends_at has passed, and hand winners to Deal.
+- `task_collect_abandoned_media` (backend/api/core/workers.py:365) — Remove uploads no listing, store or profile ever used, a week after they were made.
+- `task_expire_buy_agent_watches` (backend/api/core/workers.py:373) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
+- `task_expire_featured_listings` (backend/api/core/workers.py:523)
+- `task_fraud_sweep` (backend/api/core/workers.py:1915)
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2232) — Release listings whose winner never paid.
+- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2150) — One reminder per auction, to everyone who has bid on it.
+- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1319) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
+- `task_recompute_trust_score` (backend/api/core/workers.py:493)
+- `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:298) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
+- `task_reconcile_mpesa` (backend/api/core/workers.py:1938) — Settle pending STK prompts from provider evidence, never from age.
+- `task_reconcile_zetupay_payments` (backend/api/core/workers.py:341) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
+- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1526) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+- `task_refresh_store_ratings` (backend/api/core/workers.py:1285) — Recompute every store's rating, and write today's snapshot.
+- `task_retrain_ml_models` (backend/api/core/workers.py:1243) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
+- `task_send_email_notification` (backend/api/core/workers.py:1894)
+- `task_send_fcm_notification` (backend/api/core/workers.py:505)
+- `task_sync_listing_stock` (backend/api/core/workers.py:285) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
 
 ## Configuration (environment variables)
 
@@ -691,8 +696,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-113 files in `backend/tests/`.
+119 files in `backend/tests/`.
 
+- `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
 - `test_ai_cost.py` — Tests for the AI cost controls (api/core/ai_cost.py).
@@ -736,6 +742,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_escrow_ledger_integrity.py` — Regression tests for the escrow audit (2026-09-14).
 - `test_escrow_walkthrough.py` — Zeno walking a buyer or seller through an escrow service, step by step (zeno_assistant/escrow_walkthrough.py), and the provider list behind…
 - `test_events_v4.py` — Tests for the upgraded durable event bus (v4.0).
+- `test_featured_payment_safety.py` — Historical featured-payment callbacks still move real listings.
 - `test_founding_sellers.py` — The founding-seller offer (PRICING.md §2; pricing/service.founding_discount).
 - `test_fraud.py` — BROKA - Fraud Engine Unit Tests (v3.0) Tests trust score computation and trust band classification.
 - `test_idempotency.py` — Tests for the idempotency key guard.
@@ -748,12 +755,14 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_listing_price_change.py` — Changing a listing's price, and listings that can't be delivered.
 - `test_listing_stock.py` — BROKA - Listing stock, sold-out listings, and deleting a listing Run: pytest backend/tests/test_listing_stock.py -v
 - `test_listings.py` — BROKA - Listings Endpoint Tests Run: pytest backend/tests/test_listings.py -v
+- `test_log_redaction.py` — Ordinary logs must not become a second store of credentials or receipts.
 - `test_media_assets.py` — Image assets: processing, storage, upload, and what listings and stores do with them (Online Stores phase 1).
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
 - `test_media_hardening.py` — Image processing and the media backfill under hostile or broken input.
 - `test_media_recovery.py` — Image sizes whose object is missing, and asset records that are damaged.
 - `test_message_push_ordering.py` — Message-push ordering: a slow first send must not land after the fresh one.
 - `test_message_visibility_guard.py` — Structural guard: no NegotiationMessage read may leak across the audience line.
+- `test_mpesa_oauth_redaction.py` — Daraja OAuth diagnostics must never become a credential leak.
 - `test_native_parity.py` — The Rust extension and the Python reference agree, and the loader only hands out an extension it can trust.
 - `test_negotiate_deepseek.py` — Tests for DeepSeek V4 Flash in api/routers/negotiate.py's own (separate from ai_broker/service.py) AI-provider fallback chain.
 - `test_negotiate_fallback_providers.py` — The text-only fallback providers in routers/negotiate.py must actually run.
@@ -775,6 +784,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_repo_map.py` — scripts/graphify.py - the repository map CI keeps up to date (graphify.md).
 - `test_response_time.py` — Response-time measurement (domains/trust/response_time).
 - `test_route_ordering.py` — POST /negotiate/chat must be served by the legacy negotiate.free_chat.
+- `test_schema_migrations.py` — Schema revisions must be reproducible and fail loudly.
 - `test_search.py` — BROKA - Search Tests (listings and traders) Run: pytest backend/tests/test_search.py -v
 - `test_sell_probability.py` — The sell probability, rebuilt on what is measured (2026-10-09).
 - `test_seller_advice.py` — Seller advice cards (domains/trust/seller_advice).
@@ -799,6 +809,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_trending.py` — BROKA - Trending Endpoint Tests Run: pytest backend/tests/test_trending.py -v
 - `test_tts_voices.py` — BROKA - Which voice speaks what (POST /tts/speak) Run: pytest backend/tests/test_tts_voices.py -v
 - `test_user_privacy.py` — BROKA - What one user can see of another Run: pytest backend/tests/test_user_privacy.py -v
+- `test_verification_payment_safety.py` — Verification payments: durable initiation, amount checks and replay safety.
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
 - `test_zeno_assistant.py` — BROKA - Zeno as the user's assistant (POST /zeno/assistant/turn) Run: pytest backend/tests/test_zeno_assistant.py -v
 - `test_zeno_autolist.py` — BROKA - Zeno listing an item from its photo (zeno_assistant/autolist.py) Run: pytest backend/tests/test_zeno_autolist.py -v
@@ -1324,6 +1335,7 @@ Modules:
 - `NOTIFICATIONS.md` — Notifications — calls and messages with the app closed (2026-10-07)
 - `PRICING.md` — BROKA pricing
 - `PRIVACY.md` — Message visibility — how the audience line is enforced
+- `PRODUCTION_RELEASE.md` — Production release checklist
 - `README.md` — BROKA — AI-Mediated P2P Marketplace for East Africa
 - `REPO_REVIEW.md` — BROKA — Repository Review
 - `SECURITY.md` — Security Policy
