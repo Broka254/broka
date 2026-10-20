@@ -61,38 +61,6 @@ Counts: admin 32, optional 4, public 61, token 4, user 145.
 | Method | Path | Auth | Handler |
 |---|---|---|---|
 | GET | `/` | public | `root` (backend/main.py:470) |
-<<<<<<< HEAD
-| GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:1832) |
-| GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:1920) |
-| GET | `/admin/deals` | admin | `admin_deals` (backend/api/domains/admin/router.py:874) |
-| GET | `/admin/deals/{deal_id}` | admin | `admin_deal_detail` (backend/api/domains/admin/router.py:912) |
-| POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:1900) |
-| GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:2062) |
-| GET | `/admin/diagnostics/econfirm` | admin | `econfirm_diagnostics` (backend/api/domains/admin/router.py:1873) |
-| GET | `/admin/disputes` | admin | `admin_disputes` (backend/api/domains/admin/router.py:1079) |
-| GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:2031) |
-| GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:2012) |
-| GET | `/admin/finance-integrity` | admin | `finance_integrity` (backend/api/domains/admin/router.py:1250) |
-| GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:1950) |
-| POST | `/admin/fraud-events/{event_id}/resolve` | admin | `resolve_fraud_event` (backend/api/domains/admin/router.py:1566) |
-| GET | `/admin/health/services` | admin | `service_health` (backend/api/domains/admin/router.py:562) |
-| GET | `/admin/ledger-integrity` | admin | `ledger_integrity` (backend/api/domains/admin/router.py:1844) |
-| GET | `/admin/listings` | admin | `admin_listings` (backend/api/domains/admin/router.py:1010) |
-| POST | `/admin/media/backfill` | admin | `run_media_backfill` (backend/api/domains/admin/router.py:2050) |
-| GET | `/admin/ops-snapshot` | admin | `ops_snapshot` (backend/api/domains/admin/router.py:342) |
-| GET | `/admin/payments` | admin | `admin_payments` (backend/api/domains/admin/router.py:1170) |
-| GET | `/admin/stores` | admin | `admin_stores` (backend/api/domains/admin/router.py:716) |
-| GET | `/admin/summary` | admin | `admin_summary` (backend/api/domains/admin/router.py:305) |
-| GET | `/admin/transactions` | admin | `get_transactions` (backend/api/domains/admin/router.py:1973) |
-| GET | `/admin/users` | admin | `list_users` (backend/api/domains/admin/router.py:810) |
-| GET | `/admin/users/{user_id}` | admin | `admin_user_detail` (backend/api/domains/admin/router.py:1442) |
-| POST | `/admin/users/{user_id}/flag` | admin | `flag_user` (backend/api/domains/admin/router.py:1765) |
-| POST | `/admin/users/{user_id}/promote-admin` | admin | `promote_to_admin` (backend/api/domains/admin/router.py:1743) |
-| POST | `/admin/users/{user_id}/recompute-trust` | admin | `recompute_trust` (backend/api/domains/admin/router.py:1814) |
-| POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:1790) |
-| GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:1997) |
-| GET | `/admin/zeno/activity` | admin | `zeno_activity` (backend/api/domains/admin/router.py:1618) |
-=======
 | GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:1855) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:1943) |
 | GET | `/admin/deals` | admin | `admin_deals` (backend/api/domains/admin/router.py:908) |
@@ -123,7 +91,6 @@ Counts: admin 32, optional 4, public 61, token 4, user 145.
 | POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:1813) |
 | GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:2029) |
 | GET | `/admin/zeno/activity` | admin | `zeno_activity` (backend/api/domains/admin/router.py:1641) |
->>>>>>> fc0998a (Harden admin API authorization and response contracts)
 | WS | `/auction-ws/ws/{listing_id}` | token | `auction_ws` (backend/api/domains/auction_ws/router.py:15) |
 | POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:51) |
 | GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:114) |
