@@ -53,35 +53,44 @@ Where things usually are:
 
 ## Backend endpoints
 
-237 endpoints served by `backend/main.py`. **Auth** is read from each
+246 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 23, optional 4, public 61, token 4, user 145.
+Counts: admin 32, optional 4, public 61, token 4, user 145.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:467) |
-| GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:361) |
-| GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:449) |
-| POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:429) |
-| GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:591) |
-| GET | `/admin/diagnostics/econfirm` | admin | `econfirm_diagnostics` (backend/api/domains/admin/router.py:402) |
-| GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:560) |
-| GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:541) |
-| GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:479) |
-| GET | `/admin/health/services` | admin | `service_health` (backend/api/domains/admin/router.py:125) |
-| GET | `/admin/ledger-integrity` | admin | `ledger_integrity` (backend/api/domains/admin/router.py:373) |
-| POST | `/admin/media/backfill` | admin | `run_media_backfill` (backend/api/domains/admin/router.py:579) |
-| GET | `/admin/ops-snapshot` | admin | `ops_snapshot` (backend/api/domains/admin/router.py:58) |
-| GET | `/admin/stores` | admin | `admin_stores` (backend/api/domains/admin/router.py:201) |
-| GET | `/admin/summary` | admin | `admin_summary` (backend/api/domains/admin/router.py:34) |
-| GET | `/admin/transactions` | admin | `get_transactions` (backend/api/domains/admin/router.py:502) |
-| GET | `/admin/users` | admin | `list_users` (backend/api/domains/admin/router.py:244) |
-| POST | `/admin/users/{user_id}/flag` | admin | `flag_user` (backend/api/domains/admin/router.py:294) |
-| POST | `/admin/users/{user_id}/promote-admin` | admin | `promote_to_admin` (backend/api/domains/admin/router.py:272) |
-| POST | `/admin/users/{user_id}/recompute-trust` | admin | `recompute_trust` (backend/api/domains/admin/router.py:343) |
-| POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:319) |
-| GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:526) |
+| GET | `/` | public | `root` (backend/main.py:470) |
+| GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:1832) |
+| GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:1920) |
+| GET | `/admin/deals` | admin | `admin_deals` (backend/api/domains/admin/router.py:874) |
+| GET | `/admin/deals/{deal_id}` | admin | `admin_deal_detail` (backend/api/domains/admin/router.py:912) |
+| POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:1900) |
+| GET | `/admin/diagnostics/client-ip` | admin | `client_ip_diagnostics` (backend/api/domains/admin/router.py:2062) |
+| GET | `/admin/diagnostics/econfirm` | admin | `econfirm_diagnostics` (backend/api/domains/admin/router.py:1873) |
+| GET | `/admin/disputes` | admin | `admin_disputes` (backend/api/domains/admin/router.py:1079) |
+| GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:2031) |
+| GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:2012) |
+| GET | `/admin/finance-integrity` | admin | `finance_integrity` (backend/api/domains/admin/router.py:1250) |
+| GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:1950) |
+| POST | `/admin/fraud-events/{event_id}/resolve` | admin | `resolve_fraud_event` (backend/api/domains/admin/router.py:1566) |
+| GET | `/admin/health/services` | admin | `service_health` (backend/api/domains/admin/router.py:562) |
+| GET | `/admin/ledger-integrity` | admin | `ledger_integrity` (backend/api/domains/admin/router.py:1844) |
+| GET | `/admin/listings` | admin | `admin_listings` (backend/api/domains/admin/router.py:1010) |
+| POST | `/admin/media/backfill` | admin | `run_media_backfill` (backend/api/domains/admin/router.py:2050) |
+| GET | `/admin/ops-snapshot` | admin | `ops_snapshot` (backend/api/domains/admin/router.py:342) |
+| GET | `/admin/payments` | admin | `admin_payments` (backend/api/domains/admin/router.py:1170) |
+| GET | `/admin/stores` | admin | `admin_stores` (backend/api/domains/admin/router.py:716) |
+| GET | `/admin/summary` | admin | `admin_summary` (backend/api/domains/admin/router.py:305) |
+| GET | `/admin/transactions` | admin | `get_transactions` (backend/api/domains/admin/router.py:1973) |
+| GET | `/admin/users` | admin | `list_users` (backend/api/domains/admin/router.py:810) |
+| GET | `/admin/users/{user_id}` | admin | `admin_user_detail` (backend/api/domains/admin/router.py:1442) |
+| POST | `/admin/users/{user_id}/flag` | admin | `flag_user` (backend/api/domains/admin/router.py:1765) |
+| POST | `/admin/users/{user_id}/promote-admin` | admin | `promote_to_admin` (backend/api/domains/admin/router.py:1743) |
+| POST | `/admin/users/{user_id}/recompute-trust` | admin | `recompute_trust` (backend/api/domains/admin/router.py:1814) |
+| POST | `/admin/users/{user_id}/unflag` | admin | `unflag_user` (backend/api/domains/admin/router.py:1790) |
+| GET | `/admin/workflow-versions` | admin | `get_workflow_versions` (backend/api/domains/admin/router.py:1997) |
+| GET | `/admin/zeno/activity` | admin | `zeno_activity` (backend/api/domains/admin/router.py:1618) |
 | WS | `/auction-ws/ws/{listing_id}` | token | `auction_ws` (backend/api/domains/auction_ws/router.py:15) |
 | POST | `/auction/bid` | user | `place_bid` (backend/api/routers/auction.py:51) |
 | GET | `/auction/{listing_id}/leaderboard` | public | `get_leaderboard` (backend/api/routers/auction.py:114) |
@@ -168,7 +177,7 @@ Counts: admin 23, optional 4, public 61, token 4, user 145.
 | GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:77) |
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:71) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:296) |
-| GET | `/health` | public | `health` (backend/main.py:495) |
+| GET | `/health` | public | `health` (backend/main.py:498) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:196) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:254) |
 | GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:186) |
@@ -196,7 +205,7 @@ Counts: admin 23, optional 4, public 61, token 4, user 145.
 | DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1180) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1134) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1146) |
-| GET | `/live` | public | `live` (backend/main.py:578) |
+| GET | `/live` | public | `live` (backend/main.py:581) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
@@ -245,7 +254,7 @@ Counts: admin 23, optional 4, public 61, token 4, user 145.
 | GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:144) |
 | GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:176) |
 | GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:150) |
-| GET | `/ready` | public | `ready` (backend/main.py:501) |
+| GET | `/ready` | public | `ready` (backend/main.py:504) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:30) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:64) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:45) |
@@ -630,7 +639,7 @@ What each `backend/api/domains/<area>` imports from other domains and from
 `api/core` (imports inside functions included). Useful for the blast radius
 of a change.
 
-- **admin** — domains: escrow, media; core: ai_cost, audit, client_ip, config, econfirm_client, event_catalog, fraud, ledger, observability, permissions, workflow; database, security
+- **admin** — domains: escrow, listings, media; core: ai_cost, audit, client_ip, config, econfirm_client, event_catalog, fraud, ledger, money, observability, permissions, timeutil, workflow; database
 - **ai_broker** — domains: categories, listings, pricing; core: circuit_breaker, config, gemini, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
@@ -696,8 +705,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-119 files in `backend/tests/`.
+120 files in `backend/tests/`.
 
+- `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
 - `test_ai_broker_deepseek.py` — Tests for DeepSeek V4 Flash - DIRECT API integration in the AI broker (api/domains/ai_broker/service.py).
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
