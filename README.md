@@ -422,7 +422,7 @@ routes need `Authorization: Bearer <access token>`.
 | `/calls` | Call setup, TURN credentials, call logging |
 | `/stt`, `/tts` | Speech-to-text tokens and transcription, text-to-speech |
 | `/media` | Image upload (`/media/images`) and serving, link-preview JPEGs (`/media/og/{id}.jpg`), chat voice notes and images |
-| `/admin` | Summary, users, audit logs, fraud events, ledger integrity, AI savings |
+| `/admin` | Summary; users/stores/deals/listings/disputes/payments; ops snapshot, service health, finance integrity, fraud resolution, audit logs, AI savings |
 | `/health`, `/ready`, `/live` | Liveness and readiness probes |
 
 WebSockets: `/deal-ws/ws/{deal_id}` (deal status), `/auction-ws/ws/{listing_id}`

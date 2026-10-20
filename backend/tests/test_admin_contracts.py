@@ -7,6 +7,7 @@ legacy implementation fails CI rather than production.
 """
 from __future__ import annotations
 
+import datetime
 import uuid
 
 import pytest
@@ -65,6 +66,9 @@ async def _user(*, admin: bool = False) -> User:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", [
     "/admin/summary", "/admin/ops-snapshot", "/admin/health/services", "/admin/stores",
+    "/admin/users", "/admin/deals", "/admin/listings", "/admin/disputes",
+    "/admin/payments", "/admin/finance-integrity", "/admin/zeno/activity",
+    "/admin/deals/not-a-real-deal", "/admin/users/not-a-real-user",
 ])
 async def test_dashboard_reads_require_admin(client, path):
     ordinary = await _user()
@@ -79,13 +83,21 @@ async def test_ops_snapshot_has_stable_aggregate_shape(client):
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {
-        "generated_at", "users", "listings", "stores", "deals",
-        "payments", "disputes", "jobs",
+        "generated_at", "timezone", "window_hours", "definitions", "users",
+        "listings", "deals", "commission", "disputes", "fraud", "payments",
+        "escrow", "media", "ledger",
     }
-    assert {"total", "flagged", "admins"} <= set(body["users"])
-    assert {"total", "by_status"} <= set(body["deals"])
-    assert {"total", "by_status", "pending_callbacks"} <= set(body["payments"])
-    assert body["payments"]["pending_callbacks"] >= 0
+    assert body["timezone"] == "UTC"
+    assert body["window_hours"] == 24
+    assert {"total", "flagged", "admins", "new_current", "new_previous"} <= set(body["users"])
+    assert {"total", "by_status", "released_current", "released_previous"} <= set(body["deals"])
+    assert {"released_total_kes", "released_current_kes", "released_previous_kes"} <= set(body["commission"])
+    assert {"legacy_total", "legacy_open", "cases_total", "cases_active", "cases_by_state"} <= set(body["disputes"])
+    assert {"mpesa", "zetupay", "zetupay_unfinished", "mpesa_pending"} <= set(body["payments"])
+    assert {"total", "by_status", "open", "awaiting_manual_refund"} <= set(body["escrow"])
+    assert {"pending_total", "pending_by_kind"} <= set(body["media"])
+    assert {"balanced", "discrepancy_kes", "negative_escrow_deals", "escrow_held_kes"} <= set(body["ledger"])
+    assert body["payments"]["mpesa"]["pending"] >= 0
 
 
 @pytest.mark.asyncio
@@ -96,10 +108,12 @@ async def test_summary_has_the_contract_the_dashboard_reads(client):
     body = response.json()
     assert set(body) == {
         "users", "listings", "deals", "commission_earned_kes",
-        "disputes", "flagged_users",
+        "disputes", "flagged_users", "listings_active", "deals_released",
+        "dispute_cases_active",
     }
     assert all(isinstance(body[name], int) for name in (
         "users", "listings", "deals", "disputes", "flagged_users",
+        "listings_active", "deals_released", "dispute_cases_active",
     ))
     assert isinstance(body["commission_earned_kes"], (int, float))
 
@@ -110,38 +124,57 @@ async def test_service_health_reports_schema_without_secret_values(client):
     response = await client.get("/admin/health/services", headers=_headers(admin))
     assert response.status_code == 200
     body = response.json()
-    assert body["services"]["database"]["ok"] is True
-    assert body["services"]["database"]["schema_ok"] is True
+    assert set(body) == {"generated_at", "checks", "providers", "note"}
+    checks = {row["name"]: row for row in body["checks"]}
+    assert checks["database_connectivity"]["status"] == "ok"
+    assert checks["database_schema"]["status"] == "ok"
+    assert all({"latency_ms", "checked_at", "kind"} <= set(row) for row in body["checks"])
+    assert all(row["probe"] == "not_run" for row in body["providers"])
     # Only configuration states are exposed, never the values themselves.
-    serialized = response.text
-    assert "password" not in serialized.lower()
-    assert "secret_key" not in serialized.lower()
+    serialized = response.text.lower()
+    assert "password" not in serialized
+    assert "secret_key" not in serialized
+    assert "postgresql" not in serialized
 
 
 @pytest.mark.asyncio
 async def test_admin_stores_is_bounded_and_excludes_deleted_by_default(client):
     admin = await _user(admin=True)
     owner = await _user()
+    tag = uuid.uuid4().hex[:10]
     async with AsyncSessionLocal() as db:
         db.add_all([
-            Store(owner_id=owner.id, name="Visible", slug=f"visible-{uuid.uuid4().hex[:8]}"),
+            Store(owner_id=owner.id, name=f"Visible {tag}", slug=f"visible-{tag}"),
             Store(
-                owner_id=owner.id, name="Deleted", slug=f"deleted-{uuid.uuid4().hex[:8]}",
-                deleted_at=__import__("datetime").datetime.utcnow(),
+                owner_id=owner.id, name=f"Deleted {tag}", slug=f"deleted-{tag}",
+                deleted_at=datetime.datetime.utcnow(),
             ),
         ])
         await db.commit()
 
-    response = await client.get("/admin/stores?limit=10", headers=_headers(admin))
+    response = await client.get(
+        f"/admin/stores?search={tag}&limit=10", headers=_headers(admin),
+    )
     assert response.status_code == 200
-    names = {row["name"] for row in response.json()}
-    assert "Visible" in names and "Deleted" not in names
+    body = response.json()
+    assert body["total"] == 1
+    assert [row["name"] for row in body["items"]] == [f"Visible {tag}"]
+
+    deleted = await client.get(
+        f"/admin/stores?search={tag}&status=deleted", headers=_headers(admin),
+    )
+    assert deleted.status_code == 200
+    assert [row["name"] for row in deleted.json()["items"]] == [f"Deleted {tag}"]
     assert (await client.get("/admin/stores?limit=201", headers=_headers(admin))).status_code == 422
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path,maximum", [
     ("/admin/users", 200),
+    ("/admin/deals", 200),
+    ("/admin/listings", 200),
+    ("/admin/disputes", 200),
+    ("/admin/payments", 200),
     ("/admin/audit-logs", 500),
     ("/admin/fraud-events", 200),
     ("/admin/transactions", 200),

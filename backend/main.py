@@ -174,6 +174,9 @@ app.add_middleware(
     allow_credentials=settings.allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The admin client reads the filtered total from X-Total-Count; browsers
+    # hide non-simple response headers unless they are explicitly exposed.
+    expose_headers=["X-Total-Count", "X-Request-ID"],
 )
 
 # ── Request body size ─────────────────────────────────────────────────────────
