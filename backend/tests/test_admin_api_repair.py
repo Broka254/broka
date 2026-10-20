@@ -14,11 +14,11 @@ from decimal import Decimal
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from api.database import (
     AccountType, AsyncSessionLocal, AuditLog, Deal, DealStatus, Dispute,
-    DisputeStatus, FraudEvent, Listing, ListingStatus, MpesaStatus,
+    DisputeStatus, FraudEvent, Listing, ListingStatus, ListingType, MpesaStatus,
     MpesaTransaction, NegotiationMessage, User, init_db, reset_engine,
 )
 from api.models.dispute import CaseBranch, CaseState, DisputeCase
@@ -28,6 +28,7 @@ from api.models.listing_payment import ListingPayment
 from api.models.payment_callback import PaymentCallback
 from api.models.store import Store
 from api.models.zetupay import Purpose, ZetuPayPayment, ZetuPayStatus
+from api.core.permissions import Permission
 from api.security import create_access_token
 from main import app
 
@@ -659,3 +660,175 @@ async def test_fraud_resolution_is_idempotent_audited_and_authorized(client, adm
     assert (await client.post(
         "/admin/fraud-events/does-not-exist/resolve",
         headers=headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_and_user_detail_normalize_null_detail(client, admin):
+    """Nullable audit detail is a string in the contract, and only the
+    documented fields leave the API."""
+    target = await _user()
+    async with AsyncSessionLocal() as db:
+        db.add(AuditLog(
+            actor_id=admin.id,
+            action="test_null_detail",
+            resource_type="user",
+            resource_id=target.id,
+            detail=None,
+            ip_address="203.0.113.5",
+        ))
+        await db.commit()
+
+    headers = _headers(admin)
+    response = await client.get(
+        f"/admin/audit-logs?resource_id={target.id}&limit=10", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["x-total-count"] == "1"
+    item = response.json()[0]
+    assert item["detail"] == ""
+    assert set(item) == {
+        "id", "actor_id", "action", "resource_type", "resource_id",
+        "detail", "ip_address", "created_at",
+    }
+    assert item["created_at"].endswith("Z")
+
+    detail = await client.get(f"/admin/users/{target.id}", headers=headers)
+    assert detail.status_code == 200
+    recent = [
+        row for row in detail.json()["recent_audit"]
+        if row["action"] == "test_null_detail"
+    ]
+    assert len(recent) == 1
+    assert recent[0]["detail"] == ""
+    assert set(recent[0]) == {
+        "id", "actor_id", "action", "resource_type", "resource_id",
+        "detail", "created_at",
+    }
+    assert "password_hash" not in detail.text
+
+
+@pytest.mark.asyncio
+async def test_summary_active_listings_use_the_buyer_visible_definition(
+    client, admin, monkeypatch,
+):
+    """summary.listings_active and ops.listings.active must agree.
+
+    An active-status listing that buyers cannot see (expired fee, reported
+    sold out, or an auction while auctions are off) is still in `listings`
+    and `by_status`, but not in either "active" metric.
+    """
+    from dataclasses import replace
+
+    from api.domains.listings import paid as paid_module
+
+    monkeypatch.setattr(paid_module, "settings", replace(
+        paid_module.settings,
+        auctions_enabled=False,
+        store_billing_enabled=False,
+    ))
+    before_summary = (await client.get(
+        "/admin/summary", headers=_headers(admin))).json()["listings_active"]
+    before_ops = (await client.get(
+        "/admin/ops-snapshot", headers=_headers(admin))).json()["listings"]["active"]
+
+    seller = await _user(account_type=AccountType.buyer_seller)
+    now = datetime.datetime.utcnow()
+    visible = await _listing(seller)
+    await _listing(seller, paid_until=now - datetime.timedelta(hours=1))
+    await _listing(seller, sold_out_reported_at=now)
+    await _listing(seller, listing_type=ListingType.auction)
+
+    summary = (await client.get(
+        "/admin/summary", headers=_headers(admin))).json()
+    ops = (await client.get(
+        "/admin/ops-snapshot", headers=_headers(admin))).json()
+    assert summary["listings_active"] - before_summary == 1
+    assert ops["listings"]["active"] - before_ops == 1
+    assert summary["listings_active"] == ops["listings"]["active"]
+    assert ops["listings"]["total"] >= before_ops + 4
+    assert visible.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("removed,path", [
+    (Permission.MANAGE_USERS, "/admin/users"),
+    (Permission.VIEW_TRANSACTIONS, "/admin/deals"),
+    (Permission.VIEW_ALL_DISPUTES, "/admin/disputes"),
+    (Permission.ADMIN_SUMMARY, "/admin/summary"),
+])
+async def test_admin_reads_enforce_their_named_capability(
+    client, admin, monkeypatch, removed, path,
+):
+    """Every admin currently has every flag, but the dependency must still
+    check the flag rather than merely `is_admin`."""
+    import api.core.permissions as permissions
+
+    monkeypatch.setattr(
+        permissions, "_ADMIN_PERMISSIONS",
+        permissions._ADMIN_PERMISSIONS - {removed},
+    )
+    response = await client.get(path, headers=_headers(admin))
+    assert response.status_code == 403
+    assert removed.value in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_promotion_requires_the_promote_admin_capability(client, admin, monkeypatch):
+    import api.core.permissions as permissions
+
+    target = await _user()
+    monkeypatch.setattr(
+        permissions, "_ADMIN_PERMISSIONS",
+        permissions._ADMIN_PERMISSIONS - {Permission.PROMOTE_ADMIN},
+    )
+    response = await client.post(
+        f"/admin/users/{target.id}/promote-admin", headers=_headers(admin))
+    assert response.status_code == 403
+    async with AsyncSessionLocal() as db:
+        stored = (await db.execute(
+            select(User).where(User.id == target.id))).scalar_one()
+    assert stored.is_admin is False
+
+
+@pytest.mark.asyncio
+async def test_payment_views_tolerate_historical_null_status(client, admin):
+    """A provider row written before the status default existed must not
+    become a JSON null-keyed count or crash the transaction view."""
+    seller = await _user(account_type=AccountType.buyer_seller)
+    buyer = await _user()
+    listing = await _listing(seller)
+    deal = await _deal(seller, buyer, listing)
+    txn = MpesaTransaction(
+        deal_id=deal.id, buyer_id=buyer.id, phone=buyer.phone,
+        amount=50, checkout_request_id=f"ws_CO_{uuid.uuid4().hex}",
+        status=MpesaStatus.pending,
+    )
+    async with AsyncSessionLocal() as db:
+        db.add(txn)
+        await db.commit()
+        await db.refresh(txn)
+        await db.execute(
+            update(MpesaTransaction)
+            .where(MpesaTransaction.id == txn.id)
+            .values(status=None)
+        )
+        await db.commit()
+
+    headers = _headers(admin)
+    payments = await client.get(
+        f"/admin/payments?user_id={buyer.id}", headers=headers)
+    assert payments.status_code == 200
+    payment = next(
+        row for row in payments.json()["items"] if row["id"] == txn.id)
+    assert payment["status"] is None
+    assert set(payments.json()["counts"]["mpesa"]) == {
+        "pending", "success", "failed"}
+
+    txns = await client.get("/admin/transactions?limit=200", headers=headers)
+    assert txns.status_code == 200
+    row = next(row for row in txns.json() if row["id"] == txn.id)
+    assert row["status"] is None
+
+    ops = await client.get("/admin/ops-snapshot", headers=headers)
+    assert ops.status_code == 200
+    assert set(ops.json()["payments"]["mpesa"]) == {
+        "pending", "success", "failed"}

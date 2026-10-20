@@ -124,7 +124,7 @@ def _auth_of(fn: ast.AST) -> str:
     names = {dotted(n.args[0]) for n in ast.walk(fn)
              if isinstance(n, ast.Call) and dotted(n.func) == "Depends" and n.args}
     names |= {dotted(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)}
-    if "require_admin" in names:
+    if "require_admin" in names or "require_permission" in names:
         return "admin"
     if "get_current_user" in names:
         return "user"

@@ -40,7 +40,7 @@ from api.core.audit import record_audit
 from api.core.client_ip import client_ip_or_none
 from api.core.money import money_decimal
 from api.core.observability import request_id_var
-from api.core.permissions import require_admin
+from api.core.permissions import Permission, require_permission
 from api.core.fraud import compute_trust_score, trust_band
 
 _log = logging.getLogger(__name__)
@@ -97,6 +97,27 @@ def _count_map(rows, statuses: Sequence[str]) -> dict[str, int]:
             continue
         counts[name] = counts.get(name, 0) + int(count or 0)
     return counts
+
+
+def _audit_item(row: AuditLog, *, include_ip: bool = False) -> dict:
+    """One audit row in the dashboard's contract.
+
+    `detail` is nullable in the database but the admin client expects a
+    string; an older row written without a note reads as "". Only the
+    fields named here leave the API - no ORM state or provider payloads.
+    """
+    item = {
+        "id": row.id,
+        "actor_id": row.actor_id,
+        "action": row.action,
+        "resource_type": row.resource_type,
+        "resource_id": row.resource_id,
+        "detail": row.detail or "",
+        "created_at": _iso(row.created_at),
+    }
+    if include_ip:
+        item["ip_address"] = row.ip_address
+    return item
 
 
 def _deal_item(deal: Deal) -> dict:
@@ -276,6 +297,12 @@ async def _payment_status_counts(db: AsyncSession) -> tuple[dict, dict]:
     zetupay = {status: 0 for status in _ZETUPAY_STATUSES}
     for source, status, count in rows:
         name = _status(status)
+        # Provider rows written before the status column had a default can
+        # hold NULL. A None key is not a valid JSON object key and would make
+        # the dashboard's fixed status list silently miss the row; it is
+        # unknown, not pending.
+        if name is None:
+            continue
         if source == "mpesa":
             mpesa[name] = mpesa.get(name, 0) + int(count or 0)
         elif source == "zetupay":
@@ -303,13 +330,20 @@ def _awaiting_manual_refund_condition():
 
 @router.get("/summary")
 async def admin_summary(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
     db: AsyncSession = Depends(get_db),
 ):
+    from api.domains.listings.paid import live_clause
+
     users_r = await db.execute(select(func.count(User.id)))
     listings_r = await db.execute(select(func.count(Listing.id)))
+    # Same definition as ops_snapshot.listings.active: an "active" count
+    # that included expired/unpaid, sold-out or (while auctions are off)
+    # auction rows would tell the dashboard buyers can see listings they
+    # cannot. The full lifecycle count stays in `listings`.
     listings_active_r = await db.execute(
-        select(func.count(Listing.id)).where(Listing.status == ListingStatus.active)
+        select(func.count(Listing.id)).where(
+            Listing.status == ListingStatus.active, live_clause())
     )
     deals_r = await db.execute(select(func.count(Deal.id)))
     deals_released_r = await db.execute(
@@ -341,7 +375,7 @@ async def admin_summary(
 @router.get("/ops-snapshot")
 async def ops_snapshot(
     window_hours: int = Query(24, ge=1, le=720),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
     db: AsyncSession = Depends(get_db),
 ):
     """One bounded read for the dashboard's operations page.
@@ -413,7 +447,7 @@ async def ops_snapshot(
         .group_by(MediaAsset.purpose)
     )).all()
     media_by_kind = {
-        str(kind): int(count or 0) for kind, count in media_rows
+        (_status(kind) or "unknown"): int(count or 0) for kind, count in media_rows
     }
 
     from api.core.ledger import ledger as _ledger
@@ -473,7 +507,7 @@ async def ops_snapshot(
             "admins": await count(User, User.is_admin == True),     # noqa: E712
         },
         "listings": {
-            "total": sum(listings_by_status.values()),
+            "total": await count(Listing),
             "by_status": listings_by_status,
             "active": await count(
                 Listing, Listing.status == ListingStatus.active, live_clause(now)),
@@ -484,7 +518,7 @@ async def ops_snapshot(
                 Listing.created_at < current_start),
         },
         "deals": {
-            "total": sum(deals_by_status.values()),
+            "total": await count(Deal),
             "by_status": deals_by_status,
             "created_current": await count(
                 Deal, Deal.created_at >= current_start, Deal.created_at < now),
@@ -505,7 +539,7 @@ async def ops_snapshot(
         "disputes": {
             "legacy_total": await count(Dispute),
             "legacy_open": await count(Dispute, Dispute.status == DisputeStatus.open),
-            "cases_total": sum(cases_by_state.values()),
+            "cases_total": await count(DisputeCase),
             "cases_active": sum(
                 cases_by_state.get(state.value, 0)
                 for state in CaseState if state.is_active
@@ -560,7 +594,7 @@ async def _ledger_account_total(db: AsyncSession, account, direction) -> Decimal
 
 @router.get("/health/services")
 async def service_health(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """Dependency checks and provider configuration, bounded by timeouts.
 
@@ -722,7 +756,7 @@ async def admin_stores(
     status: Optional[str] = Query(None),
     active: Optional[bool] = None,
     deleted: bool = False,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
     db: AsyncSession = Depends(get_db),
 ):
     """Paginated store directory. Deleted stores are excluded by default.
@@ -800,7 +834,7 @@ def _user_item(user: User) -> dict:
         "trust_score": score,
         "trust_band": trust_band(score),
         "is_flagged": bool(user.is_flagged),
-        "completed_deals": user.completed_deals,
+        "completed_deals": int(user.completed_deals or 0),
         "rating": user.rating,
         "created_at": _iso(user.created_at),
     }
@@ -815,7 +849,7 @@ async def list_users(
     is_admin: Optional[bool] = None,
     account_type: Optional[AccountType] = None,
     flagged_only: bool = False,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
     """User directory. X-Total-Count is the filtered total, not the page size."""
@@ -877,7 +911,7 @@ async def admin_deals(
     status: Optional[list[str]] = Query(None),
     seller_id: Optional[str] = Query(None, max_length=64),
     buyer_id: Optional[str] = Query(None, max_length=64),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.VIEW_TRANSACTIONS)),
     db: AsyncSession = Depends(get_db),
 ):
     """Paginated deals. `status_counts` is global; `total` is filtered."""
@@ -911,7 +945,7 @@ async def admin_deals(
 @router.get("/deals/{deal_id}")
 async def admin_deal_detail(
     deal_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.VIEW_TRANSACTIONS)),
     db: AsyncSession = Depends(get_db),
 ):
     """One deal and its real child records. Missing children are empty arrays."""
@@ -1015,7 +1049,7 @@ async def admin_listings(
     seller_id: Optional[str] = Query(None, max_length=64),
     store_id: Optional[str] = Query(None, max_length=64),
     search: Optional[str] = Query(None, max_length=100),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
     db: AsyncSession = Depends(get_db),
 ):
     """Paginated listings. `status_counts` is global; `total` is filtered.
@@ -1083,7 +1117,7 @@ async def admin_disputes(
     branch: Optional[str] = Query(None),
     dispute_type: Optional[str] = Query(None, max_length=64),
     deal_id: Optional[str] = Query(None, max_length=64),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.VIEW_ALL_DISPUTES)),
     db: AsyncSession = Depends(get_db),
 ):
     """Modern dispute cases plus a separate legacy-dispute summary.
@@ -1176,7 +1210,7 @@ async def admin_payments(
     user_id: Optional[str] = Query(None, max_length=64),
     deal_id: Optional[str] = Query(None, max_length=64),
     search: Optional[str] = Query(None, max_length=100),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.VIEW_TRANSACTIONS)),
     db: AsyncSession = Depends(get_db),
 ):
     """Read-only payment intents across Daraja and ZetuPay.
@@ -1248,7 +1282,7 @@ async def admin_payments(
 
 @router.get("/finance-integrity")
 async def finance_integrity(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.VIEW_TRANSACTIONS)),
     db: AsyncSession = Depends(get_db),
 ):
     """Read-only financial diagnostics from canonical ledger/deal records.
@@ -1441,7 +1475,7 @@ async def finance_integrity(
 @router.get("/users/{user_id}")
 async def admin_user_detail(
     user_id: str,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
     """One user's account state, bounded recent activity and real deal stats."""
@@ -1516,7 +1550,7 @@ async def admin_user_detail(
                 user.trust_score if user.trust_score is not None else 100),
             "is_flagged": bool(user.is_flagged),
             "rating": user.rating,
-            "completed_deals": user.completed_deals,
+            "completed_deals": int(user.completed_deals or 0),
             "last_seen": _iso(user.last_seen),
             "created_at": _iso(user.created_at),
             "business_name": user.business_name,
@@ -1544,18 +1578,7 @@ async def admin_user_detail(
             }
             for event in fraud_events
         ],
-        "recent_audit": [
-            {
-                "id": row.id,
-                "actor_id": row.actor_id,
-                "action": row.action,
-                "resource_type": row.resource_type,
-                "resource_id": row.resource_id,
-                "detail": row.detail,
-                "created_at": _iso(row.created_at),
-            }
-            for row in recent_audit
-        ],
+        "recent_audit": [_audit_item(row) for row in recent_audit],
         "generated_at": _now_iso(),
     }
 
@@ -1567,7 +1590,7 @@ async def resolve_fraud_event(
     event_id: str,
     request: Request,
     body: Optional[AdminActionIn] = None,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
     """Resolve one fraud event once; repeat calls report changed=false."""
@@ -1617,7 +1640,7 @@ async def resolve_fraud_event(
 @router.get("/zeno/activity")
 async def zeno_activity(
     window_hours: int = Query(24, ge=1, le=720),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
     db: AsyncSession = Depends(get_db),
 ):
     """Durable Zeno/negotiation activity, plus honestly-labelled local counters.
@@ -1744,7 +1767,7 @@ async def promote_to_admin(
     user_id: str,
     request: Request,
     body: Optional[AdminActionIn] = None,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.PROMOTE_ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
     r = await db.execute(select(User).where(User.id == user_id))
@@ -1766,7 +1789,7 @@ async def flag_user(
     user_id: str,
     request: Request,
     body: Optional[AdminActionIn] = None,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
     r = await db.execute(select(User).where(User.id == user_id))
@@ -1791,7 +1814,7 @@ async def unflag_user(
     user_id: str,
     request: Request,
     body: Optional[AdminActionIn] = None,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
     r = await db.execute(select(User).where(User.id == user_id))
@@ -1815,7 +1838,7 @@ async def recompute_trust(
     user_id: str,
     request: Request,
     body: Optional[AdminActionIn] = None,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
     score = await compute_trust_score(user_id, db)
@@ -1829,7 +1852,7 @@ async def recompute_trust(
 
 
 @router.get("/ai-savings")
-async def ai_savings(admin: User = Depends(require_admin)):
+async def ai_savings(admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY))):
     """How many relay-classification calls are being avoided.
 
     Process-local counters, so they reset on deploy and are per-worker -
@@ -1843,7 +1866,7 @@ async def ai_savings(admin: User = Depends(require_admin)):
 @router.get("/ledger-integrity")
 async def ledger_integrity(
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.VIEW_TRANSACTIONS)),
 ):
     """Escrow ledger health.
 
@@ -1872,7 +1895,7 @@ async def ledger_integrity(
 @router.get("/diagnostics/econfirm")
 async def econfirm_diagnostics(
     amount: float = Query(1000, gt=0, le=1_000_000),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """Is E-Confirm reachable with this deployment's key? Asks for the fee
     on `amount` - a read that moves no money - and returns what came back,
@@ -1900,7 +1923,7 @@ async def econfirm_diagnostics(
 async def econfirm_refunded(
     deal_id: str,
     request: Request,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.OVERRIDE_ESCROW)),
     db: AsyncSession = Depends(get_db),
 ):
     """Close an approved refund that was returned by hand through E-Confirm.
@@ -1918,42 +1941,47 @@ async def econfirm_refunded(
 
 @router.get("/audit-logs")
 async def get_audit_logs(
+    response: Response,
     resource_type: Optional[str] = None,
     resource_id: Optional[str] = None,
     actor_id: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
+    """Filtered audit trail. X-Total-Count is the filtered total."""
+    conditions = []
     if resource_type:
-        q = q.where(AuditLog.resource_type == resource_type)
+        conditions.append(AuditLog.resource_type == resource_type)
     if resource_id:
-        q = q.where(AuditLog.resource_id == resource_id)
+        conditions.append(AuditLog.resource_id == resource_id)
     if actor_id:
-        q = q.where(AuditLog.actor_id == actor_id)
-    r = await db.execute(q)
-    logs = r.scalars().all()
-    return [
-        {
-            "id": l.id, "actor_id": l.actor_id, "action": l.action,
-            "resource_type": l.resource_type, "resource_id": l.resource_id,
-            "detail": l.detail, "ip_address": l.ip_address,
-            "created_at": l.created_at.isoformat() if l.created_at else None,
-        }
-        for l in logs
-    ]
+        conditions.append(AuditLog.actor_id == actor_id)
+
+    total = int((await db.execute(
+        select(func.count(AuditLog.id)).where(*conditions)
+    )).scalar() or 0)
+    rows = (await db.execute(
+        select(AuditLog).where(*conditions)
+        .order_by(desc(AuditLog.created_at), desc(AuditLog.id))
+        .limit(limit).offset(offset)
+    )).scalars().all()
+    response.headers["X-Total-Count"] = str(total)
+    return [_audit_item(row, include_ip=True) for row in rows]
 
 
 @router.get("/fraud-events")
 async def get_fraud_events(
     resolved: Optional[bool] = None,
     limit: int = Query(50, ge=1, le=200),
-    admin: User = Depends(require_admin),
+    offset: int = Query(0, ge=0),
+    admin: User = Depends(require_permission(Permission.MANAGE_USERS)),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(FraudEvent).order_by(desc(FraudEvent.created_at)).limit(limit)
+    q = (select(FraudEvent)
+         .order_by(desc(FraudEvent.created_at), desc(FraudEvent.id))
+         .limit(limit).offset(offset))
     if resolved is not None:
         q = q.where(FraudEvent.resolved == resolved)
     r = await db.execute(q)
@@ -1962,8 +1990,9 @@ async def get_fraud_events(
         {
             "id": e.id, "user_id": e.user_id, "reason": e.reason,
             "triggered_by": e.triggered_by, "trust_score_at_flag": e.trust_score_at_flag,
-            "reviewed_by_admin": e.reviewed_by_admin, "resolved": e.resolved,
-            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "reviewed_by_admin": bool(e.reviewed_by_admin),
+            "resolved": bool(e.resolved),
+            "created_at": _iso(e.created_at),
         }
         for e in events
     ]
@@ -1972,20 +2001,23 @@ async def get_fraud_events(
 @router.get("/transactions")
 async def get_transactions(
     limit: int = Query(50, ge=1, le=200),
-    admin: User = Depends(require_admin),
+    offset: int = Query(0, ge=0),
+    admin: User = Depends(require_permission(Permission.VIEW_TRANSACTIONS)),
     db: AsyncSession = Depends(get_db),
 ):
     r = await db.execute(
-        select(MpesaTransaction).order_by(desc(MpesaTransaction.created_at)).limit(limit)
+        select(MpesaTransaction).order_by(
+            desc(MpesaTransaction.created_at), desc(MpesaTransaction.id)
+        ).limit(limit).offset(offset)
     )
     txns = r.scalars().all()
     return [
         {
             "id": t.id, "deal_id": t.deal_id, "buyer_id": t.buyer_id,
-            "phone": t.phone, "amount": t.amount,
+            "phone": t.phone, "amount": _money(t.amount),
             "mpesa_receipt": t.mpesa_receipt,
-            "status": t.status.value,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "status": _status(t.status),
+            "created_at": _iso(t.created_at),
         }
         for t in txns
     ]
@@ -1995,7 +2027,7 @@ async def get_transactions(
 
 @router.get("/workflow-versions")
 async def get_workflow_versions(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """
     Return all registered workflow versions and their rule sets.
@@ -2010,7 +2042,7 @@ async def get_workflow_versions(
 
 @router.get("/event-metrics")
 async def get_event_metrics(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """
     Return in-process event counts since last restart.
@@ -2029,7 +2061,7 @@ async def get_event_metrics(
 
 @router.get("/event-catalog")
 async def get_event_catalog(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """
     Return the full Broka Event Catalog — every event type and its domain.
@@ -2049,7 +2081,7 @@ async def get_event_catalog(
 @router.post("/media/backfill")
 async def run_media_backfill(
     rows_per_kind: int = Query(50, ge=1, le=500),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """Run one media backfill pass now (the 5-minute sweep runs smaller
     ones on its own) and report what is left."""
@@ -2061,7 +2093,7 @@ async def run_media_backfill(
 @router.get("/diagnostics/client-ip")
 async def client_ip_diagnostics(
     request: Request,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_permission(Permission.ADMIN_SUMMARY)),
 ):
     """What this deployment believes the caller's address is, and why.
 

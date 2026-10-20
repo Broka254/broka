@@ -75,7 +75,13 @@ _USER_PERMISSIONS: set[Permission] = {
     Permission.USE_AI_DISPUTE,
 }
 
-# Additional permissions granted to admins
+# Additional permissions granted to admins.
+#
+# There is no role-storage table yet: `User.is_admin` is the only role field,
+# and every administrator receives this whole set. The flags exist so routes
+# can name the capability they need and a narrower admin role can be added
+# later without changing those routes - do not describe them as enforcing
+# separation between administrators today.
 _ADMIN_PERMISSIONS: set[Permission] = _USER_PERMISSIONS | {
     Permission.RELEASE_ESCROW,
     Permission.RESOLVE_DISPUTE,
