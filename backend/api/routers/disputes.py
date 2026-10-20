@@ -465,7 +465,8 @@ async def _mpesa_b2c_refund(phone: str, amount: float, reference_id: str) -> dic
             OAUTH_URL, headers={"Authorization": f"Basic {creds}"}
         )
     if tok_resp.status_code != 200:
-        logger.error("[disputes] M-Pesa OAuth failed for B2C: %s", tok_resp.text[:200])
+        # The OAuth body can echo credentials and must never be logged.
+        logger.error("[disputes] M-Pesa OAuth failed for B2C: status=%s", tok_resp.status_code)
         return {"success": False, "detail": "oauth_failed"}
     token = tok_resp.json()["access_token"]
 
@@ -491,10 +492,13 @@ async def _mpesa_b2c_refund(phone: str, amount: float, reference_id: str) -> dic
 
     body = resp.json()
     if resp.status_code == 200 and body.get("ResponseCode") == "0":
-        logger.info("[disputes] B2C refund initiated for %s → phone %s", reference_id, p)
+        logger.info("[disputes] B2C refund initiated for %s", reference_id)
         return {"success": True, "detail": body.get("ConversationID", "")}
     else:
-        logger.error("[disputes] B2C refund failed: %s", body)
+        logger.error(
+            "[disputes] B2C refund failed: status=%s code=%s",
+            resp.status_code, body.get("ResponseCode"),
+        )
         return {"success": False, "detail": body.get("ResponseDescription", "b2c_failed")}
 
 

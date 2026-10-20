@@ -1,7 +1,8 @@
 """Tests for ARQ + in-process worker infrastructure (v4.0)."""
 import asyncio
+import uuid
 import pytest
-from api.core.workers import BackgroundWorker
+from api.core.workers import BackgroundWorker, scheduler_lease
 
 class TestBackgroundWorker:
     @pytest.mark.asyncio
@@ -41,3 +42,18 @@ class TestBackgroundWorker:
         await asyncio.sleep(0.5)
         await w.stop()
         assert sorted(results) == list(range(10))
+
+
+class TestSchedulerLease:
+    @pytest.mark.asyncio
+    async def test_only_one_replica_runs_a_named_sweep_and_releases_on_exit(self):
+        name = f"broka:test:scheduler:{uuid.uuid4()}"
+        async with scheduler_lease(name) as first:
+            assert first is True
+            async with scheduler_lease(name) as overlapping:
+                assert overlapping is False
+
+        # The lease is released by leaving the first context (or by the
+        # database closing a crashed process's connection).
+        async with scheduler_lease(name) as after_release:
+            assert after_release is True

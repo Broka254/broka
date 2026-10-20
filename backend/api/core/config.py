@@ -687,6 +687,19 @@ def validate_startup() -> None:
             "/verify/callback/<secret>, and /featured/callback/<secret>."
         )
 
+    # ── Explicit browser origins in production ────────────────────────────────
+    # Bearer-token authentication does not make a wildcard harmless: it lets
+    # any website call signup/login/OTP and every unauthenticated read from a
+    # user's browser. Native clients ignore CORS, so the only production
+    # callers that need it are the storefront and the admin dashboard - a
+    # known, small set that must be named rather than "*".
+    if s.is_production and s.allowed_origins_raw.strip() in ("", "*"):
+        raise RuntimeError(
+            "FATAL: ALLOWED_ORIGINS must be an explicit comma-separated list "
+            "of the production web/admin origins; a wildcard is not allowed. "
+            "Example: https://broka.co.ke,https://admin.broka.co.ke"
+        )
+
     # ── Check ECONFIRM_API_KEY ─────────────────────────────────────────────────
     # Marketplace escrow funding/release for every new deal goes through
     # E-Confirm now (see api/core/econfirm_client.py) - without this key in

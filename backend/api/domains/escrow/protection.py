@@ -617,6 +617,8 @@ async def mark_econfirm_refunded(db: AsyncSession, deal_id: str, admin_id: str,
     await record_audit(db, admin_id, "econfirm_refund_completed", "deal", deal_id,
                        f"amount={held}", ip_address=request_ip)
     _zeno_says(db, locked, "buyer", f"Your refund of {_kes(held)} has been sent. This deal is closed.")
+    from api.core.ledger import ledger
+    await ledger.record_escrow_refunded(db, deal_id, held, f"refund-request-{deal_id[:8]}")
     await db.commit()
     await publish(EscrowRefunded(
         deal_id=deal_id, buyer_id=locked.buyer_id, seller_id=locked.seller_id,

@@ -15,6 +15,7 @@ before two wrong foreign keys were removed (audit_logs.actor_id, which also
 holds "system"; auction_meta.deal_id, which holds a claim before its deal
 exists). It runs when the suite runs on Postgres (tests/postgres_plugin.py).
 """
+import asyncio
 import uuid
 from datetime import datetime, timedelta
 
@@ -104,9 +105,14 @@ class TestRefreshTokens:
         assert (await _refresh(client, new)).status_code == 200
         # The old one still works for the grace period - a lost response is
         # retried with it - and then stops.
-        assert (await _refresh(client, old)).status_code == 200
+        retry = await _refresh(client, old)
+        assert retry.status_code == 200
+        assert "refresh_token" not in retry.json(), (
+            "rotation happens once; replaying the old token must not mint another"
+        )
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(select(RefreshToken).where(RefreshToken.user_id == user_id))).scalars().all()
+        assert len(rows) == 2, "one original token and exactly one replacement"
         shortened = [r for r in rows if r.expires_at <= datetime.utcnow() + ROTATION_GRACE]
         assert shortened, "the replaced token's lifetime is cut to the grace period"
         async with AsyncSessionLocal() as db:
@@ -125,6 +131,25 @@ class TestRefreshTokens:
 
 def _on_postgres() -> bool:
     return database.DATABASE_URL.startswith("postgresql")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _on_postgres(), reason="Postgres only (tests/postgres_plugin.py)")
+async def test_simultaneous_refreshes_rotate_only_once(client):
+    user_id, token = await _signed_in(client)
+    await _age_tokens(user_id, ROTATE_AFTER + timedelta(hours=1))
+
+    first, second = await asyncio.gather(_refresh(client, token), _refresh(client, token))
+    assert first.status_code == second.status_code == 200
+    bodies = [first.json(), second.json()]
+    assert sum("refresh_token" in body for body in bodies) == 1, (
+        "one credential must not mint two replacement refresh tokens"
+    )
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(RefreshToken).where(
+            RefreshToken.user_id == user_id))).scalars().all()
+    assert len(rows) == 2
+    assert sum(row.rotated_at is not None for row in rows) == 1
 
 
 @pytest.mark.asyncio

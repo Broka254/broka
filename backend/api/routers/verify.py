@@ -23,16 +23,22 @@ VerificationPayment through zetupay_settled() below.
 
 import os
 import base64
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from api.core import mpesa_stk
+from api.core.audit import record_audit
+from api.core.reconciliation import report_reconciliation
 from api.core.config import settings
 from api.core.rate_limit import stk_limiter
 from api.core.zetupay import ZetuPayUnavailable
@@ -95,6 +101,25 @@ class PurchaseRequest(BaseModel):
     phone_number: str    # buyer's M-Pesa phone  07XX or 2547XX
 
 
+def _verification_fingerprint(tier: str, phone: str, amount: int) -> str:
+    return hashlib.sha256(f"{tier}\n{phone}\n{amount:.2f}".encode()).hexdigest()
+
+
+def _verification_response(payment: VerificationPayment) -> dict:
+    tier_info = VERIFY_TIERS.get(payment.tier, VERIFY_TIERS["basic"])
+    return {
+        "checkout_request_id": payment.checkout_request_id,
+        "customer_message": (
+            "This payment request is already in progress. Check your phone; "
+            "do not start another payment."
+        ),
+        "amount": tier_info["price"],
+        "tier": payment.tier,
+        "tier_label": tier_info["label"],
+        "status": payment.status.value,
+    }
+
+
 # ── M-Pesa helpers ────────────────────────────────────────────────────────────
 
 async def _get_token() -> str:
@@ -130,6 +155,7 @@ async def list_tiers():
 @router.post("/purchase")
 async def purchase_verification(
     payload: PurchaseRequest,
+    x_idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
     db:      AsyncSession = Depends(get_db),
     current: User         = Depends(get_current_user),
 ):
@@ -168,8 +194,73 @@ async def purchase_verification(
 
     amount = tier_info["price"]
     phone  = _fmt_phone(payload.phone_number)
+    if mpesa_stk.normalize_phone(phone) is None:
+        raise HTTPException(status_code=400, detail="Enter a Safaricom number, e.g. 0712 345 678.")
+
+    client_ref = (x_idempotency_key or "").strip() or None
+    if client_ref and len(client_ref) > 200:
+        raise HTTPException(status_code=400, detail="X-Idempotency-Key is too long")
+    fingerprint = _verification_fingerprint(payload.tier, phone, int(amount))
+    if client_ref:
+        earlier = (await db.execute(
+            select(VerificationPayment).where(
+                VerificationPayment.user_id == current["id"],
+                VerificationPayment.client_ref == client_ref,
+            ).limit(1)
+        )).scalar_one_or_none()
+        if earlier is not None:
+            if earlier.request_fingerprint != fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency key reused with a different payment request",
+                )
+            return _verification_response(earlier)
+
+    open_intent = (await db.execute(
+        select(VerificationPayment).where(
+            VerificationPayment.user_id == current["id"],
+            VerificationPayment.provider != zetupay_charges.PROVIDER,
+            VerificationPayment.status == MpesaStatus.pending,
+            VerificationPayment.active_intent.is_not(None),
+        ).order_by(VerificationPayment.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if open_intent is not None:
+        if open_intent.checkout_request_id:
+            return _verification_response(open_intent)
+        raise HTTPException(status_code=409, detail=(
+            "A verification payment already reached M-Pesa but its outcome "
+            "is not confirmed. Do not start another payment; check status "
+            "or contact support."
+        ))
+
+    # Persist before the provider call. A timeout then leaves a durable,
+    # blocking intent instead of a prompt nobody can match to a row.
+    vpay = VerificationPayment(
+        user_id=current["id"], tier=payload.tier, phone=phone,
+        amount=float(amount), checkout_request_id=None,
+        status=MpesaStatus.pending,
+        active_intent=f"verify:{current['id']}",
+        client_ref=client_ref,
+        request_fingerprint=fingerprint,
+    )
+    db.add(vpay)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=(
+            "A verification payment for this account is already in progress."
+        ))
+
     pwd, ts = _password_and_ts()
-    token   = await _get_token()
+    try:
+        token = await _get_token()
+    except Exception as exc:
+        vpay.status = MpesaStatus.failed
+        vpay.active_intent = None
+        vpay.last_error = f"oauth failed: {type(exc).__name__}"
+        await db.commit()
+        raise
 
     stk_payload = {
         "BusinessShortCode": SHORTCODE,
@@ -185,38 +276,47 @@ async def purchase_verification(
         "TransactionDesc":   f"BROKA {tier_info['label']} badge",
     }
 
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(
-            STK_URL, json=stk_payload,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                STK_URL, json=stk_payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        # The HTTP request may have reached Safaricom. Keep the active intent
+        # so a retry cannot send a second prompt; reconciliation settles it.
+        vpay.last_error = f"provider outcome unknown: {type(exc).__name__}"
+        await db.commit()
+        raise HTTPException(status_code=503, detail=(
+            "M-Pesa did not confirm the request. If a prompt reaches your "
+            "phone, complete it; otherwise check status before retrying."
+        ))
 
     if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"STK Push failed: {r.text}")
+        vpay.status = MpesaStatus.failed
+        vpay.active_intent = None
+        vpay.last_error = f"provider HTTP {r.status_code}"
+        await db.commit()
+        raise HTTPException(status_code=502, detail="M-Pesa could not start the payment.")
     body = r.json()
     if body.get("ResponseCode") != "0":
+        vpay.status = MpesaStatus.failed
+        vpay.active_intent = None
+        vpay.last_error = "provider rejected request"
+        await db.commit()
         raise HTTPException(
             status_code=400,
             detail=body.get("ResponseDescription", "M-Pesa rejected the request"),
         )
 
-    # Save pending payment record
-    vpay = VerificationPayment(
-        user_id             = current["id"],
-        tier                = payload.tier,
-        phone               = phone,
-        amount              = float(amount),
-        checkout_request_id = body["CheckoutRequestID"],
-        merchant_request_id = body.get("MerchantRequestID"),
-        status              = MpesaStatus.pending,
-    )
-    db.add(vpay)
+    vpay.checkout_request_id = body["CheckoutRequestID"]
+    vpay.merchant_request_id = body.get("MerchantRequestID")
+    vpay.last_error = None
     await db.commit()
-    await db.refresh(vpay)
 
     logger.info(
-        "[verify] STK Push sent - user=%s tier=%s phone=%s amount=KES%d",
-        current["id"], payload.tier, phone, amount,
+        "[verify] STK Push sent - user=%s tier=%s amount=KES%d",
+        current["id"], payload.tier, amount,
     )
 
     return {
@@ -250,9 +350,19 @@ async def _purchase_with_zetupay(db: AsyncSession, user_id: str, tier: str, phon
         user_id=user_id, tier=tier, phone=phone, amount=float(tier_info["price"]),
         checkout_request_id=reference, status=MpesaStatus.pending,
         provider=zetupay_charges.PROVIDER,
+        active_intent=f"verify:{user_id}",
     )
     db.add(vpay)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Two taps can both pass prompt_pending before either row is visible.
+        # The unique active-intent index stops the loser before any prompt.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=(
+            "An M-Pesa prompt for this badge is already on your phone. "
+            "Finish it, or check the payment status before trying again."
+        ))
     try:
         await zetupay_charges.start(
             db, user_id=user_id, purpose=Purpose.VERIFICATION, amount=tier_info["price"],
@@ -287,6 +397,7 @@ async def zetupay_settled(db: AsyncSession, payment_id: str, receipt: str | None
     if vpay is None or vpay.status == MpesaStatus.success:
         return
     vpay.status = MpesaStatus.success
+    vpay.active_intent = None
     vpay.mpesa_receipt = receipt
     user = (await db.execute(
         select(User).where(User.id == vpay.user_id)
@@ -307,6 +418,7 @@ async def zetupay_failed(db: AsyncSession, payment_id: str, reason: str) -> None
     if vpay is None or vpay.status != MpesaStatus.pending:
         return
     vpay.status = MpesaStatus.failed
+    vpay.active_intent = None
     logger.info("[verify] ZetuPay payment %s failed: %s", payment_id, reason)
     await db.commit()
 
@@ -346,51 +458,106 @@ async def verification_callback_secured(secret: str, request_data: dict, db: Asy
 
 async def _process_verification_callback(request_data: dict, db: AsyncSession) -> dict:
     """Shared Safaricom STK callback handling for both routes above."""
-    try:
-        body  = request_data.get("Body", {})
-        stkCb = body.get("stkCallback", {})
-        code  = stkCb.get("ResultCode", -1)
-        mid   = stkCb.get("MerchantRequestID", "")
-        cid   = stkCb.get("CheckoutRequestID", "")
+    stkCb = ((request_data or {}).get("Body") or {}).get("stkCallback") or {}
+    cid = stkCb.get("CheckoutRequestID")
+    raw_code = stkCb.get("ResultCode")
+    if not cid or raw_code is None or str(raw_code).strip() == "":
+        raise HTTPException(status_code=400, detail="CheckoutRequestID and ResultCode are required")
+    code = str(raw_code)
+    items = {i.get("Name"): i.get("Value")
+             for i in ((stkCb.get("CallbackMetadata") or {}).get("Item") or [])}
+    receipt = str(items.get("MpesaReceiptNumber") or "").strip() or None
 
-        vpay_r = await db.execute(
+    try:
+        vpay = (await db.execute(
             select(VerificationPayment).where(
                 VerificationPayment.checkout_request_id == cid,
                 # A ZetuPay row's checkout_request_id is its ZetuPay
                 # reference: only ZetuPay's webhook may settle it.
                 VerificationPayment.provider != zetupay_charges.PROVIDER,
-            )
-        )
-        vpay = vpay_r.scalar_one_or_none()
-        if not vpay:
-            logger.warning("[verify] Callback - no VerificationPayment for CID %s", cid)
+            ).with_for_update().execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if vpay is None:
+            logger.warning("[verify] callback for unknown Daraja checkout id")
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-        if code == 0:
-            # Payment successful
-            metadata  = stkCb.get("CallbackMetadata", {}).get("Item", [])
-            receipt   = next((i["Value"] for i in metadata if i["Name"] == "MpesaReceiptNumber"), None)
-            vpay.status        = MpesaStatus.success
-            vpay.mpesa_receipt = receipt
-
-            # Upgrade the user
-            user_r = await db.execute(select(User).where(User.id == vpay.user_id))
-            user   = user_r.scalar_one_or_none()
-            if user:
-                _grant_badge(user, vpay.tier)
-                logger.info(
-                    "[verify] ✅ User %s verified - tier=%s expires=%s receipt=%s",
-                    user.id, vpay.tier, user.verify_expires_at, receipt,
-                )
-        else:
+        if vpay.status == MpesaStatus.success:
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        if code != "0":
             vpay.status = MpesaStatus.failed
-            logger.info("[verify] ❌ Payment failed for CID %s - code=%s", cid, code)
+            vpay.active_intent = None
+            await db.commit()
+            logger.info("[verify] payment failed for CID %s - code=%s", cid, code)
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
+        try:
+            reported = Decimal(str(items["Amount"])) if items.get("Amount") is not None else None
+        except (ArithmeticError, TypeError, ValueError):
+            reported = None
+        expected = Decimal(str(vpay.amount or 0))
+        if reported is None or expected <= 0 or abs(reported - expected) >= Decimal("0.01"):
+            reason = (
+                f"Verification callback reported {reported}, expected {expected} "
+                f"for payment {vpay.id} - not settled"
+            )
+            vpay.status = MpesaStatus.failed
+            vpay.active_intent = None
+            await record_audit(
+                db, "system", "verification_amount_mismatch", "user", vpay.user_id, reason,
+            )
+            report_reconciliation(
+                "verification_amount_mismatch", deal_id=None, reason=reason,
+                payment_id=vpay.id,
+            )
+            await db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        if not receipt:
+            report_reconciliation(
+                "verification_missing_receipt", deal_id=None,
+                reason=f"Successful verification callback for payment {vpay.id} had no receipt",
+                payment_id=vpay.id,
+            )
+            await db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        duplicate = (await db.execute(
+            select(VerificationPayment.id).where(
+                VerificationPayment.mpesa_receipt == receipt,
+                VerificationPayment.id != vpay.id,
+            ).limit(1)
+        )).scalar()
+        if duplicate:
+            vpay.status = MpesaStatus.failed
+            vpay.active_intent = None
+            await record_audit(
+                db, "system", "verification_duplicate_receipt", "user", vpay.user_id,
+                f"M-Pesa receipt already belongs to payment {duplicate}",
+            )
+            await db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        vpay.status = MpesaStatus.success
+        vpay.active_intent = None
+        vpay.mpesa_receipt = receipt
+        user = (await db.execute(
+            select(User).where(User.id == vpay.user_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if user is not None:
+            _grant_badge(user, vpay.tier)
+            logger.info(
+                "[verify] user %s verified - tier=%s expires=%s",
+                user.id, vpay.tier, user.verify_expires_at,
+            )
         await db.commit()
-    except Exception as e:
-        logger.error("[verify] Callback error: %s", e)
-
-    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("[verify] callback failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Callback not processed")
 
 
 @router.get("/status")

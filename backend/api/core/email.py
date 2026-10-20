@@ -56,9 +56,8 @@ class ConsoleEmail:
             return False
         logger.warning(
             "[email:console] no email provider configured (checked "
-            "RESEND_API_KEY) — logging instead of sending. to=%s subject=%r "
-            "body=%r",
-            to, subject, text,
+            "RESEND_API_KEY) — logging instead of sending. recipient, "
+            "subject and body redacted",
         )
         return True
 
@@ -94,31 +93,26 @@ class ResendEmail:
             )
 
         if resp.status_code >= 400:
-            # Resend explains refusals in the body (unverified domain,
-            # invalid from-address, rate limit). Surfacing it turns a silent
-            # "code never arrived" into something diagnosable. The body
-            # describes the request, never the code itself, which lives only
-            # in `html`/`text` and is not echoed back.
-            logger.error(
-                "[email:resend] send rejected to=%s status=%s body=%s",
-                to, resp.status_code, resp.text[:500],
-            )
+            # A Resend error body can echo the recipient and request details.
+            # Status plus the provider exception is enough to diagnose it
+            # without putting customer identity in ordinary logs.
+            logger.error("[email:resend] send rejected status=%s", resp.status_code)
             resp.raise_for_status()
 
         # A 200 carries the queued message id. Its absence means the request
         # was accepted but nothing was queued, which is not a success.
         message_id = (resp.json() or {}).get("id")
         if not message_id:
-            logger.error("[email:resend] accepted but no message id to=%s", to)
+            logger.error("[email:resend] accepted but no message id (recipient redacted)")
             return False
-        logger.info("[email:resend] queued to=%s id=%s", to, message_id)
+        logger.info("[email:resend] queued id=%s (recipient redacted)", message_id)
         return True
 
     async def send(self, to: str, subject: str, html: str, text: str) -> bool:
         try:
             return await _resend_breaker.call(self._send_once, to, subject, html, text)
         except (CircuitOpenError, httpx.HTTPError) as e:
-            logger.error("[email:resend] send failed to=%s err=%s", to, e)
+            logger.error("[email:resend] send failed err=%s", type(e).__name__)
             return False
 
 

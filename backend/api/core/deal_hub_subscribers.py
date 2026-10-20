@@ -234,7 +234,7 @@ async def on_mpesa_callback(envelope: EventEnvelope) -> None:
     """
     p = envelope.payload
     logger.info(
-        "[deal_hub_sub] M-Pesa callback cid=%s code=%s receipt=%s amount=%s",
+        "[deal_hub_sub] M-Pesa callback cid=%s code=%s receipt_present=%s amount=%s",
         p.get("checkout_request_id"), p.get("result_code"),
-        p.get("mpesa_receipt"), p.get("amount"),
+        bool(p.get("mpesa_receipt")), p.get("amount"),
     )

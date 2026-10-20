@@ -32,6 +32,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core import mpesa_stk
@@ -125,21 +126,31 @@ async def start(
         select(SubscriptionPayment.id).where(
             SubscriptionPayment.user_id == user_id,
             SubscriptionPayment.status == S.PENDING,
-            SubscriptionPayment.created_at > now - PENDING_WINDOW,
         ).limit(1)
     )).scalar()
     if pending:
         raise HTTPException(status_code=409, detail=(
             "An M-Pesa prompt for your plan is already on your phone. "
-            "Finish it, or try again in two minutes."
+            "Finish it, or check the payment status before trying again."
         ))
 
     payment = SubscriptionPayment(
         user_id=user_id, plan_id=plan.id, months=months, amount=price_for(plan, months),
         phone=phone, status=S.PENDING, created_at=now,
+        active_intent=f"premium:{user_id}",
     )
     db.add(payment)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # The pending SELECT above cannot see another transaction's
+        # uncommitted row. The unique active_intent index can, and makes
+        # the loser fail here - before it asks M-Pesa for a second prompt.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=(
+            "An M-Pesa prompt for your plan is already on your phone. "
+            "Finish it, or check the payment status before trying again."
+        ))
     if zetupay_charges.enabled():
         payment.provider = zetupay_charges.PROVIDER
         try:
@@ -156,8 +167,20 @@ async def start(
                 phone, payment.amount, account_reference="BROKAPremium",
                 description=f"{plan.name} {months}mo", callback_url=callback_url(),
             )
+        except mpesa_stk.MpesaTimeout as exc:
+            # The prompt may have reached the phone. Keep the row pending so
+            # this block above prevents a second one; the status poll or
+            # Safaricom callback resolves it.
+            payment.failure_reason = "provider_outcome_unknown"
+            await db.commit()
+            logger.warning("[premium] ambiguous prompt outcome for payment=%s: %s", payment.id, exc)
+            raise HTTPException(status_code=503, detail=(
+                "M-Pesa did not confirm the request. If a prompt reaches "
+                "your phone, complete it; otherwise check status before retrying."
+            ))
         except mpesa_stk.MpesaUnavailable as exc:
             payment.status, payment.processed, payment.failure_reason = S.FAILED, True, "prompt_not_sent"
+            payment.active_intent = None
             await db.commit()
             logger.warning("[premium] no prompt for payment=%s: %s", payment.id, exc)
             raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
@@ -182,12 +205,34 @@ async def _locked_payment(db: AsyncSession, condition) -> Optional[SubscriptionP
 async def _settle(db: AsyncSession, payment: SubscriptionPayment, receipt: Optional[str]) -> None:
     """Apply a confirmed payment; the caller holds its lock and checked it."""
     now = datetime.utcnow()
+    if receipt:
+        duplicate = (await db.execute(
+            select(SubscriptionPayment.id).where(
+                SubscriptionPayment.mpesa_receipt == receipt,
+                SubscriptionPayment.id != payment.id,
+            ).limit(1)
+        )).scalar()
+        if duplicate:
+            reason = (f"M-Pesa receipt {receipt} already belongs to premium payment "
+                      f"{duplicate}; payment {payment.id} was not applied")
+            payment.status = S.FAILED
+            payment.processed = True
+            payment.failure_reason = "duplicate_receipt"
+            payment.active_intent = None
+            await record_audit(
+                db, "system", "premium_duplicate_receipt", "user", payment.user_id, reason,
+            )
+            from api.core.reconciliation import report_reconciliation
+            report_reconciliation("premium_duplicate_receipt", deal_id=None, reason=reason)
+            await db.commit()
+            return
     sub = (await db.execute(
         select(Subscription).where(Subscription.user_id == payment.user_id)
         .with_for_update().execution_options(populate_existing=True)
     )).scalar_one_or_none()
     plan = PREMIUM_BY_ID.get(payment.plan_id)
     payment.status, payment.processed, payment.paid_at, payment.mpesa_receipt = S.SUCCESS, True, now, receipt
+    payment.active_intent = None
     if plan is None:
         # A plan retired while the prompt was open: the money is recorded,
         # and a person decides what it buys.
@@ -210,6 +255,7 @@ async def _settle(db: AsyncSession, payment: SubscriptionPayment, receipt: Optio
 
 async def _fail(db: AsyncSession, payment: SubscriptionPayment, reason: str) -> None:
     payment.status, payment.processed, payment.failure_reason = S.FAILED, True, reason[:200]
+    payment.active_intent = None
     await db.commit()
 
 

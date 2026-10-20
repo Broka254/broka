@@ -2233,6 +2233,10 @@ async def send_message(
         seller_user = seller_result.scalar_one_or_none()
         if seller_user:
             seller_user.completed_deals = (seller_user.completed_deals or 0) + 1
+        from api.core.ledger import ledger
+        await ledger.record_escrow_released(
+            db, active_deal.id, active_deal.agreed_price, active_deal.commission,
+        )
         await db.commit()
         # After commit: this is what writes the ledger entry and updates an
         # open deal screen - the chat release used to publish nothing.
@@ -2548,6 +2552,8 @@ async def send_message(
         active_deal.status = DealStatus.refunded
         active_deal.refunded_at = now
         active_deal.timer_cancelled_at = now
+        from api.core.ledger import ledger
+        await ledger.record_escrow_refunded(db, active_deal.id, refund_amount, "")
         await db.commit()
         from api.core.events import EscrowRefunded, publish as _publish
         await _publish(EscrowRefunded(

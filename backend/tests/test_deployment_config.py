@@ -23,6 +23,7 @@ back in the entrypoint" can be done without a red test explaining why.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import shutil
@@ -168,6 +169,24 @@ class TestRenderConfig:
         text = (REPO_ROOT / "render.yaml").read_text().lower()
         assert "alembic auto-migration" not in text
 
+    def test_production_refuses_wildcard_cors(self, monkeypatch):
+        from api.core import config as config_module
+
+        production = dataclasses.replace(
+            config_module.settings,
+            env="production",
+            secret_key="x" * 40,
+            zac_secret="test-zac-secret-long-enough",
+            mpesa_callback_secret="test-callback-secret",
+            econfirm_api_key="test-econfirm-key",
+            database_url="postgresql+asyncpg://user:pass@localhost/broka",
+            native_mode="auto",
+            allowed_origins_raw="*",
+        )
+        monkeypatch.setattr(config_module, "settings", production)
+        with pytest.raises(RuntimeError, match="ALLOWED_ORIGINS"):
+            config_module.validate_startup()
+
 
 class TestTheFaultsThatMadeThisNecessary:
     """Both are still true. If either stops being true, revisit the setup."""
@@ -218,7 +237,76 @@ class TestInitDbIsTheRealMechanism:
             from api.models.store import Store
             await db.execute(select(Store).limit(1))
 
+    @pytest.mark.asyncio
+    async def test_readiness_requires_the_current_schema(self):
+        import json
+
+        import main as app_main
+        from api.database import SCHEMA_VERSION
+
+        response = await app_main.ready()
+        body = json.loads(response.body)
+        assert response.status_code == 200
+        assert body["status"] == "ready"
+        assert body["schema"] == "ok"
+        assert body["schema_version"] == body["schema_required"] == SCHEMA_VERSION
+        assert body["schema_missing"] == {}
+        assert body["schema_missing_indexes"] == {}
+
     def test_main_runs_init_db_on_startup(self):
         text = (BACKEND / "main.py").read_text()
         assert "await init_db()" in text
         assert "lifespan=lifespan" in text
+
+    def test_postgres_pool_has_bounded_waits_and_health_checks(self, monkeypatch):
+        from api import database
+
+        monkeypatch.setenv("DB_POOL_SIZE", "4")
+        monkeypatch.setenv("DB_MAX_OVERFLOW", "3")
+        monkeypatch.setenv("DB_POOL_TIMEOUT_SECONDS", "7")
+        monkeypatch.setenv("DB_CONNECT_TIMEOUT_SECONDS", "8")
+        monkeypatch.setenv("DB_COMMAND_TIMEOUT_SECONDS", "9")
+        connect_args, pool_kwargs = database._postgres_transport_options()
+        assert pool_kwargs["pool_size"] == 4
+        assert pool_kwargs["max_overflow"] == 3
+        assert pool_kwargs["pool_timeout"] == 7
+        assert pool_kwargs["pool_pre_ping"] is True
+        assert connect_args["timeout"] == 8
+        assert connect_args["command_timeout"] == 9
+
+        monkeypatch.setenv("DB_COMMAND_TIMEOUT_SECONDS", "0")
+        connect_args, _ = database._postgres_transport_options()
+        assert connect_args["command_timeout"] is None
+
+    async def test_shutdown_disposes_the_database_pool(self, monkeypatch):
+        import main as app_main
+        from api.core import workers
+
+        events = []
+
+        async def noop(*args, **kwargs):
+            return None
+
+        class Worker:
+            async def start(self):
+                events.append("worker-start")
+
+            async def stop(self):
+                events.append("worker-stop")
+
+        async def dispose():
+            events.append("db-dispose")
+
+        monkeypatch.setattr(app_main, "validate_secret_key", lambda: None)
+        monkeypatch.setattr(app_main, "validate_startup", lambda: None)
+        monkeypatch.setattr(app_main, "init_db", noop)
+        monkeypatch.setattr(app_main, "worker", Worker())
+        monkeypatch.setattr(app_main, "dispose_engine", dispose)
+        monkeypatch.setattr(app_main, "_has_calls", False)
+        monkeypatch.setattr(workers, "start_periodic_sweep", noop)
+        monkeypatch.setattr(workers, "stop_periodic_sweep", noop)
+
+        async with app_main.lifespan(app_main.app):
+            assert events == ["worker-start"]
+
+        assert events == ["worker-start", "worker-stop", "db-dispose"]

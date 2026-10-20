@@ -104,11 +104,14 @@ async def refresh_access_token(body: RefreshRequest, db: AsyncSession = Depends(
     user_id = payload.get("sub")
 
     # Verify token exists in DB and is not revoked
+    # FOR UPDATE serialises two refreshes of the same token. Without it both
+    # requests read rotated_at = NULL and each mint a new refresh token from
+    # one credential. The second waits here, then sees the first's rotation.
     r = await db.execute(
         select(RefreshToken).where(
             RefreshToken.jti == jti,
             RefreshToken.user_id == user_id,
-        )
+        ).with_for_update()
     )
     stored = r.scalar_one_or_none()
 
@@ -128,8 +131,14 @@ async def refresh_access_token(body: RefreshRequest, db: AsyncSession = Depends(
         "expires_in":    15 * 60,  # 15 minutes in seconds
     }
     issued = _naive_utc(stored.created_at)
+    if stored.rotated_at is not None:
+        # This is the old token's grace window. It remains useful only as a
+        # recovery retry for a lost response; rotation already happened, so
+        # it must not create a second replacement.
+        return response
     if issued is None or now - issued >= ROTATE_AFTER:
         response["refresh_token"] = issue_refresh_token_row(db, user_id)
+        stored.rotated_at = now
         grace_until = now + ROTATION_GRACE
         if _naive_utc(stored.expires_at) > grace_until:
             stored.expires_at = grace_until

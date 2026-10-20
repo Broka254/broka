@@ -261,7 +261,12 @@ def _init_db_statements() -> list[str]:
     import inspect
 
     from api import database
-    tree = ast.parse(inspect.getsource(database.init_db))
+    # The historical ALTER list lives in _init_db_impl; init_db is the
+    # production/release gate around it. Inspect both so moving the list
+    # between those two functions cannot make this test silently stop
+    # exercising the real statement.
+    source = inspect.getsource(database._init_db_impl) + "\n" + inspect.getsource(database.init_db)
+    tree = ast.parse(source)
     out: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and "ALTER TABLE" in node.value:

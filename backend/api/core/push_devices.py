@@ -144,9 +144,9 @@ async def forget(token: str) -> None:
                 column = _legacy_column(kind)
                 await db.execute(update(User).where(column == token).values({column: None}))
             await db.commit()
-        logger.info("[push] PUSH_TOKEN_FORGOTTEN token=...%s", token[-6:])
+        logger.info("[push] dead device token forgotten")
     except Exception as exc:
-        logger.warning("[push] could not forget a dead token: %s", exc)
+        logger.warning("[push] could not forget a dead token: %s", type(exc).__name__)
 
 
 def _default_sender() -> Callable[..., Awaitable]:

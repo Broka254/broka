@@ -291,6 +291,7 @@ class TestMobitechHttpErrorDiagnostics:
         assert "FULL-CIRCLE" in logged  # sanitized payload's real (non-secret) shortcode value
         assert "123456" not in logged  # OTP text never logged
         assert "realkey123" not in logged  # API key never logged
+        assert "254706462869" not in logged  # recipient phone never logged
         assert "<redacted>" in logged  # message field shown as redacted, not the real text
 
     @pytest.mark.asyncio

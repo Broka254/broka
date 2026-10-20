@@ -268,8 +268,13 @@ class TestConsoleProvidersRefuseInProduction:
         assert "debug_code" not in r.text
 
     @pytest.mark.asyncio
-    async def test_console_providers_still_log_outside_production(self):
+    async def test_console_providers_still_log_outside_production(self, caplog):
         from api.core.email import ConsoleEmail
         from api.core.sms import ConsoleSMS
+        caplog.set_level("WARNING")
         assert await ConsoleSMS().send("+254712345678", "hi") is True
-        assert await ConsoleEmail().send("a@b.co", "s", "<p>h</p>", "t") is True
+        assert await ConsoleEmail().send(
+            "a@b.co", "Code 482913", "<p>482913</p>", "482913",
+        ) is True
+        assert "+254712345678" not in caplog.text
+        assert "482913" not in caplog.text

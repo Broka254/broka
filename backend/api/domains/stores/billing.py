@@ -278,13 +278,12 @@ async def start_payment(
         select(StorePayment.id).where(
             StorePayment.store_id == store.id,
             StorePayment.status == S.PENDING,
-            StorePayment.created_at > now - PENDING_WINDOW,
         ).limit(1)
     )).scalar()
     if pending:
         raise HTTPException(status_code=409, detail=(
             "An M-Pesa prompt for your store is already on your phone. "
-            "Finish it, or try again in two minutes."
+            "Finish it, or check the payment status before trying again."
         ))
 
     plan = card.plan(listings)
@@ -298,10 +297,17 @@ async def start_payment(
     payment = StorePayment(
         store_id=store.id, user_id=owner_id, plan_id=plan.id, listings=plan.listings,
         months=months, amount=amount, setup_fee=setup_fee, phone=phone,
-        status=S.PENDING, created_at=now,
+        status=S.PENDING, created_at=now, active_intent=f"store:{store.id}",
     )
     db.add(payment)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=(
+            "An M-Pesa prompt for your store is already on your phone. "
+            "Finish it, or check the payment status before trying again."
+        ))
     if zetupay_charges.enabled():
         payment.provider = zetupay_charges.PROVIDER
         try:
@@ -318,8 +324,17 @@ async def start_payment(
                 phone, payment.amount, account_reference="BROKAStore",
                 description=f"{plan.name} {months}mo"[:24], callback_url=callback_url(),
             )
+        except mpesa_stk.MpesaTimeout as exc:
+            payment.failure_reason = "provider_outcome_unknown"
+            await db.commit()
+            logger.warning("[store billing] ambiguous prompt outcome payment=%s: %s", payment.id, exc)
+            raise HTTPException(status_code=503, detail=(
+                "M-Pesa did not confirm the request. If a prompt reaches "
+                "your phone, complete it; otherwise check status before retrying."
+            ))
         except mpesa_stk.MpesaUnavailable as exc:
             payment.status, payment.processed, payment.failure_reason = S.FAILED, True, "prompt_not_sent"
+            payment.active_intent = None
             await db.commit()
             logger.warning("[store billing] no prompt for payment=%s: %s", payment.id, exc)
             raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
@@ -380,6 +395,28 @@ def _apply(sub: Optional[StoreSubscription], store_id: str, plan: StorePlan, mon
 async def _settle(db: AsyncSession, payment: StorePayment, receipt: Optional[str]) -> None:
     """Apply a confirmed payment; the caller holds its lock and checked it."""
     now = datetime.utcnow()
+    if receipt:
+        duplicate = (await db.execute(
+            select(StorePayment.id).where(
+                StorePayment.mpesa_receipt == receipt,
+                StorePayment.id != payment.id,
+            ).limit(1)
+        )).scalar()
+        if duplicate:
+            reason = (f"M-Pesa receipt {receipt} already belongs to store payment "
+                      f"{duplicate}; payment {payment.id} was not applied")
+            payment.status = S.FAILED
+            payment.processed = True
+            payment.failure_reason = "duplicate_receipt"
+            payment.active_intent = None
+            await record_audit(
+                db, "system", "store_duplicate_receipt", "store",
+                payment.store_id, reason,
+            )
+            from api.core.reconciliation import report_reconciliation
+            report_reconciliation("store_duplicate_receipt", deal_id=None, reason=reason)
+            await db.commit()
+            return
     sub = (await db.execute(
         select(StoreSubscription).where(StoreSubscription.store_id == payment.store_id)
         .with_for_update().execution_options(populate_existing=True)
@@ -389,6 +426,7 @@ async def _settle(db: AsyncSession, payment: StorePayment, receipt: Optional[str
     plan = card.plan(payment.listings) if card is not None and size.isdigit() else None
     payment.status, payment.processed, payment.paid_at, payment.mpesa_receipt = (
         S.SUCCESS, True, now, receipt)
+    payment.active_intent = None
     if plan is None:
         # A card retired while the prompt was open: the money is recorded,
         # and a person decides what it buys.
@@ -412,6 +450,7 @@ async def _settle(db: AsyncSession, payment: StorePayment, receipt: Optional[str
 
 async def _fail(db: AsyncSession, payment: StorePayment, reason: str) -> None:
     payment.status, payment.processed, payment.failure_reason = S.FAILED, True, reason[:200]
+    payment.active_intent = None
     await db.commit()
 
 

@@ -72,8 +72,11 @@ class FakeMpesa:
         self.prompts = []
         self.query_answer = {"errorCode": "500.001.1001", "errorMessage": "The transaction is being processed"}
         self.fail = False
+        self.timeout = False
 
     async def stk_push(self, phone, amount, account_reference, description, callback_url):
+        if self.timeout:
+            raise mpesa_stk.MpesaTimeout("no answer")
         if self.fail:
             raise mpesa_stk.MpesaUnavailable("down")
         self.prompts.append({"phone": phone, "amount": amount, "callback_url": callback_url})
@@ -127,7 +130,8 @@ async def _pay(client, headers, listing_id, months=2, **extra):
         "listing_id": listing_id, "months": months, "phone_number": "0712345678", **extra})
 
 
-def _callback(checkout_id, amount, code=0, receipt="SKA1B2C3D4"):
+def _callback(checkout_id, amount, code=0, receipt=None):
+    receipt = receipt or f"SK{uuid.uuid4().hex[:10].upper()}"
     stk = {"CheckoutRequestID": checkout_id, "ResultCode": code, "ResultDesc": "done"}
     if code == 0:
         stk["CallbackMetadata"] = {"Item": [
@@ -316,6 +320,39 @@ class TestPaying:
         assert again["price"] == 1500, "buyers have seen it: only PATCH and its rules change it"
 
     @pytest.mark.asyncio
+    async def test_one_provider_receipt_cannot_settle_two_listings(self, client, fees_on, mpesa):
+        _, h = await _user()
+        receipt = f"SK{uuid.uuid4().hex[:10].upper()}"
+        first = await _listing(client, h)
+        first_paid = (await _pay(client, h, first["id"])).json()
+        await client.post(
+            f"/pricing/listing-fee/callback/{SECRET}",
+            json=_callback(await _checkout_id(first_paid["payment_id"]), first_paid["amount"], receipt=receipt),
+        )
+
+        second = await _listing(client, h)
+        second_paid = (await _pay(client, h, second["id"])).json()
+        await client.post(
+            f"/pricing/listing-fee/callback/{SECRET}",
+            json=_callback(await _checkout_id(second_paid["payment_id"]), second_paid["amount"], receipt=receipt),
+        )
+
+        first_status = (await client.get(
+            f"/pricing/listing-fee/payments/{first_paid['payment_id']}", headers=h)).json()
+        second_status = (await client.get(
+            f"/pricing/listing-fee/payments/{second_paid['payment_id']}", headers=h)).json()
+        assert first_status["status"] == "success"
+        assert second_status["status"] == "failed"
+        assert second_status["failure_reason"] == "duplicate_receipt"
+        assert not await _in_feed(client, second["id"])
+        async with AsyncSessionLocal() as db:
+            audit = (await db.execute(select(AuditLog).where(
+                AuditLog.action == "listing_fee_duplicate_receipt",
+                AuditLog.resource_id == second["id"],
+            ))).scalar_one_or_none()
+        assert audit is not None
+
+    @pytest.mark.asyncio
     async def test_the_prompt_asks_for_the_quoted_amount(self, client, fees_on, mpesa):
         _, h = await _user()
         listing = await _listing(client, h)
@@ -402,6 +439,25 @@ class TestPaying:
         mpesa.fail = False
         assert (await _pay(client, h, listing["id"])).status_code == 200, \
             "a prompt that never went out must not block the retry"
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_is_pending_and_blocks_a_second_prompt(self, client, fees_on, mpesa):
+        _, h = await _user()
+        listing = await _listing(client, h)
+        mpesa.timeout = True
+        first = await _pay(client, h, listing["id"])
+        assert first.status_code == 503
+        mpesa.timeout = False
+        second = await _pay(client, h, listing["id"])
+        assert second.status_code == 409
+        assert mpesa.prompts == [], "a timeout must not be treated as a confirmed rejection"
+        async with AsyncSessionLocal() as db:
+            payment = (await db.execute(
+                select(ListingPayment).where(ListingPayment.listing_id == listing["id"])
+            )).scalar_one()
+        assert getattr(payment.status, "value", payment.status) == "pending"
+        assert payment.checkout_request_id is None
+        assert payment.failure_reason == "provider_outcome_unknown"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("phone", ["12345", "0812345678", "+44 7700 900123", ""])

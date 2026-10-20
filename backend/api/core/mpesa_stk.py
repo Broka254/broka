@@ -31,6 +31,15 @@ class MpesaUnavailable(Exception):
     """No STK prompt was sent, or Safaricom could not be asked."""
 
 
+class MpesaTimeout(MpesaUnavailable):
+    """Safaricom did not answer in time: the outcome is ambiguous.
+
+    A timeout is not evidence that no prompt was sent. Callers must keep the
+    local payment pending and reconcile it; sending a replacement prompt is
+    how one tap becomes two charges.
+    """
+
+
 # A Kenyan mobile number: 07xx or 01xx. Whether the line has M-Pesa only
 # Daraja can tell, and it refuses the rest itself.
 _KENYAN_MOBILE = re.compile(r"^254(7\d{8}|1\d{8})$")
@@ -101,6 +110,8 @@ async def stk_push(
         body = r.json()
     except MpesaUnavailable:
         raise
+    except httpx.TimeoutException as exc:
+        raise MpesaTimeout(f"STK push timed out: {type(exc).__name__}") from exc
     except Exception as exc:
         raise MpesaUnavailable(f"STK push failed: {type(exc).__name__}") from exc
     if str(body.get("ResponseCode")) != "0" or not body.get("CheckoutRequestID"):
@@ -176,4 +187,3 @@ def query_outcome(answer: Optional[dict]) -> Optional[bool]:
     if code is None or str(code) == "":
         return None
     return str(code) == "0"
-

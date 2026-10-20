@@ -61,11 +61,13 @@ async def _listing(seller: User, name: str) -> Listing:
     return listing
 
 
-def _fee(seller: User, listing: Listing, status: str, paid_at: datetime | None, **extra) -> ListingPayment:
+def _fee(seller: User, listing: Listing, status: str, paid_at: datetime | None,
+         *, receipt: str | None = None, **extra) -> ListingPayment:
+    receipt = receipt or (f"FEE{uuid.uuid4().hex[:8].upper()}" if status == "success" else None)
     fields = dict(user_id=seller.id, listing_id=listing.id, months=1, monthly_fee=300,
                   listing_amount=300, featured_amount=0, amount=300, phone="254712345678",
                   status=status, paid_at=paid_at,
-                  mpesa_receipt="FEE123" if status == "success" else None)
+                  mpesa_receipt=receipt)
     fields.update(extra)
     return ListingPayment(**fields)
 
@@ -78,7 +80,7 @@ async def test_listing_fees_and_plans_are_listed_apart_from_sales(client):
     async with AsyncSessionLocal() as db:
         db.add_all([
             _fee(seller, calculator, "success", now - timedelta(days=2), months=3, amount=950,
-                 featured_plan="week", featured_amount=99),
+                 featured_plan="week", featured_amount=99, receipt="FEE123"),
             _fee(seller, calculator, "pending", None),
             _fee(seller, calculator, "failed", None),
             SubscriptionPayment(user_id=seller.id, plan_id="pro", months=1, amount=599,

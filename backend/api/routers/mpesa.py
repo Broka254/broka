@@ -12,17 +12,25 @@ ENV VARS REQUIRED (set in the host's dashboard - Railway):
 
 import os
 import base64
+import hashlib
 import httpx
 import logging
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Request
+from decimal import Decimal
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
 from api.database import get_db, Deal, DealStatus, User, MpesaTransaction, MpesaStatus
 from api.security import get_current_user, verify_password_async
 from api.core.events import publish, EscrowFunded, MpesaCallbackReceived
+from api.core.audit import record_audit
+from api.core.rate_limit import stk_limiter
+from api.models.payment_callback import PaymentCallback, PaymentCallbackStatus
 from api.domains.pricing.safe_payment import require_in_app_payments
 
 logger = logging.getLogger(__name__)
@@ -71,14 +79,21 @@ QUERY_URL = f"{BASE_URL}/mpesa/stkpushquery/v1/query"
 
 async def _get_access_token() -> str:
     credentials = base64.b64encode(f"{CONSUMER_KEY}:{CONSUMER_SECRET}".encode()).decode()
-    logger.info("M-Pesa OAuth attempt - ENV=%s SHORTCODE=%s KEY_PREFIX=%s URL=%s",
-                MPESA_ENV, SHORTCODE, CONSUMER_KEY[:6] if CONSUMER_KEY else "MISSING", OAUTH_URL)
+    # OAuth responses contain a bearer token and error bodies can echo request
+    # credentials. Log only routing/status facts; never the configured key,
+    # response body, or the token itself.
+    logger.info("M-Pesa OAuth attempt - ENV=%s SHORTCODE=%s URL=%s",
+                MPESA_ENV, SHORTCODE, OAUTH_URL)
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(OAUTH_URL, headers={"Authorization": f"Basic {credentials}"})
-    logger.info("M-Pesa OAuth response - status=%s body=%s", resp.status_code, resp.text[:300])
+    logger.info("M-Pesa OAuth response - status=%s", resp.status_code)
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"M-Pesa OAuth failed: {resp.text}")
-    return resp.json()["access_token"]
+        raise HTTPException(status_code=502, detail="M-Pesa authentication failed")
+    try:
+        return resp.json()["access_token"]
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.error("M-Pesa OAuth response missing access_token (status=%s)", resp.status_code)
+        raise HTTPException(status_code=502, detail="M-Pesa authentication failed") from exc
 
 
 def _generate_password() -> tuple[str, str]:
@@ -113,12 +128,33 @@ class StkQueryRequest(BaseModel):
     checkout_request_id: str
 
 
+def _request_fingerprint(deal_id: str, phone: str, amount: int) -> str:
+    """The request an idempotency key belongs to. Reusing the key with a
+    different phone, deal or amount is a conflict, not a retry."""
+    raw = f"{deal_id}\n{phone}\n{amount:.2f}".encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _txn_response(txn: MpesaTransaction) -> dict:
+    return {
+        "checkout_request_id": txn.checkout_request_id,
+        "merchant_request_id": txn.merchant_request_id,
+        "amount": txn.amount,
+        "status": txn.status.value,
+        "customer_message": (
+            "This payment request is already in progress. Check your phone; "
+            "do not start another payment."
+        ),
+    }
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/stk-push", dependencies=[Depends(require_in_app_payments)])
 async def initiate_stk_push(
     data: StkPushRequest,
     current_user=Depends(get_current_user),
+    x_idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -134,6 +170,10 @@ async def initiate_stk_push(
     if not await verify_password_async(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect password")
 
+    # Keyed on the authenticated user, never the phone or deal supplied in
+    # the body: a caller-chosen value is no limit at all.
+    await stk_limiter.check_and_record(current_user["id"])
+
     # 2. Load and validate deal
     deal_result = await db.execute(select(Deal).where(Deal.id == data.deal_id))
     deal = deal_result.scalar_one_or_none()
@@ -148,8 +188,79 @@ async def initiate_stk_push(
     amount = max(1, int(round(deal.commission)))
     phone  = _normalize_phone(data.phone_number)
 
+    client_ref = (x_idempotency_key or "").strip() or None
+    if client_ref and len(client_ref) > 200:
+        raise HTTPException(status_code=400, detail="X-Idempotency-Key is too long")
+    fingerprint = _request_fingerprint(deal.id, phone, amount)
+
+    # A retry of the SAME logical request replays the intent. A different
+    # request reusing the key is refused. Both checks happen before the
+    # provider call, so neither can create a second prompt.
+    if client_ref:
+        earlier = (await db.execute(
+            select(MpesaTransaction).where(
+                MpesaTransaction.deal_id == deal.id,
+                MpesaTransaction.client_ref == client_ref,
+            )
+        )).scalar_one_or_none()
+        if earlier is not None:
+            if earlier.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="Idempotency key reused with a different payment request")
+            return _txn_response(earlier)
+
+    open_intent = (await db.execute(
+        select(MpesaTransaction).where(
+            MpesaTransaction.deal_id == deal.id,
+            MpesaTransaction.status == MpesaStatus.pending,
+            MpesaTransaction.callback_processed.is_(False),
+        ).order_by(MpesaTransaction.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if open_intent is not None:
+        if open_intent.checkout_request_id:
+            return _txn_response(open_intent)
+        raise HTTPException(
+            status_code=409,
+            detail=("A payment request for this deal already reached M-Pesa, but "
+                    "its outcome is not yet confirmed. Do not start another payment; "
+                    "check the deal status or contact support."),
+        )
+
+    # Persist the intent BEFORE calling Safaricom. `active_intent` is unique,
+    # so two concurrent requests cannot both own the right to prompt; the
+    # loser gets a 409 instead of a second STK push.
+    txn = MpesaTransaction(
+        deal_id=deal.id,
+        buyer_id=current_user["id"],
+        phone=phone,
+        amount=amount,
+        checkout_request_id=None,
+        status=MpesaStatus.pending,
+        active_intent=deal.id,
+        client_ref=client_ref,
+        request_fingerprint=fingerprint,
+    )
+    db.add(txn)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A payment request for this deal is already in progress. Check your phone.",
+        )
+
     # 4. Get Safaricom access token
-    token = await _get_access_token()
+    try:
+        token = await _get_access_token()
+    except Exception as exc:
+        # No prompt can have been sent: authentication happens before the
+        # STK request. The intent is safely terminal and can be retried.
+        txn.status = MpesaStatus.failed
+        txn.callback_processed = True
+        txn.active_intent = None
+        txn.last_error = f"oauth failed: {type(exc).__name__}"
+        await db.commit()
+        raise
     timestamp, password = _generate_password()
 
     # 5. STK Push payload
@@ -167,38 +278,62 @@ async def initiate_stk_push(
         "TransactionDesc":   f"BROKA commission for deal {deal.id[:8]}",
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            STK_URL,
-            json=payload,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                STK_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+    except httpx.TimeoutException as exc:
+        # Safaricom may have accepted the prompt. Leave the intent pending so
+        # a retry cannot send a second one; the callback or reconciliation
+        # decides what actually happened.
+        txn.last_error = f"provider timeout: {type(exc).__name__}"
+        await db.commit()
+        logger.error("[mpesa] STK outcome ambiguous for deal=%s (timeout)", deal.id)
+        raise HTTPException(
+            status_code=503,
+            detail=("M-Pesa did not answer in time. If a prompt reaches your phone, "
+                    "complete it; otherwise check the deal status before trying again."),
         )
+    except httpx.HTTPError as exc:
+        txn.last_error = f"provider transport error: {type(exc).__name__}"
+        await db.commit()
+        raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Check the deal status before retrying.")
 
     if resp.status_code != 200:
         # Status only in the log, fixed text to the client: the upstream body
         # is Safaricom's, not ours to forward, and can carry request details.
         logger.warning("[mpesa] STK push HTTP %s for deal=%s", resp.status_code, deal.id)
+        txn.status = MpesaStatus.failed
+        txn.callback_processed = True
+        txn.active_intent = None
+        txn.last_error = f"provider HTTP {resp.status_code}"
+        await db.commit()
         raise HTTPException(status_code=502, detail="M-Pesa is not accepting payment requests right now. Please try again.")
 
     body = resp.json()
     if body.get("ResponseCode") != "0":
+        txn.status = MpesaStatus.failed
+        txn.callback_processed = True
+        txn.active_intent = None
+        txn.last_error = "provider rejected request"
+        await db.commit()
         raise HTTPException(
             status_code=400,
             detail=body.get("ResponseDescription", "M-Pesa rejected the request"),
         )
 
-    # 6. Save transaction record
-    txn = MpesaTransaction(
-        deal_id=deal.id,
-        buyer_id=current_user["id"],
-        phone=phone,
-        amount=amount,
-        checkout_request_id=body["CheckoutRequestID"],
-        merchant_request_id=body["MerchantRequestID"],
-        status=MpesaStatus.pending,
-    )
-    db.add(txn)
+    # 6. Record the provider's identifiers on the intent we already own.
+    txn.checkout_request_id = body["CheckoutRequestID"]
+    txn.merchant_request_id = body["MerchantRequestID"]
+    txn.last_error = None
     await db.commit()
+
+    # A callback may have arrived between the provider accepting the prompt
+    # and this commit. Drain it now that the CheckoutRequestID is visible.
+    await _drain_callback_inbox(db, txn.checkout_request_id)
 
     return {
         "checkout_request_id":  body["CheckoutRequestID"],
@@ -259,13 +394,24 @@ async def query_payment_status(
     # to us over our own authenticated call, so ResultCode 0 for our own
     # CheckoutRequestID is trustworthy, and the amount is the one we
     # requested (an STK prompt's amount cannot be changed by the payer).
+    # Re-read under the row lock: the callback may have landed while the
+    # provider request was in flight.
+    txn = (await db.execute(
+        select(MpesaTransaction).where(MpesaTransaction.id == txn.id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one()
     if not txn.callback_processed:
         result_code = body.get("ResultCode")
         if str(result_code) == "0":
-            await _settle_successful_stk(db, txn)
+            # A query response has no M-Pesa receipt. Do not mark the intent
+            # fully processed yet: the callback carries the receipt, and it
+            # must still be able to attach that evidence after this path has
+            # already funded the deal.
+            await _settle_successful_stk(db, txn, mark_processed=bool(txn.mpesa_receipt))
         elif result_code is not None and str(result_code) != "":
             txn.status = MpesaStatus.failed
             txn.callback_processed = True
+            txn.active_intent = None
             await db.commit()
 
     return body
@@ -313,7 +459,9 @@ async def mpesa_callback_secured(secret: str, request: Request, db: AsyncSession
     return await _process_mpesa_callback(request, db)
 
 
-async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> None:
+async def _settle_successful_stk(
+    db: AsyncSession, txn: MpesaTransaction, *, mark_processed: bool = True,
+) -> None:
     """Apply a CONFIRMED successful STK payment to its transaction and deal.
 
     The one place a legacy M-Pesa payment moves a deal, shared by the
@@ -323,8 +471,12 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
         (lock_deal_if_status). Without the guard a late or replayed result
         could drag a released/refunded/cancelled deal back to `paid`,
         re-opening a settled deal for a second release;
-      * EscrowFunded is published exactly once, after commit - it is what
-        writes the ledger entry and broadcasts over the deal's WebSocket;
+      * the escrow ledger is written in the SAME transaction as the deal
+        status. It used to be written by a post-commit event subscriber
+        whose errors were only logged, so a committed payment could have no
+        ledger entry and nothing would retry it;
+      * EscrowFunded is published after commit only for the WebSocket
+        broadcast (the subscriber sees the ledger row already exists);
       * callback_processed marks the transaction done, so whichever of the
         callback and the query arrives second is a no-op.
 
@@ -337,6 +489,7 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
     from api.domains.escrow.service import _FUNDED_OR_LATER, lock_deal_if_status
 
     txn.status = MpesaStatus.success
+    txn.active_intent = None
     deal = await lock_deal_if_status(db, txn.deal_id, (DealStatus.agreed,))
     if deal is None:
         current = (await db.execute(
@@ -344,7 +497,9 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
             .execution_options(populate_existing=True)
         )).scalar_one_or_none()
         status_now = current.status if current is not None else None
-        txn.callback_processed = True
+        if mark_processed:
+            txn.callback_processed = True
+        txn.active_intent = None
         if status_now in _FUNDED_OR_LATER:
             logger.warning(
                 "[mpesa] payment for deal=%s in status=%s - recording the "
@@ -374,7 +529,16 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
         return
 
     deal.status = DealStatus.paid
-    txn.callback_processed = True
+    if mark_processed:
+        txn.callback_processed = True
+
+    # Atomic with the deal transition. If this raises, the callback returns
+    # 500 and neither the status change nor a partial ledger pair commits.
+    from api.core.ledger import ledger
+    await ledger.record_escrow_funded(
+        db, deal.id, deal.buyer_id, txn.amount,
+        txn.mpesa_receipt or txn.checkout_request_id or txn.id,
+    )
     await db.commit()
 
     # After commit, so subscribers see a consistent database.
@@ -387,97 +551,240 @@ async def _settle_successful_stk(db: AsyncSession, txn: MpesaTransaction) -> Non
     ))
 
 
+def _callback_fields(body: dict) -> tuple[Optional[str], Optional[str], Optional[Decimal], Optional[str], str]:
+    """The non-secret fields needed to apply an STK callback.
+
+    Deliberately excludes the payer's phone number and the raw provider
+    body: those have no role in matching and must not end up in the durable
+    inbox or a log line.
+    """
+    stk = ((body or {}).get("Body") or {}).get("stkCallback") or {}
+    items = {i.get("Name"): i.get("Value")
+             for i in ((stk.get("CallbackMetadata") or {}).get("Item") or [])}
+    amount = None
+    try:
+        if items.get("Amount") is not None:
+            amount = Decimal(str(items.get("Amount")))
+    except (TypeError, ValueError, ArithmeticError):
+        amount = None
+    receipt = str(items.get("MpesaReceiptNumber") or "").strip() or None
+    raw_code = stk.get("ResultCode")
+    result_code = None if raw_code is None or str(raw_code).strip() == "" else str(raw_code)
+    return (
+        stk.get("CheckoutRequestID") or None,
+        result_code,
+        amount,
+        receipt,
+        str(stk.get("ResultDesc") or ""),
+    )
+
+
+async def _remember_callback(
+    db: AsyncSession, checkout_id: str, result_code: str,
+    amount: Optional[Decimal], receipt: Optional[str], description: str,
+) -> PaymentCallback:
+    """Persist the callback before matching it.
+
+    This is the durability boundary for a callback that beats the STK
+    response. A duplicate delivery is recognised by the unique
+    (provider, checkout_request_id) key rather than by application reads.
+    """
+    existing = (await db.execute(
+        select(PaymentCallback).where(
+            PaymentCallback.provider == "daraja",
+            PaymentCallback.checkout_request_id == checkout_id,
+        )
+    )).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    row = PaymentCallback(
+        provider="daraja", checkout_request_id=checkout_id,
+        result_code=result_code, amount=amount, receipt=receipt,
+        result_description=description[:200],
+        status=PaymentCallbackStatus.PENDING,
+    )
+    db.add(row)
+    try:
+        await db.commit()
+        return row
+    except IntegrityError:
+        await db.rollback()
+        return (await db.execute(
+            select(PaymentCallback).where(
+                PaymentCallback.provider == "daraja",
+                PaymentCallback.checkout_request_id == checkout_id,
+            )
+        )).scalar_one()
+
+
+async def _apply_callback(
+    db: AsyncSession, txn: MpesaTransaction, result_code: str,
+    amount: Optional[Decimal], receipt: Optional[str], description: str,
+) -> str:
+    """Apply one callback to one locked payment intent. Returns its outcome."""
+    if txn.callback_processed:
+        return "duplicate"
+
+    if result_code != "0":
+        txn.status = MpesaStatus.failed
+        txn.callback_processed = True
+        txn.active_intent = None
+        logger.warning("[mpesa] payment failed cid=%s code=%s", txn.checkout_request_id, result_code)
+        await db.commit()
+        return "failed"
+
+    reported = amount if amount is not None else None
+    expected = Decimal(str(txn.amount or 0))
+    amount_ok = reported is not None and expected > 0 and abs(reported - expected) < Decimal("0.01")
+    if not amount_ok:
+        reason = (f"M-Pesa callback for transaction {txn.id} reported {reported}, "
+                  f"expected {expected} (receipt {receipt}) - not settled")
+        txn.status = MpesaStatus.failed
+        txn.callback_processed = True
+        txn.active_intent = None
+        txn.last_error = "amount mismatch"
+        await record_audit(db, "system", "mpesa_amount_mismatch", "deal", txn.deal_id, reason)
+        from api.core.reconciliation import report_reconciliation
+        report_reconciliation(
+            "mpesa_amount_mismatch", deal_id=txn.deal_id, reason=reason,
+            checkout_request_id=txn.checkout_request_id,
+        )
+        await db.commit()
+        return "amount_mismatch"
+
+    if not receipt:
+        reason = (f"M-Pesa callback for transaction {txn.id} succeeded without a receipt - "
+                  "not settled; reconcile with Safaricom")
+        txn.callback_processed = True
+        txn.active_intent = None
+        txn.last_error = "missing receipt"
+        await record_audit(db, "system", "mpesa_missing_receipt", "deal", txn.deal_id, reason)
+        from api.core.reconciliation import report_reconciliation
+        report_reconciliation(
+            "mpesa_missing_receipt", deal_id=txn.deal_id, reason=reason,
+            checkout_request_id=txn.checkout_request_id,
+        )
+        await db.commit()
+        return "reconciliation_required"
+
+    duplicate_receipt = (await db.execute(
+        select(MpesaTransaction.id).where(
+            MpesaTransaction.mpesa_receipt == receipt,
+            MpesaTransaction.id != txn.id,
+        ).limit(1)
+    )).scalar()
+    if duplicate_receipt:
+        reason = (f"M-Pesa receipt {receipt} already belongs to transaction "
+                  f"{duplicate_receipt}; transaction {txn.id} was not settled")
+        txn.status = MpesaStatus.failed
+        txn.callback_processed = True
+        txn.active_intent = None
+        txn.last_error = "duplicate receipt"
+        await record_audit(db, "system", "mpesa_duplicate_receipt", "deal", txn.deal_id, reason)
+        from api.core.reconciliation import report_reconciliation
+        report_reconciliation(
+            "mpesa_duplicate_receipt", deal_id=txn.deal_id, reason=reason,
+            checkout_request_id=txn.checkout_request_id,
+        )
+        await db.commit()
+        return "duplicate_receipt"
+
+    txn.mpesa_receipt = receipt
+    await _settle_successful_stk(db, txn)
+    await publish(MpesaCallbackReceived(
+        checkout_request_id=txn.checkout_request_id or "",
+        result_code=0,
+        mpesa_receipt=txn.mpesa_receipt or "",
+        amount=txn.amount,
+    ))
+    return "applied"
+
+
+async def _drain_callback_inbox(db: AsyncSession, checkout_id: str) -> Optional[str]:
+    """Apply a previously-unknown callback once its payment row exists.
+
+    Failure here is left for the sweep: the prompt has already been sent,
+    so making the initiating HTTP response fail would not undo it.
+    """
+    row = (await db.execute(
+        select(PaymentCallback).where(
+            PaymentCallback.provider == "daraja",
+            PaymentCallback.checkout_request_id == checkout_id,
+            PaymentCallback.status == PaymentCallbackStatus.PENDING,
+        ).with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if row is None:
+        return None
+    txn = (await db.execute(
+        select(MpesaTransaction).where(MpesaTransaction.checkout_request_id == checkout_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if txn is None:
+        await db.rollback()
+        return None
+    try:
+        outcome = await _apply_callback(
+            db, txn, row.result_code or "", row.amount, row.receipt, row.result_description or "",
+        )
+        row.status = PaymentCallbackStatus.PROCESSED
+        row.processed_at = datetime.utcnow()
+        row.attempts = (row.attempts or 0) + 1
+        row.last_error = None
+        await db.commit()
+        return outcome
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("[mpesa] inbox callback retry failed cid=%s: %s", checkout_id, type(exc).__name__)
+        return None
+
+
 async def _process_mpesa_callback(request: Request, db: AsyncSession) -> dict:
     """Shared Safaricom STK callback handling for both routes above."""
     try:
         body = await request.json()
-        logger.info("M-Pesa callback received: %s", body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="The callback body must be JSON")
 
-        stk         = body.get("Body", {}).get("stkCallback", {})
-        checkout_id = stk.get("CheckoutRequestID")
-        result_code = stk.get("ResultCode")
-        result_desc = stk.get("ResultDesc", "")
+    checkout_id, result_code, amount, receipt, description = _callback_fields(body)
+    if not checkout_id or result_code is None:
+        # An incomplete body is not evidence of failure. Reject it so it is
+        # not recorded as a failed payment and cannot poison a live intent.
+        raise HTTPException(status_code=400, detail="CheckoutRequestID and ResultCode are required")
 
-        result = await db.execute(
-            select(MpesaTransaction).where(
-                MpesaTransaction.checkout_request_id == checkout_id
-            )
-        )
-        txn = result.scalar_one_or_none()
+    # Store first: a callback that beats the initiation response is still
+    # durable, and a redelivery hits the unique row rather than re-applying.
+    row = await _remember_callback(db, checkout_id, result_code, amount, receipt, description)
+    if row.status == PaymentCallbackStatus.PROCESSED:
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-        if txn:
-            # ── Idempotency guard (issue #6) ──────────────────────────────────
-            # M-Pesa may deliver the same callback multiple times.
-            # If we've already processed this transaction, ignore the duplicate.
-            if getattr(txn, "callback_processed", False):
-                logger.info("M-Pesa callback duplicate ignored cid=%s", checkout_id)
-                return {"ResultCode": 0, "ResultDesc": "Accepted"}
+    txn = (await db.execute(
+        select(MpesaTransaction).where(MpesaTransaction.checkout_request_id == checkout_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if txn is None:
+        # Leave the inbox row pending. The initiation path drains it after it
+        # stores the CheckoutRequestID; the sweep retries if that process died.
+        logger.warning("[mpesa] callback stored for not-yet-visible checkout cid=%s", checkout_id)
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-            if result_code == 0:
-                # Extract receipt + reported amount from CallbackMetadata.
-                items = stk.get("CallbackMetadata", {}).get("Item", [])
-                reported_amount = None
-                for item in items:
-                    if item.get("Name") == "MpesaReceiptNumber":
-                        txn.mpesa_receipt = str(item.get("Value", ""))
-                    if item.get("Name") == "Amount":
-                        try:
-                            reported_amount = float(item.get("Value"))
-                        except (TypeError, ValueError):
-                            reported_amount = None
-
-                # SECURITY/INTEGRITY FIX (escrow audit, 2026-09-14): this
-                # used to do `txn.amount = float(item["Value"])` - blindly
-                # overwriting the amount WE requested with whatever the
-                # callback claimed was paid, then marking the deal paid and
-                # publishing EscrowFunded(amount=txn.amount) so the ledger
-                # recorded that figure as the escrowed sum.
-                #
-                # Two ways that goes wrong. A forged callback (this
-                # endpoint is unauthenticated by design - Safaricom posts
-                # to it - and the docstring above already flags that a
-                # guessed CheckoutRequestID is enough to reach here) could
-                # settle a 50,000 deal by claiming Amount=1. And a genuine
-                # short/partial payment would be silently accepted as full
-                # settlement. The requested amount is the authority; the
-                # callback's figure is a claim to be checked against it.
-                expected = float(txn.amount or 0)
-                amount_ok = (
-                    reported_amount is not None
-                    and expected > 0
-                    and abs(reported_amount - expected) < 0.01
-                )
-                if not amount_ok:
-                    logger.error(
-                        "[mpesa] AMOUNT_MISMATCH cid=%s expected=%.2f reported=%s "
-                        "- not settling this deal",
-                        checkout_id, expected, reported_amount,
-                    )
-                    txn.status = MpesaStatus.failed
-                    txn.callback_processed = True
-                    await db.commit()
-                    # Still a 200 to Safaricom: retrying this callback would
-                    # not change the outcome, and a non-200 makes them
-                    # redeliver it indefinitely.
-                    return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-                await _settle_successful_stk(db, txn)
-                await publish(MpesaCallbackReceived(
-                    checkout_request_id=checkout_id or "",
-                    result_code=result_code,
-                    mpesa_receipt=txn.mpesa_receipt or "",
-                    amount=txn.amount,
-                ))
-            else:
-                txn.status             = MpesaStatus.failed
-                txn.callback_processed = True
-                logger.warning("M-Pesa payment failed: %s - %s", result_code, result_desc)
-                await db.commit()
-
+    try:
+        outcome = await _apply_callback(db, txn, result_code, amount, receipt, description)
+        row = await db.get(PaymentCallback, row.id, populate_existing=True)
+        if row is not None:
+            row.status = PaymentCallbackStatus.PROCESSED
+            row.processed_at = datetime.utcnow()
+            row.attempts = (row.attempts or 0) + 1
+            row.last_error = None
+            await db.commit()
+        logger.info("[mpesa] callback cid=%s outcome=%s", checkout_id, outcome)
     except Exception as exc:
-        logger.error("Callback processing error: %s", exc)
+        # A 500 makes Safaricom redeliver. Returning 200 here used to turn a
+        # transient database failure into a permanently unrecorded payment.
+        await db.rollback()
+        logger.exception("[mpesa] callback processing failed cid=%s: %s", checkout_id, type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Callback not processed")
 
-    # Safaricom requires exactly this response
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
@@ -488,10 +795,21 @@ async def get_deal_payment_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Return the latest M-Pesa transaction status for a deal."""
+    deal = (await db.execute(
+        select(Deal).where(
+            Deal.id == deal_id,
+            ((Deal.buyer_id == current_user["id"]) | (Deal.seller_id == current_user["id"])),
+        )
+    )).scalar_one_or_none()
+    if deal is None:
+        # Same response for "not found" and "not yours" - an id probe must
+        # not reveal that somebody else's deal exists.
+        raise HTTPException(status_code=404, detail="Deal not found")
     result = await db.execute(
         select(MpesaTransaction)
         .where(MpesaTransaction.deal_id == deal_id)
         .order_by(MpesaTransaction.created_at.desc())
+        .limit(1)
     )
     txn = result.scalar_one_or_none()
     if not txn:

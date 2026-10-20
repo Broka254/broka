@@ -112,7 +112,9 @@ def _callback(checkout_id, amount, code=0):
     stk = {"CheckoutRequestID": checkout_id, "ResultCode": code, "ResultDesc": "done"}
     if code == 0:
         stk["CallbackMetadata"] = {"Item": [
-            {"Name": "Amount", "Value": amount}, {"Name": "MpesaReceiptNumber", "Value": "SKP1"}]}
+            {"Name": "Amount", "Value": amount},
+            {"Name": "MpesaReceiptNumber", "Value": f"SKS{uuid.uuid4().hex[:10].upper()}"},
+        ]}
     return {"Body": {"stkCallback": stk}}
 
 

@@ -22,8 +22,9 @@ What must hold:
     asking ZetuPay with the paymentKey;
   * another amount, a second payment for a paid reference, and money for a
     reference BROKA never issued buy nothing and are flagged for a refund;
-  * ZetuPay down or slow fails the payment cleanly, and a payment that
-    arrives anyway is still applied;
+  * ZetuPay down fails the payment cleanly; a timeout stays ambiguous and
+    blocks a replacement prompt, while a payment that arrives anyway is
+    still applied;
   * deal money never comes near ZetuPay: E-Confirm keeps it.
 """
 import asyncio
@@ -210,8 +211,10 @@ async def _charge(purpose, target_id) -> ZetuPayPayment:
         ))).scalar_one()
 
 
-def _txn(reference, amount, wave, status="success", receipt="RHS98JJK3") -> dict:
+def _txn(reference, amount, wave, status="success", receipt=None) -> dict:
     """A payment webhook as ZetuPay documents it: the bare transaction."""
+    if receipt is None and status == "success":
+        receipt = f"RZ{uuid.uuid4().hex[:8].upper()}"
     return {
         "_id": uuid.uuid4().hex[:24], "application": uuid.uuid4().hex[:24],
         "amount": amount, "gross": amount, "fee": round(amount * 0.015, 2),
@@ -256,7 +259,7 @@ def _status_answer(charge, status, amount=None, wave=None, result="") -> dict:
         "checkoutRequestId": "ws_CO_1", "resultCode": 0 if status == "success" else 1032,
         "resultDesc": result or ("The service request is processed successfully."
                                  if status == "success" else "Request cancelled by user"),
-        "receiptNumber": "RHS98JJK3" if status == "success" else None,
+        "receiptNumber": f"RZ{charge.reference[-8:]}" if status == "success" else None,
     }}
 
 
@@ -538,25 +541,36 @@ class TestProviderFailure:
         assert (await _pay_fee(client, h, listing["id"])).status_code == 200
 
     @pytest.mark.asyncio
-    async def test_a_timeout_is_failed_but_a_payment_that_arrives_anyway_lands(
+    async def test_a_timeout_keeps_the_prompt_blocking_a_retry_until_it_is_resolved(
             self, client, fees_on, zp, announced):
         _, h = await _user()
         listing = await _listing(client, h)
         zp.fail = "timeout"
         r = await _pay_fee(client, h, listing["id"])
-        assert r.status_code == 502 and "slow" in r.json()["detail"]
+        assert r.status_code == 502 and "check the payment status" in r.json()["detail"]
         async with AsyncSessionLocal() as db:
             row = (await db.execute(select(ListingPayment).where(
                 ListingPayment.listing_id == listing["id"]))).scalar_one()
         charge = await _charge(Purpose.LISTING_FEE, row.id)
-        assert (charge.status, charge.failure_reason) == ("failed", "provider_timeout")
+        assert (charge.status, charge.failure_reason) == ("initiated", "provider_timeout")
         assert charge.provider_payment_id is None, "no 202, so nothing to ask ZetuPay about"
+        assert row.status == "pending" and row.active_intent == f"listing:{listing['id']}"
+
+        # The ambiguous prompt blocks a replacement. Only the provider's
+        # webhook/status answer may release it.
+        zp.fail = None
+        retry = await _pay_fee(client, h, listing["id"])
+        assert retry.status_code == 409
+        assert len(zp.prompts) == 0
 
         # The prompt had gone out after all, and the seller paid it.
         r = await _webhook(client, _txn(charge.reference, row.amount, "WP-LATE-PAID"))
         assert r.json()["outcome"] == "applied"
         assert (await _fee_status(client, h, row.id))["status"] == "success"
         assert await _in_feed(client, listing["id"])
+        async with AsyncSessionLocal() as db:
+            settled = await db.get(ListingPayment, row.id)
+        assert settled.active_intent is None
 
     @pytest.mark.asyncio
     async def test_the_status_poll_applies_a_payment_whose_webhook_is_late(
@@ -697,6 +711,7 @@ class TestBoostAndBadge:
             row = (await db.execute(select(VerificationPayment).where(
                 VerificationPayment.checkout_request_id == reference))).scalar_one()
         assert row.provider == "zetupay"
+        assert row.active_intent is None
 
     @pytest.mark.asyncio
     async def test_a_number_that_is_not_kenyan_is_refused_before_any_prompt(self, client, zetupay_on, zp):
@@ -1007,7 +1022,8 @@ class TestClient:
 def _production(**changes):
     return dataclasses.replace(
         settings, env="production", secret_key="x" * 40, zac_secret="zac-" + "y" * 40,
-        mpesa_callback_secret="m" * 32, econfirm_api_key="ek", **changes,
+        mpesa_callback_secret="m" * 32, econfirm_api_key="ek",
+        allowed_origins_raw="https://broka.co.ke", **changes,
     )
 
 

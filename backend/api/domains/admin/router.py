@@ -2,23 +2,32 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 
 from api.database import (
     get_db, User, Listing, Deal, Dispute, Review,
-    MpesaTransaction, AuditLog, FraudEvent, DealStatus,
+    MpesaTransaction, MpesaStatus, AuditLog, FraudEvent, DealStatus,
 )
+from api.models.payment_callback import PaymentCallback, PaymentCallbackStatus
+from api.models.store import Store
 from api.security import get_current_user
+from api.core.audit import record_audit
+from api.core.client_ip import client_ip_or_none
 from api.core.permissions import require_admin
 from api.core.fraud import compute_trust_score, trust_band
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class AdminActionIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 @router.get("/summary")
@@ -45,10 +54,196 @@ async def admin_summary(
     }
 
 
+@router.get("/ops-snapshot")
+async def ops_snapshot(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """One bounded read for the dashboard's operations page.
+
+    The external dashboard previously called this path and received 404.
+    Every number here is computed from a live table; none is a placeholder.
+    Kept deliberately aggregate-only - the dashboard does not need user
+    phone numbers or provider payloads to show operational load.
+    """
+    async def count(model, *where):
+        query = select(func.count()).select_from(model)
+        if where:
+            query = query.where(*where)
+        return int((await db.execute(query)).scalar() or 0)
+
+    deal_rows = (await db.execute(
+        select(Deal.status, func.count(Deal.id)).group_by(Deal.status)
+    )).all()
+    deals_by_status = {
+        getattr(status, "value", str(status)): int(count or 0)
+        for status, count in deal_rows
+    }
+    payment_rows = (await db.execute(
+        select(MpesaTransaction.status, func.count(MpesaTransaction.id))
+        .group_by(MpesaTransaction.status)
+    )).all()
+    payments_by_status = {
+        getattr(status, "value", str(status)): int(count or 0)
+        for status, count in payment_rows
+    }
+
+    pending_callbacks = await count(
+        PaymentCallback,
+        PaymentCallback.status == PaymentCallbackStatus.PENDING,
+    )
+    stale_mpesa = await count(
+        MpesaTransaction,
+        MpesaTransaction.status == MpesaStatus.pending,
+    )
+
+    return {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "users": {
+            "total": await count(User),
+            "flagged": await count(User, User.is_flagged == True),  # noqa: E712
+            "admins": await count(User, User.is_admin == True),     # noqa: E712
+        },
+        "listings": {"total": await count(Listing)},
+        "stores": {
+            "total": await count(Store),
+            "active": await count(Store, Store.deleted_at.is_(None), Store.is_active == True),  # noqa: E712
+            "deleted": await count(Store, Store.deleted_at.is_not(None)),
+        },
+        "deals": {"total": sum(deals_by_status.values()), "by_status": deals_by_status},
+        "payments": {
+            "total": sum(payments_by_status.values()),
+            "by_status": payments_by_status,
+            "pending_callbacks": pending_callbacks,
+        },
+        "disputes": {"total": await count(Dispute)},
+        "jobs": {"stale_pending_stk": stale_mpesa},
+    }
+
+
+@router.get("/health/services")
+async def service_health(
+    admin: User = Depends(require_admin),
+):
+    """Configuration and reachability of the services the API depends on.
+
+    Values are booleans/states only. Never return an API key, DSN, token or
+    provider response body: this endpoint is authenticated, but credentials
+    still do not belong in an HTTP response or the logs it produces.
+    """
+    from api.core.config import settings
+    from api.database import schema_status
+
+    services = {}
+    overall_ok = True
+    try:
+        status = await schema_status()
+        services["database"] = {
+            "ok": True,
+            "schema_ok": bool(status["current"]),
+            "schema_version": status["current_version"],
+            "schema_required": status["required_version"],
+        }
+        overall_ok = overall_ok and bool(status["current"])
+    except Exception as exc:
+        services["database"] = {"ok": False, "error": type(exc).__name__}
+        overall_ok = False
+
+    if settings.redis_enabled:
+        try:
+            import redis.asyncio as aioredis
+            client = aioredis.from_url(
+                settings.redis_url, socket_connect_timeout=2, socket_timeout=2,
+            )
+            await client.ping()
+            await client.aclose()
+            services["redis"] = {"ok": True}
+        except Exception as exc:
+            services["redis"] = {"ok": False, "error": type(exc).__name__}
+            overall_ok = False
+    else:
+        services["redis"] = {
+            "ok": False,
+            "configured": False,
+            "detail": "not configured; in-process fallbacks are active",
+        }
+
+    services["mpesa"] = {
+        "ok": bool(settings.mpesa_consumer_key and settings.mpesa_consumer_secret),
+        "configured": bool(settings.mpesa_consumer_key and settings.mpesa_consumer_secret),
+        "callback_secret_configured": bool(settings.mpesa_callback_secret),
+    }
+    services["econfirm"] = {
+        "ok": bool(settings.econfirm_api_key),
+        "configured": bool(settings.econfirm_api_key),
+    }
+    services["zetupay"] = {
+        "ok": bool(settings.zetupay_enabled and settings.zetupay_secret_key),
+        "enabled": bool(settings.zetupay_enabled),
+        "configured": bool(settings.zetupay_secret_key),
+    }
+    services["sms"] = {"configured": bool(
+        (settings.mobitech_api_key and settings.mobitech_sender_name)
+        or (settings.at_api_key and settings.at_username)
+    )}
+    services["email"] = {"configured": bool(settings.email_enabled)}
+    services["object_storage"] = {"configured": bool(settings.r2_configured)}
+    services["error_tracking"] = {"configured": bool(settings.sentry_dsn)}
+
+    return {
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+        "status": "ok" if overall_ok else "degraded",
+        "services": services,
+    }
+
+
+@router.get("/stores")
+async def admin_stores(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    active: Optional[bool] = None,
+    deleted: bool = False,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bounded store listing for the admin dashboard.
+
+    The external dashboard called `/admin/stores` and got 404. This exposes
+    operational fields only; business email and owner phone are not needed
+    to moderate a store and are omitted.
+    """
+    query = select(Store)
+    if deleted:
+        query = query.where(Store.deleted_at.is_not(None))
+    else:
+        query = query.where(Store.deleted_at.is_(None))
+    if active is not None:
+        query = query.where(Store.is_active == active)
+    rows = (await db.execute(
+        query.order_by(desc(Store.created_at)).limit(limit).offset(offset)
+    )).scalars().all()
+    return [
+        {
+            "id": store.id,
+            "owner_id": store.owner_id,
+            "name": store.name,
+            "slug": store.slug,
+            "category": store.category,
+            "county": store.county,
+            "is_active": bool(store.is_active),
+            "deleted_at": store.deleted_at.isoformat() if store.deleted_at else None,
+            "rating": store.rating,
+            "rating_reviews": store.rating_reviews,
+            "created_at": store.created_at.isoformat() if store.created_at else None,
+        }
+        for store in rows
+    ]
+
+
 @router.get("/users")
 async def list_users(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     flagged_only: bool = False,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -76,6 +271,8 @@ async def list_users(
 @router.post("/users/{user_id}/promote-admin")
 async def promote_to_admin(
     user_id: str,
+    request: Request,
+    body: Optional[AdminActionIn] = None,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -84,6 +281,11 @@ async def promote_to_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     user.is_admin = True
+    await record_audit(
+        db, admin.id, "admin_promoted", "user", user_id,
+        detail=(body.reason if body else None) or "promoted by administrator",
+        ip_address=client_ip_or_none(request),
+    )
     await db.commit()
     return {"ok": True, "user_id": user_id}
 
@@ -91,6 +293,8 @@ async def promote_to_admin(
 @router.post("/users/{user_id}/flag")
 async def flag_user(
     user_id: str,
+    request: Request,
+    body: Optional[AdminActionIn] = None,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -98,8 +302,15 @@ async def flag_user(
     user = r.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    user.is_flagged = True
-    user.trust_score = max(0, (user.trust_score or 100) - 30)
+    # Idempotent: clicking flag twice used to subtract another 30 points.
+    if not user.is_flagged:
+        user.is_flagged = True
+        user.trust_score = max(0, (user.trust_score or 100) - 30)
+    await record_audit(
+        db, admin.id, "user_flagged", "user", user_id,
+        detail=(body.reason if body else None) or "flagged by administrator",
+        ip_address=client_ip_or_none(request),
+    )
     await db.commit()
     return {"ok": True, "user_id": user_id, "trust_score": user.trust_score}
 
@@ -107,6 +318,8 @@ async def flag_user(
 @router.post("/users/{user_id}/unflag")
 async def unflag_user(
     user_id: str,
+    request: Request,
+    body: Optional[AdminActionIn] = None,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -117,6 +330,11 @@ async def unflag_user(
     user.is_flagged = False
     # Recompute trust score
     score = await compute_trust_score(user_id, db)
+    await record_audit(
+        db, admin.id, "user_unflagged", "user", user_id,
+        detail=(body.reason if body else None) or "unflagged by administrator",
+        ip_address=client_ip_or_none(request),
+    )
     await db.commit()
     return {"ok": True, "user_id": user_id, "trust_score": score}
 
@@ -124,10 +342,17 @@ async def unflag_user(
 @router.post("/users/{user_id}/recompute-trust")
 async def recompute_trust(
     user_id: str,
+    request: Request,
+    body: Optional[AdminActionIn] = None,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     score = await compute_trust_score(user_id, db)
+    await record_audit(
+        db, admin.id, "user_trust_recomputed", "user", user_id,
+        detail=(body.reason if body else None) or f"trust recomputed to {score}",
+        ip_address=client_ip_or_none(request),
+    )
     await db.commit()
     return {"user_id": user_id, "trust_score": score, "trust_band": trust_band(score)}
 
@@ -225,8 +450,8 @@ async def get_audit_logs(
     resource_type: Optional[str] = None,
     resource_id: Optional[str] = None,
     actor_id: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -253,7 +478,7 @@ async def get_audit_logs(
 @router.get("/fraud-events")
 async def get_fraud_events(
     resolved: Optional[bool] = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -275,7 +500,7 @@ async def get_fraud_events(
 
 @router.get("/transactions")
 async def get_transactions(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):

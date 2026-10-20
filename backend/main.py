@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.database import init_db
+from api.database import dispose_engine, init_db
 from api.core.body_limit import BodySizeLimitMiddleware
 from api.core.config import settings, validate_startup
 from api.core.workers import worker
@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI):
     if _has_calls:
         await calls.stop_ring_watchdog()
     await worker.stop()
+    await dispose_engine()
     logging.getLogger(__name__).info("🛑 BROKA v6.0 stopped")
 
 
@@ -499,9 +500,11 @@ async def health():
 @app.get("/ready", tags=["Health"])
 async def ready():
     """
-    Readiness probe — checks DB connectivity.
-    Returns 200 when ready to serve traffic, 503 if not.
-    Used by load balancers (Render, Kubernetes) to gate traffic.
+    Readiness probe — requires a live database and the current schema.
+    Returns 200 when safe to serve traffic, 503 if not. A configured but
+    unavailable Redis is reported as degraded rather than taking the whole
+    API out of rotation: financial jobs use database advisory locks and
+    rate limiting has a bounded in-process fallback.
     """
     from fastapi.responses import JSONResponse
     from sqlalchemy import text
@@ -510,8 +513,24 @@ async def ready():
             await db.execute(text("SELECT 1"))
         db_ok = True
     except Exception as e:
-        logging.getLogger(__name__).error("[ready] DB check failed: %s", e)
+        logging.getLogger(__name__).error(
+            "[ready] DB check failed: %s", type(e).__name__,
+        )
         db_ok = False
+
+    schema_ok = False
+    schema = {}
+    if db_ok:
+        try:
+            from api.database import schema_status
+            schema = await schema_status()
+            schema_ok = bool(schema["current"])
+        except Exception as e:
+            # Do not include a DSN or row contents here. The type is enough
+            # to distinguish a connection failure from a version mismatch.
+            logging.getLogger(__name__).error(
+                "[ready] schema check failed: %s", type(e).__name__,
+            )
 
     redis_ok = True
     if settings.redis_enabled:
@@ -521,20 +540,29 @@ async def ready():
             await r.ping()
             await r.aclose()
         except Exception as e:
-            logging.getLogger(__name__).warning("[ready] Redis check failed: %s", e)
+            logging.getLogger(__name__).warning(
+                "[ready] Redis check failed: %s", type(e).__name__,
+            )
             redis_ok = False
 
     from api.core.workflow import CURRENT_VERSION, all_versions
     from api.core.event_catalog import handler_count
     from api.core import native
 
-    status_code = 200 if db_ok else 503
+    ready_now = db_ok and schema_ok
+    status_code = 200 if ready_now else 503
     return JSONResponse(
         status_code=status_code,
         content={
-            "status":           "ready" if db_ok else "not_ready",
+            "status":           "ready" if ready_now else "not_ready",
             "db":               "ok" if db_ok else "error",
+            "schema":           "ok" if schema_ok else "error",
+            "schema_version":   schema.get("current_version"),
+            "schema_required":  schema.get("required_version"),
+            "schema_missing":   schema.get("missing", {}),
+            "schema_missing_indexes": schema.get("missing_indexes", {}),
             "redis":            "ok" if redis_ok else "error" if settings.redis_enabled else "not_configured",
+            "degraded":         bool(settings.redis_enabled and not redis_ok),
             "version":          "6.0.0",
             "workflow_current": CURRENT_VERSION,
             "workflow_all":     all_versions(),

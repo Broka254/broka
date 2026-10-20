@@ -25,6 +25,7 @@ FeaturedPayment through zetupay_settled() below.
 import os
 import logging
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -32,6 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api.database import get_db, Listing, FeaturedPayment, MpesaStatus
+from api.core.audit import record_audit
+from api.core.reconciliation import report_reconciliation
 from api.domains.payments import service as zetupay_charges
 from api.domains.pricing.service import FEATURED_NOT_SOLD
 from api.models.zetupay import Purpose
@@ -183,51 +186,110 @@ async def boost_callback_secured(secret: str, payload: dict, db: AsyncSession = 
 
 async def _process_boost_callback(payload: dict, db: AsyncSession) -> dict:
     """Shared Safaricom STK callback handling for both routes above."""
-    try:
-        body      = payload.get("Body", {})
-        stk_cb    = body.get("stkCallback", {})
-        result_code = stk_cb.get("ResultCode", -1)
-        checkout_id = stk_cb.get("CheckoutRequestID", "")
+    stk_cb = ((payload or {}).get("Body") or {}).get("stkCallback") or {}
+    checkout_id = stk_cb.get("CheckoutRequestID")
+    raw_code = stk_cb.get("ResultCode")
+    if not checkout_id or raw_code is None or str(raw_code).strip() == "":
+        raise HTTPException(status_code=400, detail="CheckoutRequestID and ResultCode are required")
+    result_code = str(raw_code)
+    items = {i.get("Name"): i.get("Value")
+             for i in ((stk_cb.get("CallbackMetadata") or {}).get("Item") or [])}
+    receipt = str(items.get("MpesaReceiptNumber") or "").strip() or None
 
-        result = await db.execute(
+    try:
+        payment = (await db.execute(
             select(FeaturedPayment).where(
                 FeaturedPayment.checkout_request_id == checkout_id,
                 # A ZetuPay row's checkout_request_id is its ZetuPay
                 # reference: only ZetuPay's webhook may settle it.
                 FeaturedPayment.provider != zetupay_charges.PROVIDER,
-            )
-        )
-        payment = result.scalar_one_or_none()
-        if not payment:
-            logger.warning("Boost callback: payment not found for %s", checkout_id)
+            ).with_for_update().execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if payment is None:
+            # The intent is persisted before Safaricom is called. An unknown
+            # id therefore belongs to another rail or an old prompt; there
+            # is nothing safe to settle and no reason to make Safaricom
+            # redeliver forever.
+            logger.warning("Boost callback: unknown Daraja checkout id")
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-        if result_code == 0:
-            # Extract M-Pesa receipt
-            items = stk_cb.get("CallbackMetadata", {}).get("Item", [])
-            receipt = next(
-                (i["Value"] for i in items if i.get("Name") == "MpesaReceiptNumber"), None
-            )
-            payment.status       = MpesaStatus.success
-            payment.mpesa_receipt = receipt
-
-            # Mark listing as featured
-            lresult = await db.execute(
-                select(Listing).where(Listing.id == payment.listing_id)
-            )
-            listing = lresult.scalar_one_or_none()
-            if listing:
-                _extend_featured(listing, payment.plan)
-        else:
+        if payment.status == MpesaStatus.success:
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        if result_code != "0":
+            # A late failure must never drag a successful payment backward.
             payment.status = MpesaStatus.failed
+            await db.commit()
             logger.info("Boost payment failed for listing %s: %s",
                         payment.listing_id, stk_cb.get("ResultDesc"))
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
+        try:
+            reported = Decimal(str(items["Amount"])) if items.get("Amount") is not None else None
+        except (ArithmeticError, TypeError, ValueError):
+            reported = None
+        expected = Decimal(str(payment.amount or 0))
+        if reported is None or expected <= 0 or abs(reported - expected) >= Decimal("0.01"):
+            reason = (
+                f"Boost callback reported {reported}, expected {expected} "
+                f"for payment {payment.id} - not settled"
+            )
+            payment.status = MpesaStatus.failed
+            payment.last_error = "amount mismatch"
+            await record_audit(
+                db, "system", "boost_amount_mismatch", "listing", payment.listing_id, reason,
+            )
+            report_reconciliation(
+                "boost_amount_mismatch", deal_id=None, reason=reason,
+                listing_id=payment.listing_id,
+            )
+            await db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        if not receipt:
+            payment.last_error = "missing receipt"
+            report_reconciliation(
+                "boost_missing_receipt", deal_id=None,
+                reason=f"Successful boost callback for payment {payment.id} had no receipt",
+                listing_id=payment.listing_id,
+            )
+            await db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        duplicate = (await db.execute(
+            select(FeaturedPayment.id).where(
+                FeaturedPayment.mpesa_receipt == receipt,
+                FeaturedPayment.id != payment.id,
+            ).limit(1)
+        )).scalar()
+        if duplicate:
+            payment.status = MpesaStatus.failed
+            payment.last_error = "duplicate receipt"
+            await record_audit(
+                db, "system", "boost_duplicate_receipt", "listing", payment.listing_id,
+                f"Receipt already belongs to payment {duplicate}",
+            )
+            await db.commit()
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        payment.status = MpesaStatus.success
+        payment.mpesa_receipt = receipt
+        payment.last_error = None
+        listing = (await db.execute(
+            select(Listing).where(Listing.id == payment.listing_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if listing is not None:
+            _extend_featured(listing, payment.plan)
         await db.commit()
-    except Exception as e:
-        logger.error("Boost callback error: %s", e)
-
-    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # A 500 makes Safaricom retry. The old handler returned 200 after a
+        # database error, permanently losing a paid boost.
+        await db.rollback()
+        logger.exception("Boost callback failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Callback not processed")
 
 
 @router.get("/status/{listing_id}")

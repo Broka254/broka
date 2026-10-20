@@ -66,9 +66,21 @@ class SubscriptionPayment(Base):
     provider            = sa.Column(sa.String(16), nullable=False, default="daraja", server_default="daraja")
     failure_reason      = sa.Column(sa.String, nullable=True)
     processed           = sa.Column(sa.Boolean, nullable=False, default=False)
+    # A unique, non-null token while this payment may still prompt the
+    # buyer. The pre-read in premium.payments.start is only a fast path;
+    # this column is what stops two concurrent requests both sending STK.
+    active_intent       = sa.Column(sa.String(64), nullable=True)
     created_at          = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)
     paid_at             = sa.Column(sa.DateTime, nullable=True)
     period_end          = sa.Column(sa.DateTime, nullable=True)   # the plan's paid_until after this
+
+    __table_args__ = (
+        sa.Index("uq_subscription_payments_active_intent", "active_intent", unique=True),
+        # Safaricom receipts are provider-global identifiers. A payment
+        # callback replayed against a different checkout must not settle two
+        # subscription rows for one movement of money.
+        sa.Index("uq_subscription_payments_receipt", "mpesa_receipt", unique=True),
+    )
 
 
 class FeatureUsage(Base):

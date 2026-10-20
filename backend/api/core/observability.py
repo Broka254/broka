@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 from contextvars import ContextVar
@@ -24,6 +25,18 @@ from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
 
 logger = logging.getLogger(__name__)
+
+_CALLBACK_SECRET_PATH = re.compile(r"^(?P<prefix>.*/callback)/[^/]+$")
+
+
+def safe_log_path(path: str) -> str:
+    """A request path safe to log.
+
+    Daraja has no webhook signature, so callback routes authenticate with a
+    secret path segment. Logging the raw path would copy that credential
+    into every HTTP log and log aggregator, defeating the protection.
+    """
+    return _CALLBACK_SECRET_PATH.sub(r"\g<prefix>/{secret}", path)
 
 # Per-request ID available anywhere via request_id_var.get()
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
@@ -118,7 +131,7 @@ class LatencyLogMiddleware:
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         method = scope.get("method", "?")
-        path   = scope.get("path", "/")
+        path   = safe_log_path(scope.get("path", "/"))
         logger.info(
             "[http] %s %s %d %.1fms rid=%s",
             method, path, status[0], elapsed_ms, request_id_var.get("-"),

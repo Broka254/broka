@@ -101,8 +101,9 @@ def new_reference(purpose: str) -> str:
 def unavailable_detail(exc: zetupay.ZetuPayUnavailable) -> str:
     """What the app shows when start() raised."""
     if isinstance(exc, zetupay.ZetuPayTimeout):
-        return ("M-Pesa is slow to answer. If a prompt reaches your phone you can "
-                "still pay it; otherwise try again in a moment.")
+        return ("M-Pesa did not confirm the request. If a prompt reaches your "
+                "phone, complete it; otherwise check the payment status before "
+                "trying again.")
     return "Couldn't reach M-Pesa. Try again in a moment."
 
 
@@ -179,8 +180,28 @@ async def start(
         # Unless the webhook got there first - a prompt answered while our
         # request timed out.
         if locked is not None and locked.status == S.INITIATED:
-            reason = TIMED_OUT if isinstance(exc, zetupay.ZetuPayTimeout) else "prompt_not_sent"
-            await _fail(db, locked, reason)
+            if isinstance(exc, zetupay.ZetuPayTimeout):
+                # The request may have reached ZetuPay. Failing the domain row
+                # here (and releasing its active-intent slot) lets the user
+                # send a second prompt while the first can still be accepted:
+                # one tap, two charges. Keep it open for the provider's
+                # webhook/status answer and alert a person to the ambiguity.
+                locked.failure_reason = TIMED_OUT
+                locked.updated_at = now
+                report_reconciliation(
+                    "zetupay_initiation_unknown",
+                    deal_id=None,
+                    level="warning",
+                    reason=(
+                        f"ZetuPay timed out for {purpose} payment {payment.id}; "
+                        "the prompt may still reach the phone, so retries are blocked"
+                    ),
+                    provider_transaction_id=payment.reference,
+                    purpose=purpose,
+                    payment_id=payment.id,
+                )
+            else:
+                await _fail(db, locked, "prompt_not_sent")
         await db.commit()
         raise
 

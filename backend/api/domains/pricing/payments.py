@@ -33,6 +33,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core import mpesa_stk
@@ -148,13 +149,12 @@ async def start_payment(
         select(ListingPayment.id).where(
             ListingPayment.listing_id == listing.id,
             ListingPayment.status == S.PENDING,
-            ListingPayment.created_at > now - PENDING_WINDOW,
         ).limit(1)
     )).scalar()
     if pending:
         raise HTTPException(status_code=409, detail=(
             "An M-Pesa prompt for this listing is already on your phone. "
-            "Finish it, or try again in two minutes."
+            "Finish it, or check the payment status before trying again."
         ))
 
     quote = await service.listing_fee_quote(
@@ -183,9 +183,20 @@ async def start_payment(
         featured_plan=featured_plan or None, featured_amount=featured_amount,
         amount=option["total"] + featured_amount, phone=phone,
         status=S.PENDING, quote=json.dumps(quote), created_at=now,
+        active_intent=f"listing:{listing.id}",
     )
     db.add(payment)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Two taps can both pass the pending read before either has
+        # inserted. The unique active_intent index serialises them here,
+        # before the provider is called.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=(
+            "An M-Pesa prompt for this listing is already on your phone. "
+            "Finish it, or check the payment status before trying again."
+        ))
 
     if zetupay_charges.enabled():
         # Settled by ZetuPay's webhook (domains/payments), never by
@@ -205,10 +216,21 @@ async def start_payment(
                 phone, payment.amount, account_reference="BROKAListing",
                 description=f"List {months}mo", callback_url=callback_url(),
             )
+        except mpesa_stk.MpesaTimeout as exc:
+            # No evidence that the prompt was refused. Leave it pending and
+            # therefore blocking; a status poll or callback decides it.
+            payment.failure_reason = "provider_outcome_unknown"
+            await db.commit()
+            logger.warning("[listing_fee] ambiguous prompt outcome payment=%s: %s", payment.id, exc)
+            raise HTTPException(status_code=503, detail=(
+                "M-Pesa did not confirm the request. If a prompt reaches "
+                "your phone, complete it; otherwise check status before retrying."
+            ))
         except mpesa_stk.MpesaUnavailable as exc:
             payment.status = S.FAILED
             payment.processed = True
             payment.failure_reason = "prompt_not_sent"
+            payment.active_intent = None
             await db.commit()
             logger.warning("[listing_fee] no prompt for payment=%s: %s", payment.id, exc)
             raise HTTPException(status_code=502, detail="Couldn't reach M-Pesa. Try again in a moment.")
@@ -239,6 +261,28 @@ async def _settle(db: AsyncSession, payment: ListingPayment, receipt: Optional[s
     """Apply a confirmed payment. The caller holds the payment's row lock and
     has checked it is unprocessed."""
     now = datetime.utcnow()
+    if receipt:
+        duplicate = (await db.execute(
+            select(ListingPayment.id).where(
+                ListingPayment.mpesa_receipt == receipt,
+                ListingPayment.id != payment.id,
+            ).limit(1)
+        )).scalar()
+        if duplicate:
+            reason = (f"M-Pesa receipt {receipt} already belongs to listing payment "
+                      f"{duplicate}; payment {payment.id} was not applied")
+            payment.status = S.FAILED
+            payment.processed = True
+            payment.failure_reason = "duplicate_receipt"
+            payment.active_intent = None
+            await record_audit(
+                db, "system", "listing_fee_duplicate_receipt", "listing",
+                payment.listing_id, reason,
+            )
+            from api.core.reconciliation import report_reconciliation
+            report_reconciliation("listing_fee_duplicate_receipt", deal_id=None, reason=reason)
+            await db.commit()
+            return
     listing = (await db.execute(
         select(Listing).where(Listing.id == payment.listing_id)
         .with_for_update().execution_options(populate_existing=True)
@@ -248,6 +292,7 @@ async def _settle(db: AsyncSession, payment: ListingPayment, receipt: Optional[s
     payment.processed = True
     payment.paid_at = now
     payment.mpesa_receipt = receipt
+    payment.active_intent = None
     if listing is None:
         await db.commit()
         return
@@ -293,6 +338,7 @@ async def _fail(db: AsyncSession, payment: ListingPayment, reason: str) -> None:
     payment.status = S.FAILED
     payment.processed = True
     payment.failure_reason = reason[:200]
+    payment.active_intent = None
     await db.commit()
 
 

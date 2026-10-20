@@ -151,7 +151,9 @@ def _callback(checkout_id, amount, code=0):
     stk = {"CheckoutRequestID": checkout_id, "ResultCode": code, "ResultDesc": "done"}
     if code == 0:
         stk["CallbackMetadata"] = {"Item": [
-            {"Name": "Amount", "Value": amount}, {"Name": "MpesaReceiptNumber", "Value": "SKP1"}]}
+            {"Name": "Amount", "Value": amount},
+            {"Name": "MpesaReceiptNumber", "Value": f"SKP{uuid.uuid4().hex[:10].upper()}"},
+        ]}
     return {"Body": {"stkCallback": stk}}
 
 
@@ -413,7 +415,10 @@ class TestPaying:
         assert (await _sub(sid)).setup_fee_paid is True
 
     @pytest.mark.asyncio
-    async def test_an_unfinished_prompt_blocks_another(self, client, billing_on, mpesa):
+    async def test_an_unfinished_prompt_blocks_another(self, client, billing_on, mpesa, monkeypatch):
+        async def _allow(*_a, **_kw):
+            return None
+        monkeypatch.setattr("api.domains.stores.router.stk_limiter.check_and_record", _allow)
         _, h = await _register(client)
         sid = (await _store(client, h))["id"]
         first = await client.post(f"/stores/{sid}/billing/pay", headers=h, json={
@@ -421,11 +426,21 @@ class TestPaying:
         assert first.status_code == 200
         again = await client.post(f"/stores/{sid}/billing/pay", headers=h, json={
             "listings": 30, "months": 2, "phone_number": "0712345678"})
-        assert again.status_code == 409 and "two minutes" in again.json()["detail"]
+        assert again.status_code == 409 and "already on your phone" in again.json()["detail"]
         await _age(first.json()["payment_id"], seconds=180)
+        # Age alone is not evidence that the prompt ended. The old test let
+        # a second prompt through after two minutes, which is exactly how a
+        # buyer pays twice when Safaricom's answer was slow.
         third = await client.post(f"/stores/{sid}/billing/pay", headers=h, json={
             "listings": 30, "months": 2, "phone_number": "0712345678"})
-        assert third.status_code == 200
+        assert third.status_code == 409
+        mpesa.query_answer = {"ResultCode": 1032, "ResultDesc": "cancelled"}
+        await client.get(
+            f"/stores/{sid}/billing/payments/{first.json()['payment_id']}", headers=h,
+        )
+        retry = await client.post(f"/stores/{sid}/billing/pay", headers=h, json={
+            "listings": 30, "months": 2, "phone_number": "0712345678"})
+        assert retry.status_code == 200
 
     @pytest.mark.asyncio
     async def test_the_status_poll_settles_a_late_callback(self, client, billing_on, mpesa):

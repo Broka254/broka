@@ -169,6 +169,19 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Exercise the explicit migration release command
+        env:
+          ENV: test
+          SECRET_KEY: ci-test-secret-key-long-enough-for-testing-purposes
+          DATABASE_URL: "postgresql+asyncpg://broka:broka@localhost:5432/broka_test"
+          BROKA_NATIVE: "off"
+        # A fresh public schema, then the same command again: releases must
+        # be reproducible and a re-run must not repeat schema changes.
+        run: |
+          cd backend
+          python -m api.migrate
+          python -m api.migrate
+
       - name: Run tests on PostgreSQL
         env:
           ENV: test

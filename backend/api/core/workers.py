@@ -25,7 +25,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from typing import Any, Callable, Coroutine
+
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 Task = Callable[..., Coroutine[Any, Any, None]]
@@ -118,6 +121,53 @@ _nudge_running = False
 # costs approximately nothing and bounds the error at one minute.
 NUDGE_SWEEP_SECONDS = 60
 
+# Process-local fallback only. PostgreSQL uses a connection-scoped advisory
+# lock, which all API replicas share; SQLite is single-process by design so
+# a set is sufficient for local development and the test suite.
+_local_scheduler_leases: set[str] = set()
+
+
+@asynccontextmanager
+async def scheduler_lease(name: str):
+    """Run one scheduler pass across replicas, or skip this pass.
+
+    Session-level PostgreSQL advisory locks are released automatically when
+    the connection closes, including after a crashed process. Holding the
+    lock on a dedicated connection means every task in the pass runs under
+    one lease without pinning a transaction open across network calls.
+    """
+    from api import database
+
+    if database.engine.dialect.name != "postgresql":
+        if name in _local_scheduler_leases:
+            yield False
+            return
+        _local_scheduler_leases.add(name)
+        try:
+            yield True
+        finally:
+            _local_scheduler_leases.discard(name)
+        return
+
+    async with database.engine.connect() as conn:
+        acquired = bool(await conn.scalar(
+            text("SELECT pg_try_advisory_lock(hashtext(:name))"), {"name": name},
+        ))
+        if not acquired:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            try:
+                await conn.execute(
+                    text("SELECT pg_advisory_unlock(hashtext(:name))"), {"name": name},
+                )
+            except Exception:
+                # Closing the connection releases it even if the explicit
+                # unlock loses the connection during shutdown.
+                logger.warning("[scheduler] advisory unlock failed; connection close will release it")
+
 
 async def _nudge_loop(interval_seconds: int = NUDGE_SWEEP_SECONDS) -> None:
     """The fast loop: availability reminders and the auction lifecycle.
@@ -131,25 +181,27 @@ async def _nudge_loop(interval_seconds: int = NUDGE_SWEEP_SECONDS) -> None:
     _nudge_running = True
     logger.info("[nudge] availability sweep started (every %ds)", interval_seconds)
     while _nudge_running:
-        try:
-            await task_check_interest_nudges({})
-        except Exception as exc:
-            logger.error("[nudge] availability sweep failed: %s", exc)
-        # Auctions ride this 60s loop rather than the 300s sweep - an
-        # auction end is a deadline bidders are watching in real time. See
-        # task_close_due_auctions.
-        try:
-            await task_close_due_auctions({})
-        except Exception as exc:
-            logger.error("[nudge] auction close sweep failed: %s", exc)
-        try:
-            await task_notify_auctions_ending_soon({})
-        except Exception as exc:
-            logger.error("[nudge] auction ending-soon sweep failed: %s", exc)
-        try:
-            await task_lapse_unpaid_auction_wins({})
-        except Exception as exc:
-            logger.error("[nudge] auction payment-lapse sweep failed: %s", exc)
+        async with scheduler_lease("broka:scheduler:nudge") as acquired:
+            if acquired:
+                try:
+                    await task_check_interest_nudges({})
+                except Exception as exc:
+                    logger.error("[nudge] availability sweep failed: %s", exc)
+                # Auctions ride this 60s loop rather than the 300s sweep - an
+                # auction end is a deadline bidders are watching in real time. See
+                # task_close_due_auctions.
+                try:
+                    await task_close_due_auctions({})
+                except Exception as exc:
+                    logger.error("[nudge] auction close sweep failed: %s", exc)
+                try:
+                    await task_notify_auctions_ending_soon({})
+                except Exception as exc:
+                    logger.error("[nudge] auction ending-soon sweep failed: %s", exc)
+                try:
+                    await task_lapse_unpaid_auction_wins({})
+                except Exception as exc:
+                    logger.error("[nudge] auction payment-lapse sweep failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -165,58 +217,68 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
         # was silently finding nothing on every pass for weeks. DEBUG so it
         # costs nothing at the default level, but it is there when needed.
         logger.debug("[sweep] pass starting")
-        try:
-            await task_check_deal_timers({})
-        except Exception as exc:
-            logger.error("[sweep] deal timer check failed: %s", exc)
-        try:
-            await task_reconcile_econfirm_escrows({})
-        except Exception as exc:
-            logger.error("[sweep] E-Confirm reconciliation failed: %s", exc)
-        try:
-            await task_reconcile_zetupay_payments({})
-        except Exception as exc:
-            logger.error("[sweep] ZetuPay reconciliation failed: %s", exc)
-        try:
-            await task_check_dispute_timers()
-        except Exception as exc:
-            logger.error("[sweep] dispute timer check failed: %s", exc)
-        try:
-            await task_refresh_dispute_summary_cache()
-        except Exception as exc:
-            logger.error("[sweep] dispute summary cache refresh failed: %s", exc)
-        try:
-            await task_recompute_dcr_and_leaks()
-        except Exception as exc:
-            logger.error("[sweep] DCR/leak recompute failed: %s", exc)
-        try:
-            await task_refresh_store_ratings()
-        except Exception as exc:
-            logger.error("[sweep] store rating refresh failed: %s", exc)
-        try:
-            await task_retrain_ml_models()
-        except Exception as exc:
-            logger.error("[sweep] ML retrain failed: %s", exc)
-        try:
-            await task_check_call_expiry()
-        except Exception as exc:
-            logger.error("[sweep] call expiry check failed: %s", exc)
-        try:
-            await task_backfill_media()
-        except Exception as exc:
-            logger.error("[sweep] media backfill failed: %s", exc)
-        try:
-            await task_collect_abandoned_media()
-        except Exception as exc:
-            logger.error("[sweep] media clean-up failed: %s", exc)
-        try:
-            await task_expire_buy_agent_watches()
-        except Exception as exc:
-            logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
-        try:
-            await task_sync_listing_stock()
-        except Exception as exc:
-            logger.error("[sweep] listing stock sync failed: %s", exc)
+        async with scheduler_lease("broka:scheduler:periodic") as acquired:
+            if acquired:
+                try:
+                    await task_check_deal_timers({})
+                except Exception as exc:
+                    logger.error("[sweep] deal timer check failed: %s", exc)
+                try:
+                    await task_reconcile_econfirm_escrows({})
+                except Exception as exc:
+                    logger.error("[sweep] E-Confirm reconciliation failed: %s", exc)
+                try:
+                    await task_reconcile_zetupay_payments({})
+                except Exception as exc:
+                    logger.error("[sweep] ZetuPay reconciliation failed: %s", exc)
+                try:
+                    # This task existed but was registered only with ARQ and never
+                    # called by the in-app sweep, so in-process deployments never
+                    # reconciled a lost STK callback or an ambiguous push.
+                    from api.database import DATABASE_URL
+                    await task_reconcile_mpesa({}, DATABASE_URL)
+                except Exception as exc:
+                    logger.error("[sweep] M-Pesa reconciliation failed: %s", exc)
+                try:
+                    await task_check_dispute_timers()
+                except Exception as exc:
+                    logger.error("[sweep] dispute timer check failed: %s", exc)
+                try:
+                    await task_refresh_dispute_summary_cache()
+                except Exception as exc:
+                    logger.error("[sweep] dispute summary cache refresh failed: %s", exc)
+                try:
+                    await task_recompute_dcr_and_leaks()
+                except Exception as exc:
+                    logger.error("[sweep] DCR/leak recompute failed: %s", exc)
+                try:
+                    await task_refresh_store_ratings()
+                except Exception as exc:
+                    logger.error("[sweep] store rating refresh failed: %s", exc)
+                try:
+                    await task_retrain_ml_models()
+                except Exception as exc:
+                    logger.error("[sweep] ML retrain failed: %s", exc)
+                try:
+                    await task_check_call_expiry()
+                except Exception as exc:
+                    logger.error("[sweep] call expiry check failed: %s", exc)
+                try:
+                    await task_backfill_media()
+                except Exception as exc:
+                    logger.error("[sweep] media backfill failed: %s", exc)
+                try:
+                    await task_collect_abandoned_media()
+                except Exception as exc:
+                    logger.error("[sweep] media clean-up failed: %s", exc)
+                try:
+                    await task_expire_buy_agent_watches()
+                except Exception as exc:
+                    logger.error("[sweep] buy-agent watch expiry failed: %s", exc)
+                try:
+                    await task_sync_listing_stock()
+                except Exception as exc:
+                    logger.error("[sweep] listing stock sync failed: %s", exc)
         await asyncio.sleep(interval_seconds)
 
 
@@ -453,9 +515,9 @@ async def task_send_fcm_notification(ctx: dict, fcm_token: str, title: str, body
             msg.send,
             msg.Message(notification=msg.Notification(title=title, body=body), token=fcm_token),
         )
-        logger.info("[worker] FCM sent to ...%s", fcm_token[-4:])
+        logger.info("[worker] FCM accepted")
     except Exception as exc:
-        logger.warning("[worker] FCM failed: %s", exc)
+        logger.warning("[worker] FCM failed: %s", type(exc).__name__)
 
 
 async def task_expire_featured_listings(ctx: dict, db_url: str) -> None:
@@ -1781,6 +1843,8 @@ async def _fire_auto_refund(session, deal) -> None:
     refund_amount = round(deal.agreed_price * (1 - _COMMISSION_RATE), 2)
     deal.status = DealStatus.refunded
     deal.refunded_at = datetime.utcnow()
+    from api.core.ledger import ledger
+    await ledger.record_escrow_refunded(session, deal.id, refund_amount, "")
     buyer = (await session.execute(select(User).where(User.id == deal.buyer_id))).scalar_one_or_none()
     if buyer and buyer.phone:
         try:
@@ -1810,6 +1874,8 @@ async def _fire_auto_release(session, deal) -> None:
     deal.status = DealStatus.released
     deal.delivery_confirmed_at = now
     deal.released_at = now
+    from api.core.ledger import ledger
+    await ledger.record_escrow_released(session, deal.id, deal.agreed_price, deal.commission)
     seller = (await session.execute(select(User).where(User.id == deal.seller_id))).scalar_one_or_none()
     if seller:
         seller.completed_deals = (seller.completed_deals or 0) + 1
@@ -1870,27 +1936,107 @@ async def task_fraud_sweep(ctx: dict, db_url: str) -> None:
 
 
 async def task_reconcile_mpesa(ctx: dict, db_url: str) -> None:
+    """Settle pending STK prompts from provider evidence, never from age.
+
+    The old version called every row older than ten minutes ``failed``. A
+    prompt still on the buyer's phone (or a response lost after Safaricom
+    accepted it) is not evidence of failure; marking it failed lets the UI
+    send a second prompt and charge twice. Here a provider query decides
+    terminal states, an ambiguous answer stays pending, and a truly
+    unreferenced initiation raises a reconciliation alert for a person.
+    """
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy import select
     from datetime import datetime, timedelta
+    from api.core import mpesa_stk
+
     engine  = create_async_engine(db_url, echo=False)
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with Session() as session:
         from api.database import MpesaTransaction, MpesaStatus
+        from api.models.payment_callback import PaymentCallback, PaymentCallbackStatus
+        from api.core.reconciliation import report_reconciliation
+
+        # First, callbacks that beat the initiation response. They are
+        # already durable; this is the retry path when the initiating
+        # process died before draining them.
+        inbox = (await session.execute(
+            select(PaymentCallback).where(
+                PaymentCallback.status == PaymentCallbackStatus.PENDING,
+            ).order_by(PaymentCallback.received_at).limit(100)
+        )).scalars().all()
+        for callback in inbox:
+            matched = (await session.execute(
+                select(MpesaTransaction.id).where(
+                    MpesaTransaction.checkout_request_id == callback.checkout_request_id,
+                ).limit(1)
+            )).scalar()
+            if matched is None:
+                callback.attempts = (callback.attempts or 0) + 1
+                callback.last_error = "no matching payment row yet"
+                continue
+            try:
+                from api.routers.mpesa import _drain_callback_inbox
+                await _drain_callback_inbox(session, callback.checkout_request_id)
+            except Exception as exc:
+                await session.rollback()
+                logger.error(
+                    "[worker:reconcile] callback %s failed: %s",
+                    callback.checkout_request_id, type(exc).__name__,
+                )
+        await session.commit()
+
         cutoff  = datetime.utcnow() - timedelta(minutes=10)
         result  = await session.execute(
             select(MpesaTransaction).where(
                 MpesaTransaction.status     == MpesaStatus.pending,
                 MpesaTransaction.created_at <= cutoff,
-            )
+            ).limit(100)
         )
         stale = result.scalars().all()
         for tx in stale:
-            tx.status = MpesaStatus.failed
-            logger.warning("[worker:reconcile] stale tx=%s marked failed", tx.id)
-        if stale:
-            await session.commit()
+            if not tx.checkout_request_id:
+                # Safaricom accepted (or may have accepted) a request but we
+                # never received its identifier. There is no id to query and
+                # no safe automatic terminal state. Keep the unique
+                # active_intent claim in place, which blocks a replacement
+                # prompt, and ask a human to reconcile it.
+                message = "STK initiation has no provider identifier; reconcile manually"
+                if tx.last_error != message:
+                    tx.last_error = message
+                    report_reconciliation(
+                        "mpesa_initiation_unknown", deal_id=tx.deal_id,
+                        reason=message,
+                    )
+                continue
+
+            try:
+                answer = await mpesa_stk.stk_query(tx.checkout_request_id)
+                outcome = mpesa_stk.query_outcome(answer)
+            except Exception as exc:
+                # Transport/credentials uncertainty is not a payment result.
+                tx.last_error = f"reconciliation query unavailable: {type(exc).__name__}"
+                continue
+
+            if outcome is True:
+                from api.routers.mpesa import _settle_successful_stk
+                # A query carries no receipt, so leave callback_processed
+                # false: the callback (or a later inbox retry) still needs
+                # to attach the receipt.
+                await _settle_successful_stk(session, tx, mark_processed=False)
+                logger.info("[worker:reconcile] settled tx=%s from provider query", tx.id)
+            elif outcome is False:
+                tx.status = MpesaStatus.failed
+                tx.callback_processed = True
+                tx.active_intent = None
+                tx.last_error = None
+                logger.info("[worker:reconcile] provider says tx=%s ended unpaid", tx.id)
+            else:
+                tx.last_error = "provider still reports the prompt as open"
+
+        # Explicitly release the read transaction before the engine closes.
+        await session.commit()
     await engine.dispose()
 
 

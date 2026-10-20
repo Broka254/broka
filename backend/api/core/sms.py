@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from typing import Optional, Protocol
 
 import httpx
@@ -32,6 +33,28 @@ from api.core.config import settings
 from api.core.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
+
+_PHONE_RE = re.compile(r"(?<!\d)(?:\+?254|0)7\d{8}(?!\d)")
+
+
+def _redact_phone_text(value: str) -> str:
+    """Provider diagnostics are useful; customer phone numbers are not."""
+    return _PHONE_RE.sub("<phone-redacted>", value or "")
+
+
+def _redact_result(value):
+    if isinstance(value, dict):
+        return {
+            key: ("<redacted>" if key.lower() in {
+                "mobile", "phone", "msisdn", "recipient", "message", "to",
+            } else _redact_result(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_result(item) for item in value]
+    if isinstance(value, str):
+        return _redact_phone_text(value)
+    return value
 
 _mobitech_breaker = CircuitBreaker("mobitech_sms", failure_threshold=5, recovery_timeout=30)
 _at_breaker       = CircuitBreaker("africas_talking_sms", failure_threshold=5, recovery_timeout=30)
@@ -63,7 +86,7 @@ class ConsoleSMS:
         logger.warning("[sms:console] no SMS provider configured (checked "
                         "MOBITECH_API_KEY/MOBITECH_SENDER_NAME, then "
                         "AT_USERNAME/AT_API_KEY) — logging instead of "
-                        "sending. to=%s body=%r", phone, message)
+                        "sending. recipient and body redacted")
         return True
 
 
@@ -99,7 +122,7 @@ class AfricasTalkingSMS:
         try:
             return await _at_breaker.call(self._send_once, phone, message)
         except (CircuitOpenError, httpx.HTTPError) as e:
-            logger.error("[sms:africastalking] send failed to=%s err=%s", phone, e)
+            logger.error("[sms:africastalking] send failed err=%s", type(e).__name__)
             return False
 
 
@@ -206,7 +229,7 @@ class MobitechSMS:
         # returning a full HTML error page) shouldn't be able to dump an
         # unbounded body into the logs. 2000 chars comfortably covers any
         # JSON error object or short HTML/text page.
-        raw_text = (resp.text or "")[:2000]
+        raw_text = _redact_phone_text((resp.text or "")[:2000])
         mobitech_status = body_json.get("status_code") if body_json else None
         mobitech_desc = body_json.get("status_desc") if body_json else None
 
@@ -264,7 +287,7 @@ class MobitechSMS:
             sanitized_payload = {
                 "serviceId": payload["serviceId"],
                 "shortcode": payload["shortcode"],
-                "mobile": mobitech_phone,
+                "mobile": "<redacted>",
                 "message": "<redacted>",
                 "client_ref": client_ref,
             }
@@ -303,8 +326,8 @@ class MobitechSMS:
             # leak the OTP - only the request payload (never logged in
             # full - see sanitized_payload above) contains that.
             logger.error(
-                "[sms:mobitech] send failed to=%s http_status=%s status=%s (%s)%s response=%r",
-                phone, http_status, status_code, desc, hint, result,
+                "[sms:mobitech] send failed http_status=%s status=%s (%s)%s response=%r",
+                http_status, status_code, desc, hint, _redact_result(result),
             )
             return False
         return True
@@ -313,7 +336,7 @@ class MobitechSMS:
         try:
             return await _mobitech_breaker.call(self._send_once, phone, message)
         except (CircuitOpenError, httpx.HTTPError) as e:
-            logger.error("[sms:mobitech] send failed to=%s err=%s", phone, e)
+            logger.error("[sms:mobitech] send failed err=%s", type(e).__name__)
             return False
 
     # ── Extra, documented Mobitech endpoints ────────────────────────────────
@@ -349,7 +372,7 @@ class MobitechSMS:
                 resp.raise_for_status()
                 return resp.json()
         except httpx.HTTPError as e:
-            logger.error("[sms:mobitech] validate_mobile failed to=%s err=%s", phone, e)
+            logger.error("[sms:mobitech] validate_mobile failed err=%s", type(e).__name__)
             return None
 
 

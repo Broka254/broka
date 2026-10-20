@@ -202,13 +202,16 @@ class PushService:
                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 )
             if resp.status_code == 200:
-                logger.info("[push] ✅ Sent to %s... title='%s'", fcm_token[:20], title)
+                # FCM tokens are bearer credentials for a device, and a push
+                # title can contain a person's name or message preview.
+                logger.info("[push] FCM accepted")
                 return True
             else:
-                logger.warning("[push] FCM error %d: %s", resp.status_code, resp.text[:200])
+                # Error bodies can echo the registration token.
+                logger.warning("[push] FCM error status=%d", resp.status_code)
                 return False
         except Exception as e:
-            logger.error("[push] Send failed: %s", e)
+            logger.error("[push] Send failed: %s", type(e).__name__)
             return False
 
     async def send_to_users(

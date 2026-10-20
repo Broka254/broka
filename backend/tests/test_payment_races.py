@@ -17,15 +17,17 @@ Service-level where the rule lives in a service (the sweep never goes near a
 router), HTTP where the rule is the endpoint's.
 """
 import asyncio
+import os
 import uuid
 from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from api.core.config import settings
+from api.core import mpesa_stk
 from api.database import (
     AsyncSessionLocal, AuctionMeta, AuditLog, Deal, DealStatus, Listing,
     ListingStatus, ListingType, MpesaStatus, MpesaTransaction, User, init_db,
@@ -34,7 +36,10 @@ from api.database import (
 from api.domains.auctions import lifecycle
 from api.domains.escrow.providers import EscrowProvider, EscrowProviderResult, FeeQuote
 from api.models.external_escrow import EConfirmEscrowStatus, ExternalEscrow
+from api.models.escrow_ledger import LedgerEntry
+from api.models.payment_callback import PaymentCallback, PaymentCallbackStatus
 from api.security import create_access_token
+from api.security import hash_password
 from main import app
 
 
@@ -481,12 +486,15 @@ async def _legacy_deal():
         return deal.id, txn.checkout_request_id, buyer, seller
 
 
-def _callback(checkout_id: str, *, amount: float = 750, result_code: int = 0) -> dict:
+def _callback(
+    checkout_id: str, *, amount: float = 750, result_code: int = 0,
+    receipt: str | None = None,
+) -> dict:
     return {"Body": {"stkCallback": {
         "CheckoutRequestID": checkout_id, "ResultCode": result_code, "ResultDesc": "ok",
         "CallbackMetadata": {"Item": [
             {"Name": "Amount", "Value": amount},
-            {"Name": "MpesaReceiptNumber", "Value": "QJL82TEST"},
+            {"Name": "MpesaReceiptNumber", "Value": receipt or f"Q{_tag().upper()}"},
         ]},
     }}}
 
@@ -596,6 +604,373 @@ class TestLegacyMpesaSettlement:
             deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
         assert deal.status == DealStatus.agreed
         assert funded_events == []
+
+
+class _FixedStkClient:
+    """STK initiation stand-in. `checkout` can be set before the request."""
+
+    checkout = "ws_CO_fixed"
+    merchant = "mr_fixed"
+    calls = 0
+
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, *a, **kw):
+        type(self).calls += 1
+
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "ResponseCode": "0",
+                    "CheckoutRequestID": _FixedStkClient.checkout,
+                    "MerchantRequestID": _FixedStkClient.merchant,
+                    "ResponseDescription": "Success",
+                    "CustomerMessage": "Check your phone",
+                }
+
+        return _Resp()
+
+
+class _TimedOutStkClient(_FixedStkClient):
+    async def post(self, *a, **kw):
+        type(self).calls += 1
+        import httpx
+        raise httpx.TimeoutException("provider may have accepted it")
+
+
+async def _buyer_ready_to_pay():
+    deal_id, checkout, buyer, _ = await _legacy_deal()
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(select(User).where(User.id == buyer.id))).scalar_one()
+        row.password_hash = hash_password("Passw0rd!x")
+        await db.commit()
+    return deal_id, checkout, buyer
+
+
+async def _payable_deal():
+    """An agreed deal with no payment attempt yet."""
+    seller, buyer = await _user("PSeller"), await _user("PBuyer")
+    async with AsyncSessionLocal() as db:
+        listing = Listing(
+            seller_id=seller.id, name=f"Payable {_tag()}", category="Electronics",
+            price=25000, lat=-1.29, lng=36.82, status=ListingStatus.pending,
+        )
+        db.add(listing)
+        await db.commit()
+        deal = Deal(
+            listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id,
+            agreed_price=25000, commission=750, status=DealStatus.agreed,
+        )
+        db.add(deal)
+        await db.execute(
+            update(User).where(User.id == buyer.id)
+            .values(password_hash=hash_password("Passw0rd!x"))
+        )
+        await db.commit()
+        return deal.id, buyer
+
+
+def _auth(user: User) -> dict:
+    return {"Authorization": f"Bearer {create_access_token({'sub': user.id})}"}
+
+
+def _callback_with_receipt(checkout_id: str, receipt: str, *, amount: float = 750) -> dict:
+    body = _callback(checkout_id, amount=amount)
+    body["Body"]["stkCallback"]["CallbackMetadata"]["Item"][1]["Value"] = receipt
+    return body
+
+
+class TestDurableStkIntents:
+    @pytest.mark.asyncio
+    async def test_timeout_keeps_one_pending_intent_and_blocks_a_second_prompt(
+        self, client, funded_events, monkeypatch,
+    ):
+        deal_id, buyer = await _payable_deal()
+        _TimedOutStkClient.calls = 0
+
+        async def token():
+            return "tok"
+
+        monkeypatch.setattr("api.routers.mpesa._get_access_token", token)
+        monkeypatch.setattr("api.routers.mpesa.httpx.AsyncClient", _TimedOutStkClient)
+        monkeypatch.setattr("api.routers.mpesa.stk_limiter.check_and_record", lambda *_: asyncio.sleep(0))
+
+        payload = {"deal_id": deal_id, "phone_number": "0711111111", "password": "Passw0rd!x"}
+        first = await client.post("/mpesa/stk-push", json=payload, headers=_auth(buyer))
+        assert first.status_code == 503
+        second = await client.post("/mpesa/stk-push", json=payload, headers=_auth(buyer))
+        assert second.status_code == 409
+        assert _TimedOutStkClient.calls == 1
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(MpesaTransaction).where(MpesaTransaction.deal_id == deal_id)
+            )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].status == MpesaStatus.pending
+        assert rows[0].checkout_request_id is None
+        assert rows[0].active_intent == deal_id
+
+    @pytest.mark.asyncio
+    async def test_same_idempotency_key_replays_and_a_changed_request_is_refused(
+        self, client, funded_events, monkeypatch,
+    ):
+        deal_id, buyer = await _payable_deal()
+        _FixedStkClient.checkout = f"ws_CO_{_tag()}"
+        _FixedStkClient.calls = 0
+
+        async def token():
+            return "tok"
+
+        monkeypatch.setattr("api.routers.mpesa._get_access_token", token)
+        monkeypatch.setattr("api.routers.mpesa.httpx.AsyncClient", _FixedStkClient)
+        monkeypatch.setattr("api.routers.mpesa.stk_limiter.check_and_record", lambda *_: asyncio.sleep(0))
+
+        headers = {**_auth(buyer), "X-Idempotency-Key": "one-logical-payment"}
+        body = {"deal_id": deal_id, "phone_number": "0711111111", "password": "Passw0rd!x"}
+        first = await client.post("/mpesa/stk-push", json=body, headers=headers)
+        second = await client.post("/mpesa/stk-push", json=body, headers=headers)
+        assert first.status_code == second.status_code == 200
+        assert first.json()["checkout_request_id"] == second.json()["checkout_request_id"]
+        assert _FixedStkClient.calls == 1
+
+        changed = await client.post(
+            "/mpesa/stk-push", json={**body, "phone_number": "0722222222"}, headers=headers,
+        )
+        assert changed.status_code == 409
+        assert _FixedStkClient.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_callback_before_checkout_id_is_stored_then_drained(
+        self, client, funded_events, monkeypatch,
+    ):
+        deal_id, buyer = await _payable_deal()
+        checkout = f"ws_CO_{_tag()}"
+        _FixedStkClient.checkout = checkout
+        _FixedStkClient.calls = 0
+
+        async def token():
+            return "tok"
+
+        monkeypatch.setattr("api.routers.mpesa._get_access_token", token)
+        monkeypatch.setattr("api.routers.mpesa.httpx.AsyncClient", _FixedStkClient)
+        monkeypatch.setattr("api.routers.mpesa.stk_limiter.check_and_record", lambda *_: asyncio.sleep(0))
+
+        early = await client.post(
+            "/mpesa/callback", json=_callback_with_receipt(checkout, f"R{_tag()}"),
+        )
+        assert early.status_code == 200
+        async with AsyncSessionLocal() as db:
+            pending = (await db.execute(select(PaymentCallback).where(
+                PaymentCallback.checkout_request_id == checkout))).scalar_one()
+            assert pending.status == PaymentCallbackStatus.PENDING
+
+        paid = await client.post(
+            "/mpesa/stk-push",
+            json={"deal_id": deal_id, "phone_number": "0711111111", "password": "Passw0rd!x"},
+            headers=_auth(buyer),
+        )
+        assert paid.status_code == 200
+        async with AsyncSessionLocal() as db:
+            deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
+            callback = (await db.execute(select(PaymentCallback).where(
+                PaymentCallback.checkout_request_id == checkout))).scalar_one()
+        assert deal.status == DealStatus.paid
+        assert callback.status == PaymentCallbackStatus.PROCESSED
+
+    @pytest.mark.asyncio
+    async def test_duplicate_callback_settles_once_and_keeps_one_ledger_pair(
+        self, client, funded_events,
+    ):
+        deal_id, checkout, _, _ = await _legacy_deal()
+        body = _callback_with_receipt(checkout, f"R{_tag()}")
+        assert (await client.post("/mpesa/callback", json=body)).status_code == 200
+        assert (await client.post("/mpesa/callback", json=body)).status_code == 200
+        async with AsyncSessionLocal() as db:
+            deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
+            entries = (await db.execute(select(LedgerEntry).where(
+                LedgerEntry.deal_id == deal_id))).scalars().all()
+        assert deal.status == DealStatus.paid
+        assert len(entries) == 2
+        assert abs(sum(e.amount_kes for e in entries if e.direction.value == "DEBIT")) == 750
+        assert abs(sum(e.amount_kes for e in entries if e.direction.value == "CREDIT")) == 750
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.getenv("POSTGRES_TEST_URL"),
+        reason="row-lock behaviour under simultaneous requests is a PostgreSQL invariant",
+    )
+    async def test_simultaneous_duplicate_callbacks_settle_once(
+        self, client, funded_events,
+    ):
+        deal_id, checkout, _, _ = await _legacy_deal()
+        body = _callback_with_receipt(checkout, f"R{_tag()}")
+        first, second = await asyncio.gather(
+            client.post("/mpesa/callback", json=body),
+            client.post("/mpesa/callback", json=body),
+        )
+        assert first.status_code == second.status_code == 200
+        async with AsyncSessionLocal() as db:
+            deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
+            entries = (await db.execute(select(LedgerEntry).where(
+                LedgerEntry.deal_id == deal_id))).scalars().all()
+            callbacks = (await db.execute(select(PaymentCallback).where(
+                PaymentCallback.checkout_request_id == checkout))).scalars().all()
+        assert deal.status == DealStatus.paid
+        assert len(entries) == 2
+        assert len(callbacks) == 1
+        assert callbacks[0].status == PaymentCallbackStatus.PROCESSED
+
+    @pytest.mark.asyncio
+    async def test_database_failure_returns_500_and_the_retry_applies(
+        self, client, funded_events, monkeypatch,
+    ):
+        deal_id, checkout, _, _ = await _legacy_deal()
+        body = _callback_with_receipt(checkout, f"R{_tag()}")
+        import api.routers.mpesa as mpesa_router
+        real_apply = mpesa_router._apply_callback
+
+        async def fail(*a, **kw):
+            raise RuntimeError("temporary db failure")
+
+        with monkeypatch.context() as m:
+            m.setattr("api.routers.mpesa._apply_callback", fail)
+            assert (await client.post("/mpesa/callback", json=body)).status_code == 500
+
+        async with AsyncSessionLocal() as db:
+            pending = (await db.execute(select(PaymentCallback).where(
+                PaymentCallback.checkout_request_id == checkout))).scalar_one()
+        assert pending.status == PaymentCallbackStatus.PENDING
+        assert (await client.post("/mpesa/callback", json=body)).status_code == 200
+        async with AsyncSessionLocal() as db:
+            deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
+        assert deal.status == DealStatus.paid
+        assert real_apply is mpesa_router._apply_callback
+
+    @pytest.mark.asyncio
+    async def test_incomplete_callback_does_not_fail_a_live_payment(self, client):
+        deal_id, checkout, _, _ = await _legacy_deal()
+        body = {"Body": {"stkCallback": {"CheckoutRequestID": checkout, "ResultDesc": "bad"}}}
+        assert (await client.post("/mpesa/callback", json=body)).status_code == 400
+        async with AsyncSessionLocal() as db:
+            txn = (await db.execute(select(MpesaTransaction).where(
+                MpesaTransaction.checkout_request_id == checkout))).scalar_one()
+            deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
+        assert txn.status == MpesaStatus.pending and deal.status == DealStatus.agreed
+
+    @pytest.mark.asyncio
+    async def test_payment_status_is_visible_only_to_deal_participants(self, client):
+        deal_id, _, buyer, seller = await _legacy_deal()
+        outsider = await _user("Outsider")
+        assert (await client.get(f"/mpesa/status/{deal_id}", headers=_auth(buyer))).status_code == 200
+        assert (await client.get(f"/mpesa/status/{deal_id}", headers=_auth(seller))).status_code == 200
+        assert (await client.get(f"/mpesa/status/{deal_id}", headers=_auth(outsider))).status_code == 404
+
+
+class TestPlanPaymentIntentRace:
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.getenv("POSTGRES_TEST_URL"),
+        reason="row-lock/uncommitted-unique behaviour is a PostgreSQL invariant",
+    )
+    async def test_two_simultaneous_plan_starts_send_one_prompt(self, monkeypatch):
+        """The pending SELECT cannot see an uncommitted sibling. The unique
+        active-intent slot must stop the second provider call instead."""
+        import dataclasses
+        from fastapi import HTTPException
+        from api.domains.premium import payments as premium_payments
+        from api.models.subscription import SubscriptionPayment
+
+        patched = dataclasses.replace(premium_payments.settings, premium_enabled=True)
+        monkeypatch.setattr(premium_payments, "settings", patched)
+        user = await _user("PlanRace")
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def push(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+            return {
+                "CheckoutRequestID": f"ws_CO_{_tag()}",
+                "MerchantRequestID": f"m_{_tag()}",
+                "ResponseCode": "0",
+            }
+
+        monkeypatch.setattr(mpesa_stk, "stk_push", push)
+
+        async def buy():
+            async with AsyncSessionLocal() as db:
+                return await premium_payments.start(
+                    db, user.id, "plus", 1, "0712345678",
+                )
+
+        first = asyncio.create_task(buy())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        second = asyncio.create_task(buy())
+        await asyncio.sleep(0.1)
+        release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+
+        assert calls == 1
+        assert sum(not isinstance(r, Exception) for r in results) == 1, results
+        errors = [r for r in results if isinstance(r, Exception)]
+        assert len(errors) == 1 and isinstance(errors[0], HTTPException)
+        assert errors[0].status_code == 409
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(select(SubscriptionPayment).where(
+                SubscriptionPayment.user_id == user.id,
+            ))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].active_intent == f"premium:{user.id}"
+
+
+class TestLedgerSurvivesEventFailure:
+    @pytest.mark.asyncio
+    async def test_release_ledger_is_committed_before_publish_can_fail(
+        self, client, funded_events, monkeypatch,
+    ):
+        deal_id, checkout, buyer, _ = await _legacy_deal()
+        funded = _callback_with_receipt(checkout, f"R{_tag()}")
+        assert (await client.post("/mpesa/callback", json=funded)).status_code == 200
+
+        import api.domains.escrow.service as escrow_service
+
+        async def broken_publish(*args, **kwargs):
+            raise RuntimeError("notification channel unavailable")
+
+        monkeypatch.setattr(escrow_service, "publish", broken_publish)
+        with pytest.raises(RuntimeError, match="notification channel unavailable"):
+            async with AsyncSessionLocal() as db:
+                await escrow_service.EscrowService(db).confirm_delivery(deal_id, buyer.id)
+
+        async with AsyncSessionLocal() as db:
+            deal = (await db.execute(select(Deal).where(Deal.id == deal_id))).scalar_one()
+            entries = (await db.execute(select(LedgerEntry).where(
+                LedgerEntry.deal_id == deal_id,
+            ))).scalars().all()
+        assert deal.status == DealStatus.released
+        # Funding pair plus the release pair. Without the in-transaction
+        # write, the failed publish would leave only the funding entries.
+        assert len(entries) == 4
+        held = sum(e.amount_kes for e in entries
+                   if e.account.value == "ESCROW_HOLDING" and e.direction.value == "CREDIT")
+        released = sum(e.amount_kes for e in entries
+                       if e.account.value == "ESCROW_HOLDING" and e.direction.value == "DEBIT")
+        assert held == released == 750
 
 
 # ── E-Confirm release: the re-check under the lock must read the real row ────

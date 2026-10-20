@@ -143,10 +143,12 @@ both pass:
 
 - Refused or unreachable: the payment fails (`prompt_not_sent`), the app
   gets a 502 "Couldn't reach M-Pesa", and a retry is allowed at once.
-- Timed out: the prompt may have gone out. The payment fails
-  (`provider_timeout`) and the app is told it can still pay a prompt that
-  arrives; if it is paid, its success webhook applies it. (With no 202 there
-  is no `paymentKey`, so nothing can ask about it.)
+- Timed out: the prompt may have gone out. The payment stays `initiated`
+  (`failure_reason=provider_timeout`), its domain row stays pending and its
+  active-intent slot stays held, so a retry cannot produce a second prompt.
+  The app is told to check status; a success webhook still applies the late
+  payment. (With no 202 there is no `paymentKey`, so nothing can ask about
+  it; the durable reference is what an operator reconciles against.)
 - A payment is never failed for being slow.
 
 ## Plans

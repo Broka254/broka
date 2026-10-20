@@ -4,11 +4,12 @@ SQLite for local dev; PostgreSQL for production (Render).
 """
 
 import os
+import re
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean,
-    DateTime, Date, ForeignKey, Enum, Text, UniqueConstraint, Index, text,
+    DateTime, Date, ForeignKey, Enum, Text, UniqueConstraint, Index, inspect, text,
 )
 from datetime import datetime, date
 import enum
@@ -24,10 +25,23 @@ def _build_db_url() -> str:
     return url
 
 
-def _build_engine_and_factory(url: str):
-    is_sqlite = url.startswith("sqlite")
-    connect_args = {"check_same_thread": False} if is_sqlite else {}
+def _postgres_transport_options() -> tuple[dict, dict]:
+    """Connection and pool bounds for the production database driver.
 
+    A hung TCP connect or statement otherwise occupies a pool slot until the
+    OS gives up, which turns one provider/database incident into an API-wide
+    exhaustion of all connections. Both limits are explicit and env-tunable;
+    a non-positive command timeout is accepted only for the explicit
+    migration command, where a legitimate index build can exceed an API
+    request's budget; the migration runner sets that value itself. Kept
+    separate from engine construction so the PostgreSQL test plugin can
+    substitute its NullPool engine without losing coverage.
+    """
+    command_timeout = float(os.getenv("DB_COMMAND_TIMEOUT_SECONDS", "60"))
+    connect_args = {
+        "timeout": max(1.0, float(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "10"))),
+        "command_timeout": max(1.0, command_timeout) if command_timeout > 0 else None,
+    }
     # Pool tuning only applies to real network-hop databases - SQLite is a
     # single local file, no connection pool concept applies the same way,
     # and create_async_engine rejects pool_size/max_overflow for it anyway.
@@ -45,12 +59,28 @@ def _build_engine_and_factory(url: str):
     # layer of defence. pool_size/max_overflow are env-configurable since
     # the right ceiling depends on Xavier's actual Postgres plan's
     # connection limit, not a number this code can know in advance.
-    pool_kwargs = {} if is_sqlite else {
-        "pool_size":    int(os.getenv("DB_POOL_SIZE", "10")),
-        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "20")),
-        "pool_recycle": 300,
+    pool_kwargs = {
+        "pool_size":    max(1, int(os.getenv("DB_POOL_SIZE", "10"))),
+        "max_overflow": max(0, int(os.getenv("DB_MAX_OVERFLOW", "20"))),
+        # Waiting forever for a checked-out connection hides the incident
+        # and exhausts request workers. A bounded wait fails fast; the API's
+        # generic error handler reports it without leaking the DSN.
+        "pool_timeout": max(1.0, float(os.getenv("DB_POOL_TIMEOUT_SECONDS", "30"))),
+        "pool_recycle": max(
+            1, int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300"))
+        ),
         "pool_pre_ping": True,
     }
+    return connect_args, pool_kwargs
+
+
+def _build_engine_and_factory(url: str):
+    is_sqlite = url.startswith("sqlite")
+    if is_sqlite:
+        connect_args = {"check_same_thread": False}
+        pool_kwargs = {}
+    else:
+        connect_args, pool_kwargs = _postgres_transport_options()
 
     eng = create_async_engine(url, echo=False, connect_args=connect_args, **pool_kwargs)
     return eng, sessionmaker(eng, class_=AsyncSession, expire_on_commit=False)
@@ -91,6 +121,18 @@ def reset_engine() -> None:
     global DATABASE_URL, engine, _session_factory
     DATABASE_URL = _build_db_url()
     engine, _session_factory = _build_engine_and_factory(DATABASE_URL)
+
+
+async def dispose_engine() -> None:
+    """Close every pooled connection during graceful shutdown.
+
+    Uvicorn drains requests first (main.lifespan yields until shutdown), so
+    disposing here cannot cut off an in-flight handler. Without it,
+    connections stay open until the process is killed, which makes a
+    rolling deployment briefly hold both old and new pool ceilings against
+    the database's connection limit.
+    """
+    await engine.dispose()
 
 
 # ─── Enums ───────────────────────────────────────────────────────────────────
@@ -1015,15 +1057,35 @@ class MpesaTransaction(Base):
     buyer_id            = Column(String, ForeignKey("users.id"), nullable=False)
     phone               = Column(String, nullable=False)
     amount              = Column(Float, nullable=False)
-    checkout_request_id = Column(String, nullable=False, index=True, unique=True)
+    # NULL while the local intent exists and Safaricom has not answered yet.
+    # Persisting the intent first is what makes a timeout reconcilable: the
+    # absence of an ID means "provider outcome unknown", not "no payment".
+    checkout_request_id = Column(String, nullable=True, index=True, unique=True)
     merchant_request_id = Column(String, nullable=True)
     mpesa_receipt       = Column(String, nullable=True)   # e.g. QJL82XXXXXX
     status              = Column(Enum(MpesaStatus), default=MpesaStatus.pending)
     # Idempotency: True once callback has been fully processed (issue #6)
     callback_processed  = Column(Boolean, default=False, nullable=False)
+    # The caller's retry key and a digest of the request it belongs to.
+    # Unique per deal in the database, so two concurrent retries cannot both
+    # create an intent even when Redis is unavailable.
+    client_ref          = Column(String(200), nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
+    # The deal id while this intent is open, NULL once it is terminal. A
+    # unique index on it is the database-enforced "at most one live STK
+    # prompt per deal" rule; application-level reads are not enough under
+    # two concurrent taps.
+    active_intent       = Column(String(64), nullable=True)
+    last_error          = Column(Text, nullable=True)
     created_at          = Column(DateTime, default=datetime.utcnow)
 
     deal = relationship("Deal", back_populates="mpesa_transactions")
+
+    __table_args__ = (
+        Index("uq_mpesa_transactions_deal_client_ref", "deal_id", "client_ref", unique=True),
+        Index("uq_mpesa_transactions_active_intent", "active_intent", unique=True),
+        Index("uq_mpesa_transactions_receipt", "mpesa_receipt", unique=True),
+    )
 
 
 # ── Refresh Tokens (issue #8) ─────────────────────────────────────────────────
@@ -1040,6 +1102,10 @@ class RefreshToken(Base):
     jti         = Column(String, unique=True, nullable=False, index=True)
     expires_at  = Column(DateTime, nullable=False)
     revoked_at  = Column(DateTime, nullable=True)   # None = still valid
+    # Set once when this token is exchanged. A retry inside the grace window
+    # may still get an access token, but must never mint another refresh
+    # token: replaying one stolen token must not create an unbounded family.
+    rotated_at  = Column(DateTime, nullable=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
 
 
@@ -1115,6 +1181,7 @@ class FeaturedPayment(Base):
     merchant_request_id = Column(String, nullable=True)
     mpesa_receipt       = Column(String, nullable=True)
     status              = Column(Enum(MpesaStatus), default=MpesaStatus.pending)
+    last_error          = Column(Text, nullable=True)
     # "daraja", or "zetupay" (api/domains/payments) - whose
     # checkout_request_id is then the ZetuPay reference, never Safaricom's.
     provider            = Column(String(16), nullable=False, default="daraja", server_default="daraja")
@@ -1129,14 +1196,26 @@ class VerificationPayment(Base):
     tier                = Column(String, nullable=False)              # "basic" | "gold"
     phone               = Column(String, nullable=False)
     amount              = Column(Float, nullable=False)
-    checkout_request_id = Column(String, nullable=False, index=True)
+    # NULL while the intent exists and Safaricom has not answered yet.
+    checkout_request_id = Column(String, nullable=True, index=True)
     merchant_request_id = Column(String, nullable=True)
     mpesa_receipt       = Column(String, nullable=True)
     status              = Column(Enum(MpesaStatus), default=MpesaStatus.pending)
     # "daraja", or "zetupay" (api/domains/payments) - whose
     # checkout_request_id is then the ZetuPay reference, never Safaricom's.
     provider            = Column(String(16), nullable=False, default="daraja", server_default="daraja")
+    client_ref          = Column(String(200), nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
+    active_intent       = Column(String(64), nullable=True)
+    last_error          = Column(Text, nullable=True)
     created_at          = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("uq_verification_payments_user_client_ref", "user_id", "client_ref", unique=True),
+        Index("uq_verification_payments_active_intent", "active_intent", unique=True),
+        Index("uq_verification_payments_receipt", "mpesa_receipt", unique=True),
+        Index("uq_verification_payments_checkout", "checkout_request_id", unique=True),
+    )
 
 
 # ─── NEW v3.0 MODELS ──────────────────────────────────────────────────────────
@@ -1195,23 +1274,295 @@ END $$
 """
 
 
-async def _apply_optional_statements(conn, statements) -> None:
-    """Run best-effort schema statements, each in its own SAVEPOINT.
+_ADD_COLUMN = re.compile(
+    r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+_DROP_NOT_NULL = re.compile(
+    r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ALTER\s+COLUMN\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s+DROP\s+NOT\s+NULL",
+    re.IGNORECASE,
+)
 
-    These are all "add it if it isn't there" patches, so a failure is
-    normally just "already exists" and is meant to be skipped. Without the
-    nested transaction, skipping one on PostgreSQL poisons the connection
-    for every statement after it - see the comment at the call site.
+
+def _schema_columns(sync_conn, table: str) -> dict:
+    """Columns by name from the live database, not from model metadata."""
+    return {column["name"]: column for column in inspect(sync_conn).get_columns(table)}
+
+
+def _portable_statement(statement: str, dialect: str) -> str | None:
+    """Translate the hand-written patches to the dialect that will run them.
+
+    PostgreSQL has no DATETIME type and does not accept numeric boolean
+    defaults. SQLite accepts both, which is why these statements could sit
+    here unnoticed until a production boot. Keeping the translation at the
+    execution boundary means one list serves both test and production.
     """
+    if dialect == "sqlite":
+        # These are PostgreSQL catalogue operations. The old blanket
+        # exception hid them on SQLite; make the dialect decision explicit
+        # and leave every executable statement's failures visible.
+        if statement.lstrip().upper().startswith("DO $$"):
+            return None
+        if re.match(
+            r"^\s*ALTER\s+TABLE\s+\w+\s+ALTER\s+COLUMN\s+",
+            statement,
+            flags=re.IGNORECASE,
+        ):
+            return None
+        return statement
+    fixed = re.sub(r"\bDATETIME\b", "TIMESTAMP", statement, flags=re.IGNORECASE)
+    fixed = re.sub(
+        r"\bBOOLEAN(\s+[^,;]*?)?\s+DEFAULT\s+0\b",
+        lambda match: f"BOOLEAN{match.group(1) or ''} DEFAULT FALSE",
+        fixed,
+        flags=re.IGNORECASE,
+    )
+    fixed = re.sub(
+        r"\bBOOLEAN(\s+[^,;]*?)?\s+DEFAULT\s+1\b",
+        lambda match: f"BOOLEAN{match.group(1) or ''} DEFAULT TRUE",
+        fixed,
+        flags=re.IGNORECASE,
+    )
+    return fixed
+
+
+async def _apply_optional_statements(conn, statements) -> None:
+    """Apply idempotent historical schema patches without hiding failures.
+
+    "ADD COLUMN IF NOT EXISTS" is not portable, so idempotency is decided by
+    inspecting the live schema first. A statement that should apply and then
+    fails is a real migration failure and is raised - the old blanket
+    ``except: pass`` made a typo, a bad PostgreSQL type and a missing table
+    all look like a successful boot.
+    """
+    dialect = conn.dialect.name
     for stmt in statements:
-        try:
-            async with conn.begin_nested():
-                await conn.execute(text(stmt))
-        except Exception:
-            pass  # already applied, or not applicable to this dialect
+        match = _ADD_COLUMN.match(stmt)
+        if match:
+            table, column = match.groups()
+            columns = await conn.run_sync(_schema_columns, table)
+            if column in columns:
+                continue
+        drop_not_null = _DROP_NOT_NULL.match(stmt)
+        if drop_not_null:
+            table, column = drop_not_null.groups()
+            columns = await conn.run_sync(_schema_columns, table)
+            if column not in columns:
+                raise RuntimeError(f"schema patch names missing column {table}.{column}")
+            if columns[column].get("nullable", True):
+                continue
+        prepared = _portable_statement(stmt, dialect)
+        if prepared is None:
+            continue
+        await conn.execute(text(prepared))
 
 
-async def init_db():
+SCHEMA_VERSION = 6
+SCHEMA_REVISIONS = (
+    (1, "legacy_schema_adoption"),
+    (2, "durable_payment_intents_and_callbacks"),
+    (3, "one_shot_refresh_rotation"),
+    (4, "verification_payment_intents"),
+    (5, "one_active_intent_per_payment_target"),
+    (6, "unique_payment_receipts"),
+)
+
+# Tables/columns that must exist before an API process is safe to serve
+# financial traffic. This is intentionally a small critical set, not a full
+# model dump: readiness must fail for a missing payment invariant, while a
+# missing optional feature table should not take the whole API down.
+CRITICAL_SCHEMA = {
+    "mpesa_transactions": {
+        "id", "deal_id", "amount", "status", "callback_processed",
+        "client_ref", "request_fingerprint", "active_intent", "last_error",
+    },
+    "payment_callbacks": {
+        "id", "provider", "checkout_request_id", "status", "received_at",
+    },
+    "deals": {"id", "status", "buyer_id", "seller_id"},
+    "ledger_entries": {"id", "deal_id", "account", "direction", "amount_kes"},
+    "refresh_tokens": {"id", "jti", "expires_at", "rotated_at"},
+    "verification_payments": {
+        "id", "user_id", "amount", "status", "client_ref",
+        "request_fingerprint", "active_intent", "last_error",
+    },
+    "subscription_payments": {"id", "user_id", "status", "active_intent"},
+    "listing_payments": {"id", "listing_id", "status", "active_intent"},
+    "store_payments": {"id", "store_id", "status", "active_intent"},
+}
+
+# Named indexes that enforce money-safety invariants. A column can exist
+# while the guard that makes it useful was never created (for example an
+# index that failed during adoption), so readiness checks both.
+CRITICAL_INDEXES = {
+    "mpesa_transactions": {
+        "uq_mpesa_transactions_active_intent",
+        "uq_mpesa_transactions_deal_client_ref",
+        "uq_mpesa_transactions_receipt",
+    },
+    "verification_payments": {
+        "uq_verification_payments_active_intent",
+        "uq_verification_payments_receipt",
+        "uq_verification_payments_checkout",
+    },
+    "subscription_payments": {
+        "uq_subscription_payments_active_intent",
+        "uq_subscription_payments_receipt",
+    },
+    "listing_payments": {
+        "uq_listing_payments_active_intent",
+        "uq_listing_payments_receipt",
+    },
+    "store_payments": {
+        "uq_store_payments_active_intent",
+        "uq_store_payments_receipt",
+    },
+    "featured_payments": {"uq_featured_payments_receipt"},
+}
+
+# Before a unique guard is created, report historical duplicates instead of
+# letting PostgreSQL emit an opaque index-build failure. Values are never
+# printed: receipts, checkout ids and phone numbers are sensitive.
+_UNIQUE_INDEX_PREFLIGHT = (
+    ("uq_mpesa_transactions_active_intent", "mpesa_transactions", ("active_intent",)),
+    ("uq_mpesa_transactions_deal_client_ref", "mpesa_transactions", ("deal_id", "client_ref")),
+    ("uq_mpesa_transactions_receipt", "mpesa_transactions", ("mpesa_receipt",)),
+    ("uq_verification_payments_active_intent", "verification_payments", ("active_intent",)),
+    ("uq_verification_payments_user_client_ref", "verification_payments", ("user_id", "client_ref")),
+    ("uq_verification_payments_receipt", "verification_payments", ("mpesa_receipt",)),
+    ("uq_verification_payments_checkout", "verification_payments", ("checkout_request_id",)),
+    ("uq_featured_payments_receipt", "featured_payments", ("mpesa_receipt",)),
+    ("uq_subscription_payments_active_intent", "subscription_payments", ("active_intent",)),
+    ("uq_listing_payments_active_intent", "listing_payments", ("active_intent",)),
+    ("uq_store_payments_active_intent", "store_payments", ("active_intent",)),
+    ("uq_subscription_payments_receipt", "subscription_payments", ("mpesa_receipt",)),
+    ("uq_listing_payments_receipt", "listing_payments", ("mpesa_receipt",)),
+    ("uq_store_payments_receipt", "store_payments", ("mpesa_receipt",)),
+)
+
+
+async def _preflight_unique_indexes(conn) -> None:
+    """Fail clearly before creating a unique index over historical duplicates."""
+    def _existing_indexes(sync_conn) -> set[str]:
+        inspector = inspect(sync_conn)
+        found: set[str] = set()
+        tables = set(inspector.get_table_names())
+        for table in {name for _, name, _ in _UNIQUE_INDEX_PREFLIGHT if name in tables}:
+            found.update(index["name"] for index in inspector.get_indexes(table))
+        return found
+
+    existing = await conn.run_sync(_existing_indexes)
+    for index_name, table, columns in _UNIQUE_INDEX_PREFLIGHT:
+        if index_name in existing:
+            continue
+        column_list = ", ".join(columns)
+        nonnull = " AND ".join(f"{column} IS NOT NULL" for column in columns)
+        duplicate_count = (await conn.execute(text(
+            f"SELECT COUNT(*) FROM ("
+            f"SELECT {column_list} FROM {table} WHERE {nonnull} "
+            f"GROUP BY {column_list} HAVING COUNT(*) > 1"
+            f") AS duplicate_groups"
+        ))).scalar_one()
+        if duplicate_count:
+            raise RuntimeError(
+                f"cannot create unique index {index_name}: {table} has "
+                f"{duplicate_count} duplicate group(s) for ({column_list}). "
+                "Resolve the historical records through reconciliation; the "
+                "migration will not delete or merge money rows automatically."
+            )
+
+
+async def _record_schema_versions(conn) -> None:
+    """Record the revisions this run has proved are present.
+
+    The migration statements above remain idempotent for adoption of an
+    existing database, but this table is the durable answer to "was the
+    schema actually migrated?". Production startup checks it rather than
+    repairing the schema on every process boot.
+    """
+    await conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "version INTEGER PRIMARY KEY, "
+        "name VARCHAR(120) NOT NULL, "
+        "applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    ))
+    for version, name in SCHEMA_REVISIONS:
+        exists = (await conn.execute(
+            text("SELECT 1 FROM schema_migrations WHERE version = :version"),
+            {"version": version},
+        )).scalar()
+        if not exists:
+            await conn.execute(
+                text("INSERT INTO schema_migrations (version, name) VALUES (:version, :name)"),
+                {"version": version, "name": name},
+            )
+
+
+def _inspect_schema(sync_conn) -> dict:
+    inspector = inspect(sync_conn)
+    tables = set(inspector.get_table_names())
+    versions = []
+    if "schema_migrations" in tables:
+        rows = sync_conn.exec_driver_sql(
+            "SELECT version, name FROM schema_migrations ORDER BY version"
+        ).all()
+        versions = [{"version": row[0], "name": row[1]} for row in rows]
+    missing = {}
+    for table, required in CRITICAL_SCHEMA.items():
+        if table not in tables:
+            missing[table] = sorted(required)
+            continue
+        present = {column["name"] for column in inspector.get_columns(table)}
+        absent = required - present
+        if absent:
+            missing[table] = sorted(absent)
+    missing_indexes = {}
+    for table, required in CRITICAL_INDEXES.items():
+        if table not in tables:
+            missing_indexes[table] = sorted(required)
+            continue
+        present = {index["name"] for index in inspector.get_indexes(table)}
+        absent = required - present
+        if absent:
+            missing_indexes[table] = sorted(absent)
+    current = max((entry["version"] for entry in versions), default=0)
+    return {
+        "current_version": current,
+        "required_version": SCHEMA_VERSION,
+        "versions": versions,
+        "missing": missing,
+        "missing_indexes": missing_indexes,
+        "current": current >= SCHEMA_VERSION and not missing and not missing_indexes,
+    }
+
+
+async def schema_status() -> dict:
+    """Read-only readiness check; never creates or alters anything."""
+    async with engine.connect() as conn:
+        return await conn.run_sync(_inspect_schema)
+
+
+async def require_current_schema() -> dict:
+    status = await schema_status()
+    if not status["current"]:
+        detail = (
+            f"database schema is version {status['current_version']}, "
+            f"required {status['required_version']}"
+        )
+        if status["missing"]:
+            detail += f"; missing: {status['missing']}"
+        if status["missing_indexes"]:
+            detail += f"; missing indexes: {status['missing_indexes']}"
+        raise RuntimeError(
+            f"{detail}. Run `python -m api.migrate` as the release step; "
+            "the API process does not repair schemas."
+        )
+    return status
+
+
+async def _init_db_impl():
     # ── Model registration MUST precede create_all ────────────────────────
     # create_all() only creates tables that are present in Base.metadata at
     # the moment it runs, and a model is only registered there as a side
@@ -1259,6 +1610,7 @@ async def init_db():
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
+        ("api.models.payment_callback", ("PaymentCallback",)),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))
@@ -1497,6 +1849,33 @@ async def init_db():
             "ALTER TABLE subscription_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
             "ALTER TABLE featured_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
             "ALTER TABLE verification_payments ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT 'daraja'",
+            # Durable STK intents (api/routers/mpesa.py). The intent row is
+            # committed before Safaricom is called, so a timeout is an
+            # ambiguous pending payment rather than a missing one. Existing
+            # rows are terminal and therefore leave these columns NULL.
+            "ALTER TABLE mpesa_transactions ADD COLUMN client_ref VARCHAR(200)",
+            "ALTER TABLE mpesa_transactions ADD COLUMN request_fingerprint VARCHAR(64)",
+            "ALTER TABLE mpesa_transactions ADD COLUMN active_intent VARCHAR(64)",
+            "ALTER TABLE mpesa_transactions ADD COLUMN last_error TEXT",
+            # A prompt sent before the provider answers has no
+            # CheckoutRequestID yet. SQLite tables created by create_all are
+            # already nullable; only a pre-existing PostgreSQL table needs
+            # the ALTER, and the helper skips it when it is already nullable.
+            "ALTER TABLE mpesa_transactions ALTER COLUMN checkout_request_id DROP NOT NULL",
+            "ALTER TABLE refresh_tokens ADD COLUMN rotated_at DATETIME",
+            "ALTER TABLE featured_payments ADD COLUMN last_error TEXT",
+            "ALTER TABLE verification_payments ADD COLUMN client_ref VARCHAR(200)",
+            "ALTER TABLE verification_payments ADD COLUMN request_fingerprint VARCHAR(64)",
+            "ALTER TABLE verification_payments ADD COLUMN active_intent VARCHAR(64)",
+            "ALTER TABLE verification_payments ADD COLUMN last_error TEXT",
+            "ALTER TABLE verification_payments ALTER COLUMN checkout_request_id DROP NOT NULL",
+            # Plan, listing and store payment initiation used to rely on a
+            # read-before-insert. Two requests could both see no pending
+            # row and both send an STK prompt. These slots make the loser
+            # fail at INSERT, before any provider call.
+            "ALTER TABLE subscription_payments ADD COLUMN active_intent VARCHAR(64)",
+            "ALTER TABLE listing_payments ADD COLUMN active_intent VARCHAR(64)",
+            "ALTER TABLE store_payments ADD COLUMN active_intent VARCHAR(64)",
             # Data repair, not schema. Listings used to accept NaN and
             # Infinity (api/domains/listings/validation.py); PostgreSQL
             # stores them and every response containing such a row fails,
@@ -1660,17 +2039,55 @@ async def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_external_escrows_deal_payment "
             "ON external_escrows (deal_id, payment_no)",
             "DROP INDEX IF EXISTS ix_external_escrows_deal_id",
+            # Durable payment intents. The unique constraints are the
+            # concurrency guard; the pre-read in the router is only a fast
+            # path and cannot be trusted under two simultaneous taps.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mpesa_transactions_deal_client_ref "
+            "ON mpesa_transactions (deal_id, client_ref)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mpesa_transactions_active_intent "
+            "ON mpesa_transactions (active_intent)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mpesa_transactions_receipt "
+            "ON mpesa_transactions (mpesa_receipt)",
+            # The two legacy paid rails also receive provider identifiers and
+            # receipts. Their rows predate durable intents, so these indexes
+            # are created after inspecting for duplicates: a duplicate is
+            # historical money requiring a person, not a reason to hide the
+            # failure.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_payments_user_client_ref "
+            "ON verification_payments (user_id, client_ref)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_payments_active_intent "
+            "ON verification_payments (active_intent)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_payments_receipt "
+            "ON verification_payments (mpesa_receipt)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_payments_checkout "
+            "ON verification_payments (checkout_request_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_featured_payments_receipt "
+            "ON featured_payments (mpesa_receipt)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_subscription_payments_active_intent "
+            "ON subscription_payments (active_intent)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_listing_payments_active_intent "
+            "ON listing_payments (active_intent)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_payments_active_intent "
+            "ON store_payments (active_intent)",
+            # A provider receipt settles one local payment. These three
+            # rails already had application checks but no database guard,
+            # so two concurrent callbacks with the same receipt could both
+            # commit before either read the other's row.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_subscription_payments_receipt "
+            "ON subscription_payments (mpesa_receipt)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_listing_payments_receipt "
+            "ON listing_payments (mpesa_receipt)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_store_payments_receipt "
+            "ON store_payments (mpesa_receipt)",
         ]
-        for stmt in index_patches:
-            # Same SAVEPOINT scoping as the two blocks above - CREATE INDEX
-            # IF NOT EXISTS is portable, but an index over a column an old
-            # deployment doesn't have yet still fails, and on PostgreSQL
-            # that would take every following statement down with it.
-            try:
-                async with conn.begin_nested():
-                    await conn.execute(text(stmt))
-            except Exception as exc:
-                print(f"⚠️ Index patch skipped ({stmt[:60]}...): {exc!r}")
+        # The list contains a couple of PostgreSQL-only column changes, so
+        # it goes through the same dialect-aware, failure-visible applier.
+        # Every index itself is IF NOT EXISTS; a failure here is a real
+        # schema problem (or historical duplicate data) and must stop the
+        # release rather than leave a silently unindexed/unprotected DB.
+        await _preflight_unique_indexes(conn)
+        await _apply_optional_statements(conn, index_patches)
+        await _record_schema_versions(conn)
 
     # Canonical category taxonomy (reference/application data, not a
     # schema migration) - separate from migrate_categories_from_freetext.py,
@@ -1684,7 +2101,7 @@ async def init_db():
         if any(seed_result.values()):
             print(f"✅ Categories seeded: {seed_result}")
     except Exception as e:
-        print(f"⚠️ Category seeding failed (non-fatal, app will still start): {e!r}")
+        print(f"⚠️ Category seeding failed (non-fatal, app will still start): {type(e).__name__}")
 
     # Online Stores phase 2: stores made before `category` existed.
     try:
@@ -1693,7 +2110,7 @@ async def init_db():
         if updated:
             print(f"✅ Store categories filled in for {updated} store(s)")
     except Exception as e:
-        print(f"⚠️ Store category backfill failed (non-fatal): {e!r}")
+        print(f"⚠️ Store category backfill failed (non-fatal): {type(e).__name__}")
 
     # Online Stores phase 3: stores made before a store could sell across
     # several categories get their single category as its one link row, so
@@ -1704,7 +2121,7 @@ async def init_db():
         if created:
             print(f"✅ Store category links filled in for {created} store(s)")
     except Exception as e:
-        print(f"⚠️ Store category link backfill failed (non-fatal): {e!r}")
+        print(f"⚠️ Store category link backfill failed (non-fatal): {type(e).__name__}")
 
     # Store rating (2026-10-19): attribute existing deal reviews to the
     # store their product was sold in, then give every store that predates
@@ -1722,7 +2139,7 @@ async def init_db():
         if rated:
             print(f"✅ Store ratings computed for {rated} store(s)")
     except Exception as e:
-        print(f"⚠️ Store rating backfill failed (non-fatal): {e!r}")
+        print(f"⚠️ Store rating backfill failed (non-fatal): {type(e).__name__}")
 
     # Store billing (PRICING.md §9): when billing turns on, every store
     # already open gets its grace time as a subscription row, so switching
@@ -1736,9 +2153,29 @@ async def init_db():
             if granted:
                 print(f"✅ Store billing: {granted} store(s) given grace time")
         except Exception as e:
-            print(f"⚠️ Store billing grace backfill failed (non-fatal): {e!r}")
+            print(f"⚠️ Store billing grace backfill failed (non-fatal): {type(e).__name__}")
 
-    print("✅ Database initialised (v5.0)")
+    print(f"✅ Database migrated to schema version {SCHEMA_VERSION}")
+
+
+async def init_db():
+    """Prepare the database for this process.
+
+    Tests and local development apply migrations in-process so each isolated
+    test database is reproducible. A production deployment must run
+    ``python -m api.migrate`` as an explicit release step; API replicas then
+    only validate the resulting version. That keeps two processes from both
+    trying to repair the same schema during a rolling deploy.
+    """
+    from api.core.config import settings
+
+    auto_migrate = os.getenv("AUTO_MIGRATE_SCHEMA", "").lower() in ("1", "true", "yes")
+    if settings.is_production and not auto_migrate:
+        await require_current_schema()
+        return
+
+    await _init_db_impl()
+    await require_current_schema()
 
 
 async def get_db():

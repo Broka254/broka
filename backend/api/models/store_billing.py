@@ -80,9 +80,17 @@ class StorePayment(Base):
     provider            = sa.Column(sa.String(16), nullable=False, default="daraja", server_default="daraja")
     failure_reason      = sa.Column(sa.String, nullable=True)
     processed           = sa.Column(sa.Boolean, nullable=False, default=False)
+    # One live prompt per store, enforced by the database so concurrent
+    # billing requests cannot both create and send a payment.
+    active_intent       = sa.Column(sa.String(64), nullable=True)
     created_at          = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)
     paid_at             = sa.Column(sa.DateTime, nullable=True)
     period_end          = sa.Column(sa.DateTime, nullable=True)   # the store's paid_until after this
+
+    __table_args__ = (
+        sa.Index("uq_store_payments_active_intent", "active_intent", unique=True),
+        sa.Index("uq_store_payments_receipt", "mpesa_receipt", unique=True),
+    )
 
 
 class StoreBillingMeta(Base):

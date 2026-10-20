@@ -48,7 +48,13 @@ from main import app
 
 
 CHAT_URL = "/negotiate/chat"
-AUTH = {"Authorization": f"Bearer {create_access_token({'sub': 'route-ordering-test'})}"}
+
+
+def _auth() -> dict:
+    """A fresh token per test: the PostgreSQL suite can run longer than the
+    15-minute access-token lifetime, and a module-level token would expire
+    before these handlers were reached."""
+    return {"Authorization": f"Bearer {create_access_token({'sub': 'route-ordering-test'})}"}
 
 
 def _diagnostics() -> str:
@@ -100,7 +106,7 @@ async def test_chat_resolves_to_legacy_free_chat(client):
     422 == the token was accepted and the bound request model rejected the
     body. Which handler that was is settled by the schema test below.
     """
-    r = await client.post(CHAT_URL, json={}, headers=AUTH)
+    r = await client.post(CHAT_URL, json={}, headers=_auth())
     assert r.status_code == 422, (
         f"POST {CHAT_URL} with a valid token and an empty body returned "
         f"{r.status_code}, expected 422 from ChatIn validation. "
@@ -121,7 +127,7 @@ async def test_chat_schema_is_the_legacy_one(client):
     OpenRouter. A test that calls a live AI provider is a test that fails
     on someone else's outage.
     """
-    r = await client.post(CHAT_URL, json={"image_base64": 123}, headers=AUTH)
+    r = await client.post(CHAT_URL, json={"image_base64": 123}, headers=_auth())
     assert r.status_code == 422, (
         f"expected 422 from request-model validation, got {r.status_code}: "
         f"{r.text[:300]}{_diagnostics()}"

@@ -52,8 +52,16 @@ class ListingPayment(Base):
     provider            = sa.Column(sa.String(16), nullable=False, default="daraja", server_default="daraja")
     failure_reason      = sa.Column(sa.String, nullable=True)
     processed           = sa.Column(sa.Boolean, nullable=False, default=False)
+    # One live prompt per listing. Database-enforced because two requests
+    # can both pass the pending pre-read before either has inserted a row.
+    active_intent       = sa.Column(sa.String(64), nullable=True)
     quote               = sa.Column(sa.Text, nullable=True)       # the engine's quote, JSON
     period_start        = sa.Column(sa.DateTime, nullable=True)   # set when paid
     period_end          = sa.Column(sa.DateTime, nullable=True)
     created_at          = sa.Column(sa.DateTime, nullable=False, default=datetime.utcnow)
     paid_at             = sa.Column(sa.DateTime, nullable=True)
+
+    __table_args__ = (
+        sa.Index("uq_listing_payments_active_intent", "active_intent", unique=True),
+        sa.Index("uq_listing_payments_receipt", "mpesa_receipt", unique=True),
+    )

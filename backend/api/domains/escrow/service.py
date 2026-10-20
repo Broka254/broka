@@ -1146,6 +1146,14 @@ class EscrowService:
                 self.db, "system", "econfirm_escrow_funded", "deal", deal_id,
                 f"provider_transaction_id={escrow.provider_transaction_id} amount={escrow.amount}",
             )
+            # The event below drives the ledger handler too, but it runs
+            # after commit. Record the same idempotent pair here so a crash
+            # between commit and event delivery cannot lose the money entry.
+            from api.core.ledger import ledger
+            await ledger.record_escrow_funded(
+                self.db, deal_id, deal.buyer_id, escrow.amount,
+                escrow.provider_transaction_id,
+            )
             await self.db.commit()
             await self._publish_funded(deal, escrow)
             return
@@ -1176,6 +1184,11 @@ class EscrowService:
                     self.db, "system", "econfirm_payment_funded", "deal", deal_id,
                     f"provider_transaction_id={escrow.provider_transaction_id} "
                     f"payment_no={escrow.payment_no} amount={escrow.amount}",
+                )
+                from api.core.ledger import ledger
+                await ledger.record_escrow_funded(
+                    self.db, deal_id, current.buyer_id, escrow.amount,
+                    escrow.provider_transaction_id,
                 )
             await self.db.commit()
             await self.db.refresh(escrow)
@@ -1268,6 +1281,13 @@ class EscrowService:
         await record_audit(
             self.db, "system", "econfirm_payout_completed", "deal", deal_id,
             f"provider_transaction_id={last.provider_transaction_id} payments={len(paid_in)} amount={total}",
+        )
+        # Ledger and deal state share this transaction. The EscrowReleased
+        # event still updates the UI, but losing it must not lose the books.
+        from api.core.ledger import ledger
+        commission = sum((p.merchant_commission_amount or 0) for p in paid_in)
+        await ledger.record_escrow_released(
+            self.db, deal_id, total, commission, last.provider_transaction_id,
         )
         await self.db.commit()
         await publish(EConfirmPayoutCompleted(
@@ -1423,6 +1443,10 @@ class EscrowService:
             self.db, buyer_id, "delivery_confirmed", "deal", deal.id,
             f"seller_id={deal.seller_id} amount={deal.agreed_price} {checklist}".strip(),
             ip_address=request_ip,
+        )
+        from api.core.ledger import ledger
+        await ledger.record_escrow_released(
+            self.db, deal.id, deal.agreed_price, deal.commission,
         )
         await self.db.commit()
 

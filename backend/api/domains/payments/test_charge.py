@@ -21,7 +21,9 @@ AMOUNT = 10
 
 
 async def zetupay_settled(db: AsyncSession, target_id: str, receipt: Optional[str]) -> None:
-    logger.info("[zetupay] test charge %s paid, receipt %s", target_id, receipt)
+    # A receipt is a provider transaction identifier; the payment reference
+    # is enough to find the audit row.
+    logger.info("[zetupay] test charge %s paid", target_id)
 
 
 async def zetupay_failed(db: AsyncSession, target_id: str, reason: str) -> None:
