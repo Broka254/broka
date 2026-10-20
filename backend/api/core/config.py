@@ -362,6 +362,46 @@ class Settings:
     # ── Redis (for rate-limiting, pub/sub, and distributed workers) ───────────
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
 
+    # ── Service communications (admin announcements / incidents) ─────────────
+    # The worker claims rows in the database, so these bounds apply per pass
+    # and per provider fan-out; they are not a user-facing request budget.
+    service_communication_max_audience: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_MAX_AUDIENCE", "100000") or 100000)
+    ))
+    service_communication_max_explicit_recipients: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_MAX_EXPLICIT_RECIPIENTS", "5000") or 5000)
+    ))
+    service_communication_communication_batch: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_COMMUNICATION_BATCH", "5") or 5)
+    ))
+    service_communication_recipient_batch: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_RECIPIENT_BATCH", "50") or 50)
+    ))
+    service_communication_max_attempts: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_MAX_ATTEMPTS", "4") or 4)
+    ))
+    service_communication_retry_base_seconds: float = field(default_factory=lambda: max(
+        1.0, float(os.getenv("SERVICE_COMMUNICATION_RETRY_BASE_SECONDS", "30") or 30)
+    ))
+    service_communication_retry_max_seconds: float = field(default_factory=lambda: max(
+        1.0, float(os.getenv("SERVICE_COMMUNICATION_RETRY_MAX_SECONDS", "900") or 900)
+    ))
+    service_communication_claim_seconds: int = field(default_factory=lambda: max(
+        10, int(os.getenv("SERVICE_COMMUNICATION_CLAIM_SECONDS", "180") or 180)
+    ))
+    service_communication_provider_concurrency: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_PROVIDER_CONCURRENCY", "8") or 8)
+    ))
+    service_communication_provider_timeout_seconds: float = field(default_factory=lambda: max(
+        0.1, float(os.getenv("SERVICE_COMMUNICATION_PROVIDER_TIMEOUT_SECONDS", "20") or 20)
+    ))
+    service_communication_sweep_seconds: int = field(default_factory=lambda: max(
+        5, int(os.getenv("SERVICE_COMMUNICATION_SWEEP_SECONDS", "15") or 15)
+    ))
+    service_communication_retention_days: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_RETENTION_DAYS", "730") or 730)
+    ))
+
     # ── Observability ─────────────────────────────────────────────────────────
     sentry_dsn: str = field(default_factory=lambda: os.getenv("SENTRY_DSN", ""))
 

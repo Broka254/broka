@@ -109,6 +109,8 @@ _sweep_task: asyncio.Task | None = None
 _sweep_running = False
 _nudge_task: asyncio.Task | None = None
 _nudge_running = False
+_service_communications_task: asyncio.Task | None = None
+_service_communications_running = False
 
 # The availability nudge has its own, much faster loop.
 #
@@ -379,18 +381,27 @@ async def task_expire_buy_agent_watches(ctx: dict | None = None) -> None:
 
 
 async def start_periodic_sweep(interval_seconds: int = 300) -> None:
-    global _sweep_task, _nudge_task
+    global _sweep_task, _nudge_task, _service_communications_task
     _sweep_task = asyncio.create_task(_periodic_sweep_loop(interval_seconds))
     # Separate task, not another entry in the 300s loop - see NUDGE_SWEEP_SECONDS.
     _nudge_task = asyncio.create_task(_nudge_loop())
+    # Service communications have their own short loop. Scheduled publication
+    # and retry due-times should be measured in seconds, not the five-minute
+    # operational sweep, and every pass is idempotent across replicas.
+    from api.core.config import settings as _settings
+    _service_communications_task = asyncio.create_task(
+        _service_communications_loop(_settings.service_communication_sweep_seconds)
+    )
     logger.info("[sweep] periodic deal-timer sweep started (every %ds)", interval_seconds)
 
 
 async def stop_periodic_sweep() -> None:
     global _sweep_running, _sweep_task, _nudge_running, _nudge_task
+    global _service_communications_running, _service_communications_task
     _sweep_running = False
     _nudge_running = False
-    for task in (_sweep_task, _nudge_task):
+    _service_communications_running = False
+    for task in (_sweep_task, _nudge_task, _service_communications_task):
         if task:
             task.cancel()
             try:
@@ -479,6 +490,7 @@ class WorkerSettings:
         "api.core.workers.task_refresh_dispute_summary_cache",
         "api.core.workers.task_recompute_dcr_and_leaks",
         "api.core.workers.task_retrain_ml_models",
+        "api.core.workers.task_process_service_communications",
     ]
     max_jobs         = 20
     job_timeout      = 300
@@ -500,6 +512,38 @@ async def task_recompute_trust_score(ctx: dict, user_id: str, db_url: str) -> No
         await compute_trust_score(user_id, session)
         await session.commit()
     await engine.dispose()
+
+
+async def _service_communications_loop(interval_seconds: int) -> None:
+    """Process due service communications without a process-local job queue.
+
+    The rows themselves are the queue, so a restart, deploy or crash loses
+    nothing. Multiple API replicas may run this loop; the compare-and-swap
+    claims in service.py make each communication/recipient single-owner.
+    """
+    global _service_communications_running
+    _service_communications_running = True
+    logger.info(
+        "[service_communications] durable loop started (every %ds)",
+        interval_seconds,
+    )
+    while _service_communications_running:
+        try:
+            await task_process_service_communications({})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "[service_communications] loop pass failed type=%s", type(exc).__name__,
+            )
+        await asyncio.sleep(interval_seconds)
+
+
+async def task_process_service_communications(ctx: dict | None = None) -> dict:
+    """One bounded scheduler/delivery pass. Safe to run on every replica."""
+    from api.domains.service_communications.service import run_service_communications_pass
+    result = await run_service_communications_pass()
+    return result.as_dict()
 
 
 async def task_send_fcm_notification(ctx: dict, fcm_token: str, title: str, body: str) -> None:

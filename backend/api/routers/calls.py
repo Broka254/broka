@@ -155,7 +155,11 @@ def _get_fcm():
             _fcm_app   = firebase_admin.get_app()
         logger.info("[calls] Firebase Admin initialised")
     except Exception as e:
-        logger.warning(f"[calls] Firebase Admin init failed: {e}")
+        # A credential parse error can echo fragments of the service-account
+        # JSON. The exception type is enough to diagnose a bad configuration.
+        logger.warning(
+            "[calls] Firebase Admin init failed type=%s", type(e).__name__,
+        )
         _fcm_app = None
     return _fcm_app
 
@@ -169,11 +173,23 @@ class FcmResult:
     it should be cleared from the DB rather than retried on every future
     call. Any other failure is transient and the token stays.
     """
-    __slots__ = ("sent", "unregistered")
+    __slots__ = ("sent", "unregistered", "message_id", "failure_category", "retryable", "configured")
 
-    def __init__(self, sent: bool, unregistered: bool = False):
+    def __init__(
+        self, sent: bool, unregistered: bool = False, *,
+        message_id: Optional[str] = None,
+        failure_category: Optional[str] = None,
+        retryable: bool = False,
+        configured: bool = True,
+    ):
         self.sent = sent
         self.unregistered = unregistered
+        # FCM's message id proves the provider ACCEPTED the message. It is
+        # not delivery evidence; no caller here may turn it into delivered_at.
+        self.message_id = message_id
+        self.failure_category = failure_category
+        self.retryable = retryable
+        self.configured = configured
 
     def __bool__(self) -> bool:
         return self.sent
@@ -237,7 +253,10 @@ async def _send_fcm(
     """
     if not _get_fcm():
         logger.info("[calls] FCM not configured - skipping push")
-        return FcmResult(False)
+        return FcmResult(
+            False, failure_category="push_not_configured", retryable=False,
+            configured=False,
+        )
     try:
         from datetime import timedelta
         from firebase_admin import messaging
@@ -288,14 +307,34 @@ async def _send_fcm(
                 payload=messaging.APNSPayload(aps=aps),
             ),
         )
-        await asyncio.to_thread(messaging.send, msg)
-        return FcmResult(True)
+        message_id = await asyncio.to_thread(messaging.send, msg)
+        return FcmResult(True, message_id=message_id, configured=True)
     except Exception as e:
-        unregistered = type(e).__name__ in (
+        error_name = type(e).__name__
+        unregistered = error_name in (
             "UnregisteredError", "SenderIdMismatchError",
         )
-        logger.warning("[calls] FCM send failed (%s): %s", type(e).__name__, e)
-        return FcmResult(False, unregistered=unregistered)
+        transient = error_name in (
+            "QuotaExceededError", "UnavailableError", "InternalError",
+            "DeadlineExceededError", "ResourceExhaustedError", "AbortedError",
+        )
+        if unregistered:
+            category, retryable = "invalid_token", False
+        elif transient:
+            category, retryable = "provider_transient", True
+        elif error_name in ("InvalidArgumentError", "ThirdPartyAuthError"):
+            category, retryable = "invalid_message", False
+        else:
+            category, retryable = "provider_error", True
+        # Provider exception strings can echo the registration token and the
+        # notification content. Keep the type/category and nothing else.
+        logger.warning(
+            "[calls] FCM send failed type=%s category=%s", error_name, category,
+        )
+        return FcmResult(
+            False, unregistered=unregistered, failure_category=category,
+            retryable=retryable, configured=True,
+        )
 
 
 async def _send_voip_push(token: str, data: dict) -> bool:

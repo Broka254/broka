@@ -1359,7 +1359,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1367,6 +1367,7 @@ SCHEMA_REVISIONS = (
     (4, "verification_payment_intents"),
     (5, "one_active_intent_per_payment_target"),
     (6, "unique_payment_receipts"),
+    (7, "service_communications"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1611,6 +1612,13 @@ async def _init_db_impl():
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
+        (
+            "api.models.service_communication",
+            (
+                "ServiceCommunication", "ServiceCommunicationVersion",
+                "ServiceCommunicationRecipient", "ServiceCommunicationDeviceDelivery",
+            ),
+        ),
     ):
         try:
             _mod = __import__(_module, fromlist=list(_names))

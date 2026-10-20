@@ -51,6 +51,8 @@ class Permission(str, enum.Enum):
     VIEW_TRANSACTIONS     = "can_view_transactions"
     VIEW_ALL_DISPUTES     = "can_view_all_disputes"
     OVERRIDE_ESCROW       = "can_override_escrow"
+    VIEW_COMMUNICATIONS   = "can_view_communications"
+    MANAGE_COMMUNICATIONS = "can_manage_communications"
 
     # AI
     USE_AI_BROKER         = "can_use_ai_broker"
@@ -92,6 +94,8 @@ _ADMIN_PERMISSIONS: set[Permission] = _USER_PERMISSIONS | {
     Permission.PROMOTE_ADMIN,
     Permission.VIEW_TRANSACTIONS,
     Permission.OVERRIDE_ESCROW,
+    Permission.VIEW_COMMUNICATIONS,
+    Permission.MANAGE_COMMUNICATIONS,
 }
 
 # Permissions blocked for suspended/fraud-flagged users

@@ -176,6 +176,9 @@ if _settings.is_test:
     listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100000, window_seconds=86400)
     showcase_generate_limiter       = _make_limiter("showcase_generate",     limit=1000, window_seconds=3600)
     showcase_generate_daily_limiter = _make_limiter("showcase_generate_day", limit=100000, window_seconds=86400)
+    service_communication_publish_limiter = _make_limiter(
+        "service_communication_publish", limit=1000, window_seconds=60,
+    )
 else:
     login_limiter    = _make_limiter("login",    limit=5,  window_seconds=60)
     register_limiter = _make_limiter("register", limit=3,  window_seconds=300)
@@ -231,6 +234,12 @@ else:
     # stays well inside 12 an hour; 40 a day covers a busy shop.
     showcase_generate_limiter       = _make_limiter("showcase_generate",     limit=12, window_seconds=3600)
     showcase_generate_daily_limiter = _make_limiter("showcase_generate_day", limit=40, window_seconds=86400)
+    # Publishing/retrying is an administrative operation with a potentially
+    # large provider bill. It is keyed by the signed-in administrator, never
+    # by a body value, and leaves room for ordinary dashboard retries.
+    service_communication_publish_limiter = _make_limiter(
+        "service_communication_publish", limit=10, window_seconds=60,
+    )
 offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)

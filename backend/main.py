@@ -95,6 +95,10 @@ from api.domains.disputes.router   import router as disputes_router
 from api.domains.reviews.router    import router as reviews_router
 from api.domains.ai_broker.router  import router as ai_broker_router
 from api.domains.admin.router      import router as admin_router
+from api.domains.service_communications.router import (
+    admin_router as service_communications_admin_router,
+    customer_router as service_communications_customer_router,
+)
 from api.domains.deal_ws.router    import router as deal_ws_router
 from api.domains.auth.refresh_router import router as refresh_router
 from api.domains.media.router      import router as media_assets_router
@@ -258,6 +262,16 @@ app.include_router(reviews_router,    prefix="/reviews",    tags=["Reviews v3"])
 app.include_router(negotiate.router,  prefix="/negotiate",  tags=["Negotiate (legacy)"])
 app.include_router(ai_broker_router,  prefix="/negotiate",  tags=["AI Broker v3"])
 app.include_router(admin_router,      prefix="/admin",      tags=["Admin v3"])
+app.include_router(
+    service_communications_admin_router,
+    prefix="/admin/communications",
+    tags=["Admin - Service Communications"],
+)
+app.include_router(
+    service_communications_customer_router,
+    prefix="/communications",
+    tags=["Service Communications"],
+)
 app.include_router(deal_ws_router,    prefix="/deal-ws",    tags=["Deal WebSocket"])
 app.include_router(refresh_router,    prefix="/auth",       tags=["Auth — Token Refresh"])
 
