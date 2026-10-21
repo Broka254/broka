@@ -24,6 +24,7 @@ class LegalDocumentScreen extends StatelessWidget {
     required this.gradient,
     this.animateBackground = true,
     this.notice,
+    this.documentText,
   });
 
   final String asset;
@@ -39,6 +40,10 @@ class LegalDocumentScreen extends StatelessWidget {
   /// approved document.
   final String? notice;
 
+  /// The document text, when the caller already has it (tests). Null means
+  /// load [asset] from the bundle, which is the app's path.
+  final String? documentText;
+
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
@@ -48,59 +53,68 @@ class LegalDocumentScreen extends StatelessWidget {
         animate: animateBackground,
         child: SafeArea(
           bottom: false,
-          child: FutureBuilder<String>(
-            future: rootBundle.loadString(asset),
-            builder: (context, snap) {
-              final text = snap.data;
-              final sections = text == null
-                  ? const <TermsSection>[]
-                  : termsSections(termsBlocks(text));
-              return CustomScrollView(slivers: [
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: CollapsingScreenHeader(
-                    title: title,
-                    emoji: emoji,
-                    gradient: gradient,
-                    onBack: () => Navigator.maybePop(context),
-                    narrow: media.size.width < 360,
-                    textScale:
-                        media.textScaler.scale(1.0).clamp(1.0, 1.35).toDouble(),
-                  ),
+          child: documentText != null
+              ? _document(context, media, documentText)
+              : FutureBuilder<String>(
+                  future: rootBundle.loadString(asset),
+                  builder: (context, snap) =>
+                      _document(context, media, snap.data),
                 ),
-                if (text == null)
-                  const SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: BrokaColors.gold,
-                      ),
-                    ),
-                  )
-                else ...[
-                  if (notice != null)
-                    SliverToBoxAdapter(
-                      child: _Notice(text: notice!),
-                    ),
-                  SliverPadding(
-                    padding: EdgeInsets.fromLTRB(
-                      16, 4, 16, media.padding.bottom + 32,
-                    ),
-                    sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (_, i) => sections[i].build(gradient),
-                        childCount: sections.length,
-                      ),
-                    ),
-                  ),
-                ],
-              ]);
-            },
-          ),
         ),
       ),
     );
+  }
+
+  Widget _document(
+    BuildContext context,
+    MediaQueryData media,
+    String? text,
+  ) {
+    final sections = text == null
+        ? const <TermsSection>[]
+        : termsSections(termsBlocks(text));
+    return CustomScrollView(slivers: [
+      SliverPersistentHeader(
+        pinned: true,
+        delegate: CollapsingScreenHeader(
+          title: title,
+          emoji: emoji,
+          gradient: gradient,
+          onBack: () => Navigator.maybePop(context),
+          narrow: media.size.width < 360,
+          textScale:
+              media.textScaler.scale(1.0).clamp(1.0, 1.35).toDouble(),
+        ),
+      ),
+      if (text == null)
+        const SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: BrokaColors.gold,
+            ),
+          ),
+        )
+      else ...[
+        if (notice != null)
+          SliverToBoxAdapter(
+            key: const Key('legal-notice'),
+            child: _Notice(text: notice!),
+          ),
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(
+            16, 4, 16, media.padding.bottom + 32,
+          ),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (_, i) => sections[i].build(gradient),
+              childCount: sections.length,
+            ),
+          ),
+        ),
+      ],
+    ]);
   }
 }
 

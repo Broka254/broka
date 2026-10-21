@@ -16,13 +16,20 @@ import '../main.dart';
 import '../widgets/legal_document_view.dart';
 
 class PrivacyScreen extends StatelessWidget {
-  const PrivacyScreen({super.key, this.animateBackground = true});
+  const PrivacyScreen({
+    super.key,
+    this.animateBackground = true,
+    this.documentText,
+  });
 
   static const asset = LegalDocuments.privacyAsset;
   static const gradient = [BrokaColors.neonBlue, BrokaColors.neonGreen];
 
   /// False under widget tests: the sky never settles.
   final bool animateBackground;
+
+  /// Preloaded text for tests; null loads [asset] from the bundle.
+  final String? documentText;
 
   @override
   Widget build(BuildContext context) => LegalDocumentScreen(
@@ -31,6 +38,7 @@ class PrivacyScreen extends StatelessWidget {
         emoji: '🔒',
         gradient: gradient,
         animateBackground: animateBackground,
+        documentText: documentText,
         notice: LegalDocuments.privacy.published
             ? null
             : "BROKA's app Privacy Policy has not been published yet. This "
