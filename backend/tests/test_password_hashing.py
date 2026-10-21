@@ -30,6 +30,7 @@ from api.security import (
     verify_password,
 )
 from main import app
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -69,6 +70,7 @@ async def _register(client, phone: str, password: str):
         "password": password,
         "lat": -1.2864,
         "lng": 36.8172,
+        "legal_acceptance": legal_payload(),
     })
 
 

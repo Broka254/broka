@@ -12,6 +12,7 @@ import '../models/models.dart';
 // model because it is part of that contract, not a transport concern.
 import '../features/auctions/domain/models/auction.dart' show BidRejection;
 import '../core/network/api_client.dart';
+import '../core/legal/legal_documents.dart';
 import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
 
@@ -474,6 +475,9 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> register({
+    /// The three declarations and the document versions the app showed.
+    /// Required, so the request cannot be built without them.
+    required SignupDeclarations declarations,
     // OTP is optional at signup — null here means the user chose to skip
     // phone verification for now (Step 1 or Step 2 of the wizard) and can
     // verify later from Profile. When present, the server derives the
@@ -527,6 +531,7 @@ class ApiService {
         if (businessLocation != null) 'business_location': businessLocation,
         if (businessDescription != null) 'business_description': businessDescription,
         if (profilePhoto != null) 'profile_photo': profilePhoto,
+        'legal_acceptance': declarations.toJson(),
       }),
     ).timeout(const Duration(seconds: 30));
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -546,8 +551,20 @@ class ApiService {
         // in again with the stored password.
         refreshToken: data['refresh_token'] as String?,
       );
+      return data;
     }
-    return data;
+    // The server refused. Its `detail` is written for people when it is a
+    // string (a declaration, a version, a duplicate); Pydantic's 422 is a
+    // list of field errors and must not be put on screen.
+    final detail = data['detail'];
+    throw ApiException(
+      response.statusCode,
+      detail is String && detail.trim().isNotEmpty
+          ? detail
+          : response.statusCode == 422
+              ? 'Check the three declarations and try again.'
+              : "We couldn't create your account. Please try again.",
+    );
   }
 
   static Future<Map<String, dynamic>> login({

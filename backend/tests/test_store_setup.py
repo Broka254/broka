@@ -28,6 +28,7 @@ from api.database import (
 from api.domains.stores import naming, stats as store_stats
 from api.domains.stores import categories as store_categories
 from api.models.store import StoreDailyCount
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -69,6 +70,7 @@ async def _register(client, tier="long_term", business_category="Electronics", e
     body = {
         "phone_verify_token": token, "name": f"Seller {n}", "password": "Passw0rd!x",
         "lat": -1.286, "lng": 36.817, "email": email,
+        "legal_acceptance": legal_payload(),
     }
     if tier:
         body.update(account_type="buyer_seller", seller_tier=tier)

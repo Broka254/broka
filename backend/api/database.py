@@ -1359,7 +1359,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1368,6 +1368,11 @@ SCHEMA_REVISIONS = (
     (5, "one_active_intent_per_payment_target"),
     (6, "unique_payment_receipts"),
     (7, "service_communications"),
+    # Mandatory legal acceptance at signup (models/legal.py). A new table,
+    # so create_all() creates it; the revision makes an already-migrated
+    # database wait for `python -m api.migrate` before serving traffic,
+    # rather than accepting registrations it cannot record.
+    (8, "legal_acceptances"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1612,6 +1617,7 @@ async def _init_db_impl():
         ("api.models.push_device", ("PushDevice",)),
         ("api.models.sold_out_report", ("SoldOutReport",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
+        ("api.models.legal", ("LegalAcceptance",)),
         (
             "api.models.service_communication",
             (

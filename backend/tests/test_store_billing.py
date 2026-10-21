@@ -42,6 +42,7 @@ from api.domains.payments import service as zetupay_service
 from api.domains.stores import billing as store_billing
 from api.models.store_billing import StoreBillingMeta, StorePayment, StoreSubscription
 from api.models.zetupay import Purpose
+from tests.legal_payload import legal_payload
 
 SECRET = "store-callback-secret"
 
@@ -126,6 +127,7 @@ async def _register(client, business_category="Electronics"):
         "lat": -1.286, "lng": 36.817, "account_type": "buyer_seller",
         "seller_tier": "long_term", "business_name": f"Biz {n}",
         "business_category": business_category, "business_location": "Nairobi",
+        "legal_acceptance": legal_payload(),
     })
     assert reg.status_code == 201, reg.text
     return reg.json()["user_id"], {"Authorization": f"Bearer {reg.json()['access_token']}"}

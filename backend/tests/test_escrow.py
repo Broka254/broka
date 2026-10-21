@@ -10,6 +10,7 @@ from httpx import AsyncClient, ASGITransport
 
 from main import app
 from api.database import init_db, reset_engine
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -68,6 +69,7 @@ async def tokens(client):
         "name": "Seller Dan", "email": "dan@test.ke",
         "password": "DanPass123!",
         "lat": -1.3, "lng": 36.8,
+        "legal_acceptance": legal_payload(),
     })
     seller = (await client.post("/auth/login", json={
         "phone": seller_phone, "password": "DanPass123!",
@@ -81,6 +83,7 @@ async def tokens(client):
         "name": "Buyer Eve", "email": "eve@test.ke",
         "password": "EvePass123!",
         "lat": -1.32, "lng": 36.82,
+        "legal_acceptance": legal_payload(),
     })
     buyer = (await client.post("/auth/login", json={
         "phone": buyer_phone, "password": "EvePass123!",
@@ -186,6 +189,7 @@ class TestDealFlow:
             "phone_verify_token": stranger_verify_token,
             "name": "Stranger Sam", "email": "sam@test.ke",
             "password": "SamPass123!", "lat": -1.3, "lng": 36.8,
+            "legal_acceptance": legal_payload(),
         })
         stranger = (await client.post("/auth/login", json={
             "phone": stranger_phone, "password": "SamPass123!",
@@ -528,6 +532,7 @@ class TestEConfirmEscrow:
             "phone_verify_token": stranger_verify_token,
             "name": "Nosy Nick", "email": "nick@test.ke",
             "password": "NickPass123!", "lat": -1.3, "lng": 36.8,
+            "legal_acceptance": legal_payload(),
         })
         stranger = (await client.post("/auth/login", json={
             "phone": stranger_phone, "password": "NickPass123!",

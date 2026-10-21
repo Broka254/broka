@@ -13,6 +13,7 @@ from httpx import AsyncClient, ASGITransport
 from main import app
 from api.database import init_db, reset_engine
 from api.core.deal_hub import deal_hub, DealStatusEvent
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -63,6 +64,7 @@ async def seller_token(client):
         "name": "WS Seller", "email": "wsseller@test.ke",
         "password": "WsSeller123!",
         "lat": -1.3, "lng": 36.8,
+        "legal_acceptance": legal_payload(),
     })
     resp = await client.post("/auth/login", json={
         "phone": phone, "password": "WsSeller123!",
@@ -79,6 +81,7 @@ async def buyer_token(client):
         "name": "WS Buyer", "email": "wsbuyer@test.ke",
         "password": "WsBuyer123!",
         "lat": -1.3, "lng": 36.8,
+        "legal_acceptance": legal_payload(),
     })
     resp = await client.post("/auth/login", json={
         "phone": phone, "password": "WsBuyer123!",

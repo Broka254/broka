@@ -278,6 +278,13 @@ class _MenuScreenState extends State<MenuScreen> {
           subtitle: 'The rules for buying, selling, fees and plans on BROKA',
           onTap: () => _open('/terms'),
         ),
+        MenuTile(
+          icon: Icons.privacy_tip_outlined,
+          tint: BrokaColors.neonBlue,
+          title: 'Privacy Policy',
+          subtitle: 'Open the BROKA app Privacy Policy',
+          onTap: () => _open('/privacy'),
+        ),
       ]),
       const SizedBox(height: 22),
       MenuGroup(children: [

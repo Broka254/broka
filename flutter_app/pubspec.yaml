@@ -67,6 +67,9 @@ flutter:
     - assets/audio/ringback.wav
     # The Terms of Use and Service (TermsScreen; TERMS.md at the root).
     - assets/legal/terms.md
+    # The app Privacy Policy (PrivacyScreen). Placeholder until the approved
+    # text exists - see LEGAL_ACCEPTANCE.md.
+    - assets/legal/privacy.md
     # Category and subcategory card artwork, the same pictures the website's
     # category pages use (lib/features/categories/domain/category_visual.dart
     # and subcategory_visual.dart say which is which). 640px WebP: sharp on a

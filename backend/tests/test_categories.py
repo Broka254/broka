@@ -22,6 +22,7 @@ from httpx import AsyncClient, ASGITransport
 
 from main import app
 from api.database import init_db, reset_engine, AsyncSessionLocal, Category
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -207,6 +208,7 @@ async def seller_token(client):
         "password": "SellerPass123!",
         "lat": -1.286,
         "lng": 36.817,
+        "legal_acceptance": legal_payload(),
     })
     resp = await client.post("/auth/login", json={"phone": phone, "password": "SellerPass123!"})
     return resp.json()["access_token"]

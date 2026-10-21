@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from api.core.text_search import matches_all_terms, search_terms
 from api.database import User, PhoneOtp, EmailOtp, OtpPurpose
+from api.models.legal import LegalAcceptance
 
 
 class UserRepository:
@@ -107,6 +108,31 @@ class UserRepository:
         user = User(**kwargs)
         self.db.add(user)
         await self.db.commit()
+        await self.db.refresh(user)
+        return user
+
+    async def create_with_legal_acceptances(
+        self, acceptances: list[LegalAcceptance], **kwargs,
+    ) -> User:
+        """Create the account and its acceptance evidence in one commit.
+
+        The user is flushed first so the foreign key has an id, but nothing
+        is committed until the acceptance rows are staged too. A failure - a
+        concurrent request taking the same phone, or the database refusing
+        an acceptance row - rolls the whole attempt back: there is no path
+        that leaves an account without the evidence that created it.
+        """
+        user = User(**kwargs)
+        self.db.add(user)
+        try:
+            await self.db.flush()
+            for acceptance in acceptances:
+                acceptance.user_id = user.id
+                self.db.add(acceptance)
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
         await self.db.refresh(user)
         return user
 

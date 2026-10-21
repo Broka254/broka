@@ -17,6 +17,7 @@ from api.models.payment import FeaturedPayment, VerificationPayment
 from api.models.auth import RefreshToken
 from api.models.admin import AuditLog, FraudEvent
 from api.models.store import Store, slugify as store_slugify
+from api.models.legal import LegalAcceptance
 from api.models.service_communication import (
     ServiceCommunication,
     ServiceCommunicationVersion,
@@ -39,6 +40,7 @@ __all__ = [
     "RefreshToken",
     "AuditLog", "FraudEvent",
     "Store", "store_slugify",
+    "LegalAcceptance",
     "ServiceCommunication", "ServiceCommunicationVersion",
     "ServiceCommunicationRecipient", "ServiceCommunicationDeviceDelivery",
 ]
