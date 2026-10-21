@@ -26,7 +26,12 @@ void main() {
 
   testWidgets('the screen shows the Terms', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: TermsScreen(animateBackground: false)));
-    await tester.pumpAndSettle();
+    // Fixed pumps, not pumpAndSettle: the screen shows a CircularProgressIndicator
+    // while the bundled asset loads, and an unsettled spinner would make
+    // pumpAndSettle time out rather than reach the document.
+    for (var i = 0; i < 30; i++) {
+      await tester.pump(const Duration(milliseconds: 32));
+    }
     expect(find.text('Terms of Use and Service'), findsOneWidget);
   });
 }

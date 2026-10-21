@@ -1517,14 +1517,23 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                     base64Decode(_capturedPhoto!),
                     width: 80, height: 80, fit: BoxFit.cover)),
                 const SizedBox(width: 16),
-                const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Selfie captured ✓',
-                      style: TextStyle(color: BrokaColors.neonGreen,
-                          fontWeight: FontWeight.w700, fontSize: 15)),
-                  SizedBox(height: 4),
-                  Text('Tap to retake',
-                      style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
-                ]),
+                // Flexible, not a bare Column: at a large text scale (and
+                // under the test font, which is wider) the two lines are
+                // wider than the space beside an 80px photo, and a fixed
+                // Column overflows the row instead of wrapping.
+                const Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Selfie captured ✓',
+                          style: TextStyle(color: BrokaColors.neonGreen,
+                              fontWeight: FontWeight.w700, fontSize: 15)),
+                      SizedBox(height: 4),
+                      Text('Tap to retake',
+                          style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+                    ],
+                  ),
+                ),
               ])
             : Column(children: [
                 Container(
