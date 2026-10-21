@@ -144,6 +144,7 @@ server go in `web/src/lib/server-config.ts`, never behind `NEXT_PUBLIC_`.
 |---|---|
 | An endpoint | its row in `graphify.md` (file and line), then the domain's `service.py` |
 | Signup, login, sessions | `backend/api/domains/auth/`, `flutter_app/lib/services/api_service.dart` |
+| Terms, Privacy Policy and their acceptance at sign-up | `backend/api/core/legal_documents.py`, `backend/api/models/legal.py`, `flutter_app/lib/core/legal/legal_documents.dart`, `LEGAL_ACCEPTANCE.md` |
 | Deals, escrow, payments | `backend/api/domains/escrow/`, `backend/api/routers/mpesa.py`, `ESCROW_AUDIT.md` |
 | Disputes | `backend/api/domains/disputes/`, `DISPUTE_AUDIT.md` |
 | Fees, commission, premium and store plans | `backend/api/domains/pricing/`, `PRICING.md` |

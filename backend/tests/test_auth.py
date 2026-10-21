@@ -15,6 +15,7 @@ from httpx import AsyncClient, ASGITransport
 
 from main import app
 from api.database import init_db, reset_engine
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -87,6 +88,7 @@ class TestOtp:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 201
         # ...then confirm a second OTP request for the same number is refused.
@@ -106,6 +108,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -126,6 +129,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 400
 
@@ -140,6 +144,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -162,6 +167,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 400
 
@@ -178,6 +184,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -193,6 +200,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         }
         first = await client.post("/auth/register", json=payload)
         assert first.status_code == 201
@@ -204,6 +212,7 @@ class TestAuthRegister:
     async def test_register_missing_field(self, client):
         resp = await client.post("/auth/register", json={
             "name": "Incomplete",
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 422
 
@@ -217,6 +226,7 @@ class TestAuthRegister:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
         assert resp.status_code == 201
 
@@ -231,6 +241,7 @@ class TestAuthLogin:
             "password": "SecurePass123!",
             "lat": -1.286389,
             "lng": 36.817223,
+            "legal_acceptance": legal_payload(),
         })
 
     @pytest.mark.asyncio
@@ -290,6 +301,7 @@ class TestSellerUpgrade:
             "password": "SecurePass123!",
             "lat": 0.0,
             "lng": 34.5,
+            "legal_acceptance": legal_payload(),
         })
         return resp.json()["access_token"]
 

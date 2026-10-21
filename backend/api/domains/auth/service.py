@@ -15,10 +15,18 @@ import hashlib
 import logging
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.core.legal_documents import (
+    AGE_ACCEPTANCE_TYPE, AGE_DECLARATION_VERSION, AGE_DOCUMENT_ID,
+    PRIVACY, TERMS, LegalAcceptanceError, check_signup_acceptance,
+)
+from api.core.timeutil import to_naive_utc
+from api.models.legal import LegalAcceptance
 
 from api.security import (
     hash_password_async, verify_login_password, verify_password_async, create_access_token,
@@ -392,7 +400,36 @@ class AuthService:
         business_category: Optional[str] = None,
         business_location: Optional[str] = None,
         business_description: Optional[str] = None,
+        # Mandatory declarations. Required and keyword-only: a caller (or a
+        # future endpoint) cannot create an account while omitting them, and
+        # the router cannot forget to pass them without a TypeError at start
+        # rather than a silently accepted signup.
+        *,
+        age_confirmed: bool,
+        terms_accepted: bool,
+        privacy_acknowledged: bool,
+        terms_version: str,
+        privacy_version: str,
     ) -> dict:
+        # Refused before anything is written, so a request that forgets a
+        # declaration never leaves a user (or an OTP consumption) behind.
+        # Omitted fields do not even reach here - the request model
+        # requires them - and a literal `false` is a refusal, not a default.
+        try:
+            check_signup_acceptance(
+                age_confirmed=age_confirmed,
+                terms_accepted=terms_accepted,
+                privacy_acknowledged=privacy_acknowledged,
+                terms_version=terms_version,
+                privacy_version=privacy_version,
+            )
+        except LegalAcceptanceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        # One instant for all three declarations, from this server's clock.
+        # No client timestamp is read anywhere in this flow.
+        accepted_at = to_naive_utc(datetime.now(timezone.utc))
+
         # The profile photo arrives as base64 (converted to an image asset
         # by the media backfill). A link to an image elsewhere is refused:
         # every buyer who opened the seller's listings would load it.
@@ -497,29 +534,64 @@ class AuthService:
             and email == settings.admin_bootstrap_email
         )
 
-        user = await self.repo.create(
-            name=name.strip(),
-            # Normalised through the same allow-list the rest of the app
-            # reads. An unrecognised value is stored as NULL rather than
-            # rejected: gender is optional, and failing a registration over
-            # a malformed optional field would be a worse outcome than
-            # treating it as undisclosed.
-            gender=_normalise_gender(gender),
-            nickname=nickname.strip() if nickname else None,
-            phone=phone,
-            phone_verified=phone_verified,
-            email=email,
-            email_verified=email_verified,
-            password_hash=pw_hash,
-            lat=lat,
-            lng=lng,
-            profile_photo=profile_photo,
-            is_admin=is_admin,
-            trust_score=100,
-            account_type=resolved_account_type,
-            seller_tier=resolved_seller_tier,
-            **biz,
-        )
+        acceptances = [
+            LegalAcceptance(
+                acceptance_type=AGE_ACCEPTANCE_TYPE,
+                document_id=AGE_DOCUMENT_ID,
+                document_version=AGE_DECLARATION_VERSION,
+                document_digest=None,
+                accepted_at=accepted_at,
+            ),
+            LegalAcceptance(
+                acceptance_type=TERMS.acceptance_type,
+                document_id=TERMS.document_id,
+                document_version=TERMS.version,
+                document_digest=TERMS.digest or None,
+                accepted_at=accepted_at,
+            ),
+            LegalAcceptance(
+                acceptance_type=PRIVACY.acceptance_type,
+                document_id=PRIVACY.document_id,
+                document_version=PRIVACY.version,
+                document_digest=PRIVACY.digest or None,
+                accepted_at=accepted_at,
+            ),
+        ]
+
+        try:
+            user = await self.repo.create_with_legal_acceptances(
+                acceptances,
+                name=name.strip(),
+                # Normalised through the same allow-list the rest of the app
+                # reads. An unrecognised value is stored as NULL rather than
+                # rejected: gender is optional, and failing a registration over
+                # a malformed optional field would be a worse outcome than
+                # treating it as undisclosed.
+                gender=_normalise_gender(gender),
+                nickname=nickname.strip() if nickname else None,
+                phone=phone,
+                phone_verified=phone_verified,
+                email=email,
+                email_verified=email_verified,
+                password_hash=pw_hash,
+                lat=lat,
+                lng=lng,
+                profile_photo=profile_photo,
+                is_admin=is_admin,
+                trust_score=100,
+                account_type=resolved_account_type,
+                seller_tier=resolved_seller_tier,
+                **biz,
+            )
+        except IntegrityError as exc:
+            # A concurrent request took this phone or email between the check
+            # above and the insert. The whole transaction - user and all
+            # three acceptance rows - rolled back, so answering 409 is the
+            # complete recovery and nothing partial survives.
+            raise HTTPException(
+                status_code=409,
+                detail="This phone number or email is already registered",
+            ) from exc
 
         token = create_access_token({"sub": user.id})
         refresh_token = await self._issue_refresh_token(user.id)

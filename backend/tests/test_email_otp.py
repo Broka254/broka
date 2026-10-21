@@ -19,6 +19,7 @@ from api.database import init_db, reset_engine
 from api.domains.auth.service import _normalize_email
 from api.security import create_email_verify_token, decode_email_verify_token
 from main import app
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -190,6 +191,7 @@ class TestRegisterHandoff:
             "password": "secret123",
             "lat": -1.29,
             "lng": 36.82,
+            "legal_acceptance": legal_payload(),
             **extra,
         }
         return await client.post("/auth/register", json=body)

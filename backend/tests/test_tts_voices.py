@@ -20,6 +20,7 @@ from httpx import AsyncClient, ASGITransport
 from main import app
 from api.database import init_db, reset_engine
 from api.routers import tts
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -51,6 +52,7 @@ async def auth(client):
     await client.post("/auth/register", json={
         "phone_verify_token": verify.json()["phone_verify_token"], "name": "Voice Tester",
         "email": "voice.tester@test.ke", "password": "TestPass123!", "lat": -1.28, "lng": 36.8,
+        "legal_acceptance": legal_payload(),
     })
     login = await client.post("/auth/login", json={"phone": phone, "password": "TestPass123!"})
     return {"Authorization": f"Bearer {login.json()['access_token']}"}

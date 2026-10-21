@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db, OtpPurpose
@@ -68,6 +68,25 @@ class EmailOtpVerifyIn(BaseModel):
     code: str
 
 
+class LegalAcceptanceIn(BaseModel):
+    """The declarations a new account must make, and the revisions the app
+    showed.
+
+    All five fields are required and strictly typed: an omitted declaration
+    is not agreement, `1`/`"true"` are not a person's confirmation, and a
+    client's own timestamp has no place here (`extra="forbid"`), because
+    only the server's clock is evidence of when acceptance happened.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    age_confirmed: StrictBool
+    terms_accepted: StrictBool
+    privacy_acknowledged: StrictBool
+    terms_version: str = Field(max_length=64)
+    privacy_version: str = Field(max_length=64)
+
+
 class RegisterIn(BaseModel):
     # OTP is optional at signup (can be skipped and verified later from
     # Profile). Provide EITHER phone_verify_token (from otp/verify — the
@@ -103,6 +122,9 @@ class RegisterIn(BaseModel):
     business_location: Optional[str] = None
     business_description: Optional[str] = None
     profile_photo: Optional[str] = None  # selfie, base64
+    # Required. See LegalAcceptanceIn - the backend will not create an
+    # account whose declarations it cannot independently verify.
+    legal_acceptance: LegalAcceptanceIn
 
 
 class LoginIn(BaseModel):
@@ -231,6 +253,11 @@ async def register(
         business_category=body.business_category,
         business_location=body.business_location,
         business_description=body.business_description,
+        age_confirmed=body.legal_acceptance.age_confirmed,
+        terms_accepted=body.legal_acceptance.terms_accepted,
+        privacy_acknowledged=body.legal_acceptance.privacy_acknowledged,
+        terms_version=body.legal_acceptance.terms_version,
+        privacy_version=body.legal_acceptance.privacy_version,
     )
 
 

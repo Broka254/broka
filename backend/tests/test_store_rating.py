@@ -24,6 +24,7 @@ from api.database import (
 )
 from api.models.store import Store
 from api.domains.stores import rating as store_rating
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -67,6 +68,7 @@ async def _register(client: AsyncClient) -> tuple[str, dict]:
         "account_type": "buyer_seller", "seller_tier": "long_term",
         "business_name": f"Business {n}", "business_category": "Electronics",
         "business_location": "Nairobi",
+        "legal_acceptance": legal_payload(),
     })
     login = await client.post("/auth/login", json={"phone": phone, "password": "Passw0rd!23"})
     return reg.json()["user_id"], _auth(login.json()["access_token"])

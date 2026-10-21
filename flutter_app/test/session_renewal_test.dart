@@ -15,6 +15,7 @@
 // wiring main.dart sets up, not a stand-in for it.
 import 'dart:convert';
 
+import 'package:broka/core/legal/legal_documents.dart';
 import 'package:broka/core/network/api_client.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -217,6 +218,11 @@ void main() {
             'access_token': 'a1', 'refresh_token': 'r-signup', 'user_id': 'u1', 'name': 'Otieno',
           }, 201);
       await inApp(() => ApiService.register(
+            declarations: const SignupDeclarations(
+              ageConfirmed: true,
+              termsAccepted: true,
+              privacyAcknowledged: true,
+            ),
             phoneVerifyToken: 'pv', phone: '0712000001', name: 'Otieno', password: 'secret123',
             lat: -1.28, lng: 36.8,
           ));

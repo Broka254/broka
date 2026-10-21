@@ -26,6 +26,7 @@ import 'screens/zeno_screen.dart';
 import 'screens/listing_analytics_screen.dart';
 import 'screens/how_broka_works_screen.dart';
 import 'screens/terms_screen.dart';
+import 'screens/privacy_screen.dart';
 import 'screens/receipt_history_screen.dart';
 import 'screens/store_explainer_screen.dart';
 import 'screens/zeno_insights_screen.dart';
@@ -585,6 +586,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/zeno-insights':    (_) => const ZenoInsightsScreen(),
         '/how-broka-works':  (_) => const HowBrokaWorksScreen(),
         '/terms':            (_) => const TermsScreen(),
+        '/privacy':          (_) => const PrivacyScreen(),
         '/escrow-services':  (_) => const EscrowServicesScreen(),
         '/receipt-history':  (_) => const ReceiptHistoryScreen(),
         '/store-explainer':  (_) => const StoreExplainerScreen(),

@@ -350,6 +350,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: _confirmSignOutEverywhere,
           ),
         ]),
+        const MenuSectionLabel('Legal'),
+        MenuGroup(children: [
+          MenuTile(
+            key: const Key('settings-terms'),
+            icon: Icons.description_outlined,
+            tint: BrokaColors.neonPurple,
+            title: 'Terms of Use and Service',
+            subtitle: 'The rules for buying, selling, fees and plans on BROKA',
+            onTap: () => Navigator.of(context).pushNamed('/terms'),
+          ),
+          MenuTile(
+            key: const Key('settings-privacy'),
+            icon: Icons.privacy_tip_outlined,
+            tint: BrokaColors.neonBlue,
+            title: 'Privacy Policy',
+            subtitle: 'Open the BROKA app Privacy Policy',
+            onTap: () => Navigator.of(context).pushNamed('/privacy'),
+          ),
+        ]),
         const SizedBox(height: 24),
         const Center(
           child: Text('BROKA v2.3.0',

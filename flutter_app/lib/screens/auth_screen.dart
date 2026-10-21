@@ -31,6 +31,7 @@ import '../widgets/otp_code_field.dart';
 import '../widgets/seller_setup.dart';
 import '../widgets/wizard_scaffold.dart';
 import '../core/errors/user_facing_error.dart';
+import '../core/legal/legal_documents.dart';
 
 /// Primary call-to-action gradient: violet into blue, the left two thirds of
 /// the BROKA logo sweep. BrokaColors.gradMid (a deep purple) is the app-wide
@@ -48,6 +49,15 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   bool _loading = false;
   bool _obscure = true;
   String? _error;
+
+  // Final-step declarations. All start false: nothing is pre-agreed, and
+  // opening a Terms or Privacy screen never ticks a box. Kept in the
+  // State, so the wizard keeps them across a rebuild or a trip to one of
+  // the documents.
+  bool _ageConfirmed = false;
+  bool _termsAccepted = false;
+  bool _privacyAcknowledged = false;
+  String? _legalError;
 
   // Registration step (1-6)
   int _step = 1;
@@ -741,6 +751,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _submitRegistration() async {
+    // One request at a time: the CTA is disabled while this runs, and this
+    // guard covers a second tap that lands before the rebuild.
+    if (_loading) return;
+    if (!_legalComplete) {
+      setState(() => _legalError = _kLegalIncompleteMessage);
+      return;
+    }
     // OTP is optional at signup — _phoneVerifyToken is null if the user
     // skipped verification (Step 1 or Step 2). Either way the phone number
     // itself is required; it's always been collected by this point.
@@ -752,6 +769,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     setState(() { _loading = true; _error = null; });
     try {
       final data = await ApiService.register(
+        declarations: _declarations,
         phoneVerifyToken: _phoneVerifyToken,
         phone:        phone,
         name:         _nameCtrl.text.trim(),
@@ -1499,14 +1517,23 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                     base64Decode(_capturedPhoto!),
                     width: 80, height: 80, fit: BoxFit.cover)),
                 const SizedBox(width: 16),
-                const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Selfie captured ✓',
-                      style: TextStyle(color: BrokaColors.neonGreen,
-                          fontWeight: FontWeight.w700, fontSize: 15)),
-                  SizedBox(height: 4),
-                  Text('Tap to retake',
-                      style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
-                ]),
+                // Flexible, not a bare Column: at a large text scale (and
+                // under the test font, which is wider) the two lines are
+                // wider than the space beside an 80px photo, and a fixed
+                // Column overflows the row instead of wrapping.
+                const Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Selfie captured ✓',
+                          style: TextStyle(color: BrokaColors.neonGreen,
+                              fontWeight: FontWeight.w700, fontSize: 15)),
+                      SizedBox(height: 4),
+                      Text('Tap to retake',
+                          style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+                    ],
+                  ),
+                ),
               ])
             : Column(children: [
                 Container(
@@ -1880,8 +1907,194 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       ]),
     ),
     const SizedBox(height: 20),
-    GradientButton(
-      onPressed: _loading ? null : _submitRegistration,
+    _buildLegalDeclarations(),
+    const SizedBox(height: 16),
+    _buildFinalCta(),
+  ]);
+
+  // ── Final-step legal declarations ────────────────────────────────────────
+  //
+  // Three explicit confirmations, all starting unchecked. They are what the
+  // request carries and what legal_acceptances records; opening a document
+  // is not agreement and never sets one.
+  static const String _kLegalIncompleteMessage =
+      'Confirm all three declarations to create your account.';
+
+  bool get _legalComplete =>
+      _ageConfirmed && _termsAccepted && _privacyAcknowledged;
+
+  SignupDeclarations get _declarations => SignupDeclarations(
+        ageConfirmed: _ageConfirmed,
+        termsAccepted: _termsAccepted,
+        privacyAcknowledged: _privacyAcknowledged,
+      );
+
+  Widget _buildLegalDeclarations() => Container(
+    key: const Key('signup-legal'),
+    width: double.infinity,
+    padding: const EdgeInsets.fromLTRB(14, 16, 14, 8),
+    decoration: BoxDecoration(
+      color: BrokaColors.bgCard.withOpacity(0.82),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: BrokaColors.gold.withOpacity(0.35)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text(
+        'Before creating your BROKA account',
+        style: TextStyle(
+            color: BrokaColors.textHigh,
+            fontSize: 15,
+            fontWeight: FontWeight.w800),
+      ),
+      const SizedBox(height: 4),
+      const Text(
+        'All three declarations are required.',
+        style: TextStyle(color: BrokaColors.textMid, fontSize: 12),
+      ),
+      const SizedBox(height: 4),
+      _legalRow(
+        key: const Key('signup-age'),
+        value: _ageConfirmed,
+        label: LegalDocuments.ageDeclaration,
+        onChanged: (v) => setState(() {
+          _ageConfirmed = v;
+          _legalError = null;
+        }),
+      ),
+      _legalRow(
+        key: const Key('signup-terms'),
+        value: _termsAccepted,
+        label: LegalDocuments.termsPrefix,
+        linkText: LegalDocuments.termsLink,
+        suffix: LegalDocuments.termsSuffix,
+        linkKey: const Key('signup-terms-link'),
+        route: '/terms',
+        onChanged: (v) => setState(() {
+          _termsAccepted = v;
+          _legalError = null;
+        }),
+      ),
+      _legalRow(
+        key: const Key('signup-privacy'),
+        value: _privacyAcknowledged,
+        label: LegalDocuments.privacyPrefix,
+        linkText: LegalDocuments.privacyLink,
+        suffix: LegalDocuments.privacySuffix,
+        linkKey: const Key('signup-privacy-link'),
+        route: '/privacy',
+        onChanged: (v) => setState(() {
+          _privacyAcknowledged = v;
+          _legalError = null;
+        }),
+      ),
+      if (_legalError != null)
+        Padding(
+          key: const Key('signup-legal-error'),
+          padding: const EdgeInsets.only(left: 46, right: 4, top: 2, bottom: 6),
+          child: Text(
+            _legalError!,
+            style: const TextStyle(
+                color: BrokaColors.danger, fontSize: 12.5, height: 1.35),
+          ),
+        ),
+    ]),
+  );
+
+  Widget _legalRow({
+    required Key key,
+    required bool value,
+    required String label,
+    required ValueChanged<bool> onChanged,
+    String? linkText,
+    String? suffix,
+    Key? linkKey,
+    String? route,
+  }) {
+    const labelStyle = TextStyle(
+        fontSize: 13, height: 1.5, color: BrokaColors.textHigh);
+    final semanticsLabel = '$label${linkText ?? ''}${suffix ?? ''}';
+    void openLink() {
+      if (route != null) Navigator.of(context).pushNamed(route);
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // A 46px target: the box stays visually a checkbox, but a thumb
+        // does not have to find the 18px square itself.
+        SizedBox(
+          width: 46,
+          height: 46,
+          child: Checkbox(
+            key: key,
+            value: value,
+            onChanged: (v) => onChanged(v ?? false),
+            activeColor: BrokaColors.gold,
+            checkColor: Colors.black,
+            side: const BorderSide(color: BrokaColors.textMid, width: 1.4),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6)),
+            // The sentence, not "checkbox": the state is meaningless
+            // without what is being confirmed.
+            semanticLabel: semanticsLabel,
+          ),
+        ),
+        Expanded(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            // The checkbox already exposes a toggle to a screen reader;
+            // this one is only for fingers.
+            excludeFromSemantics: true,
+            onTap: () => onChanged(!value),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              child: Text.rich(
+                TextSpan(style: labelStyle, children: [
+                  TextSpan(text: label),
+                  if (linkText != null && route != null)
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.baseline,
+                      baseline: TextBaseline.alphabetic,
+                      child: Semantics(
+                        link: true,
+                        label: linkText,
+                        onTap: openLink,
+                        excludeSemantics: true,
+                        child: InkWell(
+                          key: linkKey,
+                          onTap: openLink,
+                          borderRadius: BorderRadius.circular(4),
+                          child: Text(
+                            linkText,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              height: 1.5,
+                              color: BrokaColors.gold,
+                              fontWeight: FontWeight.w700,
+                              decoration: TextDecoration.underline,
+                              decorationColor: BrokaColors.gold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (suffix != null) TextSpan(text: suffix),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// The existing Activate Account button, disabled until all three boxes
+  /// are ticked. A tap on the disabled button explains what is missing
+  /// instead of doing nothing - the button itself can never submit here.
+  Widget _buildFinalCta() {
+    final button = GradientButton(
+      key: const Key('signup-activate'),
+      onPressed: _loading || !_legalComplete ? null : _submitRegistration,
       child: _loading
           ? const SizedBox(width: 22, height: 22,
               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -1891,8 +2104,14 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
               SizedBox(width: 8),
               Icon(Icons.rocket_launch_rounded, color: Colors.white, size: 18),
             ]),
-    ),
-  ]);
+    );
+    if (_loading || _legalComplete) return button;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _legalError = _kLegalIncompleteMessage),
+      child: button,
+    );
+  }
 
   Widget _summaryRow(IconData icon, String value, {Color? color}) =>
     Row(children: [

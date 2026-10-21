@@ -16,6 +16,7 @@ from sqlalchemy import select
 from main import app
 from api.database import init_db, reset_engine, AsyncSessionLocal, Listing, User
 from api.core.text_search import MAX_TERMS, contains_pattern, search_terms
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,7 @@ async def _register(client, phone, name, email) -> str:
     reg = await client.post("/auth/register", json={
         "phone_verify_token": verify.json()["phone_verify_token"], "name": name,
         "email": email, "password": "TestPass123!", "lat": -1.286, "lng": 36.817,
+        "legal_acceptance": legal_payload(),
     })
     return reg.json()["user_id"]
 

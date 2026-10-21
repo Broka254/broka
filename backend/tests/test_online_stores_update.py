@@ -9,6 +9,7 @@ from api.database import init_db, reset_engine
 from api.domains.pricing import plans
 from api.domains.stores import categories as store_categories
 from main import app
+from tests.legal_payload import legal_payload
 
 
 class TestExcludedListingCategories:
@@ -97,6 +98,7 @@ async def _register_at(client, phone: str, name: str, lat: float, lng: float) ->
         "lat": lat, "lng": lng, "account_type": "buyer_seller",
         "seller_tier": "long_term", "business_name": name,
         "business_category": "Electronics", "business_location": "Test",
+        "legal_acceptance": legal_payload(),
     })
     assert reg.status_code == 201, reg.text
     login = await client.post("/auth/login", json={"phone": phone, "password": "OwnerPass123!"})

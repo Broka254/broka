@@ -171,10 +171,14 @@ class TestAdminBootstrapNeedsAProvenEmail:
 
     async def _register(self, **kwargs) -> User:
         from api.domains.auth.service import AuthService
+        from api.core.legal_documents import PRIVACY, TERMS
         async with AsyncSessionLocal() as db:
             out = await AuthService(db).register(
                 name="Someone", phone=_phone(), password="Passw0rd!long",
-                lat=-1.29, lng=36.82, **kwargs,
+                lat=-1.29, lng=36.82,
+                age_confirmed=True, terms_accepted=True, privacy_acknowledged=True,
+                terms_version=TERMS.version, privacy_version=PRIVACY.version,
+                **kwargs,
             )
         async with AsyncSessionLocal() as db:
             return (await db.execute(select(User).where(User.id == out["user_id"]))).scalar_one()

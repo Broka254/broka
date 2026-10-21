@@ -21,6 +21,7 @@ from httpx import AsyncClient, ASGITransport
 
 from main import app
 from api.database import init_db, reset_engine
+from tests.legal_payload import legal_payload
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -61,6 +62,7 @@ async def _register_and_login(client, phone: str, name: str, email: str, passwor
     await client.post("/auth/register", json={
         "phone_verify_token": token, "name": name, "email": email,
         "password": password, "lat": -1.28, "lng": 36.81,
+        "legal_acceptance": legal_payload(),
     })
     resp = await client.post("/auth/login", json={"phone": phone, "password": password})
     return resp.json()
