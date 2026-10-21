@@ -69,12 +69,16 @@ def _dart_document(name: str) -> dict:
 
 
 def _dart_string(const: str) -> str:
-    """A Dart string constant, allowing adjacent-literal concatenation."""
+    """A Dart string constant, allowing adjacent-literal concatenation.
+
+    The literals may be single- or double-quoted: the declarations use
+    double quotes where the sentence contains an apostrophe (BROKA's).
+    """
     m = re.search(rf"static const {const} =\s*(.*?);", _dart(), re.S)
     assert m, f"LegalDocuments.{const} is missing"
-    parts = re.findall(r"'([^']*)'", m.group(1))
-    assert parts, f"LegalDocuments.{const} is not a single-quoted literal"
-    return "".join(parts)
+    parts = re.findall(r"'([^']*)'|\"([^\"]*)\"", m.group(1))
+    assert parts, f"LegalDocuments.{const} is not a quoted literal"
+    return "".join(single or double for single, double in parts)
 
 
 def _asset(doc) -> pathlib.Path:
