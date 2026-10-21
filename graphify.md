@@ -110,30 +110,30 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 | GET | `/auctions` | public | `list_auctions` (backend/api/domains/auctions/router.py:24) |
 | GET | `/auctions/{listing_id}` | public | `get_auction` (backend/api/domains/auctions/router.py:146) |
 | PATCH | `/auctions/{listing_id}/terms` | user | `update_auction_terms` (backend/api/domains/auctions/router.py:62) |
-| PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:375) |
-| POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:181) |
-| POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:198) |
-| PATCH | `/auth/fcm-token` | user | `update_fcm_token` (backend/api/domains/auth/router.py:423) |
-| PATCH | `/auth/heartbeat` | user | `heartbeat` (backend/api/domains/auth/router.py:407) |
-| PATCH | `/auth/language` | user | `set_language` (backend/api/domains/auth/router.py:359) |
-| PATCH | `/auth/location` | user | `update_location` (backend/api/domains/auth/router.py:347) |
-| PATCH | `/auth/location-visibility` | user | `location_visibility` (backend/api/domains/auth/router.py:391) |
-| POST | `/auth/login` | public | `login` (backend/api/domains/auth/router.py:238) |
-| GET | `/auth/me` | user | `me` (backend/api/domains/auth/router.py:324) |
-| POST | `/auth/otp/request` | public | `request_otp` (backend/api/domains/auth/router.py:154) |
-| POST | `/auth/otp/verify` | public | `verify_otp` (backend/api/domains/auth/router.py:171) |
-| POST | `/auth/password/change` | user | `change_password` (backend/api/domains/auth/router.py:292) |
-| POST | `/auth/password/forgot` | public | `forgot_password` (backend/api/domains/auth/router.py:256) |
-| POST | `/auth/password/forgot/verify` | public | `verify_forgot_password` (backend/api/domains/auth/router.py:269) |
-| POST | `/auth/password/reset` | public | `reset_password` (backend/api/domains/auth/router.py:281) |
-| PATCH | `/auth/profile` | user | `update_profile` (backend/api/domains/auth/router.py:333) |
-| POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:208) |
-| GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:439) |
+| PATCH | `/auth/biometric-enroll` | user | `biometric_enroll` (backend/api/domains/auth/router.py:402) |
+| POST | `/auth/email/otp/request` | public | `request_email_otp` (backend/api/domains/auth/router.py:203) |
+| POST | `/auth/email/otp/verify` | public | `verify_email_otp` (backend/api/domains/auth/router.py:220) |
+| PATCH | `/auth/fcm-token` | user | `update_fcm_token` (backend/api/domains/auth/router.py:450) |
+| PATCH | `/auth/heartbeat` | user | `heartbeat` (backend/api/domains/auth/router.py:434) |
+| PATCH | `/auth/language` | user | `set_language` (backend/api/domains/auth/router.py:386) |
+| PATCH | `/auth/location` | user | `update_location` (backend/api/domains/auth/router.py:374) |
+| PATCH | `/auth/location-visibility` | user | `location_visibility` (backend/api/domains/auth/router.py:418) |
+| POST | `/auth/login` | public | `login` (backend/api/domains/auth/router.py:265) |
+| GET | `/auth/me` | user | `me` (backend/api/domains/auth/router.py:351) |
+| POST | `/auth/otp/request` | public | `request_otp` (backend/api/domains/auth/router.py:176) |
+| POST | `/auth/otp/verify` | public | `verify_otp` (backend/api/domains/auth/router.py:193) |
+| POST | `/auth/password/change` | user | `change_password` (backend/api/domains/auth/router.py:319) |
+| POST | `/auth/password/forgot` | public | `forgot_password` (backend/api/domains/auth/router.py:283) |
+| POST | `/auth/password/forgot/verify` | public | `verify_forgot_password` (backend/api/domains/auth/router.py:296) |
+| POST | `/auth/password/reset` | public | `reset_password` (backend/api/domains/auth/router.py:308) |
+| PATCH | `/auth/profile` | user | `update_profile` (backend/api/domains/auth/router.py:360) |
+| POST | `/auth/register` | public | `register` (backend/api/domains/auth/router.py:230) |
+| GET | `/auth/search` | user | `search_users` (backend/api/domains/auth/router.py:466) |
 | POST | `/auth/token/refresh` | public | `refresh_access_token` (backend/api/domains/auth/refresh_router.py:93) |
 | POST | `/auth/token/revoke` | public | `revoke_token` (backend/api/domains/auth/refresh_router.py:152) |
 | POST | `/auth/token/revoke-all` | user | `revoke_all_tokens` (backend/api/domains/auth/refresh_router.py:170) |
-| POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:307) |
-| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:453) |
+| POST | `/auth/upgrade-to-seller` | user | `upgrade_to_seller` (backend/api/domains/auth/router.py:334) |
+| GET | `/auth/user/{user_id}` | user | `get_user_profile` (backend/api/domains/auth/router.py:480) |
 | POST | `/buy-agent-requests` | user | `create_buy_agent_request` (backend/api/domains/buy_agent/router.py:254) |
 | POST | `/buy-agent-requests/action` | user | `zeno_action` (backend/api/domains/buy_agent/router.py:221) |
 | POST | `/buy-agent-requests/converse` | user | `converse_with_zeno` (backend/api/domains/buy_agent/router.py:178) |
@@ -526,6 +526,7 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 - `image_processing.py` — Turn an uploaded image into the WebP sizes BROKA serves.
 - `interest_arming.py` — Arms the seller availability nudge from the buyer's own messages.
 - `ledger.py`
+- `legal_documents.py` — The legal documents a new BROKA account must accept, and the versions this backend accepts.
 - `media_storage.py` — Where image bytes live: Cloudflare R2, or the database as a fallback.
 - `message_push.py` — Push every chat message to the person it is for, app open or not.
 - `migrations_guide.py` — ⚠️ STATUS AS OF THIS HARDENING PASS (2026-09) — READ THIS FIRST ⚠️
@@ -564,6 +565,7 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 - `dispute.py` — BROKA v5.0 - Dispute Engine Models
 - `escrow_ledger.py` — LedgerEntry model — moved here for domain consistency.
 - `external_escrow.py` — ExternalEscrow model - tracks E-Confirm's side of a marketplace deal.
+- `legal.py` — Durable evidence of what a user accepted, and when.
 - `listing.py` — Listing, Interest, Bid models — re-exported from api.database.
 - `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
 - `media.py` — Image assets - one uploaded image, stored as a few resized WebP files.
@@ -622,6 +624,7 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 | `fraud_events` | `FraudEvent` | backend/api/database.py:1242 |
 | `interests` | `Interest` | backend/api/database.py:480 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
+| `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
 | `listing_likes` | `ListingLike` | backend/api/database.py:702 |
 | `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1018 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
@@ -670,7 +673,7 @@ of a change.
 - **ai_broker** — domains: categories, listings, pricing; core: circuit_breaker, config, gemini, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
-- **auth** — domains: media, trust; core: client_ip, config, email, events, fraud, geo, nudge_templates, presence, push_devices, rate_limit, sms, text_search; database, security
+- **auth** — domains: media, trust; core: client_ip, config, email, events, fraud, geo, legal_documents, nudge_templates, presence, push_devices, rate_limit, sms, text_search, timeutil; database, security
 - **buy_agent** — domains: ai_broker, categories, listings, premium; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
@@ -734,7 +737,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-121 files in `backend/tests/`.
+123 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -787,6 +790,8 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_idempotency.py` — Tests for the idempotency key guard.
 - `test_inbox_zeno_unread.py` — The inbox opens the screen the user was using (2026-10-02).
 - `test_interest_nudges.py` — BROKA - Interest Availability Nudge Tests (v6.2) Run: pytest backend/tests/test_interest_nudges.py -v
+- `test_legal_acceptance.py` — Registration is refused unless the caller makes the three declarations.
+- `test_legal_documents.py` — The app and the backend must be talking about the same legal documents.
 - `test_listing_fee_payment.py` — Paying the listing fee (PRICING.md; api/domains/pricing/payments.py).
 - `test_listing_likes.py` — Likes, apart from saves (2026-10-09).
 - `test_listing_overhaul.py` — The 2026-09-25 listing overhaul (LISTING_OVERHAUL.md): the category taxonomy, what a listing must and may now say about itself, the seller'…
@@ -884,6 +889,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/mpesa-confirm` | `MpesaConfirmationScreen` |
 | `/negotiate` | `NegotiateScreen` |
 | `/premium` | `PremiumScreen` |
+| `/privacy` | `PrivacyScreen` |
 | `/product` | `ProductScreen` |
 | `/profile` | `ProfileScreen` |
 | `/receipt-history` | `ReceiptHistoryScreen` |
@@ -1090,6 +1096,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/core/`
 
 - `errors/user_facing_error.dart` — What the user is told when something fails.
+- `legal/legal_documents.dart` — The legal documents the app shows, the revisions it submits, and the exact declarations a new account must make.
 - `network/api_client.dart` — BROKA v3.0 - Core API Client Centralises HTTP logic: base URL, auth headers, error handling, retries.
 - `network/auction_ws_client.dart` — lib/core/network/auction_ws_client.dart Mirrors deal_ws_client.dart's exact reconnect contract: 25s JSON pings, backoff starting at 1s and…
 - `network/deal_ws_client.dart` — BROKA v3.0 - Deal Status WebSocket Client
@@ -1166,6 +1173,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `dynamic_attribute_field.dart` — lib/widgets/dynamic_attribute_field.dart
 - `factor_trend_chart.dart` — BROKA — factor trend chart
 - `gradient_button.dart` — BROKA — Gradient Button Shared primary-action button used across auth, sell, profile, and inbox screens.
+- `legal_document_view.dart` — One reader for both legal documents: the Terms of Use and Service (assets/legal/terms.md) and the Privacy Policy (assets/legal/privacy.md).
 - `lighting_coach.dart` — BROKA — Lighting coach for the selfie scan.
 - `list_picker.dart` — A searchable list in a bottom sheet, and the form field that opens one.
 - `menu_tiles.dart` — The building blocks of the Menu and Settings screens: a section label, a card that groups rows, and the row itself.
@@ -1196,9 +1204,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 - `seller_insights.dart` — BROKA — seller insights
 
-### `flutter_app/lib/screens/` (46 files)
+### `flutter_app/lib/screens/` (47 files)
 
-`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `broker_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `saved_listings_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `terms_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
+`ai_assistant_screen.dart`, `auction_screen.dart`, `auth_screen.dart`, `broker_screen.dart`, `deal_receipt_history_screen.dart`, `dispute_screen.dart`, `econfirm_payment_screen.dart`, `home_screen.dart`, `how_broka_works_screen.dart`, `inbox_screen.dart`, `listing_analytics_screen.dart`, `listing_camera_screen.dart`, `listing_map_screen.dart`, `listing_search_screen.dart`, `menu_screen.dart`, `mpesa_confirmation_screen.dart`, `negotiate_screen.dart`, `negotiation_screen.dart`, `privacy_screen.dart`, `product_screen.dart`, `profile_screen.dart`, `receipt_history_screen.dart`, `review_screen.dart`, `saved_listings_screen.dart`, `selfie_camera_screen.dart`, `sell_category_screen.dart`, `sell_description_screen.dart`, `sell_details_screen.dart`, `sell_flow.dart`, `sell_location_screen.dart`, `sell_photos_screen.dart`, `sell_price_screen.dart`, `sell_review_screen.dart`, `sell_showcase_screen.dart`, `sell_stock_screen.dart`, `sell_zeno_alert_screen.dart`, `seller_dashboard_screen.dart`, `settings_screen.dart`, `splash_screen.dart`, `start_selling_screen.dart`, `store_explainer_screen.dart`, `terms_screen.dart`, `user_profile_screen.dart`, `verification_screen.dart`, `voip_call_screen.dart`, `zeno_insights_screen.dart`, `zeno_screen.dart`
 
 ### Tests (`flutter_app/test/`)
 
@@ -1239,6 +1247,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `password_reset_test.dart` — Forgotten and changed passwords, and Settings' language choice.
 - `photo_capture_test.dart` — Store images are taken the way listing photos are (services/photo_capture.dart): BROKA's own camera first, the phone's camera only as the f…
 - `premium_test.dart` — BROKA Premium in the app (PRICING.md section 4): the plans and where the user stands as the server sends them, buying a plan, and what a re…
+- `privacy_screen_test.dart` — The Privacy Policy screen is a real destination from the moment it is linked from sign-up - and until approved text exists it must say that…
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
 - `push_delivery_test.dart` — Calls and messages that reach a phone whose app is closed (2026-10-07).
@@ -1251,6 +1260,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `seller_dashboard_shell_test.dart` — The Seller Dashboard on Home's visual system (2026-09-26): the constellation, the shared header language, and a pill switcher for its three…
 - `seller_names_test.dart` — The names a listing's seller is shown under (models/seller_names.dart).
 - `session_renewal_test.dart` — Session renewal across the app's two HTTP clients.
+- `signup_legal_test.dart` — The final sign-up step: three declarations, both documents, and what the request actually carries.
 - `signup_wizard_test.dart` — Covers the signup wizard's step split: one question per screen, which of them are optional, and the validation that gates each Continue.
 - `sms_otp_autofill_test.dart` — The signup wizard's automatic OTP capture (Android SMS Retriever), end to end on the Dart side: a code the native bridge delivers must land…
 - `splash_screen_test.dart` — The splash plays its boot sequence once, the first time BROKA opens on a phone; after that the app opens straight onto Home (2026-10-09).
@@ -1370,6 +1380,7 @@ Modules:
 - `GEMINI.md` — BROKA
 - `IOS_CALLING_SETUP.md` — BROKA iOS calling — what's in the repo, what still needs Xcode
 - `LAUNCH_DISCOUNT_MODEL.md` — What a launch discount costs BROKA, and how many sellers it can carry
+- `LEGAL_ACCEPTANCE.md` — Legal acceptance at sign-up
 - `LISTING_OVERHAUL.md` — BROKA — Listing Flow Overhaul
 - `LISTING_POSTING_REVIEW.md` — BROKA — Listing Posting Review
 - `NOTIFICATIONS.md` — Notifications — calls and messages with the app closed (2026-10-07)
