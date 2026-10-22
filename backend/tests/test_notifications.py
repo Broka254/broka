@@ -601,4 +601,7 @@ def test_who_a_message_is_for_follows_the_history_rules():
     assert r("buyer", None, True, "text") == set()          # private, to Zeno
     assert r("buyer", None, False, "call") == set()         # a call card
     assert r("broker", "buyer", True, "text") == {"buyer"}
-    assert r("broker", None, True, "text") == {"buyer", "seller"}
+    # Legacy Zeno rows with no recipient_role are not news for either -
+    # the side that should see them is unknowable (they show in /history
+    # only, so an old thread still reads whole - but they announce nothing).
+    assert r("broker", None, True, "text") == set()

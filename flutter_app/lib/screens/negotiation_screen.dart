@@ -62,6 +62,10 @@ class ChatMessage {
   final String? clientId;
   /// The send did not get through: shown as "Not sent", tap to try again.
   final bool    failed;
+  /// When the sender last changed the text. Null unless it was edited.
+  final DateTime? editedAt;
+  /// Unsend tombstone: content and media are gone, the row stays in place.
+  final bool    deleted;
 
   const ChatMessage({
     required this.role,
@@ -75,6 +79,8 @@ class ChatMessage {
     this.createdAt,
     this.clientId,
     this.failed = false,
+    this.editedAt,
+    this.deleted = false,
     String? id,
   }) : id = id ?? '';
 
@@ -93,6 +99,10 @@ class ChatMessage {
     id:           j['id'] as String? ?? '',
     clientId:     j['client_msg_id'] as String?,
     failed:       j['failed'] as bool? ?? false,
+    editedAt:     (j['edited_at'] is String && (j['edited_at'] as String).isNotEmpty)
+        ? DateTime.tryParse(j['edited_at'] as String)
+        : null,
+    deleted:      (j['deleted'] as bool?) ?? (j['msg_type'] == 'deleted'),
     createdAt:    (j['created_at'] is String && (j['created_at'] as String).isNotEmpty)
         ? DateTime.tryParse(j['created_at'] as String)
         : null,
@@ -110,13 +120,15 @@ class ChatMessage {
     id:           m.id,
     clientId:     m.clientMsgId,
     createdAt:    m.createdAt,
+    editedAt:     m.editedAt,
+    deleted:      m.deleted,
   );
 
   ChatMessage withFailed(bool value) => ChatMessage(
     role: role, content: content, msgType: msgType, mediaUrl: mediaUrl,
     durationSecs: durationSecs, callType: callType, viaAi: viaAi,
     isBroker: isBroker, createdAt: createdAt, clientId: clientId,
-    failed: value, id: id,
+    failed: value, id: id, editedAt: editedAt, deleted: deleted,
   );
 
   Map<String, dynamic> toJson() => {
@@ -130,6 +142,8 @@ class ChatMessage {
     'id': id,
     'created_at': createdAt?.toIso8601String(),
     'client_msg_id': clientId,
+    'edited_at': editedAt?.toIso8601String(),
+    'deleted': deleted,
     if (failed) 'failed': true,
   };
 }
@@ -559,6 +573,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       case 'receipt':
         _applyReceipt(data);
         return;
+      case 'message_edited':
+        _applyMessageChange(data, deleted: false);
+        return;
+      case 'message_deleted':
+        _applyMessageChange(data, deleted: true);
+        return;
       case 'message':
         final cm = ChatMessage.fromJson(data);
         // Direct chat never shows Zeno (broker) messages - same rule as
@@ -588,6 +608,64 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _counterpartLastDelivered = _later(_counterpartLastDelivered, at('last_delivered'));
       _counterpartLastRead      = _later(_counterpartLastRead, at('last_read'));
     });
+  }
+
+  /// The sender edited or unsent a message (backend media.broadcast_
+  /// message_update). Update the copy already on screen by id: a delete
+  /// must remove the words from every device that had them, not only the
+  /// phone that tapped it.
+  void _applyMessageChange(Map<String, dynamic> data, {required bool deleted}) {
+    final id = data['id'] as String?;
+    if (id == null || id.isEmpty) return;
+    final i = _messages.indexWhere((m) => m.id == id);
+    if (i < 0) return;
+    final old = _messages[i];
+    if (deleted) {
+      if (old.deleted) return;
+      _messages[i] = ChatMessage(
+        role: old.role, content: '', msgType: 'deleted',
+        viaAi: old.viaAi, isBroker: old.isBroker,
+        id: old.id, clientId: old.clientId, createdAt: old.createdAt,
+        editedAt: old.editedAt, deleted: true,
+      );
+    } else {
+      final content = data['content'] as String?;
+      if (content == null) return;
+      _messages[i] = ChatMessage(
+        role: old.role, content: content, msgType: old.msgType,
+        mediaUrl: old.mediaUrl, durationSecs: old.durationSecs,
+        callType: old.callType, viaAi: old.viaAi, isBroker: old.isBroker,
+        id: old.id, clientId: old.clientId, createdAt: old.createdAt,
+        editedAt: (data['edited_at'] is String &&
+                (data['edited_at'] as String).isNotEmpty)
+            ? DateTime.tryParse(data['edited_at'] as String)?.toLocal()
+            : DateTime.now(),
+        deleted: old.deleted,
+      );
+    }
+    setState(() {});
+    unawaited(_cacheMessages());
+  }
+
+  /// Reconcile a message already on screen with the server's copy. Edits
+  /// and unsends arrive on the socket, but a phone that was offline/closed
+  /// only sees them in the next history poll - without this, the old words
+  /// stayed on screen for the rest of the session.
+  bool _updateIfChanged(ChatMessage m) {
+    if (m.id.isEmpty) return false;
+    final i = _messages.indexWhere((x) => x.id == m.id);
+    if (i < 0) return false;
+    final old = _messages[i];
+    final editedChanged = (old.editedAt == null) != (m.editedAt == null) ||
+        (old.editedAt != null && m.editedAt != null &&
+            !old.editedAt!.isAtSameMomentAs(m.editedAt!));
+    final changed = old.content != m.content ||
+        old.msgType != m.msgType ||
+        old.deleted != m.deleted ||
+        editedChanged ||
+        old.mediaUrl != m.mediaUrl;
+    if (changed) _messages[i] = m;
+    return changed;
   }
 
   /// A message that arrived while the app is in the background. On screen
@@ -885,9 +963,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       var inbound = false;
       for (final m in history) {
         if (!(m.role == 'buyer' || m.role == 'seller') || m.viaAi) continue;
-        if (_absorb(ChatMessage.fromMessage(m))) {
+        final cm = ChatMessage.fromMessage(m);
+        if (_absorb(cm)) {
           changed = true;
           if (m.role != _role) inbound = true;
+        } else if (_updateIfChanged(cm)) {
+          changed = true;
         }
       }
       if (!changed) return;
@@ -1028,6 +1109,141 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } else {
       _enqueue(() => _deliverUpload(clientId));
     }
+  }
+
+  // ── Edit / unsend ──────────────────────────────────────────────────────────
+
+  bool _withinWindow(DateTime? at, Duration window) {
+    if (at == null) return false;
+    return DateTime.now().toUtc().difference(at.toUtc()) <= window;
+  }
+
+  /// Long-press on one of your own direct messages. Nothing here applies to
+  /// Zeno's private notes or to the other person's messages: the server
+  /// checks the same ownership and window, this only decides which actions
+  /// are worth offering.
+  Future<void> _onMessageLongPress(ChatMessage m) async {
+    if (m.isBroker || m.viaAi || m.isPending || m.deleted || m.id.isEmpty) return;
+    if (m.role != _role) return;
+    final canEdit = m.msgType == 'text' && _withinWindow(m.createdAt, const Duration(minutes: 15));
+    final canDelete = _withinWindow(m.createdAt, const Duration(hours: 48));
+    if (!canEdit && !canDelete) return;
+
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: BrokaColors.bgMid,
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(
+          dense: true,
+          title: Text(
+            m.content.length > 60 ? '${m.content.substring(0, 57)}...' : m.content,
+            maxLines: 2, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
+          ),
+        ),
+        if (canEdit)
+          ListTile(
+            leading: const Icon(Icons.edit_rounded, color: BrokaColors.neonGreen),
+            title: const Text('Edit', style: TextStyle(color: BrokaColors.textHigh)),
+            onTap: () => Navigator.pop(ctx, 'edit'),
+          ),
+        if (canDelete)
+          ListTile(
+            leading: const Icon(Icons.delete_outline_rounded, color: BrokaColors.danger),
+            title: const Text('Unsend', style: TextStyle(color: BrokaColors.textHigh)),
+            subtitle: const Text('Removes it for everyone',
+                style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+            onTap: () => Navigator.pop(ctx, 'delete'),
+          ),
+      ])),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'edit') {
+      await _editMessage(m);
+    } else if (choice == 'delete') {
+      await _deleteMessage(m);
+    }
+  }
+
+  Future<void> _editMessage(ChatMessage m) async {
+    final controller = TextEditingController(text: m.content);
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        title: const Text('Edit message', style: TextStyle(color: BrokaColors.textHigh)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: null,
+          maxLength: 2000,
+          style: const TextStyle(color: BrokaColors.textHigh),
+          decoration: const InputDecoration(
+            hintText: 'Message',
+            hintStyle: TextStyle(color: BrokaColors.textLow),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save', style: TextStyle(color: BrokaColors.neonGreen)),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || text == null || text.isEmpty || text == m.content) return;
+
+    final saved = await ApiService.editMessage(m.id, text);
+    if (!mounted) return;
+    if (saved == null) {
+      _notSent('Could not edit that message. It may be too old, or the connection dropped.');
+      return;
+    }
+    final i = _messages.indexWhere((x) => x.id == m.id);
+    if (i < 0) return;
+    setState(() => _messages[i] = ChatMessage.fromJson(saved));
+    unawaited(_cacheMessages());
+  }
+
+  Future<void> _deleteMessage(ChatMessage m) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        title: const Text('Unsend message?', style: TextStyle(color: BrokaColors.textHigh)),
+        content: const Text(
+          'It will be removed for both of you. The other person may already have seen it.',
+          style: TextStyle(color: BrokaColors.textMid),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Unsend', style: TextStyle(color: BrokaColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    final saved = await ApiService.unsendMessage(m.id);
+    if (!mounted) return;
+    if (saved == null) {
+      _notSent('Could not unsend that message. It may be too old, or the connection dropped.');
+      return;
+    }
+    final i = _messages.indexWhere((x) => x.id == m.id);
+    if (i < 0) return;
+    setState(() => _messages[i] = ChatMessage.fromJson(saved));
+    unawaited(_cacheMessages());
   }
 
   // ── Voice notes ────────────────────────────────────────────────────────────
@@ -1691,6 +1907,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         onPlayTap:  (url) => _togglePlay(url),
         onCallBack: _callBack,
         onUnsentTap: _onUnsentTap,
+        onLongPress: _onMessageLongPress,
         counterpartLastRead: _counterpartLastRead,
         counterpartLastDelivered: _counterpartLastDelivered,
       );
@@ -1864,6 +2081,7 @@ class _ChatBubble extends StatelessWidget {
   final void Function(String url) onPlayTap;
   final ValueChanged<String> onCallBack; // callType: "audio" | "video"
   final ValueChanged<ChatMessage>? onUnsentTap;
+  final ValueChanged<ChatMessage>? onLongPress;
   final DateTime? counterpartLastRead;
   final DateTime? counterpartLastDelivered;
 
@@ -1874,6 +2092,7 @@ class _ChatBubble extends StatelessWidget {
     required this.onPlayTap,
     required this.onCallBack,
     this.onUnsentTap,
+    this.onLongPress,
     this.counterpartLastRead,
     this.counterpartLastDelivered,
   });
@@ -1882,6 +2101,13 @@ class _ChatBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isBroker = message.isBroker;
     final isMe     = !isBroker && message.role == userRole;
+
+    // Unsend tombstone. The row stays so the conversation keeps its shape;
+    // the words and media are gone everywhere, including on a phone that
+    // had already received them.
+    if (message.deleted || message.msgType == 'deleted') {
+      return _DeletedBubble(isMe: isMe);
+    }
 
     // Call log card - rendered full-width/centered like a system message,
     // not as a left/right chat bubble, matching standard messaging-app
@@ -1980,6 +2206,12 @@ class _ChatBubble extends StatelessWidget {
         onTap: () => onUnsentTap!(message),
         child: Opacity(opacity: 0.7, child: bubbleContent),
       );
+    } else if (onLongPress != null && !message.isPending) {
+      bubbleContent = GestureDetector(
+        key: const Key('own-message-menu'),
+        onLongPress: () => onLongPress!(message),
+        child: bubbleContent,
+      );
     }
 
     return Padding(
@@ -2012,6 +2244,11 @@ class _ChatBubble extends StatelessWidget {
                 children: [
                   Text(roleLabel(), style: TextStyle(color: roleColor(),
                       fontSize: 10, fontWeight: FontWeight.w600)),
+                  if (message.editedAt != null) ...[
+                    const SizedBox(width: 4),
+                    const Text('edited', style: TextStyle(color: BrokaColors.textLow,
+                        fontSize: 9, fontStyle: FontStyle.italic)),
+                  ],
                   if (seenTick() != null) ...[
                     const SizedBox(width: 5),
                     seenTick()!,
@@ -2021,6 +2258,40 @@ class _ChatBubble extends StatelessWidget {
             ],
           )),
           if (isMe) const SizedBox(width: 6),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Deleted message tombstone ─────────────────────────────────────────────────
+
+class _DeletedBubble extends StatelessWidget {
+  final bool isMe;
+  const _DeletedBubble({required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: BrokaColors.bgCard.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: BrokaColors.border),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.block_rounded, size: 13, color: BrokaColors.textLow),
+              const SizedBox(width: 6),
+              Text(isMe ? 'You deleted this message' : 'This message was deleted',
+                  style: const TextStyle(color: BrokaColors.textLow,
+                      fontSize: 12, fontStyle: FontStyle.italic)),
+            ]),
+          ),
         ],
       ),
     );

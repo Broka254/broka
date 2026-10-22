@@ -452,3 +452,30 @@ async def test_a_seller_calling_a_buyer_tells_the_buyer_they_missed_it(client):
     assert kwargs["token"] == "fcm-token-buyer"
     assert kwargs["data"]["myRole"] == "buyer"
     assert kwargs["data"]["buyerId"] == buyer
+
+
+# ── Delivered is its own inbox state ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_the_inbox_distinguishes_delivered_from_read(client):
+    """A phone that received the thread but hasn't opened it used to look
+    exactly like a message still sitting on the server: one grey tick."""
+    listing_id, seller, [buyer] = await _people()
+    await _direct(client, buyer, "buyer", listing_id, "is it available?")
+    await _direct(client, seller, "seller", listing_id, "hello", buyer_id=buyer)
+
+    await client.post(f"/negotiate/{listing_id}/mark-delivered",
+                      json={}, headers=_auth(buyer))
+    row = next(t for t in (await client.get(
+        f"/negotiate/inbox/{seller}", headers=_auth(seller))).json()
+        if t["listing_id"] == listing_id)
+    assert row["last_message_delivered"] is True
+    assert row["last_message_seen"] is False
+
+    await client.post(f"/negotiate/{listing_id}/mark-read",
+                      json={}, headers=_auth(buyer))
+    row = next(t for t in (await client.get(
+        f"/negotiate/inbox/{seller}", headers=_auth(seller))).json()
+        if t["listing_id"] == listing_id)
+    assert row["last_message_delivered"] is True
+    assert row["last_message_seen"] is True

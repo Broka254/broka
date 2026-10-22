@@ -271,6 +271,9 @@ def _msg_to_dict(m: NegotiationMessage, uid: str, is_seller: bool) -> dict:
         # how their app, on another device or after a reconnect, recognises
         # the copy it already shows.
         "client_msg_id": getattr(m, "client_msg_id", None),
+        "edited_at":    (m.edited_at.isoformat() + "Z") if getattr(m, "edited_at", None) else None,
+        "deleted_at":   (m.deleted_at.isoformat() + "Z") if getattr(m, "deleted_at", None) else None,
+        "deleted":      getattr(m, "deleted_at", None) is not None,
     }
 
 
@@ -421,6 +424,9 @@ def _upload_response(nm: NegotiationMessage) -> dict:
         "duration_secs": nm.duration_secs,
         "created_at":    (nm.created_at.isoformat() + "Z") if nm.created_at else "",
         "client_msg_id": nm.client_msg_id,
+        "edited_at":     (nm.edited_at.isoformat() + "Z") if getattr(nm, "edited_at", None) else None,
+        "deleted_at":    (nm.deleted_at.isoformat() + "Z") if getattr(nm, "deleted_at", None) else None,
+        "deleted":       getattr(nm, "deleted_at", None) is not None,
     }
 
 
@@ -438,6 +444,21 @@ async def broadcast_text_message(
     key = _thread_key(listing_id, buyer_id)
     if key in _thread_connections and _thread_connections[key]:
         await _broadcast(key, _msg_to_dict(msg, uid, is_seller), exclude_uid=uid)
+
+
+async def broadcast_message_update(
+    listing_id: str, buyer_id: str, payload: dict,
+) -> None:
+    """Tell every open copy of a thread that a message changed.
+
+    Sent to the sender's other devices too, not excluded like a new
+    message: the phone that made the change has already updated its own
+    copy, but the same account on a tablet and the other party both need
+    the edit/delete event to stop showing words that no longer exist.
+    """
+    key = _thread_key(listing_id, buyer_id)
+    if _thread_connections.get(key):
+        await _broadcast(key, payload)
 
 
 async def broadcast_receipt(

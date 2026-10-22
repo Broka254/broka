@@ -225,6 +225,21 @@ class TestInterestNudgeSweep:
         assert refreshed.nudge_sent_at is not None
         assert refreshed.nudge_cancelled_at is None
 
+        # The buyer is told the text actually went out - the follow-through
+        # that makes Zeno feel like a person chasing the seller, not a form.
+        from api.database import NegotiationMessage
+        async with AsyncSessionLocal() as session:
+            note = (await session.execute(
+                select(NegotiationMessage).where(
+                    NegotiationMessage.listing_id == listing_id,
+                    NegotiationMessage.role == "broker",
+                    NegotiationMessage.recipient_role == "buyer",
+                ).order_by(NegotiationMessage.created_at.desc())
+            )).scalars().first()
+        assert note is not None
+        assert "texted" in note.content.lower()
+        assert buyer["user_id"] == note.buyer_id
+
     @pytest.mark.asyncio
     async def test_sweep_defers_during_quiet_hours(self, client, seller):
         """A due nudge at 23:30 EAT is held, not sent - and not lost.

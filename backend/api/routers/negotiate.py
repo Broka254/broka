@@ -50,6 +50,10 @@ from api.domains.listings.handover import IN_PLACE_NOTE, is_deliverable
 from api.routers.auth import _approx_location
 from api.core import gemini, text_guard
 from api.core.geo import haversine_km, round_distance_km
+from api.core.message_visibility import (
+    addressed_to_role_clause, thread_visible_to_role_clause,
+    visible_to_role_clause,
+)
 from api.core.audit import record_audit
 from api.core.config import settings
 from api.domains.pricing.safe_payment import ai_payment_policy
@@ -395,6 +399,12 @@ class MessageOut(BaseModel):
     # standing Buy-Agent request, not the buyer's own initiative -
     # negotiate_screen.dart renders a disclosure label for these (Ch.22).
     is_agent_initiated: bool = False
+    # Edit/unsend state for the sender's own direct messages. A deleted row
+    # comes back with msg_type="deleted" and its content/media cleared;
+    # `deleted` is the explicit flag so a client doesn't have to infer it.
+    edited_at:        Optional[str] = None
+    deleted_at:       Optional[str] = None
+    deleted:          bool          = False
 
 
 # ── Individual AI callers ─────────────────────────────────────────────────────
@@ -1615,6 +1625,19 @@ def _system_for_buyer_reassurance(listing, seller, b_name, dist_str, lang) -> st
     """Zeno's reassurance to the buyer right after relaying their interest
     to the seller - confirms contact was made and sets an expectation."""
     b_first = b_name.split()[0]
+    # Only promise the SMS when the seller has actually opted into texts.
+    # A reassuring lie that a text went out is worse than saying plainly
+    # that Zeno will keep an eye on it.
+    can_text = (getattr(listing, "sms_alerts", True) is not False
+                and bool(getattr(seller, "phone", None)))
+    follow_up = (
+        "If they haven't answered in about five minutes, tell them you'll "
+        "send the seller a text to make sure they see it."
+        if can_text else
+        "If they haven't answered in a few minutes, tell them you'll keep "
+        "checking and let them know as soon as there's news - do not "
+        "promise a text message."
+    )
     return (BROKER_BASE_PROMPT + _context_block(listing, seller, b_name, dist_str)
             + f"""
 
@@ -1624,10 +1647,12 @@ you contacted the seller on their behalf.
 - Confirm you've already reached out to the seller about availability.
 - Ask them to wait for the seller's reply and promise to let them know the
   moment the seller responds.
+- {follow_up}
 - Mention that once the seller confirms, they're welcome to continue in
   direct chat with the seller, or keep talking to you.
 - Address the buyer as "{b_first}".
-- Keep it to 2 sentences max.
+- Keep it to 2 sentences max, warm and specific - not a canned "we'll get
+  back to you" receipt.
 
 LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 """)
@@ -3324,14 +3349,19 @@ async def seller_default_buyer(db: AsyncSession, listing_id: str) -> Optional[st
 def _direct_message_out(m: NegotiationMessage) -> dict:
     """The stored message as the sender's app shows it - the same fields the
     chat socket and /history carry."""
+    deleted_at = getattr(m, "deleted_at", None)
+    edited_at  = getattr(m, "edited_at", None)
     return {
         "id":            m.id,
         "role":          m.role,
-        "content":       m.content or "",
-        "msg_type":      m.msg_type or "text",
+        "content":       "" if deleted_at else (m.content or ""),
+        "msg_type":      "deleted" if deleted_at else (m.msg_type or "text"),
         "via_ai":        False,
         "created_at":    (m.created_at.isoformat() + "Z") if m.created_at else None,
         "client_msg_id": m.client_msg_id,
+        "edited_at":     (edited_at.isoformat() + "Z") if edited_at else None,
+        "deleted_at":    (deleted_at.isoformat() + "Z") if deleted_at else None,
+        "deleted":       deleted_at is not None,
     }
 
 
@@ -3433,6 +3463,137 @@ async def direct_message(
     return {"ok": True, "message": _direct_message_out(direct_msg)}
 
 
+# How long a sender may change what they already sent. The same shape
+# WhatsApp uses, chosen for the same reason: long enough to fix a typo or a
+# wrong price, short enough that the other person isn't reading one message
+# while it quietly changes underneath them. Unsend gets longer because the
+# mistake may only become obvious later (sent the wrong photo, to the wrong
+# person).
+EDIT_WINDOW = _timedelta(minutes=15)
+UNSEND_WINDOW = _timedelta(hours=48)
+
+
+class MessageEditIn(BaseModel):
+    content: str = Field(max_length=CHAT_CONTENT_MAX_CHARS)
+
+
+async def _own_direct_message(
+    db: AsyncSession, message_id: str, current_uid: str,
+) -> tuple[NegotiationMessage, Listing, str]:
+    """Fetch a message and prove the caller is the human who sent it.
+
+    Raises 404/403/400 rather than returning an optional, because every
+    failure here is a refusal the client should show - not a silent no-op.
+    """
+    # visibility-ok: authorizes by sender_id before any content is returned
+    result = await db.execute(
+        select(NegotiationMessage).where(NegotiationMessage.id == message_id)
+    )
+    msg = result.scalar_one_or_none()
+    if msg is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    listing = (await db.execute(
+        select(Listing).where(Listing.id == msg.listing_id)
+    )).scalar_one_or_none()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    actual_role = "seller" if current_uid == listing.seller_id else "buyer"
+    if msg.sender_id != current_uid or msg.role != actual_role:
+        raise HTTPException(status_code=403,
+            detail="You can only change a message you sent.")
+    if bool(getattr(msg, "via_ai", False)):
+        raise HTTPException(status_code=403,
+            detail="Messages sent through Zeno are private to your AI thread and cannot be changed here.")
+    return msg, listing, actual_role
+
+
+@router.patch("/message/{message_id}")
+async def edit_message(
+    message_id: str,
+    payload: MessageEditIn,
+    db: AsyncSession = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """Edit the text of your own direct message, within the edit window.
+
+    Only text: a voice note or photo has no "new version" that can replace
+    the old one without changing what the recipient already received, and
+    a call card is a record of something that happened. The row is not
+    replaced and created_at is untouched, so its position in the thread and
+    the other side's read/delivery ticks stay meaningful.
+    """
+    msg, _, _ = await _own_direct_message(db, message_id, current["id"])
+    if msg.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="This message was deleted.")
+    if (msg.msg_type or "text") != "text":
+        raise HTTPException(status_code=400,
+            detail="Only text messages can be edited.")
+    if not msg.created_at or _dt.utcnow() - msg.created_at > EDIT_WINDOW:
+        raise HTTPException(status_code=400,
+            detail="This message is too old to edit. You can still unsend it within 48 hours.")
+
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    content = content[:CHAT_CONTENT_MAX_CHARS]
+    msg.content = content
+    msg.edited_at = _dt.utcnow()
+    await db.commit()
+    await db.refresh(msg)
+
+    if msg.buyer_id:
+        try:
+            from api.routers.media import broadcast_message_update
+            await broadcast_message_update(msg.listing_id, msg.buyer_id, {
+                "type":      "message_edited",
+                "id":        msg.id,
+                "content":   msg.content,
+                "edited_at": (msg.edited_at.isoformat() + "Z") if msg.edited_at else None,
+            })
+        except Exception as exc:
+            logger.debug("[negotiate] edit broadcast failed: %s", exc)
+    return {"ok": True, "message": _direct_message_out(msg)}
+
+
+@router.delete("/message/{message_id}")
+async def unsend_message(
+    message_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """Unsend your own direct message ("delete for everyone").
+
+    The row stays as a tombstone: hard-deleting it would make every later
+    message shift up, and the other party - who may already have read it -
+    would see a conversation that silently lost a turn. Its content, media
+    and duration are cleared in the same transaction that sets deleted_at,
+    so nothing recoverable is left in the row. Idempotent: a retry after a
+    lost response returns the same tombstone instead of an error.
+    """
+    msg, _, _ = await _own_direct_message(db, message_id, current["id"])
+    if msg.deleted_at is None:
+        if not msg.created_at or _dt.utcnow() - msg.created_at > UNSEND_WINDOW:
+            raise HTTPException(status_code=400,
+                detail="This message is too old to unsend.")
+        msg.deleted_at = _dt.utcnow()
+        msg.msg_type = "deleted"
+        msg.content = None
+        msg.media_url = None
+        msg.duration_secs = None
+        msg.call_type = None
+        await db.commit()
+        await db.refresh(msg)
+        if msg.buyer_id:
+            try:
+                from api.routers.media import broadcast_message_update
+                await broadcast_message_update(msg.listing_id, msg.buyer_id, {
+                    "type":       "message_deleted",
+                    "id":         msg.id,
+                    "deleted_at": (msg.deleted_at.isoformat() + "Z") if msg.deleted_at else None,
+                })
+            except Exception as exc:
+                logger.debug("[negotiate] delete broadcast failed: %s", exc)
+    return {"ok": True, "message": _direct_message_out(msg)}
 
 
 @router.get("/{listing_id}/history", response_model=List[MessageOut])
@@ -3487,6 +3648,17 @@ async def get_history(
         duration   = getattr(m, "duration_secs", None)
         call_type  = getattr(m, "call_type", None)
         created_at = (m.created_at.isoformat() + "Z") if getattr(m, "created_at", None) else None
+        deleted_at = getattr(m, "deleted_at", None)
+        edited_at  = getattr(m, "edited_at", None)
+        deleted    = deleted_at is not None
+        if deleted:
+            # Tombstone: the row and its position stay, the words and media
+            # go. A hard DELETE would rewrite unread counts and leave a hole
+            # in the other party's copy after they had already read it.
+            msg_type, media_url, duration, call_type = "deleted", None, None, None
+        deleted_iso = (deleted_at.isoformat() + "Z") if deleted_at else None
+        edited_iso  = (edited_at.isoformat() + "Z") if edited_at else None
+        content     = "" if deleted else (m.content or "")
 
         if m.role == "broker":
             if m.recipient_role is None or m.recipient_role == actual_role:
@@ -3497,10 +3669,11 @@ async def get_history(
                         or msg_buyer_id is None
                         or msg_buyer_id == effective_buyer_id):
                     filtered.append(
-                        MessageOut(id=m.id, role="broker", content=m.content or "", via_ai=True,
+                        MessageOut(id=m.id, role="broker", content=content, via_ai=True,
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                    call_type=call_type, created_at=created_at,
-                                   is_agent_initiated=bool(getattr(m, "is_agent_initiated", False)))
+                                   is_agent_initiated=bool(getattr(m, "is_agent_initiated", False)),
+                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
                     )
 
         elif m.role == actual_role and (
@@ -3531,10 +3704,11 @@ async def get_history(
                     or msg_buyer_id is None
                     or msg_buyer_id == effective_buyer_id):
                 filtered.append(
-                    MessageOut(id=m.id, role=m.role, content=m.content or "", via_ai=msg_via_ai,
+                    MessageOut(id=m.id, role=m.role, content=content, via_ai=msg_via_ai,
                                msg_type=msg_type, media_url=media_url, duration_secs=duration,
                                call_type=call_type, created_at=created_at,
-                               client_msg_id=getattr(m, "client_msg_id", None))
+                               client_msg_id=getattr(m, "client_msg_id", None),
+                               edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
                 )
 
         elif actual_role == "seller" and m.role == "buyer":
@@ -3552,9 +3726,10 @@ async def get_history(
                         or msg_buyer_id is None
                         or msg_buyer_id == effective_buyer_id):
                     filtered.append(
-                        MessageOut(id=m.id, role="buyer", content=m.content or "", via_ai=msg_via_ai,
+                        MessageOut(id=m.id, role="buyer", content=content, via_ai=msg_via_ai,
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
-                                   call_type=call_type, created_at=created_at)
+                                   call_type=call_type, created_at=created_at,
+                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
                     )
 
         elif actual_role == "buyer" and m.role == "seller":
@@ -3566,9 +3741,10 @@ async def get_history(
                         or msg_buyer_id is None
                         or msg_buyer_id == effective_buyer_id):
                     filtered.append(
-                        MessageOut(id=m.id, role="seller", content=m.content or "", via_ai=msg_via_ai,
+                        MessageOut(id=m.id, role="seller", content=content, via_ai=msg_via_ai,
                                    msg_type=msg_type, media_url=media_url, duration_secs=duration,
-                                   call_type=call_type, created_at=created_at)
+                                   call_type=call_type, created_at=created_at,
+                                   edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
                     )
 
     return filtered
@@ -3607,22 +3783,29 @@ async def _thread_unread_and_seen(
     *, messages_only: bool = False,
 ):
     """
-    Returns (unread_count, was_my_last_message_seen).
+    Returns (unread_count, was_my_last_message_seen, was_my_last_message_delivered).
     unread_count: messages from the counterpart, sent after my own
       last-read watermark (or all of them, if I've never read this thread).
       Call cards count, as the inbox badge always has; `messages_only`
       leaves them out, for a notification that says "N new messages".
     was_my_last_message_seen: only meaningful when I sent the thread's most
       recent message - whether the counterpart's watermark has caught up to it.
+    was_my_last_message_delivered: the same for the earlier DELIVERY
+      watermark. Without it the inbox could only draw "sent" or "read",
+      so a message their phone had already received looked exactly like
+      one still sitting on the server - the state the delivery tick exists
+      to separate.
     """
     counterpart_role = "seller" if my_role == "buyer" else "buyer"
     rows = await db.execute(select(ThreadReadState).where(
         ThreadReadState.listing_id == listing_id,
         ThreadReadState.buyer_id   == buyer_id,
     ))
-    watermarks = {r.role: r.last_read_at for r in rows.scalars().all()}
-    my_last_read          = watermarks.get(my_role)
-    counterpart_last_read = watermarks.get(counterpart_role)
+    marks = {r.role: (r.last_read_at, r.last_delivered_at)
+             for r in rows.scalars().all()}
+    my_last_read, _ = marks.get(my_role, (None, None))
+    counterpart_last_read, counterpart_last_delivered = marks.get(
+        counterpart_role, (None, None))
 
     # BUG FIX (communications audit, 2026-09-14): this counted EVERY message
     # from the counterpart, including their private via_ai=True messages to
@@ -3657,7 +3840,12 @@ async def _thread_unread_and_seen(
         and counterpart_last_read and last_msg.created_at
         and counterpart_last_read >= last_msg.created_at
     )
-    return unread, seen
+    delivered = bool(
+        last_msg is not None and last_msg.role == my_role
+        and counterpart_last_delivered and last_msg.created_at
+        and counterpart_last_delivered >= last_msg.created_at
+    )
+    return unread, seen, delivered
 
 
 async def _unread_by_kind(
@@ -3709,7 +3897,8 @@ async def _unread_by_kind(
     return (
         {
             "id":       msg.id,
-            "content":  (msg.content or "[media]")[:80],
+            "content":  ("Message deleted" if getattr(msg, "deleted_at", None)
+                         else (msg.content or "[media]"))[:80],
             "msg_type": msg.msg_type or "text",
         } if msg else None,
         {
@@ -3750,12 +3939,11 @@ async def _zeno_unread(db: AsyncSession, listing_id: str, buyer_id: str, my_role
     ))
     marks = {r.role: r.last_read_at for r in rows.scalars().all()}
     since = marks.get(_zeno_read_role(my_role)) or marks.get(my_role)
+    # visibility-ok: addressed_to_role_clause keeps only Zeno rows for this viewer
     q = select(func.count(NegotiationMessage.id)).where(
         NegotiationMessage.listing_id == listing_id,
         NegotiationMessage.buyer_id   == buyer_id,
-        NegotiationMessage.role       == "broker",
-        or_(NegotiationMessage.recipient_role.is_(None),
-            NegotiationMessage.recipient_role == my_role),
+        addressed_to_role_clause(my_role),
     )
     if since:
         q = q.where(NegotiationMessage.created_at > since)
@@ -3931,7 +4119,7 @@ async def get_read_status(
             out[f"{row.role}_last_read"] = row.last_read_at.isoformat() + "Z"
         if row.last_delivered_at:
             out[f"{row.role}_last_delivered"] = row.last_delivered_at.isoformat() + "Z"
-    out["unread"], _ = await _thread_unread_and_seen(
+    out["unread"], _, _ = await _thread_unread_and_seen(
         db, listing_id, effective_buyer_id, role, None, messages_only=True)
     out["zeno_unread"] = await _zeno_unread(db, listing_id, effective_buyer_id, role)
     return out
@@ -4020,15 +4208,18 @@ async def get_inbox(
         # recipient_role check in get_history) and test_thread_privacy
         # covers the AI context path. The inbox was the third surface
         # reading the same table and the one nobody filtered.
+        #
+        # The predicate also excludes via_ai=True human rows: a buyer's
+        # private words to Zeno are not the seller's preview, and a
+        # broker row with recipient_role NULL is a legacy shared reply -
+        # previewing it would attribute Zeno's words to the buyer.
+        # visibility-ok: thread_visible_to_role_clause applies recipient_role and via_ai audience rules
         last_result = await db.execute(
             select(NegotiationMessage)
             .where(
                 NegotiationMessage.listing_id == lid,
                 NegotiationMessage.buyer_id == user_id,
-                or_(
-                    NegotiationMessage.recipient_role.is_(None),
-                    NegotiationMessage.recipient_role == "buyer",
-                ),
+                thread_visible_to_role_clause("buyer"),
             )
             .order_by(NegotiationMessage.created_at.desc())
             .limit(1)
@@ -4038,7 +4229,7 @@ async def get_inbox(
             continue
 
         is_on, last_seen_str = _online_str(seller.last_seen)
-        unread, last_seen_flag = await _thread_unread_and_seen(
+        unread, last_seen_flag, last_delivered_flag = await _thread_unread_and_seen(
             db, lid, user_id, "buyer", last_msg)
         zeno_unread = await _zeno_unread(db, lid, user_id, "buyer")
         unread_message, unread_missed_call = (
@@ -4097,6 +4288,11 @@ async def get_inbox(
             "unread_message":     unread_message,
             "unread_missed_call": unread_missed_call,
             "last_message_seen": last_seen_flag,
+            # Delivered is its own step, not "seen in passing": the inbox
+            # used to draw one grey tick until the counterpart READ the
+            # message, so a phone that had received it and a server that
+            # still held it looked identical.
+            "last_message_delivered": last_delivered_flag,
             "time_ago":          _time_ago(last_msg.created_at),
             "my_role":           "buyer",
         })
@@ -4155,15 +4351,19 @@ async def get_inbox(
             # recipient_role check in get_history) and test_thread_privacy
             # covers the AI context path. The inbox was the third surface
             # reading the same table and the one nobody filtered.
+            #
+            # The predicate also excludes via_ai=True human rows: a
+            # seller's private words to Zeno are not the buyer's preview,
+            # and a broker row with recipient_role NULL is a legacy shared
+            # reply - previewing it would attribute Zeno's words to the
+            # seller.
+            # visibility-ok: thread_visible_to_role_clause applies recipient_role and via_ai audience rules
             last_result = await db.execute(
                 select(NegotiationMessage)
                 .where(
                     NegotiationMessage.listing_id == lid,
                     NegotiationMessage.buyer_id == bid,
-                    or_(
-                        NegotiationMessage.recipient_role.is_(None),
-                        NegotiationMessage.recipient_role == "seller",
-                    ),
+                    thread_visible_to_role_clause("seller"),
                 )
                 .order_by(NegotiationMessage.created_at.desc())
                 .limit(1)
@@ -4177,7 +4377,7 @@ async def get_inbox(
             )
             counterpart_name  = buyer_info.name  if buyer_info else "Buyer"
             counterpart_photo = buyer_info.profile_photo if buyer_info else None
-            unread, last_seen_flag = await _thread_unread_and_seen(
+            unread, last_seen_flag, last_delivered_flag = await _thread_unread_and_seen(
                 db, lid, bid, "seller", last_msg)
             zeno_unread = await _zeno_unread(db, lid, bid, "seller")
             unread_message, unread_missed_call = (
@@ -4204,7 +4404,8 @@ async def get_inbox(
                 "counterpart_avatar": counterpart_photo or "",
                 "is_online":         is_on,
                 "last_seen":         last_seen_str,
-                "last_message":      (last_msg.content or "[media]")[:80],
+                "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)
+                                      else (last_msg.content or "[media]"))[:80],
                 "last_role":         last_msg.role,
                 # See the buyer view above.
                 "last_message_id":   last_msg.id,
@@ -4229,6 +4430,7 @@ async def get_inbox(
                 "unread_message":     unread_message,
                 "unread_missed_call": unread_missed_call,
                 "last_message_seen": last_seen_flag,
+                "last_message_delivered": last_delivered_flag,
                 "time_ago":          _time_ago(last_msg.created_at),
                 "my_role":           "seller",
             })

@@ -32,6 +32,7 @@ Map<String, dynamic> _thread({
   String lastType = 'call',
   String lastRole = 'buyer',
   int unread = 0,
+  int zenoUnread = 0,
   String listingId = 'listing-1',
   String buyerId = 'buyer-1',
   Map<String, dynamic>? unreadMessage,
@@ -49,6 +50,7 @@ Map<String, dynamic> _thread({
       'last_role': lastRole,
       'last_message_id': lastId,
       'unread': unread,
+      'zeno_unread': zenoUnread,
       'unread_message': unreadMessage,
       'unread_missed_call': unreadMissedCall,
     };
@@ -107,7 +109,10 @@ void main() {
       (shownCall['platformSpecifics'] as Map?)?['tag'] as String?;
 
   test('a missed call is announced, under the tag the server push uses', () async {
-    inbox = [_thread(lastId: 'call-1')];
+    // A missed call is unread news for the callee; the sweep announces
+    // it only on that signal, not just because the row is new to this
+    // install.
+    inbox = [_thread(lastId: 'call-1', unread: 1)];
     await sweep();
     expect(shown, hasLength(1));
     expect(shown.single['title'], 'Missed call from Ann');
@@ -120,9 +125,9 @@ void main() {
   });
 
   test('a second missed call from the same person is announced too', () async {
-    inbox = [_thread(lastId: 'call-1')];
+    inbox = [_thread(lastId: 'call-1', unread: 1)];
     await sweep();
-    inbox = [_thread(lastId: 'call-2')]; // same words: "cancelled"
+    inbox = [_thread(lastId: 'call-2', unread: 2)]; // same words: "cancelled"
     await sweep();
     expect(shown, hasLength(2));
     // And the same one is not announced twice.
@@ -131,9 +136,9 @@ void main() {
   });
 
   test('the same words twice are two messages', () async {
-    inbox = [_thread(lastId: 'm1', lastMessage: 'ok', lastType: 'text')];
+    inbox = [_thread(lastId: 'm1', lastMessage: 'ok', lastType: 'text', unread: 1)];
     await sweep();
-    inbox = [_thread(lastId: 'm2', lastMessage: 'ok', lastType: 'text')];
+    inbox = [_thread(lastId: 'm2', lastMessage: 'ok', lastType: 'text', unread: 2)];
     await sweep();
     expect(shown.map((s) => s['body']), ['ok', 'ok']);
   });
@@ -152,7 +157,7 @@ void main() {
   test('a chat left open behind the home screen still notifies', () async {
     GlobalPollerService.instance.markScreenActive('listing-1', buyerId: 'buyer-1');
     GlobalPollerService.instance.appInForeground = false;
-    inbox = [_thread(lastId: 'call-9')];
+    inbox = [_thread(lastId: 'call-9', unread: 1)];
     await sweep();
     expect(shown, hasLength(1));
   });
@@ -252,7 +257,7 @@ void main() {
     await sweep();
     expect(shown, isEmpty,
         reason: 'it silenced the first thread and announced the rest');
-    inbox = [_thread(lastId: 'n1', lastMessage: 'new', lastType: 'text')];
+    inbox = [_thread(lastId: 'n1', lastMessage: 'new', lastType: 'text', unread: 1)];
     await sweep();
     expect(shown.map((s) => s['body']), ['new']);
   });
@@ -314,7 +319,7 @@ void main() {
   test("an older message hidden behind Zeno's does not replace it", () async {
     inbox = [_thread(
       lastId: 'z1', lastMessage: 'Ann asks for the last price', lastType: 'text',
-      lastRole: 'broker', unread: 1,
+      lastRole: 'broker', unread: 1, zenoUnread: 1,
       unreadMessage: {'id': 'h1', 'content': 'Last price?', 'msg_type': 'text'},
     )];
     await sweep();

@@ -1502,6 +1502,44 @@ class ApiService {
     }
   }
 
+  /// Edit the text of your own direct message (server enforces the
+  /// 15-minute window). Returns the updated row, or null when the request
+  /// failed - callers should say so rather than show the new words as if
+  /// the other side had received them.
+  static Future<Map<String, dynamic>?> editMessage(
+      String messageId, String content) async {
+    try {
+      final response = await _sendAuthed(() => http.patch(
+        Uri.parse('$baseUrl/negotiate/message/$messageId'),
+        headers: _headers,
+        body: jsonEncode({'content': content}),
+      ).timeout(const Duration(seconds: 15)));
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body);
+      final message = data is Map ? data['message'] : null;
+      return message is Map ? Map<String, dynamic>.from(message) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Unsend ("delete for everyone") your own direct message. The server
+  /// keeps a tombstone and enforces the 48-hour window.
+  static Future<Map<String, dynamic>?> unsendMessage(String messageId) async {
+    try {
+      final response = await _sendAuthed(() => http.delete(
+        Uri.parse('$baseUrl/negotiate/message/$messageId'),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 15)));
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body);
+      final message = data is Map ? data['message'] : null;
+      return message is Map ? Map<String, dynamic>.from(message) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── Media upload (voice notes + images) ────────────────────────────────────
   static Future<Map<String, dynamic>> uploadMedia({
     required String listingId,

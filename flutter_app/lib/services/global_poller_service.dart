@@ -220,8 +220,11 @@ class GlobalPollerService {
     unreadTotal.value = 0;
   }
 
+  String get _inboxScope =>
+      LocalChatStore.inboxListScopeFor(ApiService.currentUserId);
+
   Future<void> _seedUnreadFromCache() async {
-    final cached = await LocalChatStore.load(LocalChatStore.inboxListScope);
+    final cached = await LocalChatStore.load(_inboxScope);
     // Only if no sweep has answered yet - the cache is older than any sweep.
     if (cached.isNotEmpty && unreadTotal.value == 0) {
       unreadTotal.value = unreadIn(cached);
@@ -248,7 +251,7 @@ class GlobalPollerService {
       // stayed empty for the whole session if the user hadn't opened the
       // Inbox tab (with a connection) at least once, even if they'd been
       // actively chatting the whole time.
-      unawaited(LocalChatStore.save(LocalChatStore.inboxListScope,
+      unawaited(LocalChatStore.save(_inboxScope,
           threads.length > 300 ? threads.sublist(0, 300) : threads));
       // The thread on screen is being read as it arrives; its count is
       // about to be zero (the chat marks it read), so don't flash it.
@@ -261,12 +264,12 @@ class GlobalPollerService {
       final byListing = _incomingEndpoint ? await _checkIncomingCall(threads) : false;
       // The first sweep this install ever makes records what every thread
       // holds without announcing any of it - see _checkThreadForNewMessage.
-      final announce = prefs.getBool(_primedKey) ?? false;
+      final announce = _primed(prefs, _primedKeyFor, _primedKey);
       // Likewise what a last message hides, on the first sweep of a build
       // that asks for it: the build before kept one id per thread, so a
       // missed call it announced before a later message would otherwise
       // be announced again, days late, on the first launch after updating.
-      final hiddenPrimed = prefs.getBool(_hiddenPrimedKey) ?? false;
+      final hiddenPrimed = _primed(prefs, _hiddenPrimedKeyFor, _hiddenPrimedKey);
       for (final thread in threads) {
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
@@ -319,8 +322,8 @@ class GlobalPollerService {
         // reason in the V2 pass; this copy was missed.
         if (!byListing) await _checkThreadForIncomingCall(thread);
       }
-      if (!announce) await prefs.setBool(_primedKey, true);
-      if (!hiddenPrimed) await prefs.setBool(_hiddenPrimedKey, true);
+      if (!announce) await prefs.setBool(_primedKeyFor, true);
+      if (!hiddenPrimed) await prefs.setBool(_hiddenPrimedKeyFor, true);
     } catch (_) {
       // Network hiccup or not logged in - just try again next tick.
     } finally {
@@ -328,7 +331,17 @@ class GlobalPollerService {
     }
   }
 
+  String get _accountKey => ApiService.currentUserId ?? 'anon';
+
   String _seenKeyFor(Map<String, dynamic> thread) {
+    final listingId = thread['listing_id'];
+    final buyerId   = thread['buyer_id'] ?? '';
+    return 'global_poll_seen_${_accountKey}_${listingId}_$buyerId';
+  }
+
+  /// The pre-account-scoped key. Read as a fallback so an upgrade does not
+  /// announce a thread's last message again; never written.
+  String _legacySeenKeyFor(Map<String, dynamic> thread) {
     final listingId = thread['listing_id'];
     final buyerId   = thread['buyer_id'] ?? '';
     return 'global_poll_seen_${listingId}_$buyerId';
@@ -363,7 +376,9 @@ class GlobalPollerService {
       final ids = NotificationService.announcedIds(prefs, listingId, buyerId);
       if (ids.isNotEmpty) return ids.contains(id);
     }
-    if (prefs.getString(_seenKeyFor(thread)) != _textSignature(thread)) {
+    final signature = _textSignature(thread);
+    if (prefs.getString(_seenKeyFor(thread)) != signature &&
+        prefs.getString(_legacySeenKeyFor(thread)) != signature) {
       return false;
     }
     if (id != null && id.isNotEmpty) {
@@ -390,7 +405,7 @@ class GlobalPollerService {
   /// against first. The id list alone forgot a missed call still unread
   /// once eight newer ids had pushed it out, and announced it again.
   String _lastOfKindKey(Map<String, dynamic> thread, String kind) =>
-      'global_poll_last_${kind}_${thread['listing_id']}_${thread['buyer_id'] ?? ''}';
+      'global_poll_last_${kind}_${_accountKey}_${thread['listing_id']}_${thread['buyer_id'] ?? ''}';
 
   /// Mark a thread as seen without notifying.
   ///
@@ -413,6 +428,15 @@ class GlobalPollerService {
   static const _primedKey = 'global_poll_primed_v1';
   static const _hiddenPrimedKey = 'global_poll_hidden_primed_v1';
 
+  String get _primedKeyFor => '${_primedKey}_$_accountKey';
+  String get _hiddenPrimedKeyFor => '${_hiddenPrimedKey}_$_accountKey';
+
+  /// An account that has completed a sweep, falling back to the install's
+  /// old key so upgrading doesn't turn the first sweep into a notification
+  /// storm. The fallback only ever suppresses once.
+  bool _primed(SharedPreferences prefs, String key, String legacy) =>
+      (prefs.getBool(key) ?? false) || (prefs.getBool(legacy) ?? false);
+
   Future<void> _checkThreadForNewMessage(
     Map<String, dynamic> thread, SharedPreferences prefs, {
     required bool announce,
@@ -421,6 +445,9 @@ class GlobalPollerService {
     final lastRole     = thread['last_role'] as String? ?? '';
     final myRole       = thread['my_role'] as String? ?? 'buyer';
     final msgType      = thread['last_msg_type'] as String? ?? 'text';
+    final unread       = (thread['unread_count'] as int?) ??
+                         (thread['unread'] as int?) ?? 0;
+    final zenoUnread   = (thread['zeno_unread'] as int?) ?? 0;
     if (lastMessage.isEmpty) return;
     // Don't notify about our own most recent message.
     if (lastRole == myRole) return;
@@ -433,6 +460,18 @@ class GlobalPollerService {
       await prefs.reload();
     } catch (_) {}
     if (await _alreadyHandled(thread, prefs)) return;
+
+    // The inbox's last row is not automatically news. If the server says
+    // nothing here is unread for this viewer, the message was read on
+    // another device, read before sign-in, or is a legacy/shared row: do
+    // not announce it just because this install has never seen its id.
+    // Zeno messages use their own watermark - reading the direct chat must
+    // not suppress a private Zeno reply, and vice versa.
+    final news = lastRole == 'broker' ? zenoUnread : unread;
+    if (news <= 0) {
+      await _recordHandled(thread, prefs);
+      return;
+    }
     await _recordHandled(thread, prefs);
 
     // Suppression is now per-INSTALL, not per-thread.
@@ -497,6 +536,12 @@ class GlobalPollerService {
   }) async {
     final listingId = thread['listing_id'] as String?;
     if (listingId == null) return;
+    final unread = (thread['unread_count'] as int?) ??
+                   (thread['unread'] as int?) ?? 0;
+    // Both entries this can announce are direct-chat rows (the other
+    // person's text and their missed call), so the direct watermark is the
+    // only one that decides whether they are news.
+    if (unread <= 0) return;
     final buyerId = thread['buyer_id'] as String?;
     final lastId = thread['last_message_id'] as String?;
     final fromName = thread['counterpart_name'] as String? ?? 'Someone';

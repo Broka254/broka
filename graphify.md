@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-261 endpoints served by `backend/main.py`. **Auth** is read from each
+263 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 45, optional 4, public 61, token 4, user 147.
+Counts: admin 45, optional 4, public 61, token 4, user 149.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -224,31 +224,33 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
-| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:284) |
+| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:287) |
 | WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:90) |
 | POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:421) |
 | POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:452) |
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4361) |
-| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1729) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4563) |
+| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1754) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4258) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3339) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4460) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3369) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:3941) |
-| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1805) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4129) |
+| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1830) |
+| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3511) |
+| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3559) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4325) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3184) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3439) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3805) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:3849) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:3896) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:3873) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4527) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3209) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3600) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:3993) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4037) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4084) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4061) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -529,6 +531,7 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 - `legal_documents.py` — The legal documents a new BROKA account must accept, and the versions this backend accepts.
 - `media_storage.py` — Where image bytes live: Cloudflare R2, or the database as a fallback.
 - `message_push.py` — Push every chat message to the person it is for, app open or not.
+- `message_visibility.py` — Who a NegotiationMessage row is allowed to reach.
 - `migrations_guide.py` — ⚠️ STATUS AS OF THIS HARDENING PASS (2026-09) — READ THIS FIRST ⚠️
 - `money.py` — Monetary arithmetic that does not drift.
 - `mpesa_stk.py` — M-Pesa Express (STK push) for money that is BROKA's own: listing fees and premium plans.
@@ -605,42 +608,42 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 
 | Table | Model | Defined at |
 |---|---|---|
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:603 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1223 |
-| `bids` | `Bid` | backend/api/database.py:592 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:732 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:610 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1230 |
+| `bids` | `Bid` | backend/api/database.py:599 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:739 |
 | `categories` | `Category` | backend/api/database.py:332 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:340 |
-| `deals` | `Deal` | backend/api/database.py:784 |
+| `deals` | `Deal` | backend/api/database.py:791 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1123 |
+| `disputes` | `Dispute` | backend/api/database.py:1130 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1171 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1242 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1178 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1249 |
 | `interests` | `Interest` | backend/api/database.py:480 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:702 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1018 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:709 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1025 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:994 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1001 |
 | `listings` | `Listing` | backend/api/database.py:349 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:70 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:104 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1053 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1060 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:503 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:290 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1093 |
-| `reviews` | `Review` | backend/api/database.py:1138 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:944 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:923 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1100 |
+| `reviews` | `Review` | backend/api/database.py:1145 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:951 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:930 |
 | `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:171 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
 | `service_communication_versions` | `ServiceCommunicationVersion` | backend/api/models/service_communication.py:93 |
@@ -655,11 +658,11 @@ Counts: admin 45, optional 4, public 61, token 4, user 147.
 | `stores` | `Store` | backend/api/models/store.py:65 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:557 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:717 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:564 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:724 |
 | `users` | `User` | backend/api/database.py:195 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1191 |
-| `wishlists` | `Wishlist` | backend/api/database.py:690 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1198 |
+| `wishlists` | `Wishlist` | backend/api/database.py:697 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
@@ -702,29 +705,29 @@ of a change.
 `task_*` functions in `backend/api/core/workers.py`: the in-process sweep
 (every 5 minutes) and ARQ workers.
 
-- `task_ai_summary` (backend/api/core/workers.py:1943)
+- `task_ai_summary` (backend/api/core/workers.py:1971)
 - `task_backfill_media` (backend/api/core/workers.py:358) — Convert a bounded batch of base64 images into image assets.
 - `task_check_call_expiry` (backend/api/core/workers.py:588) — Backstop cleanup for stale call sessions (api/core/call_state.py).
 - `task_check_deal_timers` (backend/api/core/workers.py:603) — Periodic sweep (see start_periodic_sweep): fires AI-announced auto-resolution timers once their deadline passes, IF the awaited party never…
-- `task_check_dispute_timers` (backend/api/core/workers.py:1583) — Sweep for DisputeTimer objects whose fires_at has passed.
+- `task_check_dispute_timers` (backend/api/core/workers.py:1611) — Sweep for DisputeTimer objects whose fires_at has passed.
 - `task_check_interest_nudges` (backend/api/core/workers.py:1120) — Periodic sweep (see start_periodic_sweep): if a buyer expressed interest in a listing and the seller hasn't replied within ~5 minutes, send…
-- `task_close_due_auctions` (backend/api/core/workers.py:2101) — Close auctions whose ends_at has passed, and hand winners to Deal.
+- `task_close_due_auctions` (backend/api/core/workers.py:2129) — Close auctions whose ends_at has passed, and hand winners to Deal.
 - `task_collect_abandoned_media` (backend/api/core/workers.py:367) — Remove uploads no listing, store or profile ever used, a week after they were made.
 - `task_expire_buy_agent_watches` (backend/api/core/workers.py:375) — End Zeno watches older than BUY_AGENT_WATCH_DAYS and tell their buyers.
 - `task_expire_featured_listings` (backend/api/core/workers.py:567)
-- `task_fraud_sweep` (backend/api/core/workers.py:1959)
-- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2276) — Release listings whose winner never paid.
-- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2194) — One reminder per auction, to everyone who has bid on it.
+- `task_fraud_sweep` (backend/api/core/workers.py:1987)
+- `task_lapse_unpaid_auction_wins` (backend/api/core/workers.py:2304) — Release listings whose winner never paid.
+- `task_notify_auctions_ending_soon` (backend/api/core/workers.py:2222) — One reminder per auction, to everyone who has bid on it.
 - `task_process_service_communications` (backend/api/core/workers.py:542) — One bounded scheduler/delivery pass.
-- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1363) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
+- `task_recompute_dcr_and_leaks` (backend/api/core/workers.py:1391) — Volume 2 §3.7: nightly leak-flagging + DCR/rank_score recompute.
 - `task_recompute_trust_score` (backend/api/core/workers.py:505)
 - `task_reconcile_econfirm_escrows` (backend/api/core/workers.py:300) — Periodic sweep (Phase 8 of the E-Confirm integration): E-Confirm's callbacks aren't exposed to BROKA (per the integration spec), so this is…
-- `task_reconcile_mpesa` (backend/api/core/workers.py:1982) — Settle pending STK prompts from provider evidence, never from age.
+- `task_reconcile_mpesa` (backend/api/core/workers.py:2010) — Settle pending STK prompts from provider evidence, never from age.
 - `task_reconcile_zetupay_payments` (backend/api/core/workers.py:343) — Ask ZetuPay about BROKA's own charges (listing fees, plans, boosts, badges) whose webhook never came - a lost delivery, or a prompt that ti…
-- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1570) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
-- `task_refresh_store_ratings` (backend/api/core/workers.py:1329) — Recompute every store's rating, and write today's snapshot.
-- `task_retrain_ml_models` (backend/api/core/workers.py:1287) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
-- `task_send_email_notification` (backend/api/core/workers.py:1938)
+- `task_refresh_dispute_summary_cache` (backend/api/core/workers.py:1598) — Keeps the platform-wide dispute-resolution summary (Volume 2 §2.3) warm.
+- `task_refresh_store_ratings` (backend/api/core/workers.py:1357) — Recompute every store's rating, and write today's snapshot.
+- `task_retrain_ml_models` (backend/api/core/workers.py:1315) — Volume 2 §4.3's weekly retrain job, plus §4.4's "start logging collecting features from day one" (feature_extraction's queries run regardle…
+- `task_send_email_notification` (backend/api/core/workers.py:1966)
 - `task_send_fcm_notification` (backend/api/core/workers.py:549)
 - `task_sync_listing_stock` (backend/api/core/workers.py:287) — Show again a listing whose deals were refunded or cancelled, and mark one sold once every unit has been paid out (listings/stock.py).
 
@@ -737,7 +740,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-123 files in `backend/tests/`.
+124 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -804,6 +807,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_media_cleanup.py` — Uploads nothing ever used are removed; everything else is kept.
 - `test_media_hardening.py` — Image processing and the media backfill under hostile or broken input.
 - `test_media_recovery.py` — Image sizes whose object is missing, and asset records that are damaged.
+- `test_message_edit_unsend.py` — Edit and unsend for direct messages.
 - `test_message_push_ordering.py` — Message-push ordering: a slow first send must not land after the fresh one.
 - `test_message_visibility_guard.py` — Structural guard: no NegotiationMessage read may leak across the audience line.
 - `test_mpesa_oauth_redaction.py` — Daraja OAuth diagnostics must never become a credential leak.

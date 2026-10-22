@@ -151,21 +151,30 @@ def test_visibility_markers_state_a_reason():
     )
 
 
-@pytest.mark.parametrize("surface,needle", [
-    ("inbox buyer branch",  'NegotiationMessage.recipient_role == "buyer"'),
-    ("inbox seller branch", 'NegotiationMessage.recipient_role == "seller"'),
+@pytest.mark.parametrize("surface,role", [
+    ("inbox buyer branch",  "buyer"),
+    ("inbox seller branch", "seller"),
 ])
-def test_inbox_keeps_its_audience_filter(surface, needle):
+def test_inbox_keeps_its_audience_filter(surface, role):
     """Pins the specific fix, so a refactor cannot quietly drop it.
 
     The structural test above would still catch its removal, but this names
     the surface that actually leaked and fails with a message that says so.
+    The rule lives in api/core/message_visibility so the inbox and the push
+    builder cannot drift apart.
     """
     src = (API_ROOT / "routers" / "negotiate.py").read_text()
-    assert needle in src, (
-        f"get_inbox lost its {surface} recipient filter. This is the exact "
+    assert f'thread_visible_to_role_clause("{role}")' in src, (
+        f"get_inbox lost its {surface} audience filter. This is the exact "
         f"query that showed a seller a message Zeno had written to the buyer."
     )
+
+
+def test_push_and_inbox_share_the_audience_rule():
+    """One definition of who may see a row - not two that can disagree."""
+    push_src = (API_ROOT / "core" / "message_push.py").read_text()
+    assert "from api.core.message_visibility import visible_to_role_clause" in push_src
+    assert "_visible_to" in push_src
 
 
 def test_dispute_arbitration_is_scoped_to_one_buyer():

@@ -537,6 +537,13 @@ class NegotiationMessage(Base):
     # instead of storing the message twice. Unique per sender (index below);
     # NULL on everything else, and NULLs never collide.
     client_msg_id  = Column(String(64), nullable=True)
+    # Edit/unsend state for the sender's own DIRECT messages. Both NULL on
+    # Zeno's rows and on messages that have not been changed. A deleted row
+    # is kept as a tombstone - removing it outright would shift every later
+    # unread count and make the thread look as if the message never existed,
+    # which is exactly what a recipient who already saw it needs to know.
+    edited_at      = Column(DateTime, nullable=True)
+    deleted_at     = Column(DateTime, nullable=True)
 
     # (listing_id, buyer_id) is the thread-identity pair filtered on
     # throughout negotiate.py (history, inbox, deal-status) and
@@ -1645,6 +1652,10 @@ async def _init_db_impl():
         migrations = [
             # v2.x columns
             "ALTER TABLE thread_read_state ADD COLUMN last_delivered_at DATETIME",
+            # Edit/unsend (2026-10-21): tombstones keep the row so unread
+            # watermarks and replies stay anchored to the conversation.
+            "ALTER TABLE negotiation_messages ADD COLUMN edited_at DATETIME",
+            "ALTER TABLE negotiation_messages ADD COLUMN deleted_at DATETIME",
             "ALTER TABLE users ADD COLUMN gender VARCHAR",
             "ALTER TABLE users ADD COLUMN apns_voip_token VARCHAR",
             "ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL",

@@ -46,11 +46,12 @@ class _InboxScreenState extends State<InboxScreen> {
   // Currently expanded listing group (null = all collapsed)
   String? _expanded;
 
-  // Single on-device cache slot for the whole inbox list (there's only one
-  // inbox per signed-in user, unlike per-thread message caching which needs
-  // a key per conversation). Shared with GlobalPollerService, which keeps
-  // this warm in the background - see LocalChatStore.inboxListScope.
-  static const _inboxScope = LocalChatStore.inboxListScope;
+  // Per-account inbox cache. Shared with GlobalPollerService, which keeps
+  // this warm in the background - see LocalChatStore.inboxListScopeFor.
+  // The old single slot showed the previous account's conversations when
+  // someone else signed in on the same phone.
+  String get _inboxScope =>
+      LocalChatStore.inboxListScopeFor(ApiService.currentUserId);
 
   @override
   void initState() {
@@ -515,6 +516,8 @@ class _ThreadRow extends StatelessWidget {
     final lastRole   = thread['last_role']     as String;
     final unread     = (thread['unread']       as int?) ?? 0;
     final lastSeen   = (thread['last_message_seen'] as bool?) ?? false;
+    final lastDelivered =
+        (thread['last_message_delivered'] as bool?) ?? false;
     final timeAgo    = thread['time_ago']      as String;
     final myRole     = thread['my_role']       as String;
     final sellerName = thread['seller_name']   as String?;
@@ -605,10 +608,21 @@ class _ThreadRow extends StatelessWidget {
                   fontWeight: unread > 0 ? FontWeight.w500 : FontWeight.normal),
                   maxLines: 1, overflow: TextOverflow.ellipsis)),
               if (lastRole == myRole)
+                // The inbox used to show one grey tick until the other
+                // person READ the message, which made "their phone has it"
+                // and "the server still has it" look identical. Three
+                // states now, matching the chat: single = sent, muted
+                // double = delivered, accent double = read.
                 Icon(
-                  lastSeen ? Icons.done_all_rounded : Icons.done_rounded,
+                  (lastSeen || lastDelivered)
+                      ? Icons.done_all_rounded
+                      : Icons.done_rounded,
                   size: 13,
-                  color: lastSeen ? BrokaColors.neonBlue : BrokaColors.textLow,
+                  color: lastSeen
+                      ? BrokaColors.neonBlue
+                      : (lastDelivered
+                          ? BrokaColors.textMid
+                          : BrokaColors.textLow),
                 ),
             ]),
           ])),

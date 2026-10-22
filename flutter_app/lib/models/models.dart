@@ -76,6 +76,10 @@ class Message {
   // message before sending it, so the chat can match the copy it already
   // shows (backend NegotiationMessage.client_msg_id).
   final String? clientMsgId;
+  // Edit/unsend state for direct messages. `deleted` rows carry no content
+  // or media; the chat draws a tombstone in their place.
+  final DateTime? editedAt;
+  final bool deleted;
 
   const Message({
     required this.role,
@@ -93,6 +97,8 @@ class Message {
     this.zenoAction,
     this.isAgentInitiated = false,
     this.clientMsgId,
+    this.editedAt,
+    this.deleted = false,
   });
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -110,6 +116,10 @@ class Message {
     zenoAction: (j['zeno_action'] as Map?)?.cast<String, dynamic>(),
     isAgentInitiated: (j['is_agent_initiated'] as bool?) ?? false,
     clientMsgId:     j['client_msg_id']    as String?,
+    editedAt:        j['edited_at'] != null
+        ? DateTime.tryParse(j['edited_at'] as String)
+        : null,
+    deleted:         (j['deleted'] as bool?) ?? j['msg_type'] == 'deleted',
     createdAt:       j['created_at'] != null
         ? DateTime.tryParse(j['created_at'] as String)
         : null,
@@ -134,6 +144,8 @@ class Message {
     'call_type': callType,
     'created_at': createdAt?.toIso8601String(),
     'client_msg_id': clientMsgId,
+    'edited_at': editedAt?.toIso8601String(),
+    'deleted': deleted,
   };
 }
 

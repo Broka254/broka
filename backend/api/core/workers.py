@@ -1281,7 +1281,35 @@ async def _fire_availability_nudge(session, interest) -> bool:
     if not sent:
         # Not delivered, so not spent; the next sweep tries again.
         await entitlements.release(session, seller.id, entitlements.Feature.SMS)
-    return sent
+        return False
+
+    # Close the loop with the buyer. The SMS is real and already sent, so
+    # telling them it happened is a fact, not a reassuring fiction - and a
+    # person who promised to chase the seller and then reports back is what
+    # makes Zeno feel like an intermediary rather than a form. The row is
+    # addressed to the buyer only (recipient_role), so it never appears in
+    # the seller's thread or notifications, and the usual session hook
+    # pushes it if their app is closed.
+    try:
+        from api.database import NegotiationMessage
+        seller_first = (seller.name or "the seller").split()[0]
+        session.add(NegotiationMessage(
+            listing_id=listing.id,
+            sender_id="broker",
+            role="broker",
+            recipient_role="buyer",
+            content=(f"I've just texted {seller_first} to make sure they see "
+                     f"your message about {listing.name}. I'll tell you the "
+                     f"moment they answer."),
+            buyer_id=interest.buyer_id,
+            msg_type="text",
+        ))
+    except Exception as exc:
+        # The SMS went; failing to write the note must not unmark the
+        # nudge or make the sweep send a second text.
+        logger.warning("[sweep] buyer follow-up message failed for interest %s: %s",
+                       interest.id, exc)
+    return True
 
 
 async def task_retrain_ml_models() -> None:

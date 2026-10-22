@@ -30,6 +30,13 @@ class LocalChatStore {
   /// is alive, since it already fetches the same data for notifications).
   static const String inboxListScope = 'inbox_list';
 
+  /// The inbox cache slot for one signed-in account. The shared
+  /// `inboxListScope` above predates multi-account handling: the next
+  /// person to sign in on the same phone saw the previous user's thread
+  /// list - names, previews and unread counts - before the network answered.
+  static String inboxListScopeFor(String? userId) =>
+      'inbox_list_${userId ?? 'anon'}';
+
   /// Cap how many messages we persist per thread so a very long-lived
   /// conversation can't make the on-device cache grow without bound.
   static const int _maxCached = 300;

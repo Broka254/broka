@@ -235,3 +235,65 @@ async def test_read_status_gives_the_callers_own_unread_counts(client):
     s = (await client.get(f"/negotiate/{listing_id}/read-status",
                           params={"buyer_id": buyer}, headers=_auth(seller))).json()
     assert s["unread"] == 0
+
+
+# ── Private Zeno traffic is not the other side's inbox preview ───────────────
+
+async def _human_says(listing_id, buyer_id, role, sender_id, content,
+                      *, via_ai=False, minutes_ago=0.0):
+    async with AsyncSessionLocal() as db:
+        db.add(NegotiationMessage(
+            listing_id=listing_id, sender_id=sender_id, role=role,
+            recipient_role=None if via_ai else ("seller" if role == "buyer" else "buyer"),
+            content=content, buyer_id=buyer_id, via_ai=via_ai,
+            created_at=_ago(minutes_ago),
+        ))
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_buyers_private_zeno_message_is_not_the_sellers_preview(client):
+    listing_id, seller, buyer = await _thread()
+    await _human_says(listing_id, buyer, "buyer", buyer,
+                      "my real max is 90000, don't tell him", via_ai=True, minutes_ago=1)
+
+    s = await _row(client, seller, listing_id)
+    assert s["last_message"] == "hi"
+    assert s["last_role"] == "buyer"
+    # The private row is still nowhere in the seller's notification count.
+    assert s["unread"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_sellers_private_zeno_message_is_not_the_buyers_preview(client):
+    listing_id, seller, buyer = await _thread()
+    await _human_says(listing_id, buyer, "seller", seller,
+                      "this buyer is wasting my time", via_ai=True, minutes_ago=1)
+
+    b = await _row(client, buyer, listing_id)
+    assert b["last_message"] == "hi"
+    assert b["last_role"] == "buyer"
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_broker_row_with_no_recipient_is_not_previewed(client):
+    listing_id, seller, buyer = await _thread()
+    async with AsyncSessionLocal() as db:
+        db.add(NegotiationMessage(
+            listing_id=listing_id, sender_id="broker", role="broker",
+            recipient_role=None, content="legacy shared Zeno reply",
+            buyer_id=buyer, via_ai=True, created_at=_ago(1),
+        ))
+        await db.commit()
+
+    s = await _row(client, seller, listing_id)
+    b = await _row(client, buyer, listing_id)
+    assert s["last_message"] == "hi"
+    assert b["last_message"] == "hi"
+
+
+def test_a_legacy_broker_row_is_not_pushed_to_either_side():
+    from api.core.message_push import recipients_of
+    assert recipients_of("broker", None, True, "text") == set()
+    assert recipients_of("broker", "buyer", True, "text") == {"buyer"}
+    assert recipients_of("broker", "seller", True, "text") == {"seller"}

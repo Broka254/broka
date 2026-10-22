@@ -82,8 +82,10 @@ def recipients_of(role: str, recipient_role: Optional[str], via_ai: Optional[boo
     """Which side(s) of the thread a new message is news for - /history's
     rules (negotiate.get_history):
 
-      * Zeno's message to one side is for that side; one with no
-        recipient_role is shown to both.
+      * Zeno's message to one side is for that side. A broker row with no
+        recipient_role is a legacy shared reply: nobody knows which side
+        it was written to, so it is not news for either - the old "both"
+        rule pushed private relay copies of one side to the other.
       * A buyer's or seller's DIRECT message (via_ai false) is for the
         other side. Their words to Zeno (via_ai true) are private.
       * A call card is not a message: calls send their own missed-call push.
@@ -91,7 +93,7 @@ def recipients_of(role: str, recipient_role: Optional[str], via_ai: Optional[boo
     if role == "broker":
         if recipient_role in _ROLES:
             return {recipient_role}
-        return set(_ROLES)
+        return set()
     if role in _ROLES and not via_ai and (msg_type or "text") != "call":
         return {"seller" if role == "buyer" else "buyer"}
     return set()
@@ -195,23 +197,17 @@ async def drain() -> None:
 
 def _visible_to(role: str, listing_id: str, buyer_id: str):
     """Messages in this thread that are news for `role`: the other side's
-    direct messages, and Zeno's to this side."""
-    counterpart = "seller" if role == "buyer" else "buyer"
+    direct messages, and Zeno's to this side. The audience rule itself is
+    shared with the inbox (api.core.message_visibility) so the preview and
+    the push can never disagree about a private Zeno reply."""
+    from api.core.message_visibility import visible_to_role_clause
+
     M = NegotiationMessage
     return and_(
         M.listing_id == listing_id,
         M.buyer_id == buyer_id,
-        or_(
-            and_(
-                M.role == counterpart,
-                or_(M.via_ai.is_(False), M.via_ai.is_(None)),
-                or_(M.msg_type.is_(None), M.msg_type != "call"),
-            ),
-            and_(
-                M.role == "broker",
-                or_(M.recipient_role.is_(None), M.recipient_role == role),
-            ),
-        ),
+        visible_to_role_clause(role),
+        or_(M.msg_type.is_(None), M.msg_type != "call"),
     )
 
 
@@ -243,7 +239,7 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
 
     # Call cards left out: "2 new messages" for one text and one missed
     # call announced a message that does not exist (the call has its own).
-    direct_unread, _ = await _thread_unread_and_seen(
+    direct_unread, _, _ = await _thread_unread_and_seen(
         db, listing_id, buyer_id, role, None, messages_only=True)
     zeno_unread = await _zeno_unread(db, listing_id, buyer_id, role)
     count = int(direct_unread or 0) + int(zeno_unread or 0)

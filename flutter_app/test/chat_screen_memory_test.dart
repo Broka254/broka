@@ -299,9 +299,11 @@ void main() {
       Future<void> sweep() =>
           http.runWithClient(() => GlobalPollerService.instance.catchUp(), () => client);
 
-      inbox = [{..._thread(), 'last_role': 'broker', 'last_message': 'He said yes', 'last_message_id': 'z1'}];
+      // The sweep announces a row only when the right watermark says it is
+    // unread: Zeno's via zeno_unread, a human's via unread.
+    inbox = [{..._thread(zenoUnread: 1), 'last_role': 'broker', 'last_message': 'He said yes', 'last_message_id': 'z1'}];
       await sweep();
-      inbox = [{..._thread(), 'last_role': 'seller', 'last_message': 'ok', 'last_message_id': 's1'}];
+      inbox = [{..._thread(unread: 1), 'last_role': 'seller', 'last_message': 'ok', 'last_message_id': 's1'}];
       await sweep();
 
       final payloads = [for (final s in shown) jsonDecode(s['payload'] as String) as Map];
