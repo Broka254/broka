@@ -4,31 +4,37 @@
 //
 // The seller's record (rating, deals done) is not on this card: a buyer
 // judging a shop reads it in Store details. Where the shop is matters
-// here, so "View on map" sits in the chip row, and the distance is shown
+// here, so the map action sits in the chip row, and the distance is shown
 // whenever it is known - a shop 40 km away is a fact, not something to
 // hide.
 //
-// Shared by the directory and a category's screen of its own
-// (store_category_screen.dart). The directory opts into [StoreCard.wide] -
-// one shop per row, picture left, facts right (2026-10-22) - and every other
-// caller keeps the tall default card.
+// One card, everywhere (2026-10-22). The card is laid on its side: the
+// shop's picture fills the left of the row and the facts a buyer scans sit
+// in a column beside it. The directory, a category's own screen and Stores
+// near you all draw this one card. There used to be a second, tall
+// presentation - picture on top, facts underneath - that those two screens
+// kept while the directory moved on, so the same shop looked like a
+// different shop depending on which list it was reached from. A variant
+// nothing can opt into is how that drift happened; now there is only this.
+//
+// Tall cards also cost the facts their lines: in a single column the
+// picture had to be a fixed band, and at large system text the name and
+// place competed for what was left. Beside the picture each fact gets a
+// line of its own, and the row is wider than it is tall - the picture the
+// size of a shopfront, which is what comparing shops needs.
 //
 // Was a 52dp circle with the store's initial and three lines of small
 // text - the same card as a trader's, and nothing to show it was a shop.
 //
 // Visual upgrade (2026-09-30), onto Home's product-card system: the thin
 // violet-to-blue edge and card gradient instead of a flat border, the
-// picture taller, the store's logo as its sign where the picture meets the
-// details, the seller's record as chips, and a card that sinks a little
-// under a finger. Visit store was a 42dp bar across the whole card - the
-// loudest thing on it, louder than the shop's own picture, when the whole
-// card already opens the store. It is now a pill sized to its words, at
-// the foot beside the product count, where the thumb lands.
+// store's logo as its sign where the picture meets the details, the shop's
+// record as a rating chip, and a card that sinks a little under a finger.
 //
-// The sign is always there when there's a shopfront (2026-10-16): the
-// store's own logo, or BROKA's mark when the owner uploaded none - the
-// same fallback the web storefront and My Store already show. Only a card
-// whose picture IS the logo leaves the sign off, or the logo shows twice.
+// The sign is always there when there's a shopfront: the store's own logo,
+// or BROKA's mark when the owner uploaded none - the same fallback the web
+// storefront and My Store already show. Only a card whose picture IS the
+// logo leaves the sign off, or the logo shows twice.
 import 'package:flutter/material.dart';
 
 import '../../../../main.dart';
@@ -42,22 +48,13 @@ class StoreCard extends StatefulWidget {
   final Store store;
   final VoidCallback onTap;
 
-  /// Draw the directory's wide card instead of the tall shopfront card.
-  ///
-  /// The default stays the tall, single-column shopfront used by the nearby
-  /// and category screens. This opt-in variant lays the picture down the
-  /// left of the card and the facts beside it, so one shop takes a row;
-  /// keeping it explicit means changing the directory's density cannot
-  /// silently restyle a screen that already depends on the larger card.
-  final bool wide;
-
   /// Opens the store's details screen (reviews, seller record, location).
-  /// A chip on the picture, not another bar: the card itself still opens
-  /// the store, and this is the secondary thing a buyer does from here.
-  /// Null hides it.
+  /// A square action at the foot of the facts column, not another bar: the
+  /// card itself still opens the store, and this is the secondary thing a
+  /// buyer does from here. Null hides it.
   final VoidCallback? onDetails;
 
-  /// Opens the store on the map. Null hides the Map action.
+  /// Opens the store on the map. Null hides the map action.
   final VoidCallback? onMap;
 
   const StoreCard({
@@ -66,7 +63,6 @@ class StoreCard extends StatefulWidget {
     required this.onTap,
     this.onDetails,
     this.onMap,
-    this.wide = false,
   });
 
   @override
@@ -80,354 +76,13 @@ class _StoreCardState extends State<StoreCard> {
     if (_down != down) setState(() => _down = down);
   }
 
-  static const _pictureHeight = 168.0;
-  static const _logoSize = 62.0;
-
   @override
   Widget build(BuildContext context) {
-    if (widget.wide) return _buildWide(context);
-
     final store = widget.store;
     // The distance a buyer wants first, at any range: a shop 40 km away is
     // a fact worth knowing, not one to hide because it isn't "near".
     // Unknown stays unknown - nothing is shown at all (there is no honest
     // number to invent).
-    final distLabel = store.anyDistanceLabel;
-    final owner = store.owner;
-    final colors = CategoryVisuals.gradientFor(store.category);
-    final picture = store.coverSource ?? store.logo?.medium ?? store.logoUrl;
-    final logo = store.logoSource;
-    // The logo as a sign only when the picture is something else: a card
-    // whose only image is the logo would show it twice. No cover at all
-    // still shows BROKA's mark full width; with one, the sign is BROKA's
-    // mark until the owner uploads their own.
-    final showLogo = store.coverSource != null;
-    final products =
-        '${store.listingCount} product${store.listingCount == 1 ? '' : 's'}';
-    // The pill shows whenever the screen wired a map action: with a real
-    // pin it opens the in-app map, and without one the action falls back
-    // to the shop's place (openStoreMap).
-    final canMap = widget.onMap != null;
-
-    final gradient = BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          BrokaColors.gold.withOpacity(0.45),
-          BrokaColors.bgCard,
-          colors.last.withOpacity(0.40),
-        ],
-      ),
-    );
-
-    // A shop with no picture at all shows BROKA's mark, not its category
-    // emoji: the emoji read as clip-art standing in for a photo, and the
-    // mark is what the store's own logo falls back to everywhere else.
-    final fallback = DecoratedBox(
-      decoration: gradient,
-      child: Center(
-        child: SizedBox(
-          width: 64,
-          height: 64,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: const BrokaDefaultLogo(),
-          ),
-        ),
-      ),
-    );
-
-    // The slot a picture downloads into, or lands in when its URL fails.
-    // It carries the mark only when the card has no sign: with a cover the
-    // sign below the picture already wears BROKA's mark, and repeating it
-    // here put two marks on one shopfront (the regression the directory
-    // test caught after BrokaImage started drawing caller placeholders
-    // while loading).
-    final pictureFallback =
-        showLogo ? DecoratedBox(decoration: gradient) : fallback;
-
-    return Semantics(
-      button: true,
-      label: 'Visit ${store.name}',
-      child: GestureDetector(
-        key: Key('store-card-${store.id}'),
-        onTap: widget.onTap,
-        onTapDown: (_) => _press(true),
-        onTapUp: (_) => _press(false),
-        onTapCancel: () => _press(false),
-        child: AnimatedScale(
-          scale: _down && !BrokaMotion.reduced(context) ? 0.98 : 1.0,
-          duration: BrokaMotion.instant,
-          curve: Curves.easeOut,
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 16),
-            padding: const EdgeInsets.all(1.2),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  BrokaColors.gold.withOpacity(0.55),
-                  BrokaColors.neonBlue.withOpacity(0.40)
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                    color: BrokaColors.gold.withOpacity(0.12), blurRadius: 18),
-              ],
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: BrokaColors.cardGradient,
-                borderRadius: BorderRadius.circular(19),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SizedBox(
-                      height: _pictureHeight,
-                      child: Stack(fit: StackFit.expand, children: [
-                        picture == null
-                            ? fallback
-                            : StoreMediaImage(
-                                dataUri: picture,
-                                placeholderBuilder: (_) => pictureFallback,
-                              ),
-                        // Dark at the top and foot, so the chips on the picture
-                        // stay legible whatever the photo is.
-                        const DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Color(0x66000000),
-                                Colors.transparent,
-                                Color(0xCC0A1220)
-                              ],
-                              stops: [0, 0.42, 1],
-                            ),
-                          ),
-                        ),
-                        if (owner != null &&
-                            (owner.online || owner.lastActive != null))
-                          Positioned(
-                            top: 10,
-                            left: 10,
-                            child: _Pill(
-                              key: const Key('store-card-presence'),
-                              dot: owner.online
-                                  ? BrokaColors.success
-                                  : BrokaColors.textMid,
-                              label: owner.online
-                                  ? 'Online now'
-                                  : owner.lastActive!,
-                              color: owner.online
-                                  ? BrokaColors.success
-                                  : Colors.white70,
-                            ),
-                          ),
-                        if (store.categories.isNotEmpty)
-                          Positioned(
-                            right: 10,
-                            bottom: 10,
-                            child: _Pill(
-                              // The primary, plus how many more: the full set
-                              // belongs on the store's own page, not a caption.
-                              label:
-                                  '${CategoryVisuals.emojiFor(store.categories.first)}  '
-                                  '${store.categories.first}'
-                                  '${store.categories.length > 1 ? ' +${store.categories.length - 1}' : ''}',
-                              color: Colors.white,
-                            ),
-                          ),
-                        if (distLabel != null)
-                          Positioned(
-                            left: 10,
-                            bottom: 10,
-                            child: _DistancePill(
-                              key: const Key('store-card-distance'),
-                              label: distLabel,
-                            ),
-                          ),
-                      ]),
-                    ),
-                    // The logo sits over the picture's lower edge - the sign on
-                    // the shop front - so the Stack lets it paint above itself.
-                    Stack(clipBehavior: Clip.none, children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: EdgeInsets.only(
-                                    left: showLogo ? _logoSize + 12 : 0),
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(children: [
-                                        Flexible(
-                                          child: Text(store.name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                  color: BrokaColors.textHigh,
-                                                  fontWeight: FontWeight.w800,
-                                                  fontSize: 17.5,
-                                                  letterSpacing: -0.2)),
-                                        ),
-                                        if (owner?.verified ?? false) ...[
-                                          const SizedBox(width: 5),
-                                          const Icon(Icons.verified_rounded,
-                                              size: 17,
-                                              color: BrokaColors.success,
-                                              semanticLabel: 'Verified seller'),
-                                        ],
-                                        if (store.rating != null) ...[
-                                          const SizedBox(width: 8),
-                                          _RatingChip(
-                                            key:
-                                                Key('store-rating-${store.id}'),
-                                            rating: store.rating!,
-                                            reviews: store.reviewCount,
-                                          ),
-                                        ],
-                                      ]),
-                                      if (store.locationLine != null ||
-                                          distLabel != null) ...[
-                                        const SizedBox(height: 4),
-                                        Row(children: [
-                                          const Icon(Icons.location_on_outlined,
-                                              size: 15,
-                                              color: BrokaColors.gold),
-                                          const SizedBox(width: 4),
-                                          Flexible(
-                                              child: Text.rich(
-                                                  TextSpan(children: [
-                                                    if (store.locationLine !=
-                                                        null)
-                                                      TextSpan(
-                                                          text: store
-                                                              .locationLine!,
-                                                          style: const TextStyle(
-                                                              color: BrokaColors
-                                                                  .textMid,
-                                                              fontSize: 13)),
-                                                    if (store.locationLine !=
-                                                            null &&
-                                                        distLabel != null)
-                                                      const TextSpan(
-                                                          text: ' · ',
-                                                          style: TextStyle(
-                                                              color: BrokaColors
-                                                                  .textMid,
-                                                              fontSize: 13)),
-                                                    if (distLabel != null)
-                                                      TextSpan(
-                                                          text: distLabel,
-                                                          style: const TextStyle(
-                                                              color: BrokaColors
-                                                                  .gold,
-                                                              fontSize: 13,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700)),
-                                                  ]),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis)),
-                                        ]),
-                                      ],
-                                    ]),
-                              ),
-                              // At least the logo's overhang, so the chips never run
-                              // under it when there's no location line.
-                              SizedBox(
-                                  height: showLogo && store.locationLine == null
-                                      ? 16
-                                      : 10),
-                              Wrap(spacing: 6, runSpacing: 6, children: [
-                                // The shop's place on the map, where the seller's
-                                // record used to be. "View on map" is a real action
-                                // and most people missed the small Map pill at the
-                                // foot; the seller's record lives in Store details,
-                                // where a buyer goes when they are judging a shop.
-                                if (canMap)
-                                  _MapPill(
-                                    key: Key('store-map-${store.id}'),
-                                    onTap: widget.onMap!,
-                                  ),
-                                // Details sits here, in the card's own chip row -
-                                // the quiet sibling of Visit store below.
-                                if (widget.onDetails != null)
-                                  _DetailsPill(
-                                    key: Key('store-details-${store.id}'),
-                                    onTap: widget.onDetails!,
-                                  ),
-                              ]),
-                              const SizedBox(height: 12),
-                              Container(
-                                  height: 1,
-                                  color: BrokaColors.border.withOpacity(0.8)),
-                              const SizedBox(height: 10),
-                              // One line at every width: under 360dp Visit shortens,
-                              // so the product count keeps room instead of
-                              // overflowing the row (a 320dp phone's card is ~260dp
-                              // inside).
-                              LayoutBuilder(builder: (context, row) {
-                                final compact = row.maxWidth < 360;
-                                return Row(children: [
-                                  const Icon(Icons.inventory_2_outlined,
-                                      size: 15, color: BrokaColors.textMid),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(products,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            color: BrokaColors.textHigh,
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w700)),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  _VisitButton(
-                                      key: Key('visit-store-${store.id}'),
-                                      short: compact),
-                                ]);
-                              }),
-                            ]),
-                      ),
-                      if (showLogo)
-                        Positioned(
-                          left: 14,
-                          top: -30,
-                          child: _Logo(source: logo, size: _logoSize),
-                        ),
-                    ]),
-                  ]),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// The directory's card, laid on its side: the shop's picture fills the
-  /// left of the card and the facts a buyer scans sit in a column beside it.
-  ///
-  /// It replaced the two-column grid of tall cards (2026-10-22). Two cards
-  /// across a phone halved every line, so a name wrapped, a place wrapped,
-  /// and the picture shrank to a thumbnail above the text - the opposite of
-  /// what a directory is for, which is comparing shops. One shop per row
-  /// gives the picture the size of a shopfront and every fact a line of its
-  /// own.
-  Widget _buildWide(BuildContext context) {
-    final store = widget.store;
     final distLabel = store.anyDistanceLabel;
     final owner = store.owner;
     final colors = CategoryVisuals.gradientFor(store.category);
@@ -443,6 +98,9 @@ class _StoreCardState extends State<StoreCard> {
         '${store.listingCount} product${store.listingCount == 1 ? '' : 's'}';
     final secondaryActions = (widget.onMap == null ? 0 : 1) +
         (widget.onDetails == null ? 0 : 1);
+    // A shop with no picture at all shows BROKA's mark, not its category
+    // emoji: the emoji read as clip-art standing in for a photo, and the
+    // mark is what the store's own logo falls back to everywhere else.
     final gradient = BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topLeft,
@@ -467,6 +125,10 @@ class _StoreCardState extends State<StoreCard> {
         ),
       ),
     );
+    // The slot a picture downloads into, or lands in when its URL fails.
+    // It carries the mark only when the card has no sign: with a cover the
+    // sign over the picture already wears BROKA's mark, and repeating it
+    // here put two marks on one shopfront.
     final pictureFallback =
         showLogo ? DecoratedBox(decoration: gradient) : fallback;
 
@@ -543,7 +205,7 @@ class _StoreCardState extends State<StoreCard> {
                                         height: 1.15,
                                         letterSpacing: -0.3)),
                               ),
-                              if (owner?.verified ?? false) ...[
+                              if (owner?.verified ?? false) ... [
                                 const SizedBox(width: 5),
                                 const Icon(Icons.verified_rounded,
                                     size: 17,
@@ -563,47 +225,54 @@ class _StoreCardState extends State<StoreCard> {
                           if (store.locationLine != null ||
                               distLabel != null) ...[
                             const SizedBox(height: 7),
-                            Row(children: [
-                              const Icon(Icons.location_on_outlined,
-                                  size: 15, color: BrokaColors.gold),
-                              const SizedBox(width: 4),
-                              // The distance rides on the place line: it is
-                              // part of where the shop is, and the picture is
-                              // too narrow here for a pill over it.
-                              Flexible(
-                                child: Text.rich(
-                                  TextSpan(children: [
-                                    if (store.locationLine != null)
-                                      TextSpan(
-                                          text: store.locationLine!,
-                                          style: const TextStyle(
-                                              color: BrokaColors.textMid,
-                                              fontSize: 12.5)),
-                                    if (store.locationLine != null &&
-                                        distLabel != null)
-                                      const TextSpan(
-                                          text: ' · ',
-                                          style: TextStyle(
-                                              color: BrokaColors.textMid,
-                                              fontSize: 12.5)),
-                                    if (distLabel != null)
-                                      TextSpan(
-                                          text: distLabel,
-                                          style: const TextStyle(
-                                              color: BrokaColors.gold,
-                                              fontSize: 12.5,
-                                              fontWeight: FontWeight.w800)),
-                                  ]),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                            Row(
+                              // Where the shop is, distance included: the
+                              // one place a buyer reads how far away it is.
+                              key: distLabel == null
+                                  ? null
+                                  : const Key('store-card-distance'),
+                              children: [
+                                const Icon(Icons.location_on_outlined,
+                                    size: 15, color: BrokaColors.gold),
+                                const SizedBox(width: 4),
+                                // The distance rides on the place line: it is
+                                // part of where the shop is, and the picture is
+                                // too narrow here for a pill over it.
+                                Flexible(
+                                  child: Text.rich(
+                                    TextSpan(children: [
+                                      if (store.locationLine != null)
+                                        TextSpan(
+                                            text: store.locationLine!,
+                                            style: const TextStyle(
+                                                color: BrokaColors.textMid,
+                                                fontSize: 12.5)),
+                                      if (store.locationLine != null &&
+                                          distLabel != null)
+                                        const TextSpan(
+                                            text: ' · ',
+                                            style: TextStyle(
+                                                color: BrokaColors.textMid,
+                                                fontSize: 12.5)),
+                                      if (distLabel != null)
+                                        TextSpan(
+                                            text: distLabel,
+                                            style: const TextStyle(
+                                                color: BrokaColors.gold,
+                                                fontSize: 12.5,
+                                                fontWeight: FontWeight.w800)),
+                                    ]),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
-                              ),
-                            ]),
+                              ],
+                            ),
                           ],
                           if (category != null) ...[
                             const SizedBox(height: 6),
-                            // Emoji and label in one Text, as the tall card
-                            // does: an emoji of its own would read as the
+                            // Emoji and label in one Text, as the directory
+                            // rail does: an emoji of its own would read as the
                             // card's category fallback when it is BROKA's mark
                             // that stands in for a missing picture.
                             Text(
@@ -642,7 +311,7 @@ class _StoreCardState extends State<StoreCard> {
                           // so it is still the widest target at the foot.
                           Row(children: [
                             if (widget.onMap != null)
-                              _WideIconAction(
+                              _IconAction(
                                 key: Key('store-map-${store.id}'),
                                 icon: Icons.map_outlined,
                                 tooltip: 'View on map',
@@ -653,7 +322,7 @@ class _StoreCardState extends State<StoreCard> {
                                 widget.onDetails != null)
                               const SizedBox(width: 8),
                             if (widget.onDetails != null)
-                              _WideIconAction(
+                              _IconAction(
                                 key: Key('store-details-${store.id}'),
                                 icon: Icons.info_outline_rounded,
                                 tooltip: 'Store details',
@@ -662,7 +331,7 @@ class _StoreCardState extends State<StoreCard> {
                               ),
                             if (secondaryActions > 0) const SizedBox(width: 8),
                             Expanded(
-                              child: _WideVisitButton(
+                              child: _VisitButton(
                                 key: Key('visit-store-${store.id}'),
                                 onTap: widget.onTap,
                               ),
@@ -746,11 +415,11 @@ class _StoreCardState extends State<StoreCard> {
   }
 }
 
-/// A 44dp square secondary action on the wide card - the map and the
-/// store's details. Quiet outlines, because the card itself opens the
-/// store and Visit is the one action meant to be found first.
-class _WideIconAction extends StatelessWidget {
-  const _WideIconAction({
+/// A 44dp square secondary action on the card - the map and the store's
+/// details. Quiet outlines, because the card itself opens the store and
+/// Visit is the one action meant to be found first.
+class _IconAction extends StatelessWidget {
+  const _IconAction({
     super.key,
     required this.icon,
     required this.tooltip,
@@ -787,11 +456,11 @@ class _WideIconAction extends StatelessWidget {
       );
 }
 
-/// Visit store on the wide card: the loud action, filling the rest of the
-/// row so the thumb lands on it first. The whole card opens the store too;
-/// this says so, and gives the tap somewhere obvious to happen.
-class _WideVisitButton extends StatelessWidget {
-  const _WideVisitButton({super.key, required this.onTap});
+/// Visit store: the loud action, filling the rest of the row so the thumb
+/// lands on it first. The whole card opens the store too; this says so,
+/// and gives the tap somewhere obvious to happen.
+class _VisitButton extends StatelessWidget {
+  const _VisitButton({super.key, required this.onTap});
 
   final VoidCallback onTap;
 
@@ -862,9 +531,9 @@ class _RatingChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
         ),
-        // Wrapped rather than a Row: the wide card gives the chip the width
-        // of a column, and at large system text a Row can only overflow -
-        // the count drops to a second line instead of losing its last digit.
+        // Wrapped rather than a Row: the chip sits in a column, and at large
+        // system text a Row can only overflow - the count drops to a second
+        // line instead of losing its last digit.
         child: Wrap(
           spacing: 3,
           crossAxisAlignment: WrapCrossAlignment.center,
@@ -885,112 +554,6 @@ class _RatingChip extends StatelessWidget {
                       height: 1.2)),
           ],
         ),
-      );
-}
-
-/// Distance on the picture: the buyer's first question about a shop,
-/// given the strongest seat on the card after the shop's own name.
-class _DistancePill extends StatelessWidget {
-  const _DistancePill({super.key, required this.label});
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-              colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(color: BrokaColors.gold.withOpacity(0.35), blurRadius: 10)
-          ],
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.near_me_rounded, size: 13, color: Colors.white),
-          const SizedBox(width: 5),
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800)),
-        ]),
-      );
-}
-
-/// View on map: the shop's place, as a chip in the card's own row.
-///
-/// This replaced the seller's record here (rating / deals done): most
-/// buyers never noticed the small Map button at the foot of the card, and
-/// where a shop actually is matters more to a buyer than a deal count,
-/// which Store details still shows in full.
-class _MapPill extends StatelessWidget {
-  const _MapPill({super.key, required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        label: 'View store on map',
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: BrokaColors.neonCyan.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: BrokaColors.neonCyan.withOpacity(0.65)),
-            ),
-            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.map_outlined, size: 15, color: BrokaColors.neonCyan),
-              SizedBox(width: 5),
-              Text('View on map',
-                  style: TextStyle(
-                      color: BrokaColors.neonCyan,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.1)),
-            ]),
-          ),
-        ),
-      );
-}
-
-/// Visit store: a pill as wide as its words (the whole card is the tap
-/// target; this says what the tap does).
-class _VisitButton extends StatelessWidget {
-  const _VisitButton({super.key, this.short = false});
-
-  /// "Visit" instead of "Visit store", on narrow cards (see the
-  /// footer's LayoutBuilder).
-  final bool short;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        height: 38,
-        padding: const EdgeInsets.fromLTRB(16, 0, 12, 0),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-              colors: [BrokaColors.gold, BrokaColors.neonBlue]),
-          borderRadius: BorderRadius.circular(19),
-          boxShadow: [
-            BoxShadow(
-                color: BrokaColors.gold.withOpacity(0.35),
-                blurRadius: 12,
-                offset: const Offset(0, 3))
-          ],
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.storefront_rounded, color: Colors.white, size: 17),
-          const SizedBox(width: 7),
-          Text(short ? 'Visit' : 'Visit store',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13.5)),
-          const SizedBox(width: 3),
-          const Icon(Icons.arrow_forward_rounded,
-              color: Colors.white, size: 16),
-        ]),
       );
 }
 
@@ -1065,41 +628,4 @@ class _Pill extends StatelessWidget {
       ]),
     );
   }
-}
-
-/// Details: the secondary action on a store card (the card itself opens the
-/// store). Drawn in the fact row's own language - a gold-outline pill on the
-/// card surface, the quiet sibling of the gradient Visit store pill - so it
-/// reads as part of BROKA, not a system warning.
-class _DetailsPill extends StatelessWidget {
-  const _DetailsPill({super.key, required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        label: 'View store details',
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: BrokaColors.gold.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: BrokaColors.gold.withOpacity(0.65)),
-            ),
-            child: const Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.info_outline_rounded,
-                  size: 15, color: BrokaColors.gold),
-              SizedBox(width: 5),
-              Text('Details',
-                  style: TextStyle(
-                      color: BrokaColors.gold,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.1)),
-            ]),
-          ),
-        ),
-      );
 }

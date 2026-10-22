@@ -111,10 +111,7 @@ void main() {
     );
 
     expect(find.byKey(const Key('all-store-list')), findsOneWidget);
-    final cards = tester.widgetList<StoreCard>(find.byType(StoreCard));
-    expect(cards, isNotEmpty);
-    expect(cards.every((card) => card.wide), isTrue,
-        reason: 'the directory draws the wide card, not the tall one');
+    expect(tester.widgetList<StoreCard>(find.byType(StoreCard)), isNotEmpty);
 
     final first = tester.getRect(find.byKey(const Key('all-store-a')));
     _expectFullWidthCard(tester);
@@ -170,12 +167,13 @@ void main() {
 
     expect(find.byKey(const Key('nearby-store-list')), findsOneWidget);
     expect(find.byKey(const Key('nearby-see-all')), findsOneWidget);
-    final nearbyCards =
-        tester.widgetList<StoreCard>(find.byType(StoreCard)).where(
-              (card) => card.store.id == 'a' || card.store.id == 'b',
-            );
-    expect(nearbyCards, isNotEmpty);
-    expect(nearbyCards.every((card) => card.wide), isTrue);
+    // The rail draws the same one-row card as the list below it, not a
+    // narrower variant of its own.
+    final screenWidth = tester.getSize(find.byType(StoreListScreen)).width;
+    final nearbyCard = tester.getRect(find.byKey(const Key('store-card-a')).first);
+    expect(nearbyCard.width, greaterThan(nearbyCard.height));
+    expect(nearbyCard.width, greaterThan(screenWidth * 0.85));
+    expect(nearbyCard.left, closeTo(16, 0.5));
 
     await tester.tap(find.byKey(const Key('nearby-see-all')));
     await tester.pump();

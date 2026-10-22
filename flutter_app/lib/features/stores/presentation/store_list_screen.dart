@@ -1,8 +1,6 @@
 // BROKA — Store discovery (spec §12/§21, Phase 4)
-// A single-column directory of wide cards: each row shows the shop's
-// picture on the left with its facts beside it, via StoreCard's opt-in wide
-// presentation. The taller one-column card remains the default for the
-// nearby and category screens.
+// A single-column directory: each row shows the shop's picture on the left
+// with its facts beside it, in the one StoreCard every store list draws.
 //
 // A store card shows the shop itself, its own rating, its distance when
 // known, and a way onto the map. The owner's seller record lives in Store
@@ -36,8 +34,11 @@
 //
 // Wide-card pass (2026-10-22): the two-column grid is gone. Two cards across
 // a phone halved every line, so names and places wrapped and the picture
-// shrank to a thumbnail; one shop per row (the wide card) gives the picture
-// the size of a shopfront and every fact its own line.
+// shrank to a thumbnail; one shop per row gives the picture the size of a
+// shopfront and every fact its own line. Later the same day the tall card
+// that this change had left as the default elsewhere was removed too, so
+// the nearby and category screens could not keep showing a different shop
+// from the one in the directory.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -692,7 +693,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
     return [_storeList(main, keyPrefix: 'all-store')];
   }
 
-  /// One shop per row, each in the wide card that lays the picture on its
+  /// One shop per row, each in the shared card that lays the picture on its
   /// left and the facts beside it. This is the directory's only list shape:
   /// a two-column grid is what halved every line and shrank the picture to
   /// a thumbnail.
@@ -705,7 +706,6 @@ class _StoreListScreenState extends State<StoreListScreen> {
           (_, i) => StoreCard(
             key: Key('$keyPrefix-${stores[i].id}'),
             store: stores[i],
-            wide: true,
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(

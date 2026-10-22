@@ -1,4 +1,5 @@
-// StoreCard: distance is prominent when known, the Map action shows
+// StoreCard: one card for every store list - the picture on the left, the
+// facts beside it. Distance is prominent when known, the Map action shows
 // only when wired, and the shop's approximate point parses for the map.
 import 'package:broka/features/stores/domain/models/store.dart';
 import 'package:broka/features/stores/presentation/widgets/store_card.dart';
@@ -34,7 +35,7 @@ Store _store(
       hasLocation: approxLat != null,
     );
 
-Future<void> _pumpWide(
+Future<void> _pump(
   WidgetTester tester,
   Store store, {
   VoidCallback? onMap,
@@ -51,7 +52,6 @@ Future<void> _pumpWide(
           width: 358,
           child: StoreCard(
             store: store,
-            wide: true,
             onTap: onTap ?? () {},
             onMap: onMap,
             onDetails: onDetails,
@@ -63,31 +63,17 @@ Future<void> _pumpWide(
   await tester.pump();
 }
 
-Future<void> _pump(WidgetTester tester, Store store,
-    {VoidCallback? onMap}) async {
-  tester.view.physicalSize = const Size(1080, 2400);
-  tester.view.devicePixelRatio = 3;
-  addTearDown(tester.view.reset);
-  await tester.pumpWidget(MaterialApp(
-    home: Scaffold(
-      body: SingleChildScrollView(
-        child: StoreCard(store: store, onTap: () {}, onMap: onMap),
-      ),
-    ),
-  ));
-  await tester.pump();
-}
-
 void main() {
-  testWidgets('a nearby shop wears its distance on the picture',
+  testWidgets('a nearby shop wears its distance beside its place',
       (tester) async {
     await _pump(
         tester, _store(distanceKm: 0.8, distanceLabel: '800 m from you'));
     expect(find.byKey(const Key('store-card-distance')), findsOneWidget);
-    expect(find.text('800 m from you'), findsWidgets);
+    expect(find.textContaining('800 m from you'), findsWidgets);
   });
 
-  testWidgets('no distance, no pill - unknown is never 0 km', (tester) async {
+  testWidgets('no distance, no distance line - unknown is never 0 km',
+      (tester) async {
     await _pump(tester, _store());
     expect(find.byKey(const Key('store-card-distance')), findsNothing);
   });
@@ -106,7 +92,7 @@ void main() {
     await _pump(
         tester, _store(distanceKm: 42, distanceLabel: '42 km from you'));
     expect(find.byKey(const Key('store-card-distance')), findsOneWidget);
-    expect(find.text('42 km from you'), findsWidgets);
+    expect(find.textContaining('42 km from you'), findsWidgets);
   });
 
   testWidgets('no distance known, no distance text anywhere', (tester) async {
@@ -115,15 +101,21 @@ void main() {
     expect(find.textContaining('from you'), findsNothing);
   });
 
-  testWidgets('View on map sits in the chip row, not only at the foot',
-      (tester) async {
+  testWidgets('View on map is a labelled action on the card', (tester) async {
     var opened = 0;
     await _pump(tester, _store(approxLat: -1.29, approxLng: 36.82),
         onMap: () => opened++);
-    expect(find.text('View on map'), findsOneWidget);
+    expect(find.byTooltip('View on map'), findsOneWidget);
     expect(find.text('Map'), findsNothing);
     await tester.tap(find.byKey(const Key('store-map-s1')));
     expect(opened, 1);
+  });
+
+  testWidgets('the Map action is absent when the screen wires none',
+      (tester) async {
+    await _pump(tester, _store(approxLat: -1.29, approxLng: 36.82));
+    expect(find.byKey(const Key('store-map-s1')), findsNothing);
+    expect(find.byTooltip('View on map'), findsNothing);
   });
 
   testWidgets('the seller record is gone from the directory card',
@@ -134,9 +126,9 @@ void main() {
     expect(find.textContaining('done'), findsNothing);
   });
 
-  testWidgets('the wide card puts the picture left and the facts right',
+  testWidgets('the card puts the picture left and the facts right',
       (tester) async {
-    await _pumpWide(tester, _store(rating: 6.8));
+    await _pump(tester, _store(rating: 6.8));
     final card = tester.getRect(find.byKey(const Key('store-card-s1')));
     final name = tester.getRect(find.text('Tokyo Electronics'));
     // A shopfront laid on its side, not the tall cell a grid needs: wider
@@ -148,9 +140,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('wide cards omit unknown ratings and distances honestly',
+  testWidgets('the card omits unknown ratings and distances honestly',
       (tester) async {
-    await _pumpWide(tester, _store());
+    await _pump(tester, _store());
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('store-rating-s1')), findsNothing);
     expect(find.byKey(const Key('store-card-distance')), findsNothing);
@@ -160,10 +152,9 @@ void main() {
     expect(find.byKey(const Key('store-default-logo')), findsOneWidget);
   });
 
-  testWidgets(
-      'wide cards show the 0-10 store rating but never a fake review count',
+  testWidgets('the card shows the 0-10 store rating but never a fake review count',
       (tester) async {
-    await _pumpWide(tester, _store(rating: 8.4, reviewCount: 0));
+    await _pump(tester, _store(rating: 8.4, reviewCount: 0));
     expect(
         find.descendant(
             of: find.byKey(const Key('store-rating-s1')),
@@ -172,11 +163,11 @@ void main() {
     expect(find.text('(0)'), findsNothing);
   });
 
-  testWidgets('wide card actions keep separate callbacks', (tester) async {
+  testWidgets('the card actions keep separate callbacks', (tester) async {
     var visits = 0;
     var maps = 0;
     var details = 0;
-    await _pumpWide(
+    await _pump(
       tester,
       _store(distanceKm: 2.3, distanceLabel: '2.3 km from you'),
       onTap: () => visits++,
