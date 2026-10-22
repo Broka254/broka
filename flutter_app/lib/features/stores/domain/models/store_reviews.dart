@@ -1,11 +1,13 @@
 // A store's buyer reviews, as GET /stores/{id}/reviews returns them
 // (backend/api/domains/stores/service.py: store_reviews).
 //
-// A store has no reviews of its own: what buyers see is the owner's
-// seller-level record - the same reviews the seller's profile shows - plus
-// the owner's published standing. The models come from the reviews feature
-// and lib/models/seller_standing.dart, so the same JSON reads the same way
-// on every screen.
+// These are the reviews of deals whose product this shop sold, attributed at
+// write time (reviews.store_id) - not the owner's whole seller record, so a
+// second shop of the same owner cannot borrow this one's reputation. The
+// owner's published standing rides along as `seller_standing`; it is about
+// the person, and the models come from the reviews feature and
+// lib/models/seller_standing.dart so the same JSON reads the same way on
+// every screen.
 import '../../../../models/seller_standing.dart';
 import '../../../reviews/domain/models/review.dart';
 

@@ -410,10 +410,52 @@ void main() {
       ))));
       expect(find.byKey(const Key('store-reviews-empty')), findsOneWidget);
       expect(find.text('No reviews yet'), findsOneWidget);
-      expect(find.textContaining('after a completed deal'), findsOneWidget);
+      // Reviews come from a deal, not a completed one: BROKA never learns
+      // that an outside payment landed (2026-10-22).
+      expect(find.textContaining('who had a deal with this store'), findsOneWidget);
       expect(find.byKey(const Key('store-reviews-summary')), findsNothing);
       // No reply time either: nothing recent enough to publish.
       expect(find.byKey(const Key('store-response-time')), findsNothing);
+      // No deal here, so no way in to write one.
+      expect(find.byKey(const Key('store-rate')), findsNothing);
+    });
+
+    testWidgets('a buyer with a deal on this shop can rate it from its page',
+        (tester) async {
+      var rated = 0;
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+        child: StoreDetailsView(
+          store: Store.fromJson(_store()),
+          reviews: StoreReviews.fromJson(_reviews()),
+          reviewableDeals: 2,
+          onRateStore: () => rated++,
+        ),
+      ))));
+
+      // The star summary is there as for anyone, plus the buyer's own way in.
+      expect(find.byKey(const Key('store-reviews-summary')), findsOneWidget);
+      expect(find.byKey(const Key('store-rate')), findsOneWidget);
+      expect(find.text('Rate this store (2 deals)'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('store-rate')));
+      expect(rated, 1);
+    });
+
+    testWidgets('an empty shop offers the review button to a buyer with a deal',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+        child: StoreDetailsView(
+          store: Store.fromJson(_store()),
+          reviews: StoreReviews.fromJson({
+            'summary': {'avg': null, 'count': 0, 'distribution': {}},
+            'reviews': [],
+            'seller_standing': null,
+          }),
+          reviewableDeals: 1,
+          onRateStore: () {},
+        ),
+      ))));
+      expect(find.byKey(const Key('store-reviews-empty')), findsOneWidget);
+      expect(find.text('Rate this store'), findsOneWidget);
     });
 
     testWidgets("a new seller's record says so instead of inventing numbers", (tester) async {

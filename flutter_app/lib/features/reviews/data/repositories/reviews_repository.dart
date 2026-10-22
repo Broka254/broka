@@ -38,12 +38,18 @@ class ReviewsRepository {
       ReviewSummary.fromJson(
           await _client.get('/reviews/summary/$sellerId') as Map<String, dynamic>));
 
-  /// The signed-in buyer's completed purchases - from [sellerId] only, when
-  /// given - each saying whether it has been reviewed yet.
-  Future<Result<List<ReviewableDeal>>> myReviewableDeals({String? sellerId}) =>
+  /// The signed-in buyer's deals they may review - with [sellerId] only, or
+  /// on [storeId]'s products only, when given - each saying whether it has
+  /// been reviewed yet.
+  Future<Result<List<ReviewableDeal>>> myReviewableDeals({
+    String? sellerId,
+    String? storeId,
+  }) =>
       _guard(() async {
-        final data = await _client.get('/reviews/my-deals',
-            queryParams: sellerId == null ? null : {'seller_id': sellerId}) as Map<String, dynamic>;
+        final data = await _client.get('/reviews/my-deals', queryParams: {
+          if (sellerId != null) 'seller_id': sellerId,
+          if (storeId != null) 'store_id': storeId,
+        }) as Map<String, dynamic>;
         return [
           for (final d in (data['deals'] as List? ?? const []))
             ReviewableDeal.fromJson(d as Map<String, dynamic>),

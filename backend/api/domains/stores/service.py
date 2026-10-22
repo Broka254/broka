@@ -851,10 +851,11 @@ class StoreService:
         built from. A seller with two shops would otherwise have one shop's
         reviews shown - and counted - on the other.
 
-        Chat-only reviews have no listing to name and stay on the seller;
-        they appear on the seller's profile, not on any shop. A paused or
-        unpaid store still reports its reviews: the shop's visibility
-        governs the shop, not what buyers already said about it.
+        Chat-only reviews - legacy rows from before reviews became
+        deal-only (2026-10-22) - have no listing to name and stay on the
+        seller; they appear on the seller's profile, not on any shop. A
+        paused or unpaid store still reports its reviews: the shop's
+        visibility governs the shop, not what buyers already said about it.
         """
         from api.domains.reviews.service import ReviewService
         from api.domains.trust.public_standing import public_seller_standing

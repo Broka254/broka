@@ -63,8 +63,13 @@ async def get_review_summary(
 @router.get("/my-deals")
 async def my_reviewable_deals(
     seller_id: Optional[str] = None,
+    store_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    deals = await ReviewService(db).my_reviewable_deals(current_user["id"], seller_id)
+    """The caller's reviewable deals - every deal they are the buyer of,
+    with or without a seller_id/store_id filter - each saying whether it
+    has been reviewed already. Auth: only the buyer's own deals."""
+    deals = await ReviewService(db).my_reviewable_deals(
+        current_user["id"], seller_id, store_id)
     return {"deals": deals}

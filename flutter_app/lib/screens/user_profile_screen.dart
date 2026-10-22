@@ -29,8 +29,9 @@
 // In their place, the four figures a buyer sees on the seller's listings
 // (widgets/seller_standing_tiles.dart), the deal track record, and reviews -
 // which never loaded: the routes they called were not mounted
-// (features/reviews/). Only a buyer whose deal with this seller completed is
-// offered "Write a review"; the backend refuses anyone else.
+// (features/reviews/). Only a buyer who has a deal with this seller is
+// offered "Write a review" - a chat alone is not enough (2026-10-22) - and
+// the backend refuses anyone else.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 

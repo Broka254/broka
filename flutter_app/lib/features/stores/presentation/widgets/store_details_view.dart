@@ -8,9 +8,11 @@
 //   seller     who runs it, and their record in three numbers: deals
 //              done, rating, and the year they joined BROKA (these were
 //              chips crowding the store's header)
-//   reviews    the owner's buyer reviews, their star breakdown and reply
-//              time (a store has none of its own; these are the owner's,
-//              fetched from /stores/{id}/reviews)
+//   reviews    the shop's buyer reviews, their star breakdown and reply
+//              time (fetched from /stores/{id}/reviews), and - for a buyer
+//              who has a deal on one of its products - a way to rate the
+//              shop (2026-10-22). Reviews are deal-only: a stranger cannot
+//              post one, which is what makes the number worth reading.
 //   photos     the cover and shop photos
 //   about      the owner's own description, in full
 //   location   where the shop is, with a way to find it on a map
@@ -27,10 +29,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../main.dart' show BrokaColors;
 import '../../../../core/utils/result.dart';
+import '../../../../services/api_service.dart' show ApiService;
 import '../../../../models/seller_standing.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/constellation_background.dart';
 import '../../../../widgets/seller_standing_tiles.dart' show SellerStandingTiles;
+import '../../../reviews/data/repositories/reviews_repository.dart';
 import '../../../reviews/domain/models/review.dart';
 import '../../../safe_payment/payments_shown.dart';
 import '../../../safe_payment/safe_payment.dart';
@@ -85,6 +89,11 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
   bool _loading = false;
   String? _error;
 
+  /// The signed-in buyer's unreviewed deals on this shop's products. Empty
+  /// for a visitor, or one with no deal here - there is no button to show
+  /// them, because the backend would refuse the review anyway.
+  List<ReviewableDeal> _reviewable = const [];
+
   @override
   void initState() {
     super.initState();
@@ -92,6 +101,7 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
       _loading = true;
       _fetch();
     }
+    if (ApiService.isLoggedIn) _fetchReviewable();
   }
 
   Future<void> _fetch() async {
@@ -108,12 +118,35 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
     });
   }
 
+  /// Asks the reviews API which of the buyer's deals were on this shop's
+  /// products. A failure just means no button - the reviews themselves are
+  /// public and already loaded.
+  Future<void> _fetchReviewable() async {
+    final result = await reviewsRepository.myReviewableDeals(storeId: widget.store.id);
+    if (!mounted || result is! Success<List<ReviewableDeal>>) return;
+    setState(() => _reviewable =
+        result.data.where((deal) => !deal.alreadyReviewed).toList());
+  }
+
   void _retry() {
     setState(() {
       _loading = true;
       _error = null;
     });
     _fetch();
+  }
+
+  /// Rate this shop: the review screen scoped to this shop's deals, so the
+  /// picker can only offer products it actually sold. A review is the
+  /// seller's and the shop's at once (backend reviews/service.py).
+  Future<void> _rateStore() async {
+    final wrote = await Navigator.pushNamed(context, '/review', arguments: {
+      'store_id': widget.store.id,
+      'seller_name': widget.store.name,
+    });
+    if (!mounted || wrote != true) return;
+    _retry();
+    _fetchReviewable();
   }
 
   @override
@@ -140,6 +173,8 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
               reviewsLoading: _loading,
               reviewsError: _error,
               onRetryReviews: _retry,
+              reviewableDeals: _reviewable.length,
+              onRateStore: _reviewable.isEmpty ? null : _rateStore,
             ),
           ],
         ),
@@ -157,6 +192,8 @@ class StoreDetailsView extends StatelessWidget {
     this.reviewsLoading = false,
     this.reviewsError,
     this.onRetryReviews,
+    this.reviewableDeals = 0,
+    this.onRateStore,
   });
 
   final Store store;
@@ -173,6 +210,14 @@ class StoreDetailsView extends StatelessWidget {
 
   /// Loads the reviews again after a failure.
   final VoidCallback? onRetryReviews;
+
+  /// How many of the signed-in buyer's unreviewed deals are on this shop's
+  /// products. Zero (or a null [onRateStore]) hides the button.
+  final int reviewableDeals;
+
+  /// Opens the review form scoped to this shop. Null for anyone the backend
+  /// would refuse - a review needs a deal.
+  final VoidCallback? onRateStore;
 
   Future<void> _open(BuildContext context, Uri uri) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -225,6 +270,8 @@ class StoreDetailsView extends StatelessWidget {
           loading: reviewsLoading,
           error: reviewsError,
           onRetry: onRetryReviews,
+          reviewableDeals: reviewableDeals,
+          onRate: onRateStore,
         ),
       ],
       if (photos.isNotEmpty) ...[
@@ -699,22 +746,30 @@ class _OwnerCard extends StatelessWidget {
       );
 }
 
-/// The owner's buyer reviews: the star summary, the reply time, and the
-/// reviews themselves. A store has no reviews of its own - these are the
-/// seller's, from /stores/{id}/reviews - and the empty state says how
-/// reviews come to exist at all.
+/// The shop's buyer reviews: the star summary, the reply time, and the
+/// reviews themselves - and, for a buyer with a deal on one of its
+/// products, the way in to write one. The empty state says how reviews come
+/// to exist at all (a deal, never a chat), because "no reviews yet" on a
+/// new shop should not read as a broken feature.
 class _ReviewsSection extends StatelessWidget {
   const _ReviewsSection({
     this.reviews,
     required this.loading,
     this.error,
     this.onRetry,
+    this.reviewableDeals = 0,
+    this.onRate,
   });
 
   final StoreReviews? reviews;
   final bool loading;
   final String? error;
   final VoidCallback? onRetry;
+
+  /// The buyer's unreviewed deals on this shop's products; zero hides the
+  /// button. See StoreDetailsView.reviewableDeals.
+  final int reviewableDeals;
+  final VoidCallback? onRate;
 
   @override
   Widget build(BuildContext context) {
@@ -767,12 +822,16 @@ class _ReviewsSection extends StatelessWidget {
                 color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w700))),
           ]),
           const SizedBox(height: 6),
-          const Text("Reviews come from buyers after a completed deal. When you buy from this "
-              'store, yours will help the next buyer.',
+          const Text('Reviews come from buyers who had a deal with this store. '
+              'Once you have one, yours will help the next buyer.',
               style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4)),
           if (reply != null) ...[
             const SizedBox(height: 10),
             _replyLine(reply, band),
+          ],
+          if (_canRate) ...[
+            const SizedBox(height: 12),
+            _rateButton(),
           ],
         ]),
       );
@@ -826,6 +885,10 @@ class _ReviewsSection extends StatelessWidget {
             const SizedBox(height: 12),
             _replyLine(reply, band),
           ],
+          if (_canRate) ...[
+            const SizedBox(height: 12),
+            _rateButton(),
+          ],
         ]),
       ),
       for (final review in data.reviews) _ReviewCard(review: review),
@@ -839,6 +902,27 @@ class _ReviewsSection extends StatelessWidget {
         ),
     ]);
   }
+
+  /// Only a buyer the backend would actually accept is shown the button -
+  /// a visible "Rate this store" that 403s reads as a broken shop.
+  bool get _canRate => onRate != null && reviewableDeals > 0;
+
+  Widget _rateButton() => OutlinedButton.icon(
+        key: const Key('store-rate'),
+        onPressed: onRate,
+        icon: const Icon(Icons.star_rounded, size: 17),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: BrokaColors.gold,
+          side: BorderSide(color: BrokaColors.gold.withOpacity(0.65)),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+        label: Text(
+          reviewableDeals == 1
+              ? 'Rate this store'
+              : 'Rate this store ($reviewableDeals deals)',
+          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800),
+        ),
+      );
 
   Widget _replyLine(String reply, StandingBand band) {
     final color = SellerStandingTiles.bandColor(band);

@@ -13,10 +13,14 @@ import '../../../main.dart';
 import '../data/repositories/reviews_repository.dart';
 import '../domain/models/review.dart';
 
-/// Offers to review [dealId] if it is the buyer's completed, unreviewed
-/// deal - the backend says, not this screen's guess about what just
-/// happened. Does nothing otherwise (still in escrow, already reviewed, or
+/// Offers to review [dealId] if it is one of the buyer's deals and not
+/// reviewed yet - the backend says, not this screen's guess about what just
+/// happened. Does nothing otherwise (not their deal, already reviewed, or
 /// the call failed: the profile's "Write a review" is still there).
+///
+/// Still asked on release, the moment BROKA knows the goods changed hands.
+/// A deal that never reaches release is reviewable too (reviews/service.py)
+/// - from the profile, or from the shop's page.
 Future<void> promptReviewIfDue(BuildContext context, {
   required String dealId,
   String? sellerId,

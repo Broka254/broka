@@ -26,6 +26,7 @@ import '../domain/models/store.dart';
 import '../domain/store_categories.dart';
 import 'store_home_screen.dart';
 import 'store_map_screen.dart';
+import 'widgets/distance_filter.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
 import 'widgets/store_location_filter.dart';
@@ -64,6 +65,11 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
   String? _category;
   String? _county;
   String? _subcounty;
+
+  /// How far still counts as near. 25 km by default; a buyer in a dense town
+  /// can pull it to 5, or widen it to 50 - null is "any distance", which is
+  /// the directory's list with the closest first.
+  double? _radiusKm = Store.nearRadiusKm;
   bool _fetching = false;
 
   bool get _filtersActive =>
@@ -143,7 +149,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
       subcounty: _subcounty,
       lat: lat,
       lng: lng,
-      maxDistanceKm: Store.nearRadiusKm,
+      maxDistanceKm: _radiusKm,
       nearestFirst: true,
       limit: 50,
     );
@@ -156,7 +162,9 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
           _fetching = false;
           if (data.isNotEmpty || _filtersActive) _nearest.clear();
         });
-        if (data.isEmpty && !_filtersActive) _fetchNearest();
+        // A radius of any distance cannot come back empty on its own: there
+        // is no wider list to fall back to.
+        if (data.isEmpty && !_filtersActive && _radiusKm != null) _fetchNearest();
       },
       onFailure: (_, __) => setState(() {
         _stage = _Stage.loadFailed;
@@ -193,6 +201,7 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
       _category = null;
       _county = null;
       _subcounty = null;
+      _radiusKm = Store.nearRadiusKm;
     });
     _fetch();
   }
@@ -232,6 +241,12 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                     child: StoreLocationFilter(
                       county: _county,
                       subcounty: _subcounty,
+                      maxDistanceKm: _radiusKm,
+                      onClear: _clearFilters,
+                      onDistanceChanged: (value) {
+                        setState(() => _radiusKm = value);
+                        _fetch();
+                      },
                       onChanged: (county, subcounty) {
                         setState(() {
                           _county = county;
@@ -322,7 +337,8 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                     style: TextStyle(color: BrokaColors.textHigh, fontSize: 16,
                         fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
-                const Text('Near you means within 25 km of where you are standing.',
+                const Text('Near you starts within 25 km of where you are standing - '
+                    'you can change the radius once it knows where you are.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
                 const SizedBox(height: 18),
@@ -379,10 +395,12 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                 child: Row(children: [
                   const Icon(Icons.storefront_outlined, size: 16, color: BrokaColors.gold),
                   const SizedBox(width: 6),
-                  const Expanded(
-                    child: Text('No stores within 25 km - nearest to you',
-                        key: Key('nearby-nearest-header'),
-                        style: TextStyle(color: BrokaColors.gold, fontSize: 12,
+                  Expanded(
+                    child: Text(
+                        'No stores within ${formatDistanceKm(_radiusKm ?? Store.nearRadiusKm)}'
+                        ' - nearest to you',
+                        key: const Key('nearby-nearest-header'),
+                        style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
                             fontWeight: FontWeight.w700)),
                   ),
                 ]),
@@ -421,7 +439,8 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
                   Text(
                       _filtersActive
                           ? 'No nearby stores match those filters'
-                          : 'No stores within 25 km of you',
+                          : 'No stores within '
+                              '${formatDistanceKm(_radiusKm ?? Store.nearRadiusKm)} of you',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: BrokaColors.textHigh, fontSize: 16,
                           fontWeight: FontWeight.w800)),
@@ -452,7 +471,10 @@ class _NearbyStoresScreenState extends State<NearbyStoresScreen> {
               child: Row(children: [
                 const Icon(Icons.near_me_rounded, size: 16, color: BrokaColors.gold),
                 const SizedBox(width: 6),
-                Text('${_stores.length} within 25 km of you',
+                Text(
+                    _radiusKm == null
+                        ? '${_stores.length} nearest to you'
+                        : '${_stores.length} within ${formatDistanceKm(_radiusKm!)} of you',
                     style: const TextStyle(color: BrokaColors.gold, fontSize: 12,
                         fontWeight: FontWeight.w700)),
                 if (_fetching) ...[

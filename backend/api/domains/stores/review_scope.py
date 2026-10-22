@@ -13,13 +13,14 @@ THE RULE
    listing was sold (`reviews.store_id`). Unambiguous, and the only case
    where a store is genuinely named by the data.
 
-2. A chat-only review has no deal and therefore no listing. It is still
-   about a shop, and while BROKA holds no payments it is the ONLY kind of
-   review that exists - so leaving it out would mean no store ever shows a
-   review. It belongs to the seller's shop when the seller has exactly one
-   live store: one owner, one shop, no ambiguity. A seller with two shops
-   gets no such attribution, because picking one would be a guess, and the
-   review stays on the person's profile where it already lives.
+2. A chat-only review has no deal and therefore no listing. Since
+   2026-10-22 no new one can be written (reviews/service.py: a deal is
+   what proves the buyer dealt with the seller), but the rows posted
+   before that are real and stay readable. Such a row belongs to the
+   seller's shop when the seller has exactly one live store: one owner,
+   one shop, no ambiguity. A seller with two shops gets no such
+   attribution, because picking one would be a guess, and the review
+   stays on the person's profile where it already lives.
 
 The "sole store" test is about the OWNER, not the store: it is the same
 answer for both of that owner's rows, so the rule cannot flip per shop.

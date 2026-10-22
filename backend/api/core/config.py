@@ -454,15 +454,6 @@ class Settings:
         "ESCROW_GUIDANCE_ENABLED", "false"
     ).strip().lower() in ("1", "true", "yes", "on"))
 
-    # ── Reviews (domains/reviews/service.py) ─────────────────────────────────
-    # Off (2026-10-12): buyers pay sellers outside BROKA, so no deal ever
-    # reaches "released" and nobody could review anyone. A buyer who agreed
-    # a deal with the seller, or talked with them about one of their
-    # listings, may review them. On: only after a released (paid out) deal.
-    reviews_require_completed_deal: bool = field(default_factory=lambda: os.getenv(
-        "REVIEWS_REQUIRE_COMPLETED_DEAL", "false"
-    ).strip().lower() in ("1", "true", "yes", "on"))
-
     # ── Deal completion rate (domains/trust/completion_rate.py) ──────────────
     # Off (2026-10-12): with payments made outside BROKA there is no telling
     # a completed deal from an abandoned one, so DCR measured nothing real

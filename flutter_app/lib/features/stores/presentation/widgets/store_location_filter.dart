@@ -1,13 +1,14 @@
-// County / subcounty filter for store browsing: two pickers over
-// KenyaLocations, shared by Near you and the store directory so a
-// place means the same filter everywhere. Stateless - the caller owns
-// the selection and re-runs its query.
+// County / subcounty / distance filter for store browsing: two pickers over
+// KenyaLocations and the shared distance sheet, used by the store directory,
+// a category screen and Near you - so a place and a radius mean the same
+// filter everywhere. Stateless - the caller owns the selection and re-runs
+// its query.
 import 'package:flutter/material.dart';
 
 import '../../../../main.dart' show BrokaColors;
 import '../../../../widgets/list_picker.dart';
 import '../../domain/kenya_locations.dart';
-import '../../domain/models/store.dart';
+import 'distance_filter.dart';
 
 class StoreLocationFilter extends StatelessWidget {
   const StoreLocationFilter({
@@ -61,19 +62,9 @@ class StoreLocationFilter extends StatelessWidget {
   }
 
   Future<void> _pickDistance(BuildContext context) async {
-    final options = ['Any distance', 'Within ${Store.nearRadiusKm.round()} km'];
-    final selected = maxDistanceKm == null
-        ? options.first
-        : 'Within ${Store.nearRadiusKm.round()} km';
-    final picked = await pickFromList(
-      context,
-      title: 'Filter by distance',
-      options: options,
-      selected: selected,
-    );
+    final picked = await pickDistance(context, current: maxDistanceKm);
     if (picked == null) return;
-    onDistanceChanged
-        ?.call(picked == options.first ? null : Store.nearRadiusKm);
+    onDistanceChanged?.call(picked.km);
   }
 
   @override
@@ -109,9 +100,11 @@ class StoreLocationFilter extends StatelessWidget {
             child: _FilterChip(
               key: const Key('store-filter-distance'),
               icon: Icons.radar_rounded,
+              // "Distance" when off - the chip has no room for "Any
+              // distance", and the sheet that opens says it plainly.
               label: maxDistanceKm == null
                   ? 'Distance'
-                  : 'Within ${maxDistanceKm!.round()} km',
+                  : distanceFilterLabel(maxDistanceKm),
               active: maxDistanceKm != null,
               onTap: () => _pickDistance(context),
             ),

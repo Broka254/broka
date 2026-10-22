@@ -495,6 +495,39 @@ class TestStoreDiscovery:
         assert abs(row["approx_lat"] - -4.05) < 0.01
 
     @pytest.mark.asyncio
+    async def test_a_custom_radius_is_honoured(self, client, owner):
+        """The app lets a buyer type any radius (5 km, 50 km), not only the
+        directory's 25 km: max_distance_km is a plain number, so a custom
+        one must cut the list at that number and no other."""
+        _, owner_token = owner
+        # ~9 km south of the Nairobi point every test measures from.
+        created = await client.post("/stores", json={
+            "name": "Nine Kilometres Out", "lat": -1.367, "lng": 36.817,
+        }, headers=_auth(owner_token))
+        assert created.status_code == 201, created.text
+        store_id = created.json()["id"]
+
+        def ids(body):
+            return [s["id"] for s in body]
+
+        five = await client.get("/stores", params={
+            "lat": -1.286, "lng": 36.817, "max_distance_km": 5, "nearest_first": True,
+        })
+        assert store_id not in ids(five.json())
+
+        fifty = await client.get("/stores", params={
+            "lat": -1.286, "lng": 36.817, "max_distance_km": 50, "nearest_first": True,
+        })
+        assert store_id in ids(fifty.json())
+        row = next(s for s in fifty.json() if s["id"] == store_id)
+        assert 8 < row["distance_km"] < 10
+
+        # Any distance is the absence of the filter, not a huge number.
+        anywhere = await client.get("/stores", params={"lat": -1.286, "lng": 36.817},
+                                    headers=_auth(owner_token))
+        assert store_id in ids(anywhere.json())
+
+    @pytest.mark.asyncio
     async def test_store_without_pin_falls_back_to_owner_point(self, client, owner):
         _, owner_token = owner
         created = await client.post("/stores", json={"name": "No Pin Shop"},

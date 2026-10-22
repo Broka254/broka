@@ -58,6 +58,7 @@ import 'nearby_stores_screen.dart';
 import 'store_category_screen.dart';
 import 'store_home_screen.dart';
 import 'store_map_screen.dart';
+import 'widgets/distance_filter.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
 import 'widgets/store_location_filter.dart';
@@ -897,6 +898,14 @@ class _StoreFilterSheetState extends State<_StoreFilterSheet> {
   late String? _category = widget.category;
   late double? _maxDistanceKm = widget.maxDistanceKm;
 
+  /// The radius the buyer typed, when they did. Null for a preset, "Any
+  /// distance", or a sheet just opened - so the last chip reads "Custom…"
+  /// as the action it is, and names the value once it has one.
+  late double? _typedKm = widget.maxDistanceKm != null &&
+          !distancePresets.contains(widget.maxDistanceKm)
+      ? widget.maxDistanceKm
+      : null;
+
   @override
   Widget build(BuildContext context) {
     final categories = StoreCategories.onlineRail;
@@ -931,20 +940,50 @@ class _StoreFilterSheetState extends State<_StoreFilterSheet> {
                     if (widget.locationAvailable) ...[
                       const SizedBox(height: 18),
                       const _SheetLabel('Distance'),
+                      const SizedBox(height: 2),
+                      const Text('From your live location, in kilometres.',
+                          style: TextStyle(color: BrokaColors.textMid,
+                              fontSize: 11.5, height: 1.3)),
                       const SizedBox(height: 8),
                       Wrap(spacing: 7, runSpacing: 7, children: [
                         _SelectChip(
                           key: const Key('store-filter-distance-any'),
                           label: 'Any distance',
                           selected: _maxDistanceKm == null,
-                          onTap: () => setState(() => _maxDistanceKm = null),
+                          onTap: () => setState(() {
+                            _maxDistanceKm = null;
+                            _typedKm = null;
+                          }),
                         ),
+                        for (final km in distancePresets)
+                          _SelectChip(
+                            key: Key('store-filter-distance-${km.round()}'),
+                            label: formatDistanceKm(km),
+                            selected: _maxDistanceKm == km,
+                            onTap: () => setState(() {
+                              _maxDistanceKm = km;
+                              _typedKm = null;
+                            }),
+                          ),
+                        // A typed radius keeps its chip, so reopening the
+                        // sheet shows the filter that is actually on.
                         _SelectChip(
-                          key: const Key('store-filter-distance-25'),
-                          label: 'Within ${Store.nearRadiusKm.round()} km',
-                          selected: _maxDistanceKm == Store.nearRadiusKm,
-                          onTap: () => setState(
-                              () => _maxDistanceKm = Store.nearRadiusKm),
+                          key: const Key('store-filter-distance-custom'),
+                          label: _typedKm == null
+                              ? 'Custom…'
+                              : formatDistanceKm(_typedKm!),
+                          selected: _typedKm != null,
+                          onTap: () async {
+                            final km = await askCustomDistance(context,
+                                current: _typedKm ?? _maxDistanceKm);
+                            if (km == null || !mounted) return;
+                            setState(() {
+                              _maxDistanceKm = km;
+                              // Typing one of the presets just ticks that
+                              // preset - two chips on one filter is a lie.
+                              _typedKm = distancePresets.contains(km) ? null : km;
+                            });
+                          },
                         ),
                       ]),
                     ],

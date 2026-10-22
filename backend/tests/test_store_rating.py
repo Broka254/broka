@@ -245,10 +245,44 @@ class TestReviewAttribution:
         assert first_row["rating"] > second_row["rating"]
 
     @pytest.mark.asyncio
+    async def test_a_store_page_only_offers_its_own_sales_to_review(self, client):
+        """The "Rate this store" button on a shop's page asks /reviews/my-deals
+        for that shop's deals only. A seller with two shops must not have the
+        second shop's deal offered on the first one's page - the review
+        would land on the wrong shop."""
+        owner_id, headers = await _register(client)
+        first = await _store(client, headers, name="Electronics Shop")
+        second_id = await _extra_store(owner_id, "Other Shop")
+        first_listing = await _create_listing(client, headers, first["id"], "Phone")
+        second_listing = await _create_listing(client, headers, second_id, "Sofa")
+
+        buyer_id, buyer_headers = await _register(client)
+        async with AsyncSessionLocal() as db:
+            for listing_id in (first_listing, second_listing):
+                db.add(Deal(listing_id=listing_id, seller_id=owner_id, buyer_id=buyer_id,
+                            agreed_price=1000, commission=0, status=DealStatus.agreed))
+            await db.commit()
+
+        body = (await client.get("/reviews/my-deals",
+                                 params={"store_id": first["id"]},
+                                 headers=buyer_headers)).json()
+        [offered] = body["deals"]
+        assert offered["listing_name"] == "Phone"
+        assert offered["store_id"] == first["id"]
+        assert offered["store_name"] == first["name"]
+        assert offered["already_reviewed"] is False
+
+        # All of them, with no store filter - the seller's two shops are
+        # two deals, and the profile has no shop to pin it to.
+        all_deals = (await client.get("/reviews/my-deals",
+                                      headers=buyer_headers)).json()["deals"]
+        assert {d["store_id"] for d in all_deals} == {first["id"], second_id}
+
+    @pytest.mark.asyncio
     async def test_a_chat_review_shows_on_a_single_shop_but_not_split_between_two(self, client):
-        """Chat-only reviews are the only kind while in-app payments are
-        off. One shop: they belong to it. Two shops: they stay on the
-        person, because picking one shop would be a guess."""
+        """Legacy rows posted before reviews became deal-only (2026-10-22).
+        One shop: they belong to it. Two shops: they stay on the person,
+        because picking one shop would be a guess."""
         solo_id, solo_headers = await _register(client)
         solo = await _store(client, solo_headers, name="Solo Shop")
         buyer_id, _ = await _register(client)

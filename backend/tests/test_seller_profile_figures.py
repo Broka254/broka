@@ -163,8 +163,8 @@ class TestDealCompletionTime:
 
 @pytest_asyncio.fixture(scope="module")
 async def market():
-    """A seller, a buyer whose deal with them completed, a buyer whose deal is
-    still in escrow, and someone who never bought anything."""
+    """A seller, a buyer whose deal with them was released, a buyer whose
+    deal is still in escrow, and someone who never bought anything."""
     seller_id, as_seller = await _user("Grace Akinyi")
     buyer_id, as_buyer = await _user("Amina Wanjiku")
     waiting_id, as_waiting = await _user("Kevin Mutua")
@@ -179,19 +179,12 @@ async def market():
     }
 
 
-@pytest.fixture
-def strict_reviews():
-    """REVIEWS_REQUIRE_COMPLETED_DEAL on: only a paid-out deal is reviewed."""
-    from api.core.config import settings
-    before = settings.reviews_require_completed_deal
-    object.__setattr__(settings, "reviews_require_completed_deal", True)
-    yield
-    object.__setattr__(settings, "reviews_require_completed_deal", before)
-
-
 class TestWhoMayReview:
+    """Only the buyer of a deal. No setting turns that off - a review is a
+    record of a deal both sides actually reached (2026-10-22)."""
+
     @pytest.mark.asyncio
-    async def test_the_buyer_of_a_completed_deal_has_it_to_review(self, client, market):
+    async def test_the_buyer_of_a_deal_has_it_to_review(self, client, market):
         seller_id, _ = market["seller"]
         _, as_buyer = market["buyer"]
         res = await client.get("/reviews/my-deals", params={"seller_id": seller_id},
@@ -201,16 +194,35 @@ class TestWhoMayReview:
         assert deal["deal_id"] == market["done"]
         assert deal["seller_name"] == "Grace Akinyi"
         assert deal["listing_name"] == "Samsung A54"
+        assert deal["status"] == "released"
         assert deal["already_reviewed"] is False
 
     @pytest.mark.asyncio
-    async def test_no_one_else_has_anything_to_review(self, client, market, strict_reviews):
+    async def test_a_deal_still_running_can_be_reviewed(self, client):
+        """BROKA never learns that a deal completed (buyers pay outside it),
+        so a deal in escrow is reviewable - waiting for a release that never
+        comes is what left nobody able to review.
+
+        Its own seller, not the shared market's: a review here would change
+        that seller's summary for every later test.
+        """
+        seller_id, _ = await _user("In Escrow Seller")
+        buyer_id, as_buyer = await _user("In Escrow Buyer")
+        deal = await _deal(seller_id, buyer_id, DealStatus.paid, listing_name="JBL Flip 6")
+        [offered] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                      headers=as_buyer)).json()["deals"]
+        assert offered["deal_id"] == deal
+        res = await client.post("/reviews/", json={"deal_id": deal, "rating": 4},
+                                headers=as_buyer)
+        assert res.status_code == 201, res.text
+
+    @pytest.mark.asyncio
+    async def test_no_one_else_has_anything_to_review(self, client, market):
         seller_id, as_seller = market["seller"]
-        for who in ("waiting", "stranger"):
-            _, headers = market[who]
-            res = await client.get("/reviews/my-deals", params={"seller_id": seller_id},
-                                   headers=headers)
-            assert res.json() == {"deals": []}, who
+        _, as_stranger = market["stranger"]
+        res = await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                               headers=as_stranger)
+        assert res.json() == {"deals": []}
         # The seller is not their own buyer.
         res = await client.get("/reviews/my-deals", params={"seller_id": seller_id},
                                headers=as_seller)
@@ -233,13 +245,6 @@ class TestWhoMayReview:
         res = await client.post("/reviews/", json={"deal_id": market["done"], "rating": 5},
                                 headers=as_seller)
         assert res.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_not_before_delivery_is_confirmed(self, client, market, strict_reviews):
-        _, as_waiting = market["waiting"]
-        res = await client.post("/reviews/", json={"deal_id": market["in_escrow"], "rating": 5},
-                                headers=as_waiting)
-        assert res.status_code == 400
 
     @pytest.mark.asyncio
     async def test_an_account_that_dealt_with_itself_cannot_review(self, client):
@@ -265,10 +270,9 @@ async def _talk(seller_id: str, buyer_id: str, listing_name: str = "Sofa") -> st
         return listing.id
 
 
-class TestReviewsWithoutACompletedDeal:
-    """REVIEWS_REQUIRE_COMPLETED_DEAL off (the default, 2026-10-12): buyers pay
-    sellers outside BROKA, so no deal ever completes here and nobody could
-    review. A deal that was agreed, or a conversation, is enough."""
+class TestReviewsAreDealOnly:
+    """2026-10-22: a conversation is not a purchase. Only the buyer of a
+    deal may review - the guard random commenters were slipping past."""
 
     @pytest.mark.asyncio
     async def test_an_agreed_deal_can_be_reviewed(self, client):
@@ -278,6 +282,7 @@ class TestReviewsWithoutACompletedDeal:
         [offered] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
                                       headers=as_buyer)).json()["deals"]
         assert offered["deal_id"] == deal
+        assert offered["status"] == "agreed"
         res = await client.post("/reviews/", json={"deal_id": deal, "rating": 5},
                                 headers=as_buyer)
         assert res.status_code == 201
@@ -290,31 +295,35 @@ class TestReviewsWithoutACompletedDeal:
         res = await client.post("/reviews/", json={"deal_id": deal, "rating": 1},
                                 headers=as_buyer)
         assert res.status_code == 400
+        assert (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                 headers=as_buyer)).json() == {"deals": []}
 
     @pytest.mark.asyncio
-    async def test_a_buyer_who_talked_with_the_seller_reviews_them_once(self, client):
+    async def test_a_refunded_deal_is_not_a_purchase(self, client):
+        seller_id, _ = await _user("Refund Seller")
+        buyer_id, as_buyer = await _user("Refund Buyer")
+        deal = await _deal(seller_id, buyer_id, DealStatus.refunded)
+        res = await client.post("/reviews/", json={"deal_id": deal, "rating": 1},
+                                headers=as_buyer)
+        assert res.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_a_buyer_who_only_talked_has_nothing_to_review(self, client):
+        """The regression: anyone who opened a chat could post a review, so a
+        stranger could leave a wrong comment about a seller."""
         seller_id, _ = await _user("Chatty Seller")
         buyer_id, as_buyer = await _user("Chatty Buyer")
         await _talk(seller_id, buyer_id, "Sofa")
         await _talk(seller_id, buyer_id, "Table")
-        [offered] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
-                                      headers=as_buyer)).json()["deals"]
-        assert offered["deal_id"] == f"chat:{seller_id}"
-        assert offered["already_reviewed"] is False
-
-        res = await client.post("/reviews/", json={
-            "deal_id": offered["deal_id"], "rating": 4, "comment": "Quick replies."},
-            headers=as_buyer)
-        assert res.status_code == 201
-        assert res.json()["deal_id"] is None
-        again = await client.post("/reviews/", json={"deal_id": offered["deal_id"], "rating": 5},
-                                  headers=as_buyer)
-        assert again.status_code == 409
-        [after] = (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
-                                    headers=as_buyer)).json()["deals"]
-        assert after["already_reviewed"] is True
+        assert (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
+                                 headers=as_buyer)).json() == {"deals": []}
+        res = await client.post("/reviews/", json={"deal_id": f"chat:{seller_id}",
+                                                    "rating": 4}, headers=as_buyer)
+        assert res.status_code == 403
+        assert "deal" in res.json()["detail"].lower()
+        # Nothing was written: the seller's record is untouched.
         summary = (await client.get(f"/reviews/summary/{seller_id}")).json()
-        assert summary["count"] == 1 and summary["avg"] == 4.0
+        assert summary["count"] == 0
 
     @pytest.mark.asyncio
     async def test_a_stranger_who_never_talked_cannot_review(self, client):
@@ -333,18 +342,6 @@ class TestReviewsWithoutACompletedDeal:
         res = await client.post("/reviews/", json={"deal_id": f"chat:{self_id}", "rating": 5},
                                 headers=as_self)
         assert res.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_a_chat_is_not_enough_when_completed_deals_are_required(
-            self, client, strict_reviews):
-        seller_id, _ = await _user("Strict Seller")
-        buyer_id, as_buyer = await _user("Strict Buyer")
-        await _talk(seller_id, buyer_id)
-        assert (await client.get("/reviews/my-deals", params={"seller_id": seller_id},
-                                 headers=as_buyer)).json() == {"deals": []}
-        res = await client.post("/reviews/", json={"deal_id": f"chat:{seller_id}", "rating": 5},
-                                headers=as_buyer)
-        assert res.status_code == 400
 
 
 class TestReviewing:

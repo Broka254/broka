@@ -8,6 +8,13 @@
 // Opened with a zero-duration transition (openStoreCategory), the same
 // rule as category_navigation.dart: choosing a category should feel like
 // the page changing in place, not a screen sliding over it.
+//
+// Filters (2026-10-22): the same county/area/distance row the directory
+// has, so "Electronics" can mean "Electronics within 5 km" without going
+// back to Stores and losing the category. The distance control offers the
+// presets and a typed radius (widgets/distance_filter.dart); both it and
+// the place filters hide the nearby rail while on, the directory's rule - a
+// shelf of unfiltered shops cannot sit above a filtered result set.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -27,6 +34,7 @@ import 'store_home_screen.dart';
 import 'store_map_screen.dart';
 import 'widgets/store_card.dart';
 import 'widgets/store_details_view.dart' show showStoreDetails;
+import 'widgets/store_location_filter.dart';
 
 /// Opens the one-category store screen, with no transition.
 void openStoreCategory(BuildContext context, String categoryName) {
@@ -79,12 +87,23 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
   final List<Store> _nearby = [];
   double? _userLat;
   double? _userLng;
+  String? _county;
+  String? _subcounty;
+  double? _maxDistanceKm;
 
   CategoryVisual get _visual => StoreCategories.visualFor(widget.categoryName);
 
   /// True while the user is narrowing the list. The nearby rail is a
   /// shortcut, not a second catalogue - see [nearbyRail].
-  bool get _filtersActive => _searchCtrl.text.trim().isNotEmpty;
+  bool get _filtersActive =>
+      _searchCtrl.text.trim().isNotEmpty ||
+      _county != null ||
+      _subcounty != null ||
+      _maxDistanceKm != null;
+
+  /// A radius needs a centre: until a live fix arrives, the distance control
+  /// is hidden rather than offering a filter that cannot mean anything.
+  bool get _canUseDistance => _userLat != null && _userLng != null;
 
   /// The shops in the 'Stores near you' rail. Hidden while a filter is
   /// active, so a shelf of unfiltered shops cannot sit above a filtered
@@ -124,8 +143,11 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
     final result = await _repo.listStores(
       search: query.isEmpty ? null : query,
       category: widget.categoryName,
+      county: _county,
+      subcounty: _subcounty,
       lat: _userLat,
       lng: _userLng,
+      maxDistanceKm: _canUseDistance ? _maxDistanceKm : null,
     );
     if (!mounted) return;
     result.fold(
@@ -239,6 +261,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
                     ),
                   ),
                   SliverToBoxAdapter(child: _searchBar()),
+                  SliverToBoxAdapter(child: _locationFilters()),
                   ..._nearbySlivers(),
                   ..._bodySlivers(),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
@@ -266,6 +289,36 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
             _load();
           },
         ),
+      );
+
+  /// County, area and distance, scoped to this category - the row the
+  /// directory has (image 1), so the category screen can be narrowed the
+  /// same way instead of only by typing.
+  Widget _locationFilters() => StoreLocationFilter(
+        county: _county,
+        subcounty: _subcounty,
+        maxDistanceKm: _maxDistanceKm,
+        onClear: () {
+          setState(() {
+            _county = null;
+            _subcounty = null;
+            _maxDistanceKm = null;
+          });
+          _load();
+        },
+        onDistanceChanged: _canUseDistance
+            ? (value) {
+                setState(() => _maxDistanceKm = value);
+                _load();
+              }
+            : null,
+        onChanged: (county, subcounty) {
+          setState(() {
+            _county = county;
+            _subcounty = subcounty;
+          });
+          _load();
+        },
       );
 
   List<Widget> _nearbySlivers() {
@@ -341,8 +394,12 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
               gradient: visual.gradient,
               headline: "Couldn't load stores",
               body: _error!,
-              action:
-                  OutlinedButton(onPressed: _load, child: const Text('Retry')),
+              action: OutlinedButton(
+                  onPressed: () {
+                    _load();
+                    _loadNearby();
+                  },
+                  child: const Text('Retry')),
             ),
           ),
         ),
@@ -352,6 +409,7 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
     if (_stores.isEmpty || main.isEmpty) {
       final searching = _searchCtrl.text.trim().isNotEmpty;
       final wholesale = StoreCategories.isWholesaleFacet(widget.categoryName);
+      final narrowedByPlace = _county != null || _maxDistanceKm != null;
       // With only a handful of shops, every one can already be in the rail
       // above - but an empty category still says so.
       if (_stores.isNotEmpty && main.isEmpty && !_loading && _error == null) {
@@ -366,14 +424,18 @@ class _StoreCategoryScreenState extends State<StoreCategoryScreen> {
               gradient: visual.gradient,
               headline: searching
                   ? 'No stores match "${_searchCtrl.text.trim()}"'
-                  : wholesale
-                      ? 'No wholesale stores yet'
-                      : 'No ${widget.categoryName} stores yet',
+                  : narrowedByPlace
+                      ? 'No ${widget.categoryName} stores match those filters'
+                      : wholesale
+                          ? 'No wholesale stores yet'
+                          : 'No ${widget.categoryName} stores yet',
               body: searching
                   ? 'Try a shorter or different search'
-                  : wholesale
-                      ? 'Shops selling across several categories will show up here.'
-                      : 'Shops selling ${widget.categoryName} will show up here.',
+                  : narrowedByPlace
+                      ? 'Try a different county, area or distance.'
+                      : wholesale
+                          ? 'Shops selling across several categories will show up here.'
+                          : 'Shops selling ${widget.categoryName} will show up here.',
             ),
           ),
         ),

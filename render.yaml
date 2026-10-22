@@ -106,8 +106,6 @@ services:
         value: "false"       # true: buyers pay through BROKA's escrow again, with commission.
                              # Off: buyers pay sellers directly (PRICING.md, "While BROKA
                              # handles no payments"). Only once an escrow provider works.
-      - key: REVIEWS_REQUIRE_COMPLETED_DEAL
-        value: "false"       # true: reviews only after a paid-out deal. Off: a buyer who agreed a deal or talked with the seller may review once.
       - key: DCR_ENABLED
         value: "false"       # true: deal completion rate counts towards rank. Off while payments happen outside BROKA.
       - key: ESCROW_GUIDANCE_ENABLED

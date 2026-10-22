@@ -1,12 +1,18 @@
 // BROKA - Leave a Review Screen
-// Buyers open this to rate a seller (1-5 stars) and leave a comment.
-// Only for a deal of theirs with the seller that completed (delivery
-// confirmed, escrow paid out), once per deal - the backend checks both on
-// every submission; this screen only lists the deals that qualify.
+// Buyers open this to rate a seller (1-5 stars) and leave a comment. When
+// the reviewed deal's product belonged to a store, the same review is the
+// store's too - the backend attributes it from the deal, never from
+// anything the caller sends.
+//
+// Only a buyer who has a deal with the seller may review, once per deal.
+// A chat alone is not a deal (that was a stranger's way in until
+// 2026-10-22); the backend refuses anyone else on every submission, and
+// this screen only lists the deals that qualify.
 //
 // Route args: Map<String, dynamic> with keys:
 //   deal_id      - if provided, skip deal-picker and review this deal directly
 //   seller_id    - pre-select this seller's deals in the picker
+//   store_id     - opened from a store page: that shop's deals only
 //   seller_name  - display name of the seller
 //   listing_name - name of the listing (shown for context)
 //
@@ -38,6 +44,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   // Args
   String _dealId      = '';
   String _sellerId    = '';
+  String _storeId     = '';
   String _sellerName  = 'Seller';
   String _listingName = '';
   bool   _initialized = false;
@@ -46,6 +53,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   List<ReviewableDeal> _deals = [];
   String? _pickedDealId;
   String? _pickedListingName;
+  String _pickedStatus = '';
 
   // Form
   int    _rating  = 0;
@@ -69,6 +77,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (args is Map) {
       _dealId      = (args['deal_id']      as String?) ?? '';
       _sellerId    = (args['seller_id']    as String?) ?? '';
+      _storeId     = (args['store_id']     as String?) ?? '';
       _sellerName  = (args['seller_name']  as String?) ?? 'Seller';
       _listingName = (args['listing_name'] as String?) ?? '';
     }
@@ -87,13 +96,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   Future<void> _describeDeal() async {
     final result = await reviewsRepository.myReviewableDeals(
-        sellerId: _sellerId.isEmpty ? null : _sellerId);
+        sellerId: _sellerId.isEmpty ? null : _sellerId,
+        storeId: _storeId.isEmpty ? null : _storeId);
     if (!mounted || result is! Success<List<ReviewableDeal>>) return;
     final deal = result.data.where((d) => d.dealId == _dealId).firstOrNull;
     setState(() {
       if (deal == null) {
-        _closedMessage = "This deal can't be reviewed yet - reviews open once "
-            'you confirm the goods arrived and the payment is released.';
+        _closedMessage = "This deal can't be reviewed - reviews come from a "
+            'deal you have with this seller, and this one is cancelled, '
+            'refunded, or not one of yours.';
         _step = _ReviewStep.closed;
       } else if (deal.alreadyReviewed) {
         _sellerName = deal.sellerName;
@@ -105,6 +116,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         _sellerId = deal.sellerId;
         _listingName = deal.listingName;
         _pickedListingName = deal.listingName;
+        _pickedStatus = deal.status;
       }
     });
   }
@@ -117,9 +129,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   Future<void> _loadDeals() async {
     setState(() => _step = _ReviewStep.loading);
-    // The seller's deals only, when the screen was opened from their profile.
+    // Only what the screen was scoped to: one seller's deals, or one shop's
+    // products when opened from a store page.
     final result = await reviewsRepository.myReviewableDeals(
-        sellerId: _sellerId.isEmpty ? null : _sellerId);
+        sellerId: _sellerId.isEmpty ? null : _sellerId,
+        storeId: _storeId.isEmpty ? null : _storeId);
     if (!mounted) return;
     result.fold(
       onSuccess: (all) {
@@ -128,6 +142,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         if (pending.length == 1) {
           _pickedDealId      = pending.first.dealId;
           _pickedListingName = pending.first.listingName;
+          _pickedStatus      = pending.first.status;
           if (_sellerName == 'Seller') _sellerName = pending.first.sellerName;
           setState(() { _deals = pending; _step = _ReviewStep.form; });
         } else {
@@ -317,8 +332,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             style: TextStyle(color: BrokaColors.textHigh,
                 fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
-        const Text('Only completed deals can be reviewed. One review per deal.',
-            style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+        const Text('Only a deal you have with this seller can be reviewed, once '
+            'per deal. It counts for their store too when the item was theirs.',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.35)),
         const SizedBox(height: 20),
         if (_errorMsg != null) ...[
           _ErrorBanner(message: _errorMsg!),
@@ -341,8 +357,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
                       fontWeight: FontWeight.w700, fontSize: 14)),
               SizedBox(height: 6),
               Text(
-                'You can only review sellers you have completed a deal with.',
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 12),
+                'You can only review a seller you have a deal with. Agree a '
+                'deal in the chat first - a conversation alone does not count.',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
                 textAlign: TextAlign.center,
               ),
             ]),
@@ -353,13 +370,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
             final seller  = d.sellerName;
             final listing = d.listingName;
             final price   = d.agreedPrice;
-            final done    = d.completedAt?.toLocal();
-            final dateStr = done == null ? '' : '${done.day}/${done.month}/${done.year}';
+            // The date the card shows: when the money was released if it
+            // was, else when the deal was struck. Never one as the other.
+            final when    = (d.completedAt ?? d.createdAt)?.toLocal();
+            final dateStr = when == null ? '' : '${when.day}/${when.month}/${when.year}';
+            final shop    = d.storeName;
             final picked = _pickedDealId == dId;
             return GestureDetector(
               onTap: () => setState(() {
                 _pickedDealId      = dId;
                 _pickedListingName = listing;
+                _pickedStatus      = d.status;
                 _sellerName        = seller;
                 _errorMsg          = null;
               }),
@@ -398,13 +419,22 @@ class _ReviewScreenState extends State<ReviewScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(seller, style: const TextStyle(color: BrokaColors.textHigh,
                         fontWeight: FontWeight.w700, fontSize: 13)),
-                    Text(listing, style: const TextStyle(color: BrokaColors.textMid,
+                    Text(shop == null || shop.isEmpty ? listing : '$listing · $shop',
+                        style: const TextStyle(color: BrokaColors.textMid,
                         fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
-                    // A conversation with no deal (reviews/service.py) has
-                    // no price or date to show.
                     if (price > 0 || dateStr.isNotEmpty)
                       Text(price > 0 ? 'KES ${price.toStringAsFixed(0)}${dateStr.isEmpty ? '' : ' · $dateStr'}' : dateStr,
                           style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+                    // A deal still running is reviewable (BROKA never
+                    // learns that an outside payment landed), but the card
+                    // says which it is instead of implying "completed".
+                    if (d.status.isNotEmpty && d.status != 'released')
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(_statusLabel(d.status),
+                            style: const TextStyle(color: BrokaColors.gold,
+                                fontSize: 10, fontWeight: FontWeight.w700)),
+                      ),
                   ])),
                   if (picked)
                     const Icon(Icons.check_circle_rounded,
@@ -468,16 +498,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
                   maxLines: 1, overflow: TextOverflow.ellipsis),
             ])),
             Container(
+              key: const Key('review-deal-status'),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: BrokaColors.neonGreen.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.3)),
               ),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.handshake_rounded, color: BrokaColors.neonGreen, size: 12),
-                SizedBox(width: 4),
-                Text('Deal done', style: TextStyle(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.handshake_rounded, color: BrokaColors.neonGreen, size: 12),
+                const SizedBox(width: 4),
+                Text(_statusLabel(_pickedStatus), style: const TextStyle(
                     color: BrokaColors.neonGreen, fontSize: 10, fontWeight: FontWeight.w700)),
               ]),
             ),
@@ -624,6 +655,30 @@ class _ReviewScreenState extends State<ReviewScreen> {
       ]),
     ),
   );
+
+  /// How the deal reads on the card. "Deal done" only when BROKA saw the
+  /// money released; anything else names the phase it is in.
+  static String _statusLabel(String status) {
+    switch (status) {
+      case 'released':
+        return 'Deal done';
+      case 'paid':
+        return 'Paid into escrow';
+      case 'disputed':
+      case 'awaiting_resolution':
+      case 'awaiting_replacement':
+      case 'goods_not_arrived':
+        return 'Deal in dispute';
+      case 'awaiting_condition_check':
+        return 'Goods arrived';
+      case 'agreed':
+        return 'Deal agreed';
+      case 'negotiating':
+        return 'Still agreeing';
+      default:
+        return 'Deal';
+    }
+  }
 
   Color _ratingColor(int r) {
     if (r <= 1) return Colors.redAccent;

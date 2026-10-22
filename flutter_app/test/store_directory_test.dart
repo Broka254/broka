@@ -228,4 +228,55 @@ void main() {
     expect(reset.containsKey('max_distance_km'), isFalse);
     expect(reset.containsKey('nearest_first'), isFalse);
   });
+
+  testWidgets('a typed distance is a filter like any preset', (tester) async {
+    final requests = <http.Request>[];
+    await _pump(
+      tester,
+      repository: StoresRepository(client: _client(requests)),
+      hasLocation: true,
+    );
+
+    await tester.tap(find.byKey(const Key('store-search-filter')));
+    await tester.pumpAndSettle();
+    // The sheet holds the categories and the distances; on a phone the
+    // custom chip sits below the fold.
+    await tester.ensureVisible(find.byKey(const Key('store-filter-distance-custom')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('store-filter-distance-custom')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('distance-custom-field')), '7');
+    await tester.tap(find.byKey(const Key('distance-custom-apply')));
+    await tester.pumpAndSettle();
+    // The chip names the radius that is on, not "Custom…" any more.
+    expect(find.text('7 km'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('store-filter-apply')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('store-filter-apply')));
+    await tester.pumpAndSettle();
+
+    expect(requests.last.url.queryParameters['max_distance_km'], '7.0');
+  });
+
+  testWidgets('a distance outside the map is refused, not clamped',
+      (tester) async {
+    await _pump(
+      tester,
+      repository: StoresRepository(client: _client([])),
+      hasLocation: true,
+    );
+    await tester.tap(find.byKey(const Key('store-search-filter')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('store-filter-distance-custom')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('store-filter-distance-custom')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('distance-custom-field')), '9999');
+    await tester.tap(find.byKey(const Key('distance-custom-apply')));
+    await tester.pumpAndSettle();
+
+    // The dialog stays open and says what is allowed.
+    expect(find.byKey(const Key('distance-custom-dialog')), findsOneWidget);
+    expect(find.textContaining('between 0.5 and 2000 km'), findsOneWidget);
+  });
 }

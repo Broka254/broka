@@ -1,49 +1,52 @@
-"""Reviews Service v3.0
+"""Reviews Service v4.0
 
-A review is a buyer's word on a seller. With REVIEWS_REQUIRE_COMPLETED_DEAL
-on, only after a deal that completed: the buyer confirmed delivery and the
-escrow paid the seller out. Off (the default while buyers pay sellers outside
-BROKA, so no deal ever completes here), a buyer may review a seller they
-agreed a deal with (anything but cancelled or refunded) or talked with about
-one of their listings - once per deal, and once per seller without one. That
-is what makes someone a buyer of this seller rather than a person with an
-opinion, so it is checked here for every review - the app only hides the
-button from everyone else.
+A review is a buyer's word on a seller - and, when the product was sold
+through a store, on that store too. It is a record of a deal that happened,
+not an opinion anyone may post.
 
-A conversation without a deal is offered to the app as a reviewable "deal"
-whose id is CHAT_REVIEW_PREFIX + the seller's id, so builds already installed
-review it through the screen they have; its review row has no deal.
+WHO MAY REVIEW: only the buyer of a deal with the seller, one review per
+deal. A Deal row exists only when the two sides reached one in the app, so
+it is the proof that they actually dealt. A conversation alone is not: any
+account can open a chat and post a comment, which is exactly the random
+review this rule exists to stop (until 2026-10-22 a chat was enough).
+
+WHY NOT "COMPLETED": BROKA holds no money while buyers pay sellers
+directly, so a deal never reaches released here and requiring it meant
+nobody could ever review. Every deal status counts except cancelled and
+refunded - a deal still agreeing, paid, delivered or in a dispute is one
+the buyer was part of, and is often the only public record of what went
+wrong (ESCROW_AUDIT.md, STORES_RATING_PLAN.md §2).
+
+Its review row also carries the deal's store (reviews.store_id) so a shop
+is rated from its own sales, never from its owner's other shop.
 """
 from __future__ import annotations
 
 import logging
 from typing import Optional
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.database import Review, Deal, DealStatus, Listing, NegotiationMessage, User
-from api.core.config import settings
+from api.database import Review, Deal, DealStatus, Listing, User
+from api.models.store import Store
 from api.core.events import publish, ReviewSubmitted
 from api.core.audit import record_audit
 
 logger = logging.getLogger(__name__)
 
-# The deal statuses a buyer may review after, when reviews require a
-# completed deal. Released only: a refunded or cancelled deal is not a
-# purchase, and a paid one has not been delivered yet.
-REVIEWABLE_STATUSES = (DealStatus.released,)
-# Not a purchase whatever the setting.
-_NOT_A_PURCHASE = (DealStatus.cancelled, DealStatus.refunded)
+# A deal that was cancelled or refunded is not one the buyer went through
+# with: there is nothing to review. Every other status is a deal they were
+# part of - including the ones still running, because BROKA never learns
+# that a deal completed (buyers pay sellers outside it).
+NOT_A_PURCHASE = (DealStatus.cancelled, DealStatus.refunded)
+REVIEWABLE_STATUSES = tuple(s for s in DealStatus if s not in NOT_A_PURCHASE)
 
+# Prefix older app builds used for a chat-only "deal". Reads nothing any
+# more, but a request still carrying one gets a plain answer instead of a
+# 404 that looks like a broken screen.
 CHAT_REVIEW_PREFIX = "chat:"
-
-
-def reviewable_statuses() -> tuple:
-    if settings.reviews_require_completed_deal:
-        return REVIEWABLE_STATUSES
-    return tuple(s for s in DealStatus if s not in _NOT_A_PURCHASE)
 
 
 class ReviewService:
@@ -60,8 +63,9 @@ class ReviewService:
         if not (1 <= rating <= 5):
             raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
         if deal_id.startswith(CHAT_REVIEW_PREFIX):
-            return await self._submit_chat_review(
-                deal_id[len(CHAT_REVIEW_PREFIX):], reviewer_id, rating, comment)
+            raise HTTPException(
+                status_code=403,
+                detail="A review needs a deal. Open the deal you had with this seller to rate it.")
 
         # Validate deal access
         r = await self.db.execute(select(Deal).where(Deal.id == deal_id))
@@ -74,8 +78,10 @@ class ReviewService:
         # would be the seller rating themselves.
         if deal.seller_id == reviewer_id:
             raise HTTPException(status_code=403, detail="You can't review yourself")
-        if deal.status not in reviewable_statuses():
-            raise HTTPException(status_code=400, detail="Can only review after delivery is confirmed")
+        if deal.status not in REVIEWABLE_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail="That deal was cancelled or refunded, so there is nothing to review")
 
         if await self._already_reviewed(deal_id, reviewer_id):
             raise HTTPException(status_code=409, detail="You have already reviewed this deal")
@@ -97,45 +103,6 @@ class ReviewService:
             rating=rating,
             comment=comment[:1000],
         ))
-
-    async def _submit_chat_review(
-        self, seller_id: str, reviewer_id: str, rating: int, comment: str,
-    ) -> dict:
-        """A review of a seller the reviewer talked with but has no deal with."""
-        if settings.reviews_require_completed_deal:
-            raise HTTPException(status_code=400, detail="Can only review after delivery is confirmed")
-        if not seller_id or seller_id == reviewer_id:
-            raise HTTPException(status_code=403, detail="You can't review yourself")
-        if not await self._talked_with(reviewer_id, seller_id):
-            raise HTTPException(
-                status_code=403,
-                detail="You can review a seller once you've talked with them about a listing")
-        dup = await self.db.execute(select(Review.id).where(
-            Review.seller_id == seller_id, Review.reviewer_id == reviewer_id,
-            Review.deal_id.is_(None)))
-        if dup.first() is not None:
-            raise HTTPException(status_code=409, detail="You have already reviewed this seller")
-        return await self._save(Review(
-            deal_id=None,
-            reviewer_id=reviewer_id,
-            seller_id=seller_id,
-            rating=rating,
-            comment=comment[:1000],
-        ))
-
-    async def _talked_with(self, buyer_id: str, seller_id: str) -> bool:
-        """The buyer wrote in a thread of theirs on one of the seller's
-        listings - a stranger with no conversation has no review to give."""
-        # visibility-ok: selects one id to test the buyer wrote here, no content
-        r = await self.db.execute(
-            select(NegotiationMessage.id)
-            .join(Listing, Listing.id == NegotiationMessage.listing_id)
-            .where(
-                NegotiationMessage.buyer_id == buyer_id,
-                NegotiationMessage.sender_id == buyer_id,
-                Listing.seller_id == seller_id,
-            ).limit(1))
-        return r.first() is not None
 
     async def _save(self, review: Review) -> dict:
         seller_id, reviewer_id, deal_id = review.seller_id, review.reviewer_id, review.deal_id
@@ -267,24 +234,31 @@ class ReviewService:
 
     async def my_reviewable_deals(
         self, buyer_id: str, seller_id: Optional[str] = None,
+        store_id: Optional[str] = None,
     ) -> list[dict]:
-        """The caller's completed purchases - optionally from one seller -
-        each marked with whether it has been reviewed yet. What decides if a
-        "Write a review" button is shown at all, and what the review screen
-        lets the buyer pick from."""
+        """The caller's deals - optionally with one seller, or on one
+        shop's products - each saying whether it has been reviewed yet.
+
+        This is what decides whether a "Write a review" button is shown at
+        all, and what the review screen offers to pick from. `store_id` is
+        how a store page asks the same question about its own sales: a
+        review of that shop has to name a product the shop sold, never
+        another shop of the same owner.
+        """
         q = select(Deal.id, Deal.seller_id, Deal.listing_id, Deal.agreed_price,
-                   Deal.created_at, Deal.released_at).where(
+                   Deal.status, Deal.created_at, Deal.released_at).where(
             Deal.buyer_id == buyer_id,
             Deal.seller_id != buyer_id,
-            Deal.status.in_(reviewable_statuses()),
+            Deal.status.in_(REVIEWABLE_STATUSES),
         )
         if seller_id:
             q = q.where(Deal.seller_id == seller_id)
+        if store_id:
+            q = q.where(Deal.listing_id.in_(
+                select(Listing.id).where(Listing.store_id == store_id)))
         deals = (await self.db.execute(q.order_by(Deal.created_at.desc()).limit(100))).all()
-        chats = [] if settings.reviews_require_completed_deal else \
-            await self._reviewable_chats(buyer_id, seller_id, {d.seller_id for d in deals})
         if not deals:
-            return chats
+            return []
 
         deal_ids = [d.id for d in deals]
         rv = await self.db.execute(
@@ -296,59 +270,33 @@ class ReviewService:
             select(User.id, User.name, User.nickname)
             .where(User.id.in_({d.seller_id for d in deals})))
         sellers = {uid: nickname or name for uid, name, nickname in sr.all()}
+        # The product and the shop behind it, in one query: a store page's
+        # "Rate this store" needs to know both, and the card shows the
+        # product's name.
         lr = await self.db.execute(
-            select(Listing.id, Listing.name)
+            select(Listing.id, Listing.name, Listing.store_id)
             .where(Listing.id.in_({d.listing_id for d in deals if d.listing_id})))
-        listings = dict(lr.all())
+        listings = {lid: (name, store) for lid, name, store in lr.all()}
+        shop_names = {}
+        shop_ids = {store for _, store in listings.values() if store}
+        if shop_ids:
+            shop_names = dict((await self.db.execute(
+                select(Store.id, Store.name).where(Store.id.in_(shop_ids)))).all())
 
         return [{
             "deal_id": d.id,
             "seller_id": d.seller_id,
             "seller_name": sellers.get(d.seller_id) or "Seller",
-            "listing_name": listings.get(d.listing_id) or "Listing",
+            "listing_name": (listings.get(d.listing_id) or (None, None))[0] or "Listing",
+            "store_id": (listings.get(d.listing_id) or (None, None))[1],
+            "store_name": shop_names.get(
+                (listings.get(d.listing_id) or (None, None))[1]),
             "agreed_price": d.agreed_price,
+            "status": d.status.value if hasattr(d.status, "value") else d.status,
             "created_at": d.created_at.isoformat() if d.created_at else None,
             "completed_at": d.released_at.isoformat() if d.released_at else None,
             "already_reviewed": d.id in reviewed,
-        } for d in deals] + chats
-
-    async def _reviewable_chats(
-        self, buyer_id: str, seller_id: Optional[str], dealt_with: set,
-    ) -> list[dict]:
-        """One entry per seller the buyer talked with and has no deal with,
-        newest conversation first, in my_reviewable_deals' shape."""
-        # visibility-ok: selects listing ids and times of the buyer's own messages, no content
-        q = (select(Listing.seller_id, Listing.name, NegotiationMessage.created_at)
-             .join(Listing, Listing.id == NegotiationMessage.listing_id)
-             .where(NegotiationMessage.buyer_id == buyer_id,
-                    NegotiationMessage.sender_id == buyer_id,
-                    Listing.seller_id != buyer_id))
-        if seller_id:
-            q = q.where(Listing.seller_id == seller_id)
-        rows = (await self.db.execute(
-            q.order_by(NegotiationMessage.created_at.desc()).limit(500))).all()
-        latest: dict[str, tuple] = {}
-        for sid, name, at in rows:
-            if sid and sid not in dealt_with and sid not in latest:
-                latest[sid] = (name, at)
-        if not latest:
-            return []
-        reviewed = {row[0] for row in (await self.db.execute(
-            select(Review.seller_id).where(
-                Review.reviewer_id == buyer_id, Review.deal_id.is_(None),
-                Review.seller_id.in_(latest)))).all()}
-        sellers = {uid: nickname or name for uid, name, nickname in (await self.db.execute(
-            select(User.id, User.name, User.nickname).where(User.id.in_(latest)))).all()}
-        return [{
-            "deal_id": f"{CHAT_REVIEW_PREFIX}{sid}",
-            "seller_id": sid,
-            "seller_name": sellers.get(sid) or "Seller",
-            "listing_name": name or "Listing",
-            "agreed_price": None,
-            "created_at": at.isoformat() if at else None,
-            "completed_at": None,
-            "already_reviewed": sid in reviewed,
-        } for sid, (name, at) in latest.items()]
+        } for d in deals]
 
     async def _update_seller_rating(self, seller_id: str) -> None:
         r = await self.db.execute(
