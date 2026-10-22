@@ -481,9 +481,8 @@ void main() {
           find.descendant(of: first, matching: find.text('4.7')), findsNothing);
       expect(find.descendant(of: first, matching: find.text('9 products')),
           findsOneWidget);
-      // The compact directory card keeps the full label when it has room and
-      // shortens it on a two-column phone card, where Map and Details share
-      // the same footer. The action and its key stay the same either way.
+      // The wide directory card always says Visit; Map and Details are
+      // square icon actions beside it, not words competing for the row.
       expect(
           find.descendant(
               of: first,
@@ -498,13 +497,24 @@ void main() {
           findsNothing);
       expect(find.byKey(const Key('store-details-store-0')), findsOneWidget);
       expect(find.textContaining('Escrow'), findsNothing);
-      // Still a substantial shopfront card, not the old 80dp row.
-      expect(tester.getSize(first).height, greaterThan(240));
-      // Visit store remains a pill rather than a bar across the picture.
+      // Still a shopfront card rather than the old 80dp row: the picture
+      // fills the left of the row and the facts get their own column.
+      final cardSize = tester.getSize(first);
+      expect(cardSize.height, greaterThan(170));
+      expect(cardSize.width, greaterThan(cardSize.height));
+      // Visit store fills what the two square actions leave, so it is the
+      // widest thing in the footer without running across the picture.
       final visit =
           tester.getSize(find.byKey(const Key('visit-store-store-0')));
-      expect(visit.width, lessThan(tester.getSize(first).width / 2));
       expect(visit.height, inInclusiveRange(34, 44));
+      expect(
+          visit.width,
+          greaterThan(
+              tester.getSize(find.byKey(const Key('store-map-store-0'))).width));
+      final visitRect =
+          tester.getRect(find.byKey(const Key('visit-store-store-0')));
+      expect(visitRect.left, greaterThan(cardSize.width * 0.4),
+          reason: 'Visit stays in the facts column, never over the picture');
       // A cover and a logo: the logo is the sign over the picture's edge.
       expect(
           find.descendant(

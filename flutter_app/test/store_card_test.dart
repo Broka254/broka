@@ -34,7 +34,7 @@ Store _store(
       hasLocation: approxLat != null,
     );
 
-Future<void> _pumpCompact(
+Future<void> _pumpWide(
   WidgetTester tester,
   Store store, {
   VoidCallback? onMap,
@@ -44,17 +44,14 @@ Future<void> _pumpCompact(
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
-  const width = 174.0;
-  final height = StoreCard.compactExtentFor(width: width, textScale: 1);
   await tester.pumpWidget(MaterialApp(
     home: Scaffold(
       body: Center(
         child: SizedBox(
-          width: width,
-          height: height,
+          width: 358,
           child: StoreCard(
             store: store,
-            compact: true,
+            wide: true,
             onTap: onTap ?? () {},
             onMap: onMap,
             onDetails: onDetails,
@@ -137,9 +134,23 @@ void main() {
     expect(find.textContaining('done'), findsNothing);
   });
 
-  testWidgets('compact cards omit unknown ratings and distances honestly',
+  testWidgets('the wide card puts the picture left and the facts right',
       (tester) async {
-    await _pumpCompact(tester, _store());
+    await _pumpWide(tester, _store(rating: 6.8));
+    final card = tester.getRect(find.byKey(const Key('store-card-s1')));
+    final name = tester.getRect(find.text('Tokyo Electronics'));
+    // A shopfront laid on its side, not the tall cell a grid needs: wider
+    // than it is tall, so the picture gets the height of a real shop front.
+    expect(card.width, greaterThan(card.height));
+    // The name starts to the right of the picture's column, never under it.
+    expect(name.left, greaterThan(card.left + card.width * 0.35));
+    expect(name.right, lessThanOrEqualTo(card.right));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('wide cards omit unknown ratings and distances honestly',
+      (tester) async {
+    await _pumpWide(tester, _store());
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('store-rating-s1')), findsNothing);
     expect(find.byKey(const Key('store-card-distance')), findsNothing);
@@ -150,9 +161,9 @@ void main() {
   });
 
   testWidgets(
-      'compact cards show the 0-10 store rating but never a fake review count',
+      'wide cards show the 0-10 store rating but never a fake review count',
       (tester) async {
-    await _pumpCompact(tester, _store(rating: 8.4, reviewCount: 0));
+    await _pumpWide(tester, _store(rating: 8.4, reviewCount: 0));
     expect(
         find.descendant(
             of: find.byKey(const Key('store-rating-s1')),
@@ -161,11 +172,11 @@ void main() {
     expect(find.text('(0)'), findsNothing);
   });
 
-  testWidgets('compact card actions keep separate callbacks', (tester) async {
+  testWidgets('wide card actions keep separate callbacks', (tester) async {
     var visits = 0;
     var maps = 0;
     var details = 0;
-    await _pumpCompact(
+    await _pumpWide(
       tester,
       _store(distanceKm: 2.3, distanceLabel: '2.3 km from you'),
       onTap: () => visits++,

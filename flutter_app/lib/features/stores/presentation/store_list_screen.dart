@@ -1,7 +1,8 @@
 // BROKA — Store discovery (spec §12/§21, Phase 4)
-// A compact two-column directory, with each grid cell using StoreCard's
-// opt-in compact presentation. The taller one-column card remains the
-// default for the nearby and category screens.
+// A single-column directory of wide cards: each row shows the shop's
+// picture on the left with its facts beside it, via StoreCard's opt-in wide
+// presentation. The taller one-column card remains the default for the
+// nearby and category screens.
 //
 // A store card shows the shop itself, its own rating, its distance when
 // known, and a way onto the map. The owner's seller record lives in Store
@@ -29,9 +30,14 @@
 //
 // Directory pass (2026-10-19): the page now follows the Stores reference -
 // search and filter on one row, the artwork rail, county/area/distance
-// filters, a nearby grid, then All stores with working sort and filter
-// controls. Both sections use the same compact card, and the two lists still
+// filters, a nearby section, then All stores with working sort and filter
+// controls. Both sections use the same card, and the two lists still
 // share one id set so a nearby shop is never drawn twice.
+//
+// Wide-card pass (2026-10-22): the two-column grid is gone. Two cards across
+// a phone halved every line, so names and places wrapped and the picture
+// shrank to a thumbnail; one shop per row (the wide card) gives the picture
+// the size of a shopfront and every fact its own line.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -619,7 +625,7 @@ class _StoreListScreenState extends State<StoreListScreen> {
           ]),
         ),
       ),
-      _compactGrid(rail, keyPrefix: 'nearby-store'),
+      _storeList(rail, keyPrefix: 'nearby-store'),
     ];
   }
 
@@ -683,43 +689,23 @@ class _StoreListScreenState extends State<StoreListScreen> {
         ),
       ];
     }
-    return [_compactGrid(main, keyPrefix: 'all-store')];
+    return [_storeList(main, keyPrefix: 'all-store')];
   }
 
-  /// The directory's lazy two-column grid. The card extent comes from the
-  /// same width/text-scale budget the card uses, so a long name or larger
-  /// system text gets a taller cell instead of an overflow stripe. At very
-  /// narrow widths (or large accessibility text) one column is safer than
-  /// crushing two action rows into a phone half-width.
-  Widget _compactGrid(List<Store> stores, {required String keyPrefix}) {
-    final media = MediaQuery.of(context);
-    final textScale = media.textScaler.scale(1.0).clamp(1.0, 3.0).toDouble();
-    final width = media.size.width;
-    final columns = width < 360 || textScale > 1.45
-        ? 1
-        : width >= 700
-            ? 4
-            : width >= 520
-                ? 3
-                : 2;
-    const gap = 10.0;
-    final cardWidth = (width - 32 - (gap * (columns - 1))) / columns;
+  /// One shop per row, each in the wide card that lays the picture on its
+  /// left and the facts beside it. This is the directory's only list shape:
+  /// a two-column grid is what halved every line and shrank the picture to
+  /// a thumbnail.
+  Widget _storeList(List<Store> stores, {required String keyPrefix}) {
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      sliver: SliverGrid(
-        key: Key('$keyPrefix-grid'),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: columns,
-          crossAxisSpacing: gap,
-          mainAxisSpacing: gap,
-          mainAxisExtent: StoreCard.compactExtentFor(
-              width: cardWidth, textScale: textScale),
-        ),
+      sliver: SliverList(
+        key: Key('$keyPrefix-list'),
         delegate: SliverChildBuilderDelegate(
           (_, i) => StoreCard(
             key: Key('$keyPrefix-${stores[i].id}'),
             store: stores[i],
-            compact: true,
+            wide: true,
             onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(

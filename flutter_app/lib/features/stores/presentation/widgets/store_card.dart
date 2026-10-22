@@ -9,8 +9,9 @@
 // hide.
 //
 // Shared by the directory and a category's screen of its own
-// (store_category_screen.dart). The directory opts into [StoreCard.compact]
-// for its two-column grids; every other caller keeps the tall default card.
+// (store_category_screen.dart). The directory opts into [StoreCard.wide] -
+// one shop per row, picture left, facts right (2026-10-22) - and every other
+// caller keeps the tall default card.
 //
 // Was a 52dp circle with the store's initial and three lines of small
 // text - the same card as a trader's, and nothing to show it was a shop.
@@ -41,15 +42,14 @@ class StoreCard extends StatefulWidget {
   final Store store;
   final VoidCallback onTap;
 
-  /// Draw the directory's two-column card instead of the full-width card.
+  /// Draw the directory's wide card instead of the tall shopfront card.
   ///
   /// The default stays the tall, single-column shopfront used by the nearby
-  /// and category screens. This opt-in variant is deliberately narrower:
-  /// the picture is cropped shorter, secondary actions become icon buttons,
-  /// and the footer keeps Visit as the one loud action. Keeping it explicit
-  /// means adding a grid to the directory cannot silently restyle a screen
-  /// that already depends on the larger card.
-  final bool compact;
+  /// and category screens. This opt-in variant lays the picture down the
+  /// left of the card and the facts beside it, so one shop takes a row;
+  /// keeping it explicit means changing the directory's density cannot
+  /// silently restyle a screen that already depends on the larger card.
+  final bool wide;
 
   /// Opens the store's details screen (reviews, seller record, location).
   /// A chip on the picture, not another bar: the card itself still opens
@@ -66,45 +66,8 @@ class StoreCard extends StatefulWidget {
     required this.onTap,
     this.onDetails,
     this.onMap,
-    this.compact = false,
+    this.wide = false,
   });
-
-  /// Height of the compact card's picture. It is based on the card width so
-  /// every card in a grid row fills the same box without stretching the
-  /// source image; the cap keeps a single-column fallback from turning into
-  /// an oversized hero.
-  static double compactImageHeightFor(double width) =>
-      (width * 0.60).clamp(104.0, 144.0).toDouble();
-
-  /// The grid needs the card's full height before laying a row out. This is
-  /// the same content budget the compact builder uses below, scaled with the
-  /// system text size; reserving it up front is what keeps the last action
-  /// row from overflowing instead of quietly clipping a long name.
-  static double compactExtentFor({
-    required double width,
-    required double textScale,
-  }) {
-    final scale = textScale.clamp(1.0, 3.0).toDouble();
-    final image = compactImageHeightFor(width);
-    final name = 15.0 * 1.18 * 2 * scale;
-    final rating = (13.0 * 1.2 * scale) + 4;
-    final location = (12.0 * 1.25 * 2 * scale) + 4;
-    final category = (11.5 * 1.2 * scale) + 4;
-    final products = (11.5 * 1.2 * scale) + 6;
-    return image +
-        10 +
-        name +
-        rating +
-        location +
-        category +
-        products +
-        44 +
-        10 +
-        10 +
-        // Sub-pixel row rounding and the border inset: without a little
-        // slack a perfectly measured cell can still report a 0.2px overflow.
-        4;
-  }
 
   @override
   State<StoreCard> createState() => _StoreCardState();
@@ -122,7 +85,7 @@ class _StoreCardState extends State<StoreCard> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.compact) return _buildCompact(context);
+    if (widget.wide) return _buildWide(context);
 
     final store = widget.store;
     // The distance a buyer wants first, at any range: a shop 40 km away is
@@ -454,7 +417,16 @@ class _StoreCardState extends State<StoreCard> {
     );
   }
 
-  Widget _buildCompact(BuildContext context) {
+  /// The directory's card, laid on its side: the shop's picture fills the
+  /// left of the card and the facts a buyer scans sit in a column beside it.
+  ///
+  /// It replaced the two-column grid of tall cards (2026-10-22). Two cards
+  /// across a phone halved every line, so a name wrapped, a place wrapped,
+  /// and the picture shrank to a thumbnail above the text - the opposite of
+  /// what a directory is for, which is comparing shops. One shop per row
+  /// gives the picture the size of a shopfront and every fact a line of its
+  /// own.
+  Widget _buildWide(BuildContext context) {
     final store = widget.store;
     final distLabel = store.anyDistanceLabel;
     final owner = store.owner;
@@ -469,6 +441,8 @@ class _StoreCardState extends State<StoreCard> {
         store.categories.length > 1 ? ' +${store.categories.length - 1}' : '';
     final products =
         '${store.listingCount} product${store.listingCount == 1 ? '' : 's'}';
+    final secondaryActions = (widget.onMap == null ? 0 : 1) +
+        (widget.onDetails == null ? 0 : 1);
     final gradient = BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topLeft,
@@ -510,9 +484,10 @@ class _StoreCardState extends State<StoreCard> {
           duration: BrokaMotion.instant,
           curve: Curves.easeOut,
           child: Container(
-            padding: const EdgeInsets.all(1.1),
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(1.2),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(17),
+              borderRadius: BorderRadius.circular(20),
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -523,8 +498,8 @@ class _StoreCardState extends State<StoreCard> {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: BrokaColors.gold.withOpacity(0.10),
-                  blurRadius: 14,
+                  color: BrokaColors.gold.withOpacity(0.12),
+                  blurRadius: 18,
                   offset: const Offset(0, 4),
                 ),
               ],
@@ -532,31 +507,191 @@ class _StoreCardState extends State<StoreCard> {
             child: Container(
               decoration: BoxDecoration(
                 gradient: BrokaColors.cardGradient,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(19),
               ),
               clipBehavior: Clip.antiAlias,
+              // The picture is a share of the card rather than a fixed
+              // column: a narrow phone keeps the facts readable, and the cap
+              // stops a wide tablet card from becoming a poster with captions.
               child: LayoutBuilder(builder: (context, box) {
-                final imageHeight =
-                    StoreCard.compactImageHeightFor(box.maxWidth);
-                final secondaryActions = (widget.onMap == null ? 0 : 1) +
-                    (widget.onDetails == null ? 0 : 1);
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SizedBox(
-                      height: imageHeight,
-                      child: Stack(fit: StackFit.expand, children: [
-                        picture == null
+                final imageWidth =
+                    (box.maxWidth * 0.42).clamp(124.0, 210.0).toDouble();
+                return Stack(children: [
+                  ConstrainedBox(
+                    // A floor, so a shop with no rating, no place and no
+                    // category still gets a card with a real picture on it
+                    // rather than a strip of one.
+                    constraints: const BoxConstraints(minHeight: 172),
+                    child: Padding(
+                      padding:
+                          EdgeInsets.fromLTRB(imageWidth + 14, 12, 14, 12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Flexible(
+                                child: Text(store.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: BrokaColors.textHigh,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 19,
+                                        height: 1.15,
+                                        letterSpacing: -0.3)),
+                              ),
+                              if (owner?.verified ?? false) ...[
+                                const SizedBox(width: 5),
+                                const Icon(Icons.verified_rounded,
+                                    size: 17,
+                                    color: BrokaColors.success,
+                                    semanticLabel: 'Verified seller'),
+                              ],
+                            ],
+                          ),
+                          if (store.rating != null) ...[
+                            const SizedBox(height: 6),
+                            _RatingChip(
+                              key: Key('store-rating-${store.id}'),
+                              rating: store.rating!,
+                              reviews: store.reviewCount,
+                            ),
+                          ],
+                          if (store.locationLine != null ||
+                              distLabel != null) ...[
+                            const SizedBox(height: 7),
+                            Row(children: [
+                              const Icon(Icons.location_on_outlined,
+                                  size: 15, color: BrokaColors.gold),
+                              const SizedBox(width: 4),
+                              // The distance rides on the place line: it is
+                              // part of where the shop is, and the picture is
+                              // too narrow here for a pill over it.
+                              Flexible(
+                                child: Text.rich(
+                                  TextSpan(children: [
+                                    if (store.locationLine != null)
+                                      TextSpan(
+                                          text: store.locationLine!,
+                                          style: const TextStyle(
+                                              color: BrokaColors.textMid,
+                                              fontSize: 12.5)),
+                                    if (store.locationLine != null &&
+                                        distLabel != null)
+                                      const TextSpan(
+                                          text: ' · ',
+                                          style: TextStyle(
+                                              color: BrokaColors.textMid,
+                                              fontSize: 12.5)),
+                                    if (distLabel != null)
+                                      TextSpan(
+                                          text: distLabel,
+                                          style: const TextStyle(
+                                              color: BrokaColors.gold,
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w800)),
+                                  ]),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ]),
+                          ],
+                          if (category != null) ...[
+                            const SizedBox(height: 6),
+                            // Emoji and label in one Text, as the tall card
+                            // does: an emoji of its own would read as the
+                            // card's category fallback when it is BROKA's mark
+                            // that stands in for a missing picture.
+                            Text(
+                              '${CategoryVisuals.emojiFor(category)}  '
+                              '$category$moreCategories',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: BrokaColors.textMid,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                          const SizedBox(height: 10),
+                          Divider(
+                              height: 1,
+                              thickness: 1,
+                              color: BrokaColors.border.withOpacity(0.9)),
+                          const SizedBox(height: 10),
+                          Row(children: [
+                            const Icon(Icons.inventory_2_outlined,
+                                size: 15, color: BrokaColors.textMid),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(products,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      color: BrokaColors.textHigh,
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                          ]),
+                          const SizedBox(height: 10),
+                          // Visit takes whatever the two square actions leave,
+                          // so it is still the widest target at the foot.
+                          Row(children: [
+                            if (widget.onMap != null)
+                              _WideIconAction(
+                                key: Key('store-map-${store.id}'),
+                                icon: Icons.map_outlined,
+                                tooltip: 'View on map',
+                                color: BrokaColors.neonCyan,
+                                onTap: widget.onMap!,
+                              ),
+                            if (widget.onMap != null &&
+                                widget.onDetails != null)
+                              const SizedBox(width: 8),
+                            if (widget.onDetails != null)
+                              _WideIconAction(
+                                key: Key('store-details-${store.id}'),
+                                icon: Icons.info_outline_rounded,
+                                tooltip: 'Store details',
+                                color: BrokaColors.gold,
+                                onTap: widget.onDetails!,
+                              ),
+                            if (secondaryActions > 0) const SizedBox(width: 8),
+                            Expanded(
+                              child: _WideVisitButton(
+                                key: Key('visit-store-${store.id}'),
+                                onTap: widget.onTap,
+                              ),
+                            ),
+                          ]),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: imageWidth,
+                    child: Stack(children: [
+                      Positioned.fill(
+                        child: picture == null
                             ? fallback
                             : StoreMediaImage(
                                 dataUri: picture,
                                 fit: BoxFit.cover,
                                 placeholderBuilder: (_) => pictureFallback,
                               ),
-                        // The chips sit on busy shop photos; this keeps the
-                        // status and distance legible without dimming the
-                        // whole picture.
-                        const DecoratedBox(
+                      ),
+                      // Shade at the top and foot only: the status pill and
+                      // the logo sit on busy shop photos, and both have to
+                      // stay legible without dimming the middle of the shot.
+                      const Positioned.fill(
+                        child: DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
@@ -566,191 +701,42 @@ class _StoreCardState extends State<StoreCard> {
                                 Color(0x00000000),
                                 Color(0xBB070B16),
                               ],
-                              stops: [0, 0.48, 1],
+                              stops: [0, 0.45, 1],
                             ),
                           ),
-                        ),
-                        if (owner != null &&
-                            (owner.online || owner.lastActive != null))
-                          Positioned(
-                            top: 7,
-                            left: 7,
-                            right: 7,
-                            child: Align(
-                              alignment: Alignment.topLeft,
-                              child: _Pill(
-                                key: const Key('store-card-presence'),
-                                dot: owner.online
-                                    ? BrokaColors.success
-                                    : BrokaColors.textMid,
-                                label: owner.online
-                                    ? 'Online now'
-                                    : owner.lastActive!,
-                                color: owner.online
-                                    ? BrokaColors.success
-                                    : Colors.white70,
-                              ),
-                            ),
-                          ),
-                        Positioned(
-                          left: 7,
-                          right: 7,
-                          bottom: 7,
-                          child: Row(children: [
-                            if (showLogo) _Logo(source: logo, size: 34),
-                            if (showLogo && distLabel != null)
-                              const SizedBox(width: 6),
-                            if (distLabel != null)
-                              Expanded(
-                                child: Align(
-                                  alignment: Alignment.bottomRight,
-                                  child: _CompactDistancePill(
-                                    key: const Key('store-card-distance'),
-                                    label: distLabel,
-                                  ),
-                                ),
-                              ),
-                          ]),
-                        ),
-                      ]),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      store.name,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: BrokaColors.textHigh,
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 15,
-                                        height: 1.18,
-                                        letterSpacing: -0.2,
-                                      ),
-                                    ),
-                                  ),
-                                  if (owner?.verified ?? false) ...[
-                                    const SizedBox(width: 4),
-                                    const Icon(Icons.verified_rounded,
-                                        size: 15,
-                                        color: BrokaColors.success,
-                                        semanticLabel: 'Verified seller'),
-                                  ],
-                                ]),
-                            if (store.rating != null) ...[
-                              const SizedBox(height: 4),
-                              _RatingChip(
-                                key: Key('store-rating-${store.id}'),
-                                rating: store.rating!,
-                                reviews: store.reviewCount,
-                              ),
-                            ],
-                            if (store.locationLine != null) ...[
-                              const SizedBox(height: 4),
-                              Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Padding(
-                                      padding: EdgeInsets.only(top: 1),
-                                      child: Icon(Icons.location_on_outlined,
-                                          size: 13, color: BrokaColors.gold),
-                                    ),
-                                    const SizedBox(width: 3),
-                                    Expanded(
-                                      child: Text(
-                                        store.locationLine!,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: BrokaColors.textMid,
-                                          fontSize: 12,
-                                          height: 1.25,
-                                        ),
-                                      ),
-                                    ),
-                                  ]),
-                            ],
-                            if (category != null) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                '${CategoryVisuals.emojiFor(category)} $category$moreCategories',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: BrokaColors.textMid,
-                                  fontSize: 11.5,
-                                  height: 1.2,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                            const Spacer(),
-                            Row(children: [
-                              const Icon(Icons.inventory_2_outlined,
-                                  size: 14, color: BrokaColors.textMid),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  products,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: BrokaColors.textHigh,
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ]),
-                            const SizedBox(height: 6),
-                            LayoutBuilder(builder: (context, row) {
-                              final fullLabel =
-                                  secondaryActions == 0 || row.maxWidth >= 205;
-                              return Row(children: [
-                                if (widget.onMap != null)
-                                  _CompactIconAction(
-                                    key: Key('store-map-${store.id}'),
-                                    icon: Icons.map_outlined,
-                                    tooltip: 'View on map',
-                                    color: BrokaColors.neonCyan,
-                                    onTap: widget.onMap!,
-                                  ),
-                                if (widget.onMap != null &&
-                                    widget.onDetails != null)
-                                  const SizedBox(width: 4),
-                                if (widget.onDetails != null)
-                                  _CompactIconAction(
-                                    key: Key('store-details-${store.id}'),
-                                    icon: Icons.info_outline_rounded,
-                                    tooltip: 'Store details',
-                                    color: BrokaColors.gold,
-                                    onTap: widget.onDetails!,
-                                  ),
-                                if (secondaryActions > 0)
-                                  const SizedBox(width: 4),
-                                Expanded(
-                                  child: _CompactVisitButton(
-                                    key: Key('visit-store-${store.id}'),
-                                    fullLabel: fullLabel,
-                                    onTap: widget.onTap,
-                                  ),
-                                ),
-                              ]);
-                            }),
-                          ],
                         ),
                       ),
-                    ),
-                  ],
-                );
+                      if (owner != null &&
+                          (owner.online || owner.lastActive != null))
+                        Positioned(
+                          top: 8,
+                          left: 8,
+                          right: 8,
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: _Pill(
+                              key: const Key('store-card-presence'),
+                              dot: owner.online
+                                  ? BrokaColors.success
+                                  : BrokaColors.textMid,
+                              label: owner.online
+                                  ? 'Online now'
+                                  : owner.lastActive!,
+                              color: owner.online
+                                  ? BrokaColors.success
+                                  : Colors.white70,
+                            ),
+                          ),
+                        ),
+                      if (showLogo)
+                        Positioned(
+                          left: 10,
+                          bottom: 10,
+                          child: _Logo(source: logo, size: 46),
+                        ),
+                    ]),
+                  ),
+                ]);
               }),
             ),
           ),
@@ -760,10 +746,11 @@ class _StoreCardState extends State<StoreCard> {
   }
 }
 
-/// A 44dp secondary action on the compact card. The icon is small enough for
-/// two cards to share a phone row, while the box keeps the tap target usable.
-class _CompactIconAction extends StatelessWidget {
-  const _CompactIconAction({
+/// A 44dp square secondary action on the wide card - the map and the
+/// store's details. Quiet outlines, because the card itself opens the
+/// store and Visit is the one action meant to be found first.
+class _WideIconAction extends StatelessWidget {
+  const _WideIconAction({
     super.key,
     required this.icon,
     required this.tooltip,
@@ -790,24 +777,22 @@ class _CompactIconAction extends StatelessWidget {
               height: 44,
               decoration: BoxDecoration(
                 color: color.withOpacity(0.10),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(13),
                 border: Border.all(color: color.withOpacity(0.55)),
               ),
-              child: Icon(icon, size: 18, color: color),
+              child: Icon(icon, size: 19, color: color),
             ),
           ),
         ),
       );
 }
 
-class _CompactVisitButton extends StatelessWidget {
-  const _CompactVisitButton({
-    super.key,
-    required this.fullLabel,
-    required this.onTap,
-  });
+/// Visit store on the wide card: the loud action, filling the rest of the
+/// row so the thumb lands on it first. The whole card opens the store too;
+/// this says so, and gives the tap somewhere obvious to happen.
+class _WideVisitButton extends StatelessWidget {
+  const _WideVisitButton({super.key, required this.onTap});
 
-  final bool fullLabel;
   final VoidCallback onTap;
 
   @override
@@ -821,7 +806,8 @@ class _CompactVisitButton extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             child: Container(
               height: 44,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [BrokaColors.gold, BrokaColors.neonBlue],
@@ -835,64 +821,24 @@ class _CompactVisitButton extends StatelessWidget {
                   ),
                 ],
               ),
-              child: FittedBox(
+              // Scales down rather than clipping, so a narrow card at large
+              // system text still reads "Visit" and keeps its arrow.
+              child: const FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(
-                    fullLabel ? 'Visit store' : 'Visit',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                  const SizedBox(width: 3),
-                  const Icon(Icons.arrow_forward_rounded,
-                      color: Colors.white, size: 14),
+                  Text('Visit',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13)),
+                  SizedBox(width: 5),
+                  Icon(Icons.arrow_forward_rounded,
+                      color: Colors.white, size: 16),
                 ]),
               ),
             ),
           ),
         ),
-      );
-}
-
-class _CompactDistancePill extends StatelessWidget {
-  const _CompactDistancePill({super.key, required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [BrokaColors.gold, BrokaColors.neonBlue],
-          ),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: BrokaColors.gold.withOpacity(0.28),
-              blurRadius: 8,
-            ),
-          ],
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.near_me_rounded, size: 11, color: Colors.white),
-          const SizedBox(width: 3),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ]),
       );
 }
 
@@ -916,25 +862,29 @@ class _RatingChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: BrokaColors.gold.withOpacity(0.45)),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.star_rounded, size: 13, color: BrokaColors.gold),
-          const SizedBox(width: 3),
-          Text(rating.toStringAsFixed(1),
-              style: const TextStyle(
-                  color: BrokaColors.gold,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  height: 1.2)),
-          if (reviews > 0) ...[
-            const SizedBox(width: 3),
-            Text('($reviews)',
-                style: TextStyle(
-                    color: BrokaColors.gold.withOpacity(0.75),
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
+        // Wrapped rather than a Row: the wide card gives the chip the width
+        // of a column, and at large system text a Row can only overflow -
+        // the count drops to a second line instead of losing its last digit.
+        child: Wrap(
+          spacing: 3,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Icon(Icons.star_rounded, size: 13, color: BrokaColors.gold),
+            Text(rating.toStringAsFixed(1),
+                style: const TextStyle(
+                    color: BrokaColors.gold,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
                     height: 1.2)),
+            if (reviews > 0)
+              Text('($reviews)',
+                  style: TextStyle(
+                      color: BrokaColors.gold.withOpacity(0.75),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      height: 1.2)),
           ],
-        ]),
+        ),
       );
 }
 

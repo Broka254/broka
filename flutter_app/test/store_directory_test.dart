@@ -1,6 +1,8 @@
-// The Stores directory is a compact, two-column catalogue. These tests pin
-// the parts the wider shared card cannot cover: responsive columns, compact
-// cards in both sections, and filters that actually reach the repository.
+// The Stores directory is a single-column list of wide cards - the picture
+// on the left of each row, the facts beside it. These tests pin the parts
+// the shared card's own tests cannot cover: one shop per row at every width,
+// wide cards in both sections, and filters that actually reach the
+// repository.
 import 'dart:convert';
 
 import 'package:broka/core/network/api_client.dart';
@@ -90,61 +92,75 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
-int _columns(WidgetTester tester, String gridKey) {
-  final grid = tester.widget<SliverGrid>(find.byKey(Key(gridKey)));
-  final delegate =
-      grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
-  return delegate.crossAxisCount;
+/// A card takes the row: the screen width minus the 16dp gutters. Two
+/// columns would each be about half of this.
+void _expectFullWidthCard(WidgetTester tester) {
+  final screenWidth = tester.getSize(find.byType(StoreListScreen)).width;
+  final card = tester.getRect(find.byKey(const Key('all-store-a')));
+  expect(card.width, greaterThan(screenWidth * 0.85),
+      reason: 'a grid card is about half the screen wide');
+  expect(card.left, closeTo(16, 0.5));
 }
 
 void main() {
-  testWidgets('phone directory uses two compact columns', (tester) async {
+  testWidgets('the directory lists one wide shop per row', (tester) async {
     await _pump(
       tester,
       repository: StoresRepository(client: _client([])),
       hasLocation: false,
     );
 
-    expect(_columns(tester, 'all-store-grid'), 2);
+    expect(find.byKey(const Key('all-store-list')), findsOneWidget);
     final cards = tester.widgetList<StoreCard>(find.byType(StoreCard));
     expect(cards, isNotEmpty);
-    expect(cards.every((card) => card.compact), isTrue);
+    expect(cards.every((card) => card.wide), isTrue,
+        reason: 'the directory draws the wide card, not the tall one');
 
-    await tester.ensureVisible(find.byKey(const Key('all-store-b')));
-    await tester.pumpAndSettle();
-    final first = tester.getTopLeft(find.byKey(const Key('all-store-a')));
-    final second = tester.getTopLeft(find.byKey(const Key('all-store-b')));
-    expect(first.dy, closeTo(second.dy, 0.5));
-    expect(second.dx, greaterThan(first.dx));
+    final first = tester.getRect(find.byKey(const Key('all-store-a')));
+    _expectFullWidthCard(tester);
+    // The next shop starts below it, at the same left edge - never beside
+    // it, which is what the two-column grid did. Both fit the screen, so
+    // this is read without scrolling, while the two rects share a viewport.
+    final second = tester.getRect(find.byKey(const Key('all-store-b')));
+    expect(second.top, greaterThan(first.top));
+    expect(second.left, closeTo(first.left, 0.5));
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('narrow and large-text layouts fall back to one column',
-      (tester) async {
+  testWidgets('a 320dp phone still lays one shop per row', (tester) async {
     await _pump(
       tester,
       repository: StoresRepository(client: _client([])),
       hasLocation: false,
       size: const Size(320, 720),
     );
-    expect(_columns(tester, 'all-store-grid'), 1);
+    _expectFullWidthCard(tester);
     expect(tester.takeException(), isNull);
+  });
 
+  testWidgets('large system text keeps one shop per row and the filter sheet',
+      (tester) async {
     await _pump(
       tester,
       repository: StoresRepository(client: _client([])),
       hasLocation: false,
       textScaler: const TextScaler.linear(2.0),
     );
-    expect(_columns(tester, 'all-store-grid'), 1);
-    expect(tester.takeException(), isNull);
 
+    // The filter sheet still opens at this scale - checked before scrolling
+    // away from the search row, whose sliver is dropped once it is far off
+    // screen.
     await tester.tap(find.byKey(const Key('store-search-filter')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('store-filter-apply')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('store-filter-apply')));
+    await tester.pumpAndSettle();
+
+    _expectFullWidthCard(tester);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('nearby stores use the compact grid and See all has a real route',
+  testWidgets('nearby stores use the wide list and See all has a real route',
       (tester) async {
     await _pump(
       tester,
@@ -152,9 +168,14 @@ void main() {
       hasLocation: true,
     );
 
-    expect(find.byKey(const Key('nearby-store-grid')), findsOneWidget);
-    expect(_columns(tester, 'nearby-store-grid'), 2);
+    expect(find.byKey(const Key('nearby-store-list')), findsOneWidget);
     expect(find.byKey(const Key('nearby-see-all')), findsOneWidget);
+    final nearbyCards =
+        tester.widgetList<StoreCard>(find.byType(StoreCard)).where(
+              (card) => card.store.id == 'a' || card.store.id == 'b',
+            );
+    expect(nearbyCards, isNotEmpty);
+    expect(nearbyCards.every((card) => card.wide), isTrue);
 
     await tester.tap(find.byKey(const Key('nearby-see-all')));
     await tester.pump();
