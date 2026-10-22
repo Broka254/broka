@@ -365,6 +365,17 @@ async def upload_media(
         if not effective_buyer_id:
             raise HTTPException(status_code=400, detail="buyer_id required")
 
+    # A voice note or a photo of the item is a message to the seller, so it
+    # arms the same 5-minute availability reminder a text does
+    # (core/interest_arming). Before this, a buyer who only ever sent photos
+    # or voice notes never had their question chased - which is exactly the
+    # buyer most likely to be ignored.
+    if actual_role == "buyer":
+        from api.core.interest_arming import arm_availability_nudge
+        await arm_availability_nudge(
+            db, listing_id, authenticated_uid, seller_id=listing.seller_id,
+        )
+
     msg_type = "voice" if content_type == "audio" else "image"
     nm = NegotiationMessage(
         listing_id=listing_id,

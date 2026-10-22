@@ -1,3 +1,106 @@
+# Read messages stop buzzing, chats show sent/delivered/read, messages can be edited or unsent, and Zeno chases like a person (2026-10-22)
+
+Reported from phones, in one conversation: notifications for messages
+already read, a chat that showed only "read", no way to fix a typo, Zeno's
+private notes arriving as someone else's notification, and a broker that
+asked about availability and then went silent even when the seller did.
+
+## 1. Already-read messages no longer notify
+
+The app's background sweep announced a thread whenever the newest row's id
+was one this install had not seen. That is a fact about the *phone*, not
+about the user: after a reinstall, a sign-in on a second account, or a
+thread read on another device, every row is "unseen" and the sweep
+announced history the person had already read. Reported exactly that way -
+"it happens when I log in and there was a conversation going on".
+
+The server is now the authority on unread. `GET /negotiate/inbox` already
+knew, per viewer, what was read (`unread`) and what Zeno had said since
+they were last in Zeno's room (`zeno_unread`); the sweep simply never
+asked. It does now, and stays quiet unless one of those counts is above
+zero. The priming/signature keys are also scoped per account, so the next
+person to sign in on the same phone neither inherits the previous user's
+notification state nor the previous user's inbox cache
+(`LocalChatStore.inboxListScopeFor`).
+
+## 2. Sent, delivered, read - three states, everywhere
+
+The chat screen had a delivery watermark but the inbox collapsed it: one
+grey tick until the message was *read*, so a message their phone had
+already received and one still sitting on the server looked identical.
+`_thread_unread_and_seen` now returns the delivery state as well,
+`GET /negotiate/inbox` carries `last_message_delivered`, and the inbox
+draws the same three ticks as the chat: one grey = sent, two grey =
+delivered, two accent = read.
+
+## 3. Edit and unsend
+
+`PATCH /negotiate/message/{id}` (15 minutes, text only) and
+`DELETE /negotiate/message/{id}` (48 hours, "for everyone") for the
+sender's own direct messages. Long-press your own bubble to use them.
+
+Both keep the row and mark it: hard-deleting would move every later
+message, change unread counts, and leave a hole for someone who had
+already read it. Unsend clears content, media and duration in the same
+transaction that sets `deleted_at`, so nothing recoverable is left; the
+chat draws a tombstone and the inbox preview says "Message deleted"
+instead of the generic "[media]" it used to fall back to. An edit is
+broadcast on the thread socket (`message_edited` / `message_deleted`) so
+the other party's copy changes too - not just the phone that tapped it -
+and a phone that was offline reconciles the same rows from `/history`.
+
+Refused, deliberately: Zeno's rows (never the user's words), the other
+party's rows, media and call cards (nothing to "edit" without changing
+what was already received), and anything outside the window.
+
+## 4. The audience line, enforced by one module
+
+Zeno writes a different message to each side of a relay. Four surfaces
+each remembered their own version of that rule, and two of them disagreed
+with the others - which is how a private note reached the inbox of the
+person it was written about, and how a message could show in the inbox
+and then vanish when the thread opened.
+
+`api/core/message_visibility.py` now holds the rule, and the push builder,
+the inbox, both unread counts, `/history`, Zeno's model context and
+dispute arbitration all use it. **A broker row with no `recipient_role`
+has no audience**: it is not shown, previewed, counted, pushed or fed to
+a model. Guessing "both" for a row nobody can attribute afterwards is
+exactly how the leak happened, and no reviewer can tell a shared reply
+from a private one after the fact. `PRIVACY.md` carries the table.
+
+This also removes the phantom badge. `_thread_unread_and_seen` counted
+only the other person's messages, but the inbox preview and the push
+builder counted Zeno rows addressed to *either* side, so "3 unread"
+could open onto a thread with nothing new in it.
+
+## 5. Zeno as an intermediary, not a form
+
+The 5-minute seller text existed and had a promise attached to it, and
+both were broken in opposite directions:
+
+- **The timer was armed in the wrong places.** Sending any message to
+  Zeno armed it, including `opening_greeting` - so a seller got a text
+  five minutes after a buyer merely *opened* Zeno's screen, spending one
+  of the seller's SMS alerts on nobody's question. The direct chat, where
+  "is it still available?" is usually typed, armed nothing at all. Arming
+  now skips the non-message intents and covers the direct chat and media
+  uploads, so it follows a buyer's real question wherever they send it.
+- **The promise could be false.** Zeno told the buyer it would text the
+  seller without checking the gate the sender actually applies - the
+  listing's text opt-out, a number on file, and the seller's plan still
+  having SMS alerts left. A new `entitlements.has_left` answers the last
+  one without spending it, and the reply is only allowed to promise the
+  text when it will really go out. Otherwise it says plainly that it will
+  keep checking.
+- **The buyer heard nothing after the text.** When the SMS goes out, Zeno
+  now tells the buyer it did, and if the seller *still* hasn't answered
+  after `BUYER_FOLLOWUP_MINUTES` (45), it comes back once with the truth:
+  the seller is the one who went quiet, here is the listing, and would you
+  like similar ones. Once per interest (`Interest.buyer_followup_at`),
+  never a claim of progress that didn't happen - the seller's reply is
+  checked first, and a reply cancels it silently.
+
 # A store has its own rating, the directory lists each shop once, and My Store becomes a real dashboard (2026-10-19)
 
 Three things, from walking the Online Stores feature.

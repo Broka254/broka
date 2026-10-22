@@ -322,3 +322,54 @@ def compose_availability_nudge(
             has_have=p.has_have,
         )
     return text
+
+
+# ── The buyer's side of the same wait ────────────────────────────────────────
+
+# Zeno is the intermediary, so silence from the seller is Zeno's problem to
+# report, not something the buyer should have to infer from a chat that has
+# stopped moving. These are what it says, in-app, once the seller has had
+# the SMS and still hasn't answered. Deliberately plain: no invented reason
+# for the silence, no new promise beyond the one already kept (the text),
+# and one concrete offer so the buyer has somewhere to go.
+BUYER_WAITING_TEMPLATES = (
+    "{seller} still hasn't come back to me about your {listing}. I've already "
+    "texted them, so it's on their side now - I'll keep your message at the "
+    "top of their list. If you'd rather not wait, say the word and I'll find "
+    "you similar listings.",
+    "No word from {seller} yet on the {listing}, even after my text. I don't "
+    "want to leave you guessing: I'm still on it, and I'll tell you the "
+    "moment anything comes back. Happy to line up a backup if you'd like.",
+    "Quick update: {seller} has gone quiet on the {listing} since I texted "
+    "them. That's not on you. I'll keep chasing - and if you want, I can "
+    "show you other sellers with the same thing.",
+)
+
+
+def compose_buyer_waiting_note(
+    *,
+    seller_name: Optional[str],
+    listing_name: str,
+    seed: Optional[str] = None,
+) -> str:
+    """The in-app note to the buyer when the seller stays silent after the SMS.
+
+    No `buyer_gender`: the buyer is the recipient and is addressed as
+    "you", so there is no pronoun to get wrong. No price either - repeating
+    the asking price in a message about silence reads like a sales pitch at
+    the wrong moment.
+
+    `seed` is the Interest id, so a retried sweep writes the same words
+    rather than a differently-worded second note.
+    """
+    seller = _first_name(seller_name, "the seller")
+    listing = (listing_name or "item").strip() or "item"
+    idx = _variant_index(seed or f"{seller}:{listing}:waiting",
+                         len(BUYER_WAITING_TEMPLATES))
+    text = BUYER_WAITING_TEMPLATES[idx].format(seller=seller, listing=listing)
+    if len(text) > 400:
+        # In-app, so no per-part SMS billing - but a wall of text in a chat
+        # bubble is its own problem. The listing name is the safest trim.
+        text = BUYER_WAITING_TEMPLATES[idx].format(
+            seller=seller, listing=listing[:37] + "…")
+    return text

@@ -51,7 +51,7 @@ from api.routers.auth import _approx_location
 from api.core import gemini, text_guard
 from api.core.geo import haversine_km, round_distance_km
 from api.core.message_visibility import (
-    addressed_to_role_clause, thread_visible_to_role_clause,
+    addressed_to_role_clause, broker_visible_to, thread_visible_to_role_clause,
     visible_to_role_clause,
 )
 from api.core.audit import record_audit
@@ -267,6 +267,11 @@ CHAT_HISTORY_ENTRY_MAX_CHARS = 2_000
 # uploads (MAX_IMAGE_MB). Listing photos are resized to 1080px on upload
 # (sell_photos_screen.dart), so real ones are a small fraction of this.
 CHAT_IMAGE_MAX_B64_CHARS = (10 * 1024 * 1024 * 4) // 3 + 4
+
+# Intents that are not the buyer saying anything to the seller: Zeno's own
+# opening line, and a one-off translation of something already sent. They
+# must not arm the seller's 5-minute availability SMS (negotiate.send_message).
+_NON_MESSAGE_INTENTS = frozenset({"opening_greeting", "translate_for_me"})
 
 
 class MessageIn(BaseModel):
@@ -1153,10 +1158,12 @@ async def _grounding_transcript(db, listing_id: str, buyer_id: Optional[str],
         if not m.content:
             continue
         if m.role == "broker":
-            if m.recipient_role is not None and m.recipient_role != viewer_role:
-                continue  # addressed to the other party - not this viewer's to see
-            audience = m.recipient_role or "both parties"
-            lines.append(f"[Zeno privately told the {audience}]: {m.content}")
+            if not broker_visible_to(m.recipient_role, viewer_role):
+                # Addressed to the other party, or to nobody at all - not
+                # this viewer's to see either way.
+                continue
+            lines.append(
+                f"[Zeno privately told the {m.recipient_role}]: {m.content}")
         elif m.role == viewer_role:
             lines.append(f"[{m.role.capitalize()}, in private Zeno chat]: {m.content}")
         elif not getattr(m, "via_ai", False):
@@ -1415,9 +1422,34 @@ LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 """)
 
 
+async def _seller_can_be_texted(db, listing, seller) -> bool:
+    """Whether the 5-minute follow-up text will actually go out.
+
+    Three independent gates, the same ones api/core/workers._fire_availability_
+    nudge applies before it sends: the listing-level opt-out, a phone number
+    on file, and a plan that still has SMS alerts. Zeno makes this promise in
+    the buyer's own conversation, so a promise made with a gate closed is a
+    reassuring lie - and the buyer discovers it by waiting forever.
+    """
+    if getattr(listing, "sms_alerts", True) is False:
+        return False
+    if not getattr(seller, "phone", None):
+        return False
+    try:
+        from api.domains.premium import entitlements
+        return await entitlements.has_left(db, seller.id, entitlements.Feature.SMS)
+    except Exception as exc:
+        # A pricing lookup must never fail the buyer's message. Say nothing
+        # about a text rather than promise one that may not happen.
+        logger.warning("[negotiate] SMS entitlement check failed seller=%s: %s",
+                       seller.id, exc)
+        return False
+
+
 def _system_for_sender_reply(listing, seller, b_name, dist_str, lang, sender_role: str,
                               just_relayed: bool, relay_summary: str, grounding: str,
-                              sender_answered: bool = False) -> str:
+                              sender_answered: bool = False,
+                              sms_followup: bool = False) -> str:
     """The private reply to whoever just sent a message - the ONLY thing
     they see. Whether a relay happened THIS turn is passed in as a fact,
     not left for the model to assume, and the full factual transcript is
@@ -1487,6 +1519,26 @@ def _system_for_sender_reply(listing, seller, b_name, dist_str, lang, sender_rol
                 f"the {sender_role} is actually waiting on an answer; if they "
                 f"were not asking anything, leave that out. {vary}"
             )
+            # What happens next, stated as fact only when it is one. The
+            # sweep that sends the text exists (core/workers.task_check_
+            # interest_nudges) and the flag says its three gates are open;
+            # printing the promise otherwise is how a buyer ends up waiting
+            # for an SMS that was never going to be sent.
+            if sender_role == "buyer":
+                relay_note += (
+                    (
+                        "\n- Then one more beat, in your own words, because it is "
+                        "true: if the seller stays quiet for about five minutes, you "
+                        "text them to make sure they see this. Say it as something you "
+                        "are doing, not as a policy or a support ticket."
+                    )
+                    if sms_followup else
+                    (
+                        "\n- Do NOT say you will text or call the seller - there is "
+                        "no text going out on this one. Say you will keep checking and "
+                        "tell them the moment there is an answer."
+                    )
+                )
     else:
         relay_note = (
             f"This message did NOT need relaying to the {other_role} - it's "
@@ -1705,7 +1757,7 @@ def _build_messages_for_party(history, new_message, viewer_role) -> List[dict]:
     raw = []
     for msg in history[-MAX_HISTORY:]:
         if msg.role == "broker":
-            if msg.recipient_role is None or msg.recipient_role == viewer_role:
+            if broker_visible_to(msg.recipient_role, viewer_role):
                 raw.append({"role": "assistant", "content": msg.content})
             continue
 
@@ -1869,9 +1921,15 @@ async def send_message(
     # of interest; deriving it here means every entry point into a thread
     # arms it, not just the one endpoint someone remembered to wire up.
     #
+    # NOT for intents where the buyer told the seller nothing. Opening the
+    # Zeno screen sends `opening_greeting`, and a translation is about a
+    # message that already exists; arming on either would text a seller
+    # five minutes after a buyer merely looked at their listing - spending
+    # one of the seller's SMS alerts on nobody's question.
+    #
     # Idempotent per (listing, buyer) - a chatty buyer does not keep pushing
     # their own seller's reminder out of reach.
-    if actual_role == "buyer":
+    if actual_role == "buyer" and data.intent not in _NON_MESSAGE_INTENTS:
         from api.core.interest_arming import arm_availability_nudge
         await arm_availability_nudge(
             db, data.listing_id, authenticated_uid, seller_id=listing.seller_id,
@@ -3018,6 +3076,13 @@ async def send_message(
     grounding = await _grounding_transcript(db, data.listing_id, effective_buyer_id, sender_role)
 
     msgs_sender = _build_messages_for_party(history, data, sender_role)
+    # Only ask the pricing table when the answer can change the wording: a
+    # buyer's message was relayed, so the reply may promise the 5-minute
+    # text. A seller's relay never makes that promise.
+    sms_followup = (
+        sender_role == "buyer" and classification["needs_relay"]
+        and await _seller_can_be_texted(db, listing, seller)
+    )
     sys_sender = _system_for_sender_reply(
         listing, seller, b_name, dist_str, lang, sender_role,
         just_relayed=classification["needs_relay"],
@@ -3026,6 +3091,7 @@ async def send_message(
         # The sender ANSWERED rather than asked. Same relay, opposite
         # direction of travel - and the acknowledgement has to know which.
         sender_answered=classification.get("is_availability_confirmation", False),
+        sms_followup=sms_followup,
     )
     if image:
         # Only the sender's own reply is written with the photo in view; the
@@ -3404,6 +3470,18 @@ async def direct_message(
         if earlier is not None:
             return {"ok": True, "message": _direct_message_out(earlier)}
 
+    # The 5-minute availability reminder, on the path buyers actually use.
+    # Zeno's own screen armed it already, but "is it still available?" is
+    # usually typed in the direct chat - and without this the promise that
+    # an unanswered question gets the seller a text had no timer behind it
+    # here at all. Same transaction as the message: a send that fails must
+    # not leave a seller due for a text about a question that never landed.
+    if actual_role == "buyer":
+        from api.core.interest_arming import arm_availability_nudge
+        await arm_availability_nudge(
+            db, data.listing_id, authenticated_uid, seller_id=listing.seller_id,
+        )
+
     recipient = "seller" if actual_role == "buyer" else "buyer"
     # Direct-chat messages are scoped to the buyer's thread and marked as not via AI.
     effective_buyer_id: Optional[str] = (
@@ -3661,7 +3739,7 @@ async def get_history(
         content     = "" if deleted else (m.content or "")
 
         if m.role == "broker":
-            if m.recipient_role is None or m.recipient_role == actual_role:
+            if broker_visible_to(m.recipient_role, actual_role):
                 # Scope broker messages by buyer_id.
                 # If either side has no buyer_id (legacy row), show it.
                 msg_buyer_id = getattr(m, "buyer_id", None)
@@ -3827,6 +3905,10 @@ async def _thread_unread_and_seen(
         NegotiationMessage.role       == counterpart_role,
         or_(NegotiationMessage.via_ai.is_(False),
             NegotiationMessage.via_ai.is_(None)),
+        # An unsent message is not unread news: it has no words left to
+        # read. Counting the tombstone gave the recipient a badge for
+        # something the sender had already taken back.
+        NegotiationMessage.deleted_at.is_(None),
     )
     if messages_only:
         unread_q = unread_q.where(or_(NegotiationMessage.msg_type.is_(None),
@@ -3879,6 +3961,8 @@ async def _unread_by_kind(
             NegotiationMessage.via_ai.is_(None)),
         or_(NegotiationMessage.recipient_role.is_(None),
             NegotiationMessage.recipient_role == my_role),
+        # Same reason as `unread`: a tombstone has nothing left to announce.
+        NegotiationMessage.deleted_at.is_(None),
     ]
     if my_last_read:
         conds.append(NegotiationMessage.created_at > my_last_read)
@@ -4255,7 +4339,12 @@ async def get_inbox(
             "counterpart_avatar": seller.profile_photo or "",
             "is_online":         is_on,
             "last_seen":         last_seen_str,
-            "last_message":      (last_msg.content or "[media]")[:80],
+            # A tombstone has no words and no media, so the generic
+            # "[media]" fallback claimed the buyer's last message was an
+            # attachment when they had actually unsent it - the seller's
+            # branch already said "Message deleted".
+            "last_message":      ("Message deleted" if getattr(last_msg, "deleted_at", None)
+                                  else (last_msg.content or "[media]"))[:80],
             "last_role":         last_msg.role,
             # Which message last_message is. The app's notifier compared the
             # TEXT of the last message with the one it had notified about,

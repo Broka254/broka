@@ -208,6 +208,9 @@ def _visible_to(role: str, listing_id: str, buyer_id: str):
         M.buyer_id == buyer_id,
         visible_to_role_clause(role),
         or_(M.msg_type.is_(None), M.msg_type != "call"),
+        # An unsent message is not news either: pushing "Message deleted"
+        # would buzz a phone about words that no longer exist.
+        M.deleted_at.is_(None),
     )
 
 

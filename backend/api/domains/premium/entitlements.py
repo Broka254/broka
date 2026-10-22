@@ -267,6 +267,31 @@ async def require(db: AsyncSession, user_id: str, feature: str) -> None:
         raise _refusal(feature, plan, sub, now, spent=False)
 
 
+async def has_left(db: AsyncSession, user_id: str, feature: str) -> bool:
+    """True if one of `feature` is available - without spending it, and
+    without raising.
+
+    For wording that makes a promise about future work: Zeno tells a buyer
+    it will text the seller in five minutes, and that sentence must not be
+    printed when the seller's plan has no SMS alerts left. Same allowance
+    arithmetic as `require_left`; a caller that then spends the feature
+    still goes through `try_consume`, so this is a check, never a
+    reservation.
+    """
+    if not enabled():
+        return True
+    now = datetime.utcnow()
+    _sub, _plan, limit, key = await _allowance(db, user_id, feature, now)
+    if limit is None:
+        return True
+    if limit <= 0:
+        return False
+    used = (await db.execute(select(FeatureUsage.used).where(
+        FeatureUsage.user_id == user_id, FeatureUsage.feature == feature,
+        FeatureUsage.period_key == key))).scalar() or 0
+    return used < limit
+
+
 async def require_left(db: AsyncSession, user_id: str, feature: str) -> None:
     """The 402 unless at least one of `feature` is left - without spending
     it. For work whose cost is only known afterwards (a Buying Agent

@@ -2,16 +2,27 @@
 
 `NegotiationMessage.recipient_role` decides who may see a row:
 
-| value | audience |
-|---|---|
-| `NULL` | both parties |
-| `"buyer"` | the buyer only |
-| `"seller"` | the seller only |
+| role | value | audience |
+|---|---|---|
+| `broker` | `NULL` | **nobody** — the row names no audience, so no surface shows, previews, counts, pushes or feeds it to a model |
+| `broker` | `"buyer"` / `"seller"` | that party only |
+| `buyer` / `seller` | `"seller"` / `"buyer"` | the other party, and its sender |
+| `buyer` / `seller`, `msg_type = "call"` | `NULL` | both parties — a call card is history for both, not a message |
 
 Zeno writes a **different message to each side** of the same relay. One
 party's copy routinely contains coaching — what to counter-offer, how much
 room the other side probably has. Showing it to the wrong party is not a
 cosmetic bug.
+
+A broker row with no `recipient_role` is therefore **fail-closed**. Rows
+written before the audience column existed (or by a path that forgot it)
+are silent rather than guessed at: "both" would put a note in front of the
+very party it was written about, and no reviewer can tell those apart
+after the fact. The rule is applied by one module
+(`api/core/message_visibility.py`) so the inbox, push, unread counts,
+`/history`, the model context and arbitration cannot disagree — a message
+that shows in the inbox and then vanishes when the thread opens is that
+disagreement, seen from the user's side.
 
 ## Why a structural guard exists
 
@@ -49,24 +60,27 @@ analytics nobody reads. Both leaks above looked harmless at a glance; if you
 are reaching for a marker to make the test pass, that is the signal to add
 the filter instead.
 
-Current state: 18 queries scanned, 4 filtered in SQL, 14 marked with a
-stated reason, 0 unaccounted for.
-
 ### Filtering in SQL
 
+Use the shared clause, never a hand-written `or_` — the inclusive version
+below (`recipient_role IS NULL` = both) is what let an unattributed row
+reach both parties:
+
 ```python
-or_(
-    NegotiationMessage.recipient_role.is_(None),
-    NegotiationMessage.recipient_role == viewer_role,
+from api.core.message_visibility import (
+    addressed_to_role_clause,          # one viewer's news
+    thread_visible_to_role_clause,     # what the thread/preview may show
 )
 ```
 
 ### Filtering in Python
 
-Several paths load rows and filter in the loop (`get_history`, the grounding
-builder, the media socket). That is fine, but the marker must say so, and
-the loop must be in the same function — a filter applied by a distant caller
-is a filter someone will drop.
+Several paths load rows and filter in the loop (`get_history`, the
+`_build_messages_for_party`/`_grounding_transcript` pair that builds Zeno's
+model context, arbitration). They call `broker_visible_to(recipient_role,
+viewer_role)` from the same module. That is fine, but the marker must say
+so, and the loop must be in the same function — a filter applied by a
+distant caller is a filter someone will drop.
 
 ## What this does not cover
 

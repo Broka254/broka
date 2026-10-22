@@ -123,6 +123,15 @@ _service_communications_running = False
 # costs approximately nothing and bounds the error at one minute.
 NUDGE_SWEEP_SECONDS = 60
 
+# How long after the availability SMS Zeno tells the BUYER it is still
+# chasing. The text is the seller's last chance to be reached quietly; the
+# buyer is sitting in a conversation that has stopped moving, and silence
+# with no one to interpret it is what makes a marketplace feel dead. Long
+# enough that the seller has had a fair chance (and the buyer's own
+# patience is not insulted by "still waiting!" moments after they asked),
+# short enough that the same session still benefits.
+BUYER_FOLLOWUP_MINUTES = 45
+
 # Process-local fallback only. PostgreSQL uses a connection-scoped advisory
 # lock, which all API replicas share; SQLite is single-process by design so
 # a set is sufficient for local development and the test suite.
@@ -1149,8 +1158,6 @@ async def task_check_interest_nudges(ctx: dict) -> None:
             )
         )
         due = result.scalars().all()
-        if not due:
-            return
 
         sent = 0
         for interest in due:
@@ -1169,9 +1176,94 @@ async def task_check_interest_nudges(ctx: dict) -> None:
                 logger.error("[sweep] interest nudge check failed for interest %s: %s",
                              interest.id, exc)
 
+        # NOT behind `if not due: return` - the whole point is that a row
+        # already texted is due for its update, and on most passes there is
+        # nothing new to text at all. Returning early here made the buyer's
+        # note unreachable.
+        await _tell_buyers_still_waiting(session, now)
+
         await session.commit()
         if sent:
             logger.info("[sweep] sent %d availability nudge SMS", sent)
+
+
+async def _tell_buyers_still_waiting(session, now) -> None:
+    """One honest update to each buyer whose seller stayed silent after the SMS.
+
+    Zeno texted the seller; the seller didn't answer. The buyer is sitting in
+    a conversation that has stopped, and from their side that is
+    indistinguishable from being ignored. This is the beat that makes Zeno an
+    intermediary rather than a form: the same person who promised to chase
+    comes back and says how it went.
+
+    Facts only - the text really did go out (nudge_sent_at), so the note can
+    say so; the seller really has not replied, checked against the thread, so
+    it never claims progress that did not happen. Neither quiet hours nor the
+    buyer's gender is involved: this is an in-app message, not a paid text,
+    and the buyer is addressed as "you".
+    """
+    from datetime import timedelta
+    from sqlalchemy import select
+    from api.database import Interest, Listing, NegotiationMessage, User
+    from api.core.nudge_templates import compose_buyer_waiting_note
+
+    cutoff = now - timedelta(minutes=BUYER_FOLLOWUP_MINUTES)
+    due = (await session.execute(
+        select(Interest).where(
+            Interest.nudge_sent_at.isnot(None),
+            Interest.nudge_sent_at <= cutoff,
+            Interest.buyer_followup_at.is_(None),
+            Interest.nudge_cancelled_at.is_(None),
+        )
+    )).scalars().all()
+    if not due:
+        return
+
+    told = 0
+    for interest in due:
+        try:
+            # A reply that arrived after the text means there is nothing to
+            # report - mark it so the same row isn't re-checked forever.
+            if await _seller_has_responded(session, interest):
+                interest.buyer_followup_at = now
+                continue
+            listing = (await session.execute(
+                select(Listing).where(Listing.id == interest.listing_id)
+            )).scalar_one_or_none()
+            buyer = (await session.execute(
+                select(User).where(User.id == interest.buyer_id)
+            )).scalar_one_or_none()
+            seller = (await session.execute(
+                select(User).where(User.id == listing.seller_id)
+            )).scalar_one_or_none() if listing else None
+            if not listing or not buyer or not seller:
+                interest.buyer_followup_at = now
+                continue
+
+            session.add(NegotiationMessage(
+                listing_id=listing.id,
+                sender_id="broker",
+                role="broker",
+                # Buyer only. The seller is the subject of this note, and
+                # telling them the buyer is being told would just be a
+                # notification with no action in it.
+                recipient_role="buyer",
+                content=compose_buyer_waiting_note(
+                    seller_name=seller.name,
+                    listing_name=listing.name or "item",
+                    seed=interest.id,
+                ),
+                buyer_id=interest.buyer_id,
+                msg_type="text",
+            ))
+            interest.buyer_followup_at = now
+            told += 1
+        except Exception as exc:
+            # One bad row must not cost every other buyer their update.
+            logger.error("[sweep] buyer waiting-note failed for interest %s: %s",
+                         interest.id, exc)
+    if told:
+        logger.info("[sweep] told %d buyers the seller is still silent", told)
 
 
 async def _seller_has_responded(session, interest) -> bool:

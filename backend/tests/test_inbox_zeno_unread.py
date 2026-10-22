@@ -291,6 +291,16 @@ async def test_a_legacy_broker_row_with_no_recipient_is_not_previewed(client):
     assert s["last_message"] == "hi"
     assert b["last_message"] == "hi"
 
+    # And the thread Agrees with the preview. This is the half that used to
+    # disagree: /history kept showing unattributed broker rows to both, so a
+    # message the inbox skipped appeared on opening the thread (the reverse
+    # of the reported "it showed in the inbox, then vanished").
+    for uid in (seller, buyer):
+        hist = (await client.get(f"/negotiate/{listing_id}/history",
+                                 params={"buyer_id": buyer},
+                                 headers=_auth(uid))).json()
+        assert [m["content"] for m in hist] == ["hi"]
+
 
 def test_a_legacy_broker_row_is_not_pushed_to_either_side():
     from api.core.message_push import recipients_of

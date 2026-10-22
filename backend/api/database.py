@@ -498,6 +498,11 @@ class Interest(Base):
     # so a query can tell "resolved, no SMS needed" apart from "we texted
     # them", same split as Deal.timer_cancelled_at vs timer_fired_at.
     nudge_cancelled_at = Column(DateTime, nullable=True)
+    # Set once Zeno has told the BUYER that the seller is still silent after
+    # the text went out. Without it the sweep would repeat the same note on
+    # every pass; with it the buyer hears one honest update and the row
+    # stops being picked up. Naive UTC, like every other timestamp here.
+    buyer_followup_at = Column(DateTime, nullable=True)
 
 
 class NegotiationMessage(Base):
@@ -1656,6 +1661,9 @@ async def _init_db_impl():
             # watermarks and replies stay anchored to the conversation.
             "ALTER TABLE negotiation_messages ADD COLUMN edited_at DATETIME",
             "ALTER TABLE negotiation_messages ADD COLUMN deleted_at DATETIME",
+            # Zeno's one honest update to a buyer whose seller stayed silent
+            # after the availability SMS (core/workers.task_check_interest_nudges).
+            "ALTER TABLE interests ADD COLUMN buyer_followup_at DATETIME",
             "ALTER TABLE users ADD COLUMN gender VARCHAR",
             "ALTER TABLE users ADD COLUMN apns_voip_token VARCHAR",
             "ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL",

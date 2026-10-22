@@ -48,7 +48,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select
 
 from api.database import (
     get_db, Deal, DealStatus, Dispute, DisputeStatus, User, Listing,
@@ -594,18 +594,19 @@ async def mediate(
     #     advice given in confidence to one party, not evidence about what
     #     was agreed, and it should not shape a ruling against them.
     #
-    # Kept: both parties' own messages, and broker messages addressed to
-    # both (recipient_role IS NULL). That is the shared record of the
-    # negotiation - which is what arbitration is supposed to weigh.
+    # Kept: both parties' own messages - the shared record of the
+    # negotiation, which is what arbitration is supposed to weigh. Broker
+    # rows are left out entirely, including ones with no recipient_role: a
+    # row that names no audience cannot be attributed to a side, and a
+    # private note must not shape a ruling against the party it was written
+    # about (api.core.message_visibility).
+    # visibility-ok: broker rows are excluded by role; only the deal's own buyer's human messages are loaded
     chat_r = await db.execute(
         select(NegotiationMessage)
         .where(
             NegotiationMessage.listing_id == deal.listing_id,
             NegotiationMessage.buyer_id == deal.buyer_id,
-            or_(
-                NegotiationMessage.role.in_(("buyer", "seller")),
-                NegotiationMessage.recipient_role.is_(None),
-            ),
+            NegotiationMessage.role.in_(("buyer", "seller")),
         )
         .order_by(NegotiationMessage.created_at.asc())
     )

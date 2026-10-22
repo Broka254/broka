@@ -214,3 +214,34 @@ async def test_an_old_message_can_no_longer_be_unsent(client):
         await db.commit()
     r = await client.delete(f"/negotiate/message/{msg['id']}", headers=_auth(buyer))
     assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_an_unsent_message_stops_being_unread_and_is_never_pushed(client):
+    """A tombstone is not news.
+
+    The sender takes the message back before the other person reads it.
+    Counting or pushing the row would buzz a phone about words that no
+    longer exist, and leave a badge that opens onto nothing.
+    """
+    listing_id, seller, buyer = await _people()
+    msg = await _direct(client, buyer, "buyer", listing_id, "wrong chat, ignore")
+
+    before = (await client.get(f"/negotiate/inbox/{seller}",
+                               headers=_auth(seller))).json()
+    row = next(t for t in before if t["listing_id"] == listing_id)
+    assert row["unread"] == 1
+
+    with patch("api.routers.media.broadcast_message_update", new=AsyncMock()):
+        r = await client.delete(f"/negotiate/message/{msg['id']}", headers=_auth(buyer))
+    assert r.status_code == 200, r.text
+
+    after = (await client.get(f"/negotiate/inbox/{seller}",
+                              headers=_auth(seller))).json()
+    row = next(t for t in after if t["listing_id"] == listing_id)
+    assert row["unread"] == 0
+
+    from api.core.message_push import build_notification
+    async with AsyncSessionLocal() as db:
+        note = await build_notification(db, listing_id, buyer, "seller")
+    assert note is None

@@ -74,6 +74,16 @@ class TestPrivateWordsNeverCrossParties:
         assert secret_laden not in ctx
         assert BUYER_PRIVATE not in ctx
 
+    def test_an_unattributed_broker_row_reaches_neither_side(self):
+        # recipient_role is the audience line. A row that names nobody has
+        # no audience - guessing "both" is how a note written about the
+        # seller ended up in the seller's own model context.
+        history = _history() + [_Msg("broker", "UNATTRIBUTED PRIVATE NOTE")]
+        for role in ("buyer", "seller"):
+            msgs = _build_messages_for_party(history, _New(role, "ok"), role)
+            ctx = "\n".join(m["content"] for m in msgs)
+            assert "UNATTRIBUTED PRIVATE NOTE" not in ctx
+
     def test_broker_message_addressed_to_one_side_stays_there(self):
         buyer_ctx = _ctx("buyer", _New("buyer", "ok"))
         seller_ctx = _ctx("seller", _New("buyer", "ok"))
