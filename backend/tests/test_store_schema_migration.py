@@ -5,9 +5,16 @@
 is not "the column exists" but that a store created before the field keeps
 its row, its link, its owner, its publication state and its data, and reads
 as physical - the only type it could have been.
-"""
-import sqlite3
 
+The pre-upgrade table is built through the engine `reset_engine()` returns,
+not with the `sqlite3` module. Under tests/postgres_plugin.py every
+reset_engine() opens a brand-new PostgreSQL schema and ignores DATABASE_URL,
+so a row written into a hand-built SQLite file was never in the database
+init_db() migrated: the store "vanished" and the Postgres CI job failed on
+NoResultFound (job-logs (42).txt) while the SQLite job passed. Building the
+legacy table through the engine also means the ALTER statements are proven on
+the database production actually runs.
+"""
 import pytest
 from sqlalchemy import text
 
@@ -15,35 +22,39 @@ import api.database as db_module
 from api.database import init_db, reset_engine
 from api.models.store import Store
 
+# The stores table as it existed before this upgrade: identity, link, the
+# publication switch and the old free-text location. No type, no hours, no
+# coverage. FALSE/TRUE rather than 0/1 because PostgreSQL refuses an integer
+# where a boolean column is expected.
+_LEGACY_STORES_DDL = (
+    "CREATE TABLE stores ("
+    " id VARCHAR PRIMARY KEY, owner_id VARCHAR NOT NULL, name VARCHAR NOT NULL,"
+    " slug VARCHAR NOT NULL UNIQUE, category VARCHAR, description TEXT,"
+    " country VARCHAR NOT NULL, county VARCHAR, subcounty VARCHAR,"
+    " location_description VARCHAR, is_active BOOLEAN NOT NULL DEFAULT FALSE,"
+    " created_at TIMESTAMP, updated_at TIMESTAMP)"
+)
+_LEGACY_STORE_ROW = (
+    "INSERT INTO stores (id, owner_id, name, slug, category, description,"
+    " country, county, subcounty, is_active, created_at)"
+    " VALUES ('legacy-store', 'owner-1', 'Mama Njeri Shop', 'mama-njeri',"
+    " 'Electronics', 'Sells phones and chargers.', 'Kenya', 'Nairobi',"
+    " 'Westlands', TRUE, '2026-01-02 03:04:05')"
+)
+
 
 @pytest.mark.asyncio
 async def test_an_existing_store_keeps_its_data_and_becomes_physical(tmp_path, monkeypatch):
-    db_path = tmp_path / "legacy.db"
-    # The stores table as it existed before this upgrade: identity, link,
-    # the publication switch and the old free-text location. No type, no
-    # hours, no coverage.
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE stores ("
-        " id VARCHAR PRIMARY KEY, owner_id VARCHAR NOT NULL, name VARCHAR NOT NULL,"
-        " slug VARCHAR NOT NULL UNIQUE, category VARCHAR, description TEXT,"
-        " country VARCHAR NOT NULL, county VARCHAR, subcounty VARCHAR,"
-        " location_description VARCHAR, is_active BOOLEAN NOT NULL DEFAULT 1,"
-        " created_at DATETIME, updated_at DATETIME)"
-    )
-    conn.execute(
-        "INSERT INTO stores (id, owner_id, name, slug, category, description, country,"
-        " county, subcounty, is_active, created_at)"
-        " VALUES ('legacy-store', 'owner-1', 'Mama Njeri Shop', 'mama-njeri',"
-        " 'Electronics', 'Sells phones and chargers.', 'Kenya', 'Nairobi',"
-        " 'Westlands', 1, '2026-01-02 03:04:05')"
-    )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'legacy.db'}")
     reset_engine()
     try:
+        # The old table must exist before init_db() runs, so create_all()
+        # leaves it alone and the ALTERs land on it - the position every
+        # deployment upgrading in place is in.
+        async with db_module.engine.begin() as connection:
+            await connection.execute(text(_LEGACY_STORES_DDL))
+            await connection.execute(text(_LEGACY_STORE_ROW))
+
         await init_db()
         async with db_module.engine.connect() as connection:
             row = (await connection.execute(text(
