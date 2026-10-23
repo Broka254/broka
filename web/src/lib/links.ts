@@ -54,3 +54,13 @@ export function viaTag(value: string | string[] | undefined): string | undefined
   const v = Array.isArray(value) ? value[0] : value
   return v && /^[a-z0-9_-]{1,32}$/i.test(v) ? v.toLowerCase() : undefined
 }
+
+/**
+ * A Marketing Studio campaign link's `c` token. Case is kept - the token is
+ * opaque - and only the shape the API accepts is passed on; anything else is
+ * dropped and the page still works.
+ */
+export function campaignToken(value: string | string[] | undefined): string | undefined {
+  const v = Array.isArray(value) ? value[0] : value
+  return v && /^[A-Za-z0-9_-]{8,32}$/.test(v) ? v : undefined
+}

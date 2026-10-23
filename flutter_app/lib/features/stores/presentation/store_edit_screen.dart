@@ -71,9 +71,12 @@ class _StoreEditScreenState extends State<StoreEditScreen> {
   }
 
   Widget _content() => switch (widget.step) {
+        StoreSetupStep.type => TypeStep(c),
         StoreSetupStep.name => NameStep(c),
         StoreSetupStep.category => CategoryStep(c),
         StoreSetupStep.location => LocationStep(c),
+        StoreSetupStep.hours => HoursStep(c),
+        StoreSetupStep.coverage => CoverageStep(c),
         StoreSetupStep.logo => LogoStep(c),
         StoreSetupStep.photos => PhotosStep(c),
         StoreSetupStep.email => EmailStep(c, onError: (e) => setState(() => _error = e)),

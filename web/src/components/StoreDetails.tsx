@@ -25,7 +25,12 @@ export function StoreDetails({ view }: { view: StoreView }) {
   const rating = deals > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null
   const since = yearOf(owner?.member_since)
   const opened = monthYearOf(store.created_at)
-  const summaryLine = [store.category, placeLine(store.subcounty, store.county)].filter(Boolean).join(' · ')
+  // For an online store the equivalent of "where it is" is where it
+  // delivers; the county fields are for premises and must not be shown as
+  // an address a buyer could visit.
+  const summaryLine = [store.category, view.isVirtual ? view.delivery : placeLine(store.subcounty, store.county)]
+    .filter(Boolean)
+    .join(' · ')
   const area = placeLine(store.subcounty, store.county) ?? store.country
   const landmark = store.location_description?.trim() || null
   const mapQuery = placeLine(store.location_description, store.subcounty, store.county, store.country)
@@ -43,9 +48,15 @@ export function StoreDetails({ view }: { view: StoreView }) {
         <div>
           <p className={styles.ownerName}>{store.name}</p>
           {summaryLine && <p className={styles.mutedLine}>{summaryLine}</p>}
+          <p className={styles.mutedLine}>
+            {view.isVirtual ? 'Online store · no shop to visit' : 'Physical store'}
+          </p>
           <p className={store.is_active ? styles.statusOpen : styles.statusPaused}>
             {store.is_active ? 'Open' : 'Taking a break'}
           </p>
+          {!view.isVirtual && view.hours.length > 0 && (
+            <p className={view.openNow ? styles.statusOpen : styles.mutedLine}>{view.openLabel}</p>
+          )}
         </div>
       </div>
 
@@ -100,7 +111,7 @@ export function StoreDetails({ view }: { view: StoreView }) {
         </div>
       </section>
 
-      {view.photos.length > 0 && (
+      {view.photos.length > 0 && !view.isVirtual && (
         <section aria-labelledby="photos-title">
           <h2 id="photos-title" className={styles.detailsLabel}>
             Photos of the shop
@@ -127,25 +138,61 @@ export function StoreDetails({ view }: { view: StoreView }) {
         </section>
       )}
 
-      <section aria-labelledby="location-title">
-        <h2 id="location-title" className={styles.detailsLabel}>
-          Location
-        </h2>
-        <div className={`card ${styles.detailsCard}`}>
-          <p className={landmark ? styles.mutedLine : styles.strongLine}>📍 {area}</p>
-          {landmark && <p className={styles.strongLine}>{landmark}</p>}
-          {mapQuery && mapQuery !== store.country && (
-            <a
-              className={styles.detailsAction}
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`}
-              target="_blank"
-              rel="noopener"
-            >
-              Find it on the map
-            </a>
-          )}
-        </div>
-      </section>
+      {view.isVirtual ? (
+        <section aria-labelledby="delivery-title">
+          <h2 id="delivery-title" className={styles.detailsLabel}>
+            Delivery and service area
+          </h2>
+          <div className={`card ${styles.detailsCard}`}>
+            <p className={styles.strongLine}>🚚 {view.delivery ?? 'Where it delivers: ask the store'}</p>
+            {view.deliveryNote && <p className={styles.strongLine}>{view.deliveryNote}</p>}
+            <p className={styles.mutedLine}>
+              This is an online store: there is no shop to visit. Agree delivery or collection with the seller
+              in the product chat.
+            </p>
+          </div>
+        </section>
+      ) : (
+        <section aria-labelledby="location-title">
+          <h2 id="location-title" className={styles.detailsLabel}>
+            Location
+          </h2>
+          <div className={`card ${styles.detailsCard}`}>
+            <p className={landmark ? styles.mutedLine : styles.strongLine}>📍 {area}</p>
+            {landmark && <p className={styles.strongLine}>{landmark}</p>}
+            {mapQuery && mapQuery !== store.country && (
+              <a
+                className={styles.detailsAction}
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`}
+                target="_blank"
+                rel="noopener"
+              >
+                Find it on the map
+              </a>
+            )}
+          </div>
+        </section>
+      )}
+
+      {!view.isVirtual && view.hours.length > 0 && (
+        <section aria-labelledby="hours-title">
+          <h2 id="hours-title" className={styles.detailsLabel}>
+            Opening hours
+          </h2>
+          <div className={`card ${styles.detailsCard}`}>
+            <p className={view.openNow ? styles.statusOpen : styles.strongLine}>{view.openLabel}</p>
+            <dl className={styles.infoList}>
+              {view.hours.map((row) => (
+                <div key={row.day}>
+                  <dt>{row.label}</dt>
+                  <dd className={row.closed ? styles.mutedLine : undefined}>{row.hours}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className={styles.mutedLine}>Times are East Africa Time (Africa/Nairobi).</p>
+          </div>
+        </section>
+      )}
 
       <section aria-labelledby="contact-title">
         <h2 id="contact-title" className={styles.detailsLabel}>
@@ -175,10 +222,26 @@ export function StoreDetails({ view }: { view: StoreView }) {
           Store info
         </h2>
         <dl className={`card ${styles.detailsCard} ${styles.infoList}`}>
+          <div>
+            <dt>Type</dt>
+            <dd>{view.isVirtual ? 'Online store' : 'Physical store'}</dd>
+          </div>
           {store.category && (
             <div>
               <dt>Sells</dt>
               <dd>{store.category}</dd>
+            </div>
+          )}
+          {!view.isVirtual && (
+            <div>
+              <dt>Opening hours</dt>
+              <dd>{view.hours.length > 0 ? view.openLabel : 'Opening hours unavailable'}</dd>
+            </div>
+          )}
+          {view.delivery && (
+            <div>
+              <dt>Delivery</dt>
+              <dd>{view.delivery}</dd>
             </div>
           )}
           <div>

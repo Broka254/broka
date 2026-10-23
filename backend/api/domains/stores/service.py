@@ -41,7 +41,7 @@ import uuid
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, delete, desc, func, not_, or_, select
+from sqlalchemy import and_, asc, case, delete, desc, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,13 +52,14 @@ from api.core.text_search import matches_all_terms, search_terms
 from api.database import AccountType, Listing, ListingStatus, SellerTier, User
 from api.domains.listings.paid import is_live, live_clause
 from api.domains.categories.seed import CANONICAL_CATEGORIES, canonical_category_name
-from api.models.store import Store, StoreCategoryLink
+from api.models.store import DEFAULT_STORE_TYPE, STORE_TYPES, Store, StoreCategoryLink
 from api.domains.listings.service import ListingService, load_listing_media
 from api.security import decode_email_verify_token
 from . import billing as store_billing
 from . import categories as store_categories
 from .area_points import area_point
-from . import naming
+from api.domains.listings.location import canonical_county
+from . import naming, opening_hours
 from .media import (
     normalize_photo_list, parse_photo_list, normalize_single_media, MediaTooLargeError,
 )
@@ -113,6 +114,11 @@ class StoreService:
 
     async def create_store(self, owner_id: str, data: dict) -> dict:
         name = self._clean_name(data.get("name"))
+        # A client that predates store types gets "physical": every store
+        # that existed before the field was a shop you could walk into.
+        store_type = self._store_type(data, current=DEFAULT_STORE_TYPE) or DEFAULT_STORE_TYPE
+        hours_json = self._opening_hours_column(data)
+        service_areas_json, delivery_note = self._coverage_columns(data)
 
         owner = await self._lock_owner_for_create(owner_id)
 
@@ -164,15 +170,23 @@ class StoreService:
             # Only clients new enough to choose a link name are held to
             # it - app builds that predate phase 2 (no slug, no image
             # assets) must still be able to open a store.
-            if data.get("slug") and not image_columns.get("photo_ids") and not photos:
+            # A physical shop opens with at least one real photo of it: a
+            # logo or cover isn't one. A virtual store has no premises to
+            # photograph, so the rule does not apply to it - requiring one
+            # would force a seller to invent a shop that doesn't exist.
+            if (store_type == "physical" and data.get("slug")
+                    and not image_columns.get("photo_ids") and not photos):
                 raise HTTPException(
                     status_code=400,
-                    detail="Add at least one photo of your shop before opening your store.",
+                    detail="Add at least one photo of your shop before opening your store. "
+                           "A store with no premises can open as a virtual store.",
                 )
             slug = chosen_slug or await self._unique_slug(name)
             store = Store(
                 owner_id=owner_id, name=name, slug=slug, category=category,
-                logo_url=logo_url, photos=photos,
+                logo_url=logo_url, photos=photos, store_type=store_type,
+                opening_hours=hours_json, service_areas=service_areas_json,
+                delivery_note=delivery_note,
             )
             if coords is not None:
                 store.lat, store.lng = coords
@@ -307,6 +321,7 @@ class StoreService:
         viewer_lng: Optional[float] = None,
         max_distance_km: Optional[float] = None,
         nearest_first: bool = False,
+        store_type: Optional[str] = None,
     ):
         """Browse active stores. A paused store is left out of the
         directory, though its own link still resolves; with store billing
@@ -335,6 +350,12 @@ class StoreService:
         )
         if store_billing.enabled():
             q = q.where(store_billing.live_subscription_clause(Store.id))
+        if store_type:
+            # A filter, never a way to hide virtual stores: leaving it out
+            # returns both kinds, and `store_type` never enters distance
+            # filtering (a virtual store has no pin but still serves buyers).
+            normalised = self._store_type({"store_type": store_type})
+            q = q.where(Store.store_type == normalised)
         search_terms_ = search_terms(search)
         if search_terms_:
             # Every typed word has to appear somewhere a buyer would look
@@ -730,6 +751,8 @@ class StoreService:
         requester_id: str,
         state: str = "all",
         search: Optional[str] = None,
+        category: Optional[str] = None,
+        sort: str = "newest",
         limit: int = 20,
         offset: int = 0,
     ) -> dict:
@@ -771,6 +794,10 @@ class StoreService:
         if terms:
             where.append(matches_all_terms(
                 terms, (Listing.name, Listing.category, Listing.description)))
+        if category:
+            # The same category string Home's chips use, so a seller filtering
+            # "Phones" here sees what a buyer filtering it there would.
+            where.append(Listing.category == category)
 
         # sum(case) rather than count() FILTER, which older SQLite lacks.
         row = (await self.db.execute(select(*(
@@ -783,8 +810,15 @@ class StoreService:
         q = select(Listing).where(*where)
         if state != "all":
             q = q.where(in_state[state])
+        order = {
+            "newest": (desc(Listing.created_at), Listing.id),
+            "oldest": (asc(Listing.created_at), Listing.id),
+            "name": (func.lower(Listing.name), Listing.id),
+            "price_low": (asc(Listing.price), Listing.id),
+            "price_high": (desc(Listing.price), Listing.id),
+        }.get(sort, (desc(Listing.created_at), Listing.id))
         listings = (await self.db.execute(
-            q.order_by(desc(Listing.created_at), Listing.id).limit(limit).offset(offset)
+            q.order_by(*order).limit(limit).offset(offset)
         )).scalars().all()
 
         seller_ids = {l.seller_id for l in listings}
@@ -798,8 +832,107 @@ class StoreService:
             item = ListingService._owner_listing_dict(
                 listing, seller=sellers.get(listing.seller_id), store=store, assets=assets)
             item["store_state"] = self._owner_state(listing, now, store_live)
+            # Why this product isn't showing, or what would make it sell -
+            # answered by the server so the app doesn't re-derive BROKA's
+            # rules and drift from them.
+            item["health"] = self._product_health(listing, assets)
             items.append(item)
         return {"items": items, "counts": counts}
+
+    @staticmethod
+    def _product_health(listing: Listing, assets: Optional[dict] = None) -> dict:
+        """The issues a seller can fix on a product, and nothing invented.
+
+        Each issue names the screen that fixes it (`fix`), so the app can
+        link straight there instead of leaving the seller to guess. Empty
+        issues means the product passes the checks BROKA actually applies.
+        """
+        from api.domains.media.service import parse_id_list
+
+        issues: list[dict] = []
+        photo_ids = parse_id_list(getattr(listing, "photo_ids", None))
+        has_photo = bool(photo_ids) or bool(getattr(listing, "verified_photos", None)) or bool(
+            getattr(listing, "showcase_image_url", None))
+        if not has_photo:
+            issues.append({"code": "no_image", "label": "No product photo",
+                           "fix": "photos"})
+        description = (getattr(listing, "description", None) or "").strip()
+        if len(description) < 25:
+            issues.append({"code": "short_description",
+                           "label": "Description is too short to answer questions",
+                           "fix": "details"})
+        if not (getattr(listing, "category", None) or "").strip():
+            issues.append({"code": "no_category", "label": "No category",
+                           "fix": "category"})
+        quantity = getattr(listing, "quantity", None)
+        if quantity is not None and int(quantity) <= 0:
+            issues.append({"code": "out_of_stock", "label": "Out of stock",
+                           "fix": "stock"})
+        fee = getattr(listing, "paid_until", None)
+        from api.domains.listings.paid import fee_state
+        if fee_state(listing).get("needs_payment"):
+            issues.append({"code": "unpaid_listing_fee",
+                           "label": "Listing fee unpaid - buyers cannot see it",
+                           "fix": "fee"})
+        status = getattr(listing.status, "value", listing.status)
+        if status == ListingStatus.cancelled.value:
+            issues.append({"code": "archived", "label": "Archived",
+                           "fix": "details"})
+        return {"issues": issues, "ok": not issues}
+
+    async def bulk_archive_listings(
+        self, store_id: str, requester_id: str, listing_ids: list[str],
+    ) -> dict:
+        """Archive several of the store's products in one call.
+
+        Every id is checked against this store AND this seller before any
+        row changes: an id from another shop, another seller's listing, or
+        one that has a buyer's deal on it is refused for the whole request,
+        not silently skipped. Archiving is a status change on the existing
+        listing row - never a delete - so deals, payments, reviews and
+        history keep pointing at something real.
+        """
+        from api.domains.media.service import parse_id_list  # noqa: F401 - keep import light
+        ids = list(dict.fromkeys(listing_ids or []))
+        if not ids:
+            raise HTTPException(status_code=400, detail="Choose at least one product.")
+        if len(ids) > 50:
+            raise HTTPException(status_code=400, detail="Archive at most 50 products at a time.")
+        store = await self.get_owned(store_id, requester_id)
+        rows = (await self.db.execute(
+            select(Listing).where(
+                Listing.id.in_(ids), Listing.store_id == store.id,
+                Listing.seller_id == requester_id,
+            )
+        )).scalars().all()
+        found = {row.id: row for row in rows}
+        missing = [i for i in ids if i not in found]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail="Some of those products aren't in this store. Select them again.",
+            )
+        blocked = [
+            row.name for row in rows
+            if getattr(row.status, "value", row.status) in (
+                ListingStatus.pending.value, ListingStatus.completed.value)
+        ]
+        if blocked:
+            raise HTTPException(
+                status_code=409,
+                detail="These products are in a deal or sold, so they can't be archived: "
+                       + ", ".join(blocked[:5]) + ("…" if len(blocked) > 5 else ""),
+            )
+        archived: list[str] = []
+        for row in rows:
+            if getattr(row.status, "value", row.status) == ListingStatus.cancelled.value:
+                continue
+            row.status = ListingStatus.cancelled
+            row.is_featured = False
+            archived.append(row.id)
+        if archived:
+            await self.db.commit()
+        return {"archived": archived, "already_archived": [i for i in ids if i not in archived]}
 
     @staticmethod
     def _owner_state(listing: Listing, now: datetime, store_live: bool = True) -> str:
@@ -892,6 +1025,10 @@ class StoreService:
         store = await self._get_or_404(store_id)
         self._require_owner(store, requester_id)
 
+        requested_type = self._store_type(data, current=store.store_type)
+        hours_json = self._opening_hours_column(data)
+        service_areas_json, delivery_note = self._coverage_columns(data)
+
         if "slug" in data and data["slug"] and naming.normalize(data["slug"]) != store.slug:
             raise HTTPException(
                 status_code=400,
@@ -952,11 +1089,34 @@ class StoreService:
         # take them all away afterwards, which left a storefront with
         # nothing to show. A removal that would take the last photo is
         # refused; adding, replacing or reordering still goes through.
-        if ("photo_ids" in data or "photos" in data) and not self._has_shop_photo(store):
+        effective_type = requested_type or store.store_type
+        if (("photo_ids" in data or "photos" in data) and not self._has_shop_photo(store)
+                and effective_type == "physical"):
             raise HTTPException(
                 status_code=400,
-                detail="Keep at least one photo of your shop - buyers need to see it.",
+                detail="Keep at least one photo of your shop - buyers need to see it. "
+                       "A store with no premises can become a virtual store instead.",
             )
+
+        if requested_type and requested_type != store.store_type:
+            # Switching changes what the storefront may claim, not what the
+            # owner already told us: a move to virtual keeps the address and
+            # pin stored (they are not destroyed), it just stops publishing
+            # them as premises. A move to physical needs a real shop photo,
+            # because a physical storefront without one is the state the
+            # original rule exists to prevent.
+            if requested_type == "physical" and not self._has_shop_photo(store):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Add at least one photo of your shop before switching to a physical store.",
+                )
+            store.store_type = requested_type
+        if "opening_hours" in data:
+            store.opening_hours = hours_json
+        if "service_areas" in data:
+            store.service_areas = service_areas_json
+        if "delivery_note" in data:
+            store.delivery_note = delivery_note
 
         if "business_email" in data or "official_email" in data:
             owner = await self.db.get(User, requester_id)
@@ -1074,6 +1234,89 @@ class StoreService:
             user.account_type == AccountType.buyer_seller
             and user.seller_tier == SellerTier.long_term
         )
+
+    # ── Store type, hours and delivery coverage ──────────────────────────
+
+    @staticmethod
+    def _store_type(data: dict, current: Optional[str] = None) -> Optional[str]:
+        """The validated type a request sets, or `current` when it sets
+        none. `store_type` is never guessed from location or photos: a shop
+        without a pin is not automatically virtual, and a virtual shop may
+        still have an address on file."""
+        if "store_type" not in data or data.get("store_type") is None:
+            return current
+        value = data.get("store_type")
+        if not isinstance(value, str) or value.strip().lower() not in STORE_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose a physical or virtual store.",
+            )
+        return value.strip().lower()
+
+    @staticmethod
+    def _opening_hours_column(data: dict) -> Optional[str]:
+        """The JSON to store for a request's `opening_hours`; None clears it.
+        Only called when the key is present (create passes the result even
+        when absent, which is None and means no schedule)."""
+        if "opening_hours" not in data:
+            return None
+        try:
+            return opening_hours.dumps(opening_hours.normalize(data.get("opening_hours")))
+        except opening_hours.OpeningHoursError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @staticmethod
+    def _coverage_columns(data: dict) -> tuple[Optional[str], Optional[str]]:
+        """(service_areas JSON, delivery_note) from a request. Keys that
+        aren't present become None, which callers only assign when the key
+        is in the payload - so an unrelated edit never clears coverage."""
+        areas_json = None
+        if "service_areas" in data:
+            raw = data.get("service_areas")
+            if raw is None or raw == []:
+                areas_json = None
+            else:
+                if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Choose the counties you deliver to, or Nationwide.",
+                    )
+                cleaned: list[str] = []
+                for value in raw:
+                    text = " ".join(value.split())
+                    if text.lower() == "nationwide":
+                        cleaned = ["Nationwide"]
+                        break
+                    county = canonical_county(text)
+                    if county is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"\"{text}\" isn't a Kenyan county. Choose from the list, or Nationwide.",
+                        )
+                    if county not in cleaned:
+                        cleaned.append(county)
+                areas_json = __import__("json").dumps(cleaned) if cleaned else None
+        note = None
+        if "delivery_note" in data:
+            raw = data.get("delivery_note")
+            if isinstance(raw, str) and raw.strip():
+                note = raw.strip()
+                if len(note) > 200:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Keep the delivery note under 200 characters.",
+                    )
+        return areas_json, note
+
+    @staticmethod
+    def _service_area_list(raw: Optional[str]) -> list[str]:
+        if not raw:
+            return []
+        try:
+            value = __import__("json").loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
 
     @staticmethod
     def _clean_name(raw) -> str:
@@ -1361,6 +1604,7 @@ class StoreService:
             elif not store_billing.is_live(sub):
                 active = False
 
+        store_type_public = store.store_type or DEFAULT_STORE_TYPE
         distance_km, distance_approximate = self._store_distance(
             store, owner, viewer_lat, viewer_lng)
         # The mappable point is _store_point's point at ±1 km rounding:
@@ -1401,6 +1645,16 @@ class StoreService:
             # What app builds before phase 2 display.
             "specialization": category,
             "description": store.description,
+            # Physical or virtual. The rest of the type-specific fields
+            # below are always present so an older client can ignore them;
+            # the app and the web decide what to draw from this one value.
+            "store_type": store.store_type or DEFAULT_STORE_TYPE,
+            # Weekly hours, the rows a storefront draws, and "open now" -
+            # computed here, in Africa/Nairobi, so neither client has to
+            # and neither can disagree with the other.
+            **opening_hours.public_payload(store.opening_hours),
+            "service_areas": self._service_area_list(store.service_areas),
+            "delivery_note": store.delivery_note,
             "country": store.country,
             "county": store.county,
             "subcounty": store.subcounty,
@@ -1436,10 +1690,13 @@ class StoreService:
             # show those as approximate ("≈ 6 km from you").
             "distance_approximate": bool(distance_approximate and distance_km is not None),
             # Where the map may put the shop (±1 km, never exact), and -
-            # for the owner only - the pin exactly as they set it.
-            "approx_lat": approx_lat,
-            "approx_lng": approx_lng,
-            "has_location": approx_lat is not None,
+            # for the owner only - the pin exactly as they set it. A virtual
+            # store publishes no map point: it has no premises, and showing
+            # one (even an approximate area) would invent a shopfront. The
+            # owner still receives their own stored pin below.
+            "approx_lat": approx_lat if (store_type_public == "physical") else None,
+            "approx_lng": approx_lng if (store_type_public == "physical") else None,
+            "has_location": approx_lat is not None and store_type_public == "physical",
             **({"lat": store.lat, "lng": store.lng} if owner_view else {}),
             "created_at": store.created_at.isoformat() if store.created_at else None,
             "updated_at": store.updated_at.isoformat() if store.updated_at else None,

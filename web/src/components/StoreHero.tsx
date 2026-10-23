@@ -20,7 +20,9 @@ import styles from './shop.module.css'
 export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?: ProductCardData[] }) {
   const { store } = view
   const owner = store.owner
-  const subtitle = [store.category, placeLine(store.subcounty, store.county)].filter(Boolean).join(' · ')
+  const subtitle = [store.category, view.isVirtual ? view.delivery : placeLine(store.subcounty, store.county)]
+    .filter(Boolean)
+    .join(' · ')
   const deals = owner?.completed_deals ?? 0
   // A rating only means something once there are deals behind it.
   const rating = deals > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null

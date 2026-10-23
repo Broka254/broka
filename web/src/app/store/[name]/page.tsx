@@ -24,7 +24,7 @@ import styles from '@/components/store.module.css'
 import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
 import { CONDITIONS, PRICE_BANDS, SORTS, filtersQuery, panelActive, readFilters, toProductCard } from '@/lib/catalogue'
 import { PAGE_SIZE } from '@/lib/config'
-import { storeCartPath, viaTag } from '@/lib/links'
+import { campaignToken, storeCartPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
 import { jsonLdScript, storeDescription, storeJsonLd, storePreviewImage, storeView } from '@/lib/storefront'
 
@@ -62,10 +62,14 @@ export default async function StorePage({ params, searchParams }: Props) {
 
   const filters = readFilters(query)
   const via = viaTag(query.via)
+  const campaign = campaignToken(query.c)
   // One address per store: /store/Clanix -> /store/clanix.
   if (name !== store.slug) {
     const q = new URLSearchParams(filtersQuery(filters).slice(1))
     if (via) q.set('via', via)
+    // The campaign token must survive the address tidy-up, or the visit it
+    // was meant to attribute arrives anonymous.
+    if (campaign) q.set('c', campaign)
     permanentRedirect(`/store/${store.slug}${q.size ? `?${q}` : ''}`)
   }
 
@@ -155,7 +159,7 @@ export default async function StorePage({ params, searchParams }: Props) {
             </section>
           </>
         )}
-        <VisitBeacon storeId={store.id} via={via} />
+        <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(storeJsonLd(view)) }} />
       </main>
       <StoreFooter view={view} categories={categories} />

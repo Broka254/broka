@@ -21,7 +21,7 @@ function visitorId(): string | undefined {
   }
 }
 
-export function VisitBeacon({ storeId, via }: { storeId: string; via?: string }) {
+export function VisitBeacon({ storeId, via, campaign }: { storeId: string; via?: string; campaign?: string }) {
   const sent = useRef(false)
   useEffect(() => {
     if (sent.current) return
@@ -31,11 +31,12 @@ export function VisitBeacon({ storeId, via }: { storeId: string; via?: string })
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         via,
+        campaign,
         referrer: document.referrer ? document.referrer.slice(0, 500) : undefined,
         visitor: visitorId(),
       }),
       keepalive: true,
     }).catch(() => {})
-  }, [storeId, via])
+  }, [storeId, via, campaign])
   return null
 }

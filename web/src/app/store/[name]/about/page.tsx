@@ -16,7 +16,7 @@ import { VisitBeacon } from '@/components/VisitBeacon'
 import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
 import { getStore } from '@/lib/api'
-import { absoluteUrl, storeCartPath, storeDetailsPath, viaTag } from '@/lib/links'
+import { absoluteUrl, campaignToken, storeCartPath, storeDetailsPath, viaTag } from '@/lib/links'
 import { storeDescription, storePreviewImage, storeView } from '@/lib/storefront'
 
 type Props = {
@@ -50,8 +50,14 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
   const store = await getStore(name)
   if (!store) notFound()
   const via = viaTag(query.via)
+  const campaign = campaignToken(query.c)
   // One address per store: /store/Clanix/about -> /store/clanix/about.
-  if (name !== store.slug) permanentRedirect(`${storeDetailsPath(store.slug)}${via ? `?via=${via}` : ''}`)
+  if (name !== store.slug) {
+    const q = new URLSearchParams()
+    if (via) q.set('via', via)
+    if (campaign) q.set('c', campaign)
+    permanentRedirect(`${storeDetailsPath(store.slug)}${q.size ? `?${q}` : ''}`)
+  }
 
   const view = storeView(store)
   return (
@@ -65,7 +71,7 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
         </nav>
         <h1 className={styles.detailsTitle}>Store details</h1>
         <StoreDetails view={view} />
-        <VisitBeacon storeId={store.id} via={via} />
+        <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
       </main>
       <StoreFooter view={view} />
       {store.is_active && <CartDrawer storeId={store.id} storeName={store.name} cartPath={storeCartPath(store.slug)} />}

@@ -59,6 +59,46 @@ export interface Store {
   /** Measured average reply time in minutes; null = not measured. */
   response_minutes?: number | null
   created_at?: string | null
+  /**
+   * "physical" (premises a customer can visit) or "virtual" (online only).
+   * Absent from API versions before store types: every store that existed
+   * then was physical.
+   */
+  store_type?: 'physical' | 'virtual' | null
+  /** Where it delivers: Kenyan counties, or ["Nationwide"]. */
+  service_areas?: string[] | null
+  /** How buyers get their order, in the owner's words. */
+  delivery_note?: string | null
+  /** The weekly schedule, or null when the owner gave none. */
+  opening_hours?: Record<string, OpeningHoursDay | null> | null
+  opening_hours_week?: OpeningHoursWeekRow[] | null
+  opening_hours_available?: boolean
+  open_status?: OpenStatus | null
+}
+
+export interface OpeningHoursDay {
+  /** A whole-day schedule carries only this. */
+  all_day?: boolean
+  /** "HH:MM", 24-hour. A close at or before open crosses midnight. */
+  open?: string
+  close?: string
+}
+
+export interface OpeningHoursWeekRow {
+  day: string
+  label: string
+  short: string
+  hours: string
+  closed: boolean
+  all_day: boolean
+}
+
+export interface OpenStatus {
+  state: 'open' | 'closed' | 'unknown'
+  label: string
+  opens_at: string | null
+  closes_at: string | null
+  next_day: string | null
 }
 
 export interface StoreCategory {

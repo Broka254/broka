@@ -1620,6 +1620,7 @@ async def _init_db_impl():
     for _module, _names in (
         ("api.models.dispute", ("DisputeCase", "DisputeEvent", "DisputeEvidence", "DisputeTimer")),
         ("api.models.store", ("Store", "StoreDailyCount", "StoreCategoryLink", "StoreRatingSnapshot")),
+        ("api.models.marketing", ("MarketingCampaign", "MarketingCreative", "MarketingCampaignEvent")),
         ("api.models.external_escrow", ("ExternalEscrow",)),
         ("api.models.media", ("MediaAsset", "MediaBlob")),
         ("api.models.listing_payment", ("ListingPayment",)),
@@ -1826,6 +1827,15 @@ async def _init_db_impl():
             "ALTER TABLE stores ADD COLUMN rating_response_component FLOAT",
             "ALTER TABLE stores ADD COLUMN rating_tenure_component FLOAT",
             "ALTER TABLE stores ADD COLUMN rating_updated_at TIMESTAMP",
+            # Physical/virtual stores (2026-10-23). Every row that predates
+            # the column was a shop a customer could walk into, so the
+            # default is 'physical' - the migration never guesses a type.
+            "ALTER TABLE stores ADD COLUMN store_type VARCHAR NOT NULL DEFAULT 'physical'",
+            # Structured weekly hours (JSON text) and delivery coverage, kept
+            # apart from the shop's address on purpose - see models/store.py.
+            "ALTER TABLE stores ADD COLUMN opening_hours TEXT",
+            "ALTER TABLE stores ADD COLUMN service_areas TEXT",
+            "ALTER TABLE stores ADD COLUMN delivery_note VARCHAR(200)",
             # Review attribution (2026-10-19): a deal review names the store
             # whose product was sold, so one shop's record cannot lift
             # another's. NULL on chat-only reviews (no listing, so no honest

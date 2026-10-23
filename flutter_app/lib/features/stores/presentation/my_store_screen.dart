@@ -45,6 +45,7 @@ import '../domain/models/store.dart';
 import '../domain/models/store_product.dart';
 import 'setup/store_setup_controller.dart';
 import 'store_billing_screen.dart';
+import 'marketing_studio_screen.dart';
 import 'store_edit_screen.dart';
 import 'widgets/broka_default_logo.dart';
 import 'widgets/store_performance.dart';
@@ -311,7 +312,7 @@ class _Dashboard extends StatelessWidget {
   /// that outlives the test's pump cycle.
   final bool animate;
 
-  static const _tabs = ['Overview', 'Products', 'Settings'];
+  static const _tabs = ['Overview', 'Products', 'Marketing', 'Settings'];
 
   @override
   Widget build(BuildContext context) {
@@ -372,6 +373,7 @@ class _Dashboard extends StatelessWidget {
               onStoreChanged: onStoreChanged, onRefresh: onRefresh, animate: animate),
           _ProductsTab(store: store, repo: repo, listings: listings, share: share,
               filter: productFilter, onProductsChanged: onRefresh),
+          MarketingStudioTab(store: store, repo: repo),
           _SettingsTab(
             store: store,
             repo: repo,
@@ -420,8 +422,11 @@ class _Header extends StatelessWidget {
               _StatusPill(active: store.isActive),
               const SizedBox(width: 8),
               Flexible(child: Text(
-                  [live, if (store.categories.isNotEmpty) store.categories.join(', ')]
-                      .join(' · '),
+                  [
+                    live,
+                    store.isVirtual ? 'Online store' : 'Physical store',
+                    if (store.categories.isNotEmpty) store.categories.join(', '),
+                  ].join(' · '),
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5))),
             ]),
@@ -757,6 +762,14 @@ class _OverviewTabState extends State<_OverviewTab> {
                   ),
           ]),
         ),
+        const SizedBox(height: 14),
+        // What the shop is, when it's open, and where it delivers - the
+        // three facts a buyer checks first. Each opens the page that edits
+        // it, so a wrong one is two taps from fixed.
+        _BusinessCard(
+          store: store,
+          onEdit: (step) => _editStore(context, store, step, widget.onStoreChanged),
+        ),
         if (counts != null && (counts.hidden > 0 || counts.inDeal > 0)) ...[
           const SizedBox(height: 14),
           _NeedsAttention(counts: counts, onShow: _showProducts),
@@ -842,6 +855,38 @@ class _OverviewTabState extends State<_OverviewTab> {
           )),
         ]),
         const SizedBox(height: 22),
+        // Promotions, one tap from the numbers they should move. The
+        // Marketing tab does the work; this is the reminder to use it.
+        _card(
+          key: const Key('marketing-prompt'),
+          child: Row(children: [
+            Container(
+              width: 42, height: 42,
+              decoration: BoxDecoration(
+                color: BrokaColors.neonPurple.withOpacity(0.16),
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: const Icon(Icons.auto_awesome_rounded,
+                  color: BrokaColors.neonPurple, size: 21),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Promote your store', style: TextStyle(color: BrokaColors.textHigh,
+                  fontWeight: FontWeight.w700, fontSize: 14.5)),
+              SizedBox(height: 2),
+              Text('AI writes posts for WhatsApp, Instagram, TikTok and more - from your real products.',
+                  style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.35)),
+            ])),
+            const SizedBox(width: 6),
+            TextButton(
+              key: const Key('open-marketing'),
+              onPressed: () => DefaultTabController.of(context).animateTo(2),
+              child: const Text('Create', style: TextStyle(color: BrokaColors.gold,
+                  fontWeight: FontWeight.w700)),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 22),
         StoreShareCard(store: store, share: widget.share),
         const SizedBox(height: 22),
         _sectionLabel('Your selling'),
@@ -851,7 +896,64 @@ class _OverviewTabState extends State<_OverviewTab> {
   }
 }
 
-/// The store's plan at a glance, above the open/paused switch: unpaid and
+/// Physical or virtual, opening hours and delivery coverage on one card.
+/// Only what the store actually has: a virtual store has no hours row, and a
+/// physical store with no schedule says so instead of showing "Closed".
+class _BusinessCard extends StatelessWidget {
+  const _BusinessCard({required this.store, required this.onEdit});
+  final Store store;
+  final ValueChanged<StoreSetupStep> onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = store.liveOpenStatus;
+    final coverage = store.deliveryCoverageLabel;
+    Widget line(IconData icon, String label, String? value, StoreSetupStep step,
+            {Color? color, Key? key}) =>
+        InkWell(
+          key: key,
+          onTap: () => onEdit(step),
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 7),
+            child: Row(children: [
+              Icon(icon, size: 18, color: color ?? BrokaColors.textMid),
+              const SizedBox(width: 10),
+              SizedBox(width: 74, child: Text(label, style: const TextStyle(
+                  color: BrokaColors.textMid, fontSize: 12))),
+              Expanded(child: Text(value ?? 'Not set',
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: value == null ? BrokaColors.textLow
+                      : BrokaColors.textHigh, fontSize: 12.5,
+                      fontWeight: value == null ? FontWeight.w400 : FontWeight.w600))),
+              const Icon(Icons.chevron_right_rounded, size: 16, color: BrokaColors.textLow),
+            ]),
+          ),
+        );
+
+    return _card(
+      key: const Key('business-card'),
+      padding: const EdgeInsets.fromLTRB(16, 8, 10, 8),
+      child: Column(children: [
+        line(Icons.storefront_outlined, 'Type', store.storeType.label, StoreSetupStep.type,
+            key: const Key('business-type')),
+        if (!store.isVirtual)
+          line(
+            status.isKnown ? Icons.schedule_rounded : Icons.schedule_outlined,
+            'Hours',
+            status.isKnown ? status.label : 'Opening hours unavailable',
+            StoreSetupStep.hours,
+            color: status.isOpen ? BrokaColors.success : null,
+            key: const Key('business-hours'),
+          ),
+        line(Icons.local_shipping_outlined, 'Delivery', coverage, StoreSetupStep.coverage,
+            key: const Key('business-coverage')),
+      ]),
+    );
+  }
+}
+
+/// The store's plan at a glance, above the open/paused switch: unpaid and/// The store's plan at a glance, above the open/paused switch: unpaid and
 /// the shop is hidden from buyers, or paid up until a date. Tapping either
 /// opens the billing screen (stores/billing.py).
 class _StorePlanCard extends StatelessWidget {
@@ -1338,7 +1440,7 @@ String _shortDate(DateTime utc) {
   return '${d.day} ${_months[d.month - 1]}';
 }
 
-enum _ProductAction { pay, price, share, insights, view, remove }
+enum _ProductAction { pay, price, improve, share, insights, view, remove }
 
 class _ProductsTab extends StatefulWidget {
   const _ProductsTab({
@@ -1376,17 +1478,48 @@ class _ProductsTabState extends State<_ProductsTab> {
   Timer? _searchDebounce;
   final _searchCtrl = TextEditingController();
 
+  /// "newest" (default), oldest, name, price_low, price_high. The server
+  /// orders; the app never re-sorts a page and pretends it's the catalogue.
+  String _sort = 'newest';
+
+  /// The category filter, or null for the whole catalogue.
+  String? _category;
+
+  /// What the store sells in, biggest first - the same strings the public
+  /// storefront's chips use.
+  List<StoreCategoryCount> _categories = const [];
+
+  /// Multi-select for archiving. Only archiving is offered in bulk: paying
+  /// listing fees one prompt at a time is not a thing one tap can do.
+  bool _selecting = false;
+  final Set<String> _selected = {};
+
   // Bumped whenever the filter or the search changes, so a page that
   // arrives for the old one is dropped instead of mixed into the new list.
   int _generation = 0;
 
   StoreProductState? get _state => widget.filter.value;
 
+  static const _sorts = <String, String>{
+    'newest': 'Newest first',
+    'oldest': 'Oldest first',
+    'name': 'Name A-Z',
+    'price_low': 'Price: low to high',
+    'price_high': 'Price: high to low',
+  };
+
   @override
   void initState() {
     super.initState();
     widget.filter.addListener(_reload);
+    _loadCategories();
     _loadMore();
+  }
+
+  Future<void> _loadCategories() async {
+    final result = await widget.repo.getStoreCategories(widget.store.id);
+    if (!mounted) return;
+    if (result case Success(:final data)) setState(() => _categories = data);
   }
 
   @override
@@ -1426,7 +1559,8 @@ class _ProductsTabState extends State<_ProductsTab> {
     // the owner's list the moment it went into a deal, sold, or waited for
     // its listing fee.
     final result = await widget.repo.getOwnerProducts(widget.store.id,
-        state: _state, search: _search, limit: _pageSize, offset: _items.length);
+        state: _state, search: _search, category: _category, sort: _sort,
+        limit: _pageSize, offset: _items.length);
     if (!mounted || generation != _generation) return;
     setState(() {
       _loading = false;
@@ -1484,6 +1618,16 @@ class _ProductsTabState extends State<_ProductsTab> {
         await _pay(product);
       case _ProductAction.price:
         await _changePrice(product);
+      case _ProductAction.improve:
+        await showCopywriterSheet(
+          context,
+          repo: widget.repo,
+          storeId: widget.store.id,
+          listingId: product.id,
+          productName: product.listing.name,
+          currentTitle: product.listing.name,
+          currentDescription: product.listing.description ?? '',
+        );
       case _ProductAction.share:
         await _shareProduct(product);
       case _ProductAction.insights:
@@ -1553,6 +1697,78 @@ class _ProductsTabState extends State<_ProductsTab> {
     }
   }
 
+  void _toggleSelecting() {
+    setState(() {
+      _selecting = !_selecting;
+      _selected.clear();
+    });
+  }
+
+  void _toggleSelected(String id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+  }
+
+  void _setSort(String sort) {
+    if (sort == _sort) return;
+    _sort = sort;
+    _reload();
+  }
+
+  void _setCategory(String? category) {
+    if (category == _category) return;
+    _category = category;
+    _reload();
+  }
+
+  /// Archives the selected products after saying exactly what that does.
+  /// Every id goes to the server together; it re-checks ownership and that
+  /// none is in a deal or sold before changing any of them.
+  Future<void> _archiveSelected() async {
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: BrokaColors.bgMid,
+        title: Text('Archive ${ids.length} product${ids.length == 1 ? '' : 's'}?',
+            style: const TextStyle(color: BrokaColors.textHigh)),
+        content: const Text(
+            'They will no longer be for sale anywhere on BROKA. Products in a '
+            'deal or already sold are refused, and nothing changes until the '
+            'server has checked all of them. This cannot be undone from here.',
+            style: TextStyle(color: BrokaColors.textMid, height: 1.45)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+          TextButton(
+            key: const Key('confirm-bulk-archive'),
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('Archive', style: TextStyle(color: BrokaColors.danger,
+                fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final result = await widget.repo.archiveProducts(widget.store.id, ids);
+    if (!mounted) return;
+    switch (result) {
+      case Success(:final data):
+        setState(() {
+          _selecting = false;
+          _selected.clear();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(data == 1 ? '1 product archived' : '$data products archived')));
+        await _changed();
+      case Failure(:final message):
+        // The server names what it refused; the selection stays so the
+        // seller can remove those and try the rest.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final counts = _counts;
@@ -1596,13 +1812,86 @@ class _ProductsTabState extends State<_ProductsTab> {
           _searchField(),
           const SizedBox(height: 10),
           _filterChips(counts),
-          const SizedBox(height: 12),
+          if (_categories.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                for (final category in <String?>[null, ..._categories.map((c) => c.name)])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _CategoryFilterChip(
+                      key: Key('product-category-${category ?? 'all'}'),
+                      label: category ?? 'All categories',
+                      selected: _category == category,
+                      onTap: () => _setCategory(category),
+                    ),
+                  ),
+              ]),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(children: [
+            PopupMenuButton<String>(
+              key: const Key('product-sort'),
+              initialValue: _sort,
+              onSelected: _setSort,
+              color: BrokaColors.bgMid,
+              itemBuilder: (_) => [
+                for (final entry in _sorts.entries)
+                  PopupMenuItem(value: entry.key, child: Text(entry.value)),
+              ],
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.swap_vert_rounded, size: 17, color: BrokaColors.textMid),
+                const SizedBox(width: 5),
+                Text(_sorts[_sort]!, style: const TextStyle(
+                    color: BrokaColors.textMid, fontSize: 12.5,
+                    fontWeight: FontWeight.w600)),
+                const Icon(Icons.arrow_drop_down_rounded, color: BrokaColors.textMid),
+              ]),
+            ),
+            const Spacer(),
+            if (_items.isNotEmpty)
+              TextButton.icon(
+                key: const Key('products-select'),
+                onPressed: _toggleSelecting,
+                icon: Icon(_selecting ? Icons.close_rounded : Icons.checklist_rounded, size: 18),
+                label: Text(_selecting ? 'Cancel' : 'Select'),
+                style: TextButton.styleFrom(foregroundColor: BrokaColors.textMid),
+              ),
+          ]),
+          const SizedBox(height: 6),
+          if (_selecting)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(children: [
+                Expanded(child: Text(
+                    '${_selected.length} selected',
+                    style: const TextStyle(color: BrokaColors.textHigh,
+                        fontSize: 12.5, fontWeight: FontWeight.w600))),
+                FilledButton.icon(
+                  key: const Key('bulk-archive'),
+                  onPressed: _selected.isEmpty ? null : _archiveSelected,
+                  icon: const Icon(Icons.archive_outlined, size: 17),
+                  label: const Text('Archive'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: BrokaColors.danger,
+                    disabledBackgroundColor: BrokaColors.border,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(0, 40),
+                  ),
+                ),
+              ]),
+            ),
           if (_items.isEmpty && !_loading && _error == null) _empty(counts),
           for (final p in _items)
             _ProductRow(
               product: p,
-              onTap: () => _openActions(p),
-              onPay: p.needsPayment && p.priceEditable ? () => _pay(p) : null,
+              selecting: _selecting,
+              selected: _selected.contains(p.id),
+              onSelect: () => _toggleSelected(p.id),
+              onTap: () => _selecting ? _toggleSelected(p.id) : _openActions(p),
+              onPay: p.needsPayment && p.priceEditable && !_selecting ? () => _pay(p) : null,
             ),
           if (_loading)
             const Padding(padding: EdgeInsets.all(20),
@@ -1733,6 +2022,39 @@ class _ProductsTabState extends State<_ProductsTab> {
   }
 }
 
+/// A category filter: quieter than the state chips, because it narrows an
+/// already-filtered list rather than choosing what the screen is for.
+class _CategoryFilterChip extends StatelessWidget {
+  const _CategoryFilterChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: selected ? BrokaColors.textHigh.withOpacity(0.12) : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: selected ? BrokaColors.textHigh : BrokaColors.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Text(label, style: TextStyle(
+                color: selected ? BrokaColors.textHigh : BrokaColors.textMid,
+                fontSize: 12, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+          ),
+        ),
+      );
+}
+
 class _FilterChip extends StatelessWidget {
   const _FilterChip({
     super.key,
@@ -1836,12 +2158,25 @@ String? listingThumb(BrokaListing l) {
 }
 
 class _ProductRow extends StatelessWidget {
-  const _ProductRow({required this.product, required this.onTap, this.onPay});
+  const _ProductRow({
+    required this.product,
+    required this.onTap,
+    this.onPay,
+    this.selecting = false,
+    this.selected = false,
+    this.onSelect,
+  });
   final StoreProduct product;
   final VoidCallback onTap;
 
   /// "Pay" or "Renew" beside the product, when its fee needs paying.
   final VoidCallback? onPay;
+
+  /// The catalogue is in bulk mode: a checkbox replaces the actions, and a
+  /// tap selects rather than opens.
+  final bool selecting;
+  final bool selected;
+  final VoidCallback? onSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -1867,6 +2202,15 @@ class _ProductRow extends StatelessWidget {
                   : BrokaColors.border.withOpacity(0.6)),
             ),
             child: Row(children: [
+              if (selecting) ...[
+                Checkbox(
+                  value: selected,
+                  onChanged: (_) => onSelect?.call(),
+                  activeColor: BrokaColors.gold,
+                  visualDensity: VisualDensity.compact,
+                ),
+                const SizedBox(width: 2),
+              ],
               Opacity(
                 opacity: p.state == StoreProductState.sold ? 0.55 : 1,
                 child: _productThumb(p, 62),
@@ -1899,7 +2243,8 @@ class _ProductRow extends StatelessWidget {
                   child: Text(p.state == StoreProductState.hidden ? 'Pay' : 'Renew',
                       style: const TextStyle(fontWeight: FontWeight.w800)),
                 ),
-              const Icon(Icons.more_vert_rounded, color: BrokaColors.textMid),
+              Icon(selecting ? Icons.check_circle_outline_rounded : Icons.more_vert_rounded,
+                  color: selecting && selected ? BrokaColors.gold : BrokaColors.textMid),
             ]),
           ),
         ),
@@ -1968,6 +2313,9 @@ class _ProductActionsSheet extends StatelessWidget {
           if (p.priceEditable)
             tile(_ProductAction.price, Icons.sell_outlined, 'Change the price',
                 subtitle: 'Up to twice a week'),
+          tile(_ProductAction.improve, Icons.auto_fix_high_rounded,
+              'Improve the copy with AI',
+              subtitle: 'Suggestions for the title or description - nothing changes until you save'),
           if (p.state == StoreProductState.live)
             tile(_ProductAction.share, Icons.ios_share_rounded, 'Share this product',
                 subtitle: 'WhatsApp, your status, SMS and more'),
@@ -2273,7 +2621,23 @@ class _SettingsTabState extends State<_SettingsTab> {
         );
 
     final photoCount = store.photoImages.isNotEmpty ? store.photoImages.length : store.photos.length;
+    final status = store.liveOpenStatus;
     return _tabList(context, key: const Key('settings-list'), children: [
+      group('Your business', [
+        row(Icons.storefront_outlined, 'Store type',
+            '${store.storeType.label} · ${store.storeType.description}',
+            StoreSetupStep.type),
+        if (!store.isVirtual)
+          row(Icons.schedule_rounded, 'Opening hours',
+              status.isKnown ? status.label : 'Not provided - buyers see "unavailable"',
+              StoreSetupStep.hours),
+        row(Icons.local_shipping_outlined, 'Delivery and service area',
+            [
+              store.deliveryCoverageLabel ?? 'Not set',
+              if ((store.deliveryNote ?? '').trim().isNotEmpty) store.deliveryNote!.trim(),
+            ].join(' · '),
+            StoreSetupStep.coverage),
+      ]),
       group('How buyers see it', [
         row(Icons.storefront_outlined, 'Store name', store.name, StoreSetupStep.name),
         row(Icons.category_outlined, 'Categories and description',
@@ -2285,16 +2649,26 @@ class _SettingsTabState extends State<_SettingsTab> {
         row(Icons.account_circle_outlined, 'Logo',
             store.logoSource != null ? 'Added' : "None - BROKA's logo is shown",
             StoreSetupStep.logo),
-        row(Icons.photo_library_outlined, 'Photos of the shop',
-            '${store.cover != null ? 'Cover photo' : 'No cover'}, '
-            '$photoCount shop photo${photoCount == 1 ? '' : 's'}',
-            StoreSetupStep.photos),
+        if (!store.isVirtual)
+          row(Icons.photo_library_outlined, 'Photos of the shop',
+              '${store.cover != null ? 'Cover photo' : 'No cover'}, '
+              '$photoCount shop photo${photoCount == 1 ? '' : 's'}',
+              StoreSetupStep.photos),
       ]),
       group('Where to find you', [
-        row(Icons.place_outlined, 'Location',
-            [store.locationDescription, store.subcounty, store.county]
-                .where((s) => s != null && s.trim().isNotEmpty).join(', ').ifEmpty('Not set'),
-            StoreSetupStep.location),
+        if (!store.isVirtual)
+          row(Icons.place_outlined, 'Location',
+              [store.locationDescription, store.subcounty, store.county]
+                  .where((s) => s != null && s.trim().isNotEmpty).join(', ').ifEmpty('Not set'),
+              StoreSetupStep.location)
+        else
+          const ListTile(
+            leading: Icon(Icons.language_rounded, color: BrokaColors.textMid),
+            title: Text('Online store', style: TextStyle(color: BrokaColors.textHigh,
+                fontSize: 14.5, fontWeight: FontWeight.w600)),
+            subtitle: Text('No shop address or map pin - buyers see where you deliver instead.',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.35)),
+          ),
         row(Icons.alternate_email_rounded, 'Business email',
             store.businessEmail == null
                 ? 'None'

@@ -92,6 +92,12 @@ class _StoreCardState extends State<StoreCard> {
     // A card whose only image is the logo therefore leaves the sign off.
     final showLogo = store.coverSource != null;
     final category = store.categories.isEmpty ? null : store.categories.first;
+    // A virtual shop has no address; "Delivers to Siaya" is the equivalent
+    // fact, and without it the card would look like a store with no place
+    // at all.
+    final whereLabel = store.isVirtual
+        ? (store.deliveryCoverageLabel ?? 'Online store')
+        : store.locationLine;
     final moreCategories =
         store.categories.length > 1 ? ' +${store.categories.length - 1}' : '';
     final products =
@@ -222,8 +228,7 @@ class _StoreCardState extends State<StoreCard> {
                               reviews: store.reviewCount,
                             ),
                           ],
-                          if (store.locationLine != null ||
-                              distLabel != null) ...[
+                          if (whereLabel != null || distLabel != null) ...[
                             const SizedBox(height: 7),
                             Row(
                               // Where the shop is, distance included: the
@@ -232,7 +237,9 @@ class _StoreCardState extends State<StoreCard> {
                                   ? null
                                   : const Key('store-card-distance'),
                               children: [
-                                const Icon(Icons.location_on_outlined,
+                                Icon(store.isVirtual
+                                        ? Icons.local_shipping_outlined
+                                        : Icons.location_on_outlined,
                                     size: 15, color: BrokaColors.gold),
                                 const SizedBox(width: 4),
                                 // The distance rides on the place line: it is
@@ -241,13 +248,13 @@ class _StoreCardState extends State<StoreCard> {
                                 Flexible(
                                   child: Text.rich(
                                     TextSpan(children: [
-                                      if (store.locationLine != null)
+                                      if (whereLabel != null)
                                         TextSpan(
-                                            text: store.locationLine!,
+                                            text: whereLabel,
                                             style: const TextStyle(
                                                 color: BrokaColors.textMid,
                                                 fontSize: 12.5)),
-                                      if (store.locationLine != null &&
+                                      if (whereLabel != null &&
                                           distLabel != null)
                                         const TextSpan(
                                             text: ' · ',

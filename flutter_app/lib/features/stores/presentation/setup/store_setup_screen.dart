@@ -142,6 +142,12 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
       case StoreSetupStep.photos:
         // Compulsory: a "Skip for now" that cannot skip would only lie.
         return 'Continue';
+      case StoreSetupStep.hours:
+        return c.hasOpeningHours ? 'Continue' : 'Skip for now';
+      case StoreSetupStep.coverage:
+        return c.serviceAreas.isEmpty && c.deliveryNote.trim().isEmpty
+            ? 'Skip for now'
+            : 'Continue';
       case StoreSetupStep.email:
         return c.email.trim().isEmpty ? 'Skip' : 'Continue';
       case StoreSetupStep.review:
@@ -152,10 +158,13 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
   }
 
   Widget _content() => switch (_step) {
+        StoreSetupStep.type => TypeStep(c),
         StoreSetupStep.name => NameStep(c),
         StoreSetupStep.link => LinkStep(c),
         StoreSetupStep.category => CategoryStep(c),
         StoreSetupStep.location => LocationStep(c),
+        StoreSetupStep.hours => HoursStep(c),
+        StoreSetupStep.coverage => CoverageStep(c),
         StoreSetupStep.logo => LogoStep(c),
         StoreSetupStep.photos => PhotosStep(c),
         StoreSetupStep.email => EmailStep(c, onError: (e) => setState(() => _error = e)),

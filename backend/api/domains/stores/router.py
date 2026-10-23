@@ -20,13 +20,14 @@ from api.core.client_ip import client_ip
 from api.core.config import settings
 from api.core.idempotency import IdempotencyResult, idempotency_guard
 from api.core.rate_limit import (
-    otp_request_limiter, otp_verify_limiter, store_counter_limiter, store_name_check_limiter,
-    stk_limiter,
+    marketing_event_limiter, marketing_generation_limiter, otp_request_limiter,
+    otp_verify_limiter, store_counter_limiter, store_name_check_limiter, stk_limiter,
 )
 from api.database import OtpPurpose, get_db
 from api.security import get_current_user, get_current_user_optional
 from . import billing as store_billing
 from . import stats as store_stats
+from .marketing import MarketingService
 from .service import StoreService
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,18 @@ _MAX_PAGE_SIZE = 100
 
 class StoreIn(BaseModel):
     name: str = Field(max_length=200)
+    # "physical" | "virtual". Optional for app builds that predate store
+    # types; the server then treats the store as physical, which is what
+    # every store that existed before this field was.
+    store_type: Optional[Literal["physical", "virtual"]] = None
+    # Structured weekly hours (see stores/opening_hours.py). Refused if a
+    # time is invalid, rather than silently dropped.
+    opening_hours: Optional[dict] = None
+    # Delivery coverage: Kenyan counties, or ["Nationwide"]. Not the shop's
+    # address - a physical shop may deliver countrywide and a virtual store
+    # may serve one county.
+    service_areas: Optional[List[str]] = Field(default=None, max_length=47)
+    delivery_note: Optional[str] = Field(default=None, max_length=200)
     # The link name (broka.co.ke/store/<slug>), chosen in the setup
     # wizard. Optional only for app builds that predate it; those get one
     # derived from the name.
@@ -76,6 +89,10 @@ class StoreIn(BaseModel):
 
 class StorePatch(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
+    store_type: Optional[Literal["physical", "virtual"]] = None
+    opening_hours: Optional[dict] = None
+    service_areas: Optional[List[str]] = Field(default=None, max_length=47)
+    delivery_note: Optional[str] = Field(default=None, max_length=200)
     # Accepted only when unchanged: a store's link is fixed once it opens.
     slug: Optional[str] = Field(default=None, max_length=64)
     category: Optional[str] = None
@@ -126,6 +143,10 @@ class VisitIn(BaseModel):
     # visitor is recognised without relying on IP addresses (behind the
     # hosting proxy, many visitors can share one).
     visitor: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    # A Marketing Studio campaign link's `c=` token. Only a token that
+    # belongs to this store counts; anything else is ignored, and the
+    # campaign is credited only when the visit itself was counted.
+    campaign: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,32}$")
 
     @field_validator("via")
     @classmethod
@@ -136,6 +157,67 @@ class VisitIn(BaseModel):
 class ShareIn(BaseModel):
     channel: str = Field(max_length=32)
     surface: Literal["app", "web"] = "app"
+
+
+class BulkListingActionIn(BaseModel):
+    """A bulk change to the store's own products.
+
+    Only archiving is offered in bulk. Publishing a hidden listing needs its
+    own listing-fee payment (an M-Pesa prompt per product), and BROKA has no
+    per-listing paused state, so a "Pause" here would have to invent one -
+    neither belongs behind a single tap on a multi-select.
+    """
+    action: Literal["archive"]
+    listing_ids: List[str] = Field(min_length=1, max_length=50)
+
+
+class CampaignIn(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+    objective: Literal[
+        "new_store", "product", "new_stock", "discount", "awareness",
+        "seasonal", "storefront", "enquiries",
+    ] = "product"
+    product_ids: List[str] = Field(default_factory=list, max_length=10)
+    platforms: List[Literal["whatsapp", "instagram", "tiktok", "facebook", "x"]] = Field(
+        min_length=1, max_length=5,
+    )
+    audience: Optional[str] = Field(default=None, max_length=120)
+    tone: Literal["friendly", "professional", "bold", "playful", "premium"] = "friendly"
+    language: Literal["en", "sw"] = "en"
+    instructions: Optional[str] = Field(default=None, max_length=600)
+    # False saves the configuration as a draft; the seller can generate
+    # later. True (the default) creates it and generates in one step.
+    generate: bool = True
+
+
+class CampaignPatchIn(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+    audience: Optional[str] = Field(default=None, max_length=120)
+    instructions: Optional[str] = Field(default=None, max_length=600)
+
+
+class CreativePatchIn(BaseModel):
+    headline: Optional[str] = Field(default=None, max_length=160)
+    body: Optional[str] = Field(default=None, max_length=2200)
+    cta: Optional[str] = Field(default=None, max_length=160)
+    hashtags: Optional[List[str]] = Field(default=None, max_length=12)
+
+
+class CampaignEventIn(BaseModel):
+    kind: Literal["downloaded", "shared"]
+    platform: Optional[str] = Field(default=None, max_length=16)
+
+
+class AttributionIn(BaseModel):
+    kind: Literal["visit", "product_view"] = "visit"
+
+
+class CopywriterIn(BaseModel):
+    field: Literal["title", "description", "caption", "store_description"] = "description"
+    listing_id: Optional[str] = None
+    text: Optional[str] = Field(default=None, max_length=2200)
+    language: Literal["en", "sw"] = "en"
+    tone: Literal["friendly", "professional", "bold", "playful", "premium"] = "friendly"
 
 
 def _client_key(request: Request, current_user: Optional[dict]) -> str:
@@ -175,6 +257,8 @@ async def list_stores(
     lng: Optional[float] = Query(None, description="Viewer's longitude for distance_km"),
     max_distance_km: Optional[float] = Query(None, gt=0, le=2000),
     nearest_first: bool = Query(False, description="Nearest stores first for 'Stores near you'"),
+    store_type: Optional[Literal["physical", "virtual"]] = Query(
+        None, description="Both kinds when omitted; never hides virtual stores by default"),
     db: AsyncSession = Depends(get_db),
 ):
     """Browse active stores. Public. With lat/lng every store carries
@@ -185,6 +269,7 @@ async def list_stores(
         limit=limit, offset=offset, with_total=with_total,
         viewer_lat=lat, viewer_lng=lng,
         max_distance_km=max_distance_km, nearest_first=nearest_first,
+        store_type=store_type,
     )
 
 
@@ -419,15 +504,34 @@ async def get_owner_listings(
     store_id: str,
     state: Literal["all", "live", "hidden", "in_deal", "sold"] = "all",
     search: Optional[str] = Query(None, max_length=100),
+    category: Optional[str] = Query(None, max_length=120),
+    sort: Literal["newest", "oldest", "name", "price_low", "price_high"] = "newest",
     limit: int = Query(20, ge=1, le=_MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Every product in the store with its state and listing fee, for My
-    Store: {items, counts}. Owner only."""
+    Store: {items, counts}. Owner only. `category` filters the catalogue the
+    way the public storefront's chips do; `sort` is a fixed list, never a
+    client-supplied SQL expression."""
     return await StoreService(db).list_owner_listings(
-        store_id, current_user["id"], state=state, search=search, limit=limit, offset=offset,
+        store_id, current_user["id"], state=state, search=search,
+        category=category, sort=sort, limit=limit, offset=offset,
+    )
+
+
+@router.post("/{store_id}/manage/listings/bulk")
+async def bulk_listing_action(
+    store_id: str,
+    body: BulkListingActionIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Archive several of the store's products at once. Owner only; every
+    selected id is validated against this store before anything changes."""
+    return await StoreService(db).bulk_archive_listings(
+        store_id, current_user["id"], body.listing_ids,
     )
 
 
@@ -486,6 +590,10 @@ async def record_visit(
     counted = await store_stats.record_visit(
         db, store_id, body.surface, source, visitor, client=client,
     )
+    if counted and body.campaign:
+        # Credited only when the visit itself counted, so reloading the page
+        # can't inflate a campaign - the same rule the visit follows.
+        await MarketingService(db).attribute(store_id, body.campaign, "visit")
     return {"counted": counted}
 
 
@@ -506,6 +614,160 @@ async def record_share(
         db, store_id, body.surface, store_stats.share_channel(body.channel), client=client,
     )
     return {"counted": counted}
+
+
+@router.post("/{store_id}/campaign/{token}/event", status_code=202)
+async def attribute_campaign_event(
+    store_id: str,
+    token: str,
+    body: AttributionIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """A storefront page opened with a campaign link reports the view.
+
+    Public, because the person who followed a shared link is a buyer, not a
+    signed-in seller. The token must belong to this store's campaign; an
+    unknown one is ignored (the page still works). Rate-limited by the real
+    caller, and no visitor identifier is stored.
+    """
+    client = _client_key(request, None)
+    await store_counter_limiter.check_and_record(client)
+    await marketing_event_limiter.check_and_record(client)
+    await StoreService(db).get_row(store_id)
+    counted = await MarketingService(db).attribute(store_id, token, body.kind)
+    return {"counted": counted}
+
+
+@router.get("/{store_id}/marketing/campaigns")
+async def list_campaigns(
+    store_id: str,
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The owner's saved campaigns, newest first. Owner only - drafts are
+    private and never appear in any public response."""
+    return await MarketingService(db).list_campaigns(
+        store_id, current_user["id"], limit=limit, offset=offset,
+    )
+
+
+@router.post("/{store_id}/marketing/campaigns", status_code=201)
+async def create_campaign(
+    store_id: str,
+    body: CampaignIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a campaign and (unless generate=false) write its platform
+    creatives. Prices and titles come from the seller's listings on the
+    server; nothing in this body is trusted as product data."""
+    await marketing_generation_limiter.check_and_record(current_user["id"])
+    return await MarketingService(db).create_campaign(
+        store_id, current_user["id"], body.model_dump(),
+    )
+
+
+@router.get("/{store_id}/marketing/campaigns/{campaign_id}")
+async def get_campaign(
+    store_id: str,
+    campaign_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await MarketingService(db).get_campaign(
+        store_id, current_user["id"], campaign_id,
+    )
+
+
+@router.patch("/{store_id}/marketing/campaigns/{campaign_id}")
+async def update_campaign(
+    store_id: str,
+    campaign_id: str,
+    body: CampaignPatchIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await MarketingService(db).update_campaign(
+        store_id, current_user["id"], campaign_id, body.model_dump(exclude_unset=True),
+    )
+
+
+@router.delete("/{store_id}/marketing/campaigns/{campaign_id}")
+async def delete_campaign(
+    store_id: str,
+    campaign_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await MarketingService(db).delete_campaign(
+        store_id, current_user["id"], campaign_id,
+    )
+
+
+@router.post("/{store_id}/marketing/campaigns/{campaign_id}/regenerate")
+async def regenerate_campaign(
+    store_id: str,
+    campaign_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rewrite the creatives from the campaign's saved configuration and
+    current product data. Rate-limited: this is the paid-provider call."""
+    await marketing_generation_limiter.check_and_record(current_user["id"])
+    return await MarketingService(db).regenerate(
+        store_id, current_user["id"], campaign_id,
+    )
+
+
+@router.patch("/{store_id}/marketing/campaigns/{campaign_id}/creatives/{creative_id}")
+async def update_creative(
+    store_id: str,
+    campaign_id: str,
+    creative_id: str,
+    body: CreativePatchIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Edit a generated caption/CTA. This changes the campaign's copy only;
+    the seller's listing is never rewritten by the studio."""
+    return await MarketingService(db).update_creative(
+        store_id, current_user["id"], campaign_id, creative_id,
+        body.model_dump(exclude_unset=True),
+    )
+
+
+@router.post("/{store_id}/marketing/campaigns/{campaign_id}/events")
+async def record_campaign_event(
+    store_id: str,
+    campaign_id: str,
+    body: CampaignEventIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The owner downloaded or shared a creative. Counted as an observed
+    action - never as an impression or a sale."""
+    await marketing_event_limiter.check_and_record(current_user["id"])
+    return await MarketingService(db).record_owner_event(
+        store_id, current_user["id"], campaign_id, body.kind, body.platform or "",
+    )
+
+
+@router.post("/{store_id}/marketing/copy")
+async def copy_suggestions(
+    store_id: str,
+    body: CopywriterIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggestions for a title, description or caption, for review only.
+    Nothing is written to the listing - the seller must save any change."""
+    await marketing_generation_limiter.check_and_record(current_user["id"])
+    return await MarketingService(db).copy_suggestions(
+        store_id, current_user["id"], body.model_dump(),
+    )
 
 
 @router.get("/{store_id}/stats")

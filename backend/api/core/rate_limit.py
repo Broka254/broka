@@ -172,6 +172,8 @@ if _settings.is_test:
     image_upload_daily_limiter = _make_limiter("image_upload_day", limit=100000, window_seconds=86400)
     store_name_check_limiter = _make_limiter("store_name_check", limit=1000, window_seconds=60)
     store_counter_limiter    = _make_limiter("store_counter",    limit=1000, window_seconds=60)
+    marketing_generation_limiter = _make_limiter("marketing_generate", limit=1000, window_seconds=3600)
+    marketing_event_limiter      = _make_limiter("marketing_event", limit=1000, window_seconds=60)
     listing_create_limiter       = _make_limiter("listing_create",     limit=1000, window_seconds=3600)
     listing_create_daily_limiter = _make_limiter("listing_create_day", limit=100000, window_seconds=86400)
     showcase_generate_limiter       = _make_limiter("showcase_generate",     limit=1000, window_seconds=3600)
@@ -244,6 +246,12 @@ offer_limiter    = _make_limiter("offer",    limit=10, window_seconds=60)
 dispute_limiter  = _make_limiter("dispute",  limit=3,  window_seconds=3600)
 stk_limiter      = _make_limiter("stk_push", limit=3,  window_seconds=60)
 ai_chat_limiter  = _make_limiter("ai_chat",  limit=20, window_seconds=60)
+# Marketing Studio. Generation calls a paid provider and can be abused by a
+# seller tapping Regenerate repeatedly; 10 an hour is generous for real
+# campaign work and bounded for everyone else. Share/download events are
+# cheap but still caller-controlled, so they get their own ceiling.
+marketing_generation_limiter = _make_limiter("marketing_generate", limit=10, window_seconds=3600)
+marketing_event_limiter      = _make_limiter("marketing_event", limit=120, window_seconds=60)
 
 # Zeno-drafted SMS to the other party in a thread
 # (POST /negotiate/zeno-action/draft-sms with send=true). Stricter than

@@ -54,6 +54,210 @@ class StoreOwnerFacts {
   double? get shownRating => completedDeals > 0 ? rating : null;
 }
 
+/// How a business trades: from premises a customer can visit, or online only.
+/// A stored, validated backend field - not a label the app infers from a
+/// missing pin or photo.
+enum StoreType {
+  physical('physical', 'Physical store', 'Customers can visit your business location.'),
+  virtual('virtual', 'Virtual store', 'You sell online without a customer-facing shop.');
+
+  const StoreType(this.value, this.label, this.description);
+  final String value;
+  final String label;
+  final String description;
+
+  static StoreType parse(Object? value) =>
+      value == 'virtual' ? StoreType.virtual : StoreType.physical;
+}
+
+/// One day's opening times. [closed] and 24-hour days are explicit: a day
+/// with no times is closed, and an all-day shop is not a typo.
+class OpeningHoursDay {
+  final bool allDay;
+  final String? open;
+  final String? close;
+
+  const OpeningHoursDay({this.allDay = false, this.open, this.close});
+  const OpeningHoursDay.closed() : allDay = false, open = null, close = null;
+
+  bool get isClosed => !allDay && (open == null || close == null);
+
+  /// True when closing is at or before opening: the window runs past
+  /// midnight (20:00-02:00), the case a plain "today's hours" check misses.
+  bool get crossesMidnight =>
+      !isClosed && !allDay && _minutes(close!) <= _minutes(open!);
+
+  String get label {
+    if (allDay) return 'Open 24 hours';
+    if (isClosed) return 'Closed';
+    return '$open – $close';
+  }
+
+  Map<String, dynamic>? toJson() {
+    if (allDay) return {'all_day': true};
+    if (isClosed) return null;
+    return {'open': open, 'close': close};
+  }
+
+  static OpeningHoursDay? fromJson(Object? value) {
+    if (value is! Map) return null;
+    if (value['all_day'] == true) return const OpeningHoursDay(allDay: true);
+    final open = value['open'] as String?;
+    final close = value['close'] as String?;
+    if (open == null || close == null) return null;
+    return OpeningHoursDay(open: open, close: close);
+  }
+}
+
+const openingDayKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const openingDayLabels = {
+  'mon': 'Monday', 'tue': 'Tuesday', 'wed': 'Wednesday', 'thu': 'Thursday',
+  'fri': 'Friday', 'sat': 'Saturday', 'sun': 'Sunday',
+};
+const openingDayShort = {
+  'mon': 'Mon', 'tue': 'Tue', 'wed': 'Wed', 'thu': 'Thu',
+  'fri': 'Fri', 'sat': 'Sat', 'sun': 'Sun',
+};
+
+/// A store's weekly schedule, keyed Mon..Sun. The backend is the authority;
+/// this type only reads and edits a draft of it.
+class StoreOpeningHours {
+  final Map<String, OpeningHoursDay?> days;
+
+  const StoreOpeningHours(this.days);
+
+  static StoreOpeningHours? fromJson(Object? value) {
+    if (value is! Map) return null;
+    return StoreOpeningHours({
+      for (final day in openingDayKeys)
+        day: OpeningHoursDay.fromJson(value[day]),
+    });
+  }
+
+  Map<String, dynamic> toJson() => {
+        for (final day in openingDayKeys) day: days[day]?.toJson(),
+      };
+
+  OpeningHoursDay? operator [](String day) => days[day];
+
+  StoreOpeningHours withDay(String day, OpeningHoursDay? hours) =>
+      StoreOpeningHours({...days, day: hours});
+
+  /// Every day, Mon..Sun, for the storefront's schedule list.
+  List<({String day, String label, String short, String hours, bool closed})> get week => [
+        for (final day in openingDayKeys)
+          (
+            day: day,
+            label: openingDayLabels[day]!,
+            short: openingDayShort[day]!,
+            hours: (days[day] ?? const OpeningHoursDay.closed()).label,
+            closed: days[day] == null,
+          ),
+      ];
+
+  /// True when at least one day is set. An all-closed week is still a
+  /// schedule (a shop taking a break), not "unavailable".
+  bool get hasAny => days.values.any((d) => d != null);
+
+  /// The status from the stored schedule and the current Africa/Nairobi
+  /// time (UTC+3, no daylight saving). No network request: the app can
+  /// refresh "Open now" on a timer while the screen is open.
+  StoreOpenStatus statusAt(DateTime? now) {
+    final nairobi = (now ?? DateTime.now().toUtc()).toUtc().add(const Duration(hours: 3));
+    return computeStoreOpenStatus(this, nairobi);
+  }
+}
+
+/// "Open now · closes 18:00", "Closed now · opens Tue 08:00", or an honest
+/// "Opening hours unavailable" when nothing was provided.
+class StoreOpenStatus {
+  /// "open" | "closed" | "unknown"
+  final String state;
+  final String label;
+  final String? opensAt;
+  final String? closesAt;
+
+  const StoreOpenStatus({
+    required this.state,
+    required this.label,
+    this.opensAt,
+    this.closesAt,
+  });
+
+  static StoreOpenStatus? fromJson(Object? value) {
+    if (value is! Map) return null;
+    return StoreOpenStatus(
+      state: value['state'] as String? ?? 'unknown',
+      label: value['label'] as String? ?? 'Opening hours unavailable',
+      opensAt: value['opens_at'] as String?,
+      closesAt: value['closes_at'] as String?,
+    );
+  }
+
+  bool get isOpen => state == 'open';
+  bool get isKnown => state != 'unknown';
+}
+
+int _minutes(String hhmm) {
+  final parts = hhmm.split(':');
+  if (parts.length != 2) return 0;
+  return (int.tryParse(parts[0]) ?? 0) * 60 + (int.tryParse(parts[1]) ?? 0);
+}
+
+/// The same rules as backend api/domains/stores/opening_hours.py, so the two
+/// surfaces cannot disagree. [nairobiNow] must already be Nairobi local time.
+StoreOpenStatus computeStoreOpenStatus(StoreOpeningHours? hours, DateTime nairobiNow) {
+  if (hours == null || !hours.hasAny) {
+    return const StoreOpenStatus(
+      state: 'unknown', label: 'Opening hours unavailable');
+  }
+  final dayIndex = nairobiNow.weekday - 1; // Monday = 0
+  final today = openingDayKeys[dayIndex];
+  final yesterday = openingDayKeys[(dayIndex + 6) % 7];
+  final minutes = nairobiNow.hour * 60 + nairobiNow.minute;
+
+  final previous = hours[yesterday];
+  if (previous != null && !previous.allDay && previous.crossesMidnight) {
+    if (minutes < _minutes(previous.close!)) {
+      return StoreOpenStatus(state: 'open', label: 'Open now · closes ${previous.close}',
+          closesAt: previous.close);
+    }
+  }
+  final value = hours[today];
+  if (value != null) {
+    if (value.allDay) {
+      return const StoreOpenStatus(state: 'open', label: 'Open now · 24 hours');
+    }
+    final openM = _minutes(value.open!);
+    final closeM = _minutes(value.close!);
+    if (value.crossesMidnight) {
+      if (minutes >= openM) {
+        return StoreOpenStatus(state: 'open', label: 'Open now · closes ${value.close}',
+            closesAt: value.close);
+      }
+    } else if (minutes >= openM && minutes < closeM) {
+      return StoreOpenStatus(state: 'open', label: 'Open now · closes ${value.close}',
+          closesAt: value.close);
+    }
+    if (minutes < openM && !value.crossesMidnight) {
+      return StoreOpenStatus(state: 'closed', label: 'Closed now · opens ${value.open}',
+          opensAt: value.open);
+    }
+  }
+  for (var step = 1; step <= 7; step++) {
+    final day = openingDayKeys[(dayIndex + step) % 7];
+    final next = hours[day];
+    if (next == null) continue;
+    final opens = next.allDay ? '24 hours' : next.open!;
+    return StoreOpenStatus(
+      state: 'closed',
+      label: 'Closed now · opens ${openingDayShort[day]} $opens',
+      opensAt: opens,
+    );
+  }
+  return const StoreOpenStatus(state: 'closed', label: 'Closed now');
+}
+
 class Store {
   final String id;
   final String name;
@@ -95,6 +299,22 @@ class Store {
 
   final StoreOwnerFacts? owner;
   final bool isActive;
+
+  /// Physical premises or online-only. Backends before store types send
+  /// nothing, which reads as physical: every store that existed was one.
+  final StoreType storeType;
+
+  /// The owner's weekly schedule, null when none was provided. The server's
+  /// status is [serverOpenStatus]; [liveOpenStatus] recomputes from this
+  /// schedule without another request.
+  final StoreOpeningHours? openingHours;
+  final bool openingHoursAvailable;
+  final StoreOpenStatus? serverOpenStatus;
+
+  /// Where the store delivers/serves: Kenyan counties, or ["Nationwide"].
+  /// Separate from [county], which is where a physical shop is.
+  final List<String> serviceAreas;
+  final String? deliveryNote;
 
   /// The store's own rating, 0-10, from its reviews, its own reply time and
   /// its tenure (backend stores/rating.py). Null only from a backend that
@@ -171,6 +391,12 @@ class Store {
     this.photos = const [],
     this.owner,
     this.isActive = true,
+    this.storeType = StoreType.physical,
+    this.openingHours,
+    this.openingHoursAvailable = false,
+    this.serverOpenStatus,
+    this.serviceAreas = const [],
+    this.deliveryNote,
     this.rating,
     this.reviewCount = 0,
     this.responseMinutes,
@@ -218,6 +444,15 @@ class Store {
       photos:  (json['photos'] as List?)?.whereType<String>().toList() ?? const [],
       owner: StoreOwnerFacts.fromJson(json['owner']),
       isActive:     json['is_active']     as bool? ?? true,
+      storeType: StoreType.parse(json['store_type']),
+      openingHours: StoreOpeningHours.fromJson(json['opening_hours']),
+      openingHoursAvailable: json['opening_hours_available'] as bool? ?? false,
+      serverOpenStatus: StoreOpenStatus.fromJson(json['open_status']),
+      serviceAreas: (json['service_areas'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const [],
+      deliveryNote: json['delivery_note'] as String?,
       rating: (json['rating'] as num?)?.toDouble(),
       reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
       responseMinutes: (json['response_minutes'] as num?)?.toDouble(),
@@ -238,8 +473,37 @@ class Store {
     );
   }
 
+  bool get isVirtual => storeType == StoreType.virtual;
+
+  /// The live "Open now" status, calculated from the stored schedule and the
+  /// phone's clock in Nairobi time. Falls back to the server's answer when
+  /// the schedule itself isn't in the payload (an older backend), and to
+  /// "unavailable" when neither exists - never to "closed", which BROKA
+  /// cannot know.
+  StoreOpenStatus get liveOpenStatus {
+    final schedule = openingHours;
+    if (schedule != null && schedule.hasAny) return schedule.statusAt(null);
+    return serverOpenStatus ??
+        const StoreOpenStatus(state: 'unknown', label: 'Opening hours unavailable');
+  }
+
+  /// "Delivers to Nairobi, Kisumu" / "Delivers nationwide", or null when the
+  /// owner hasn't said. Delivery coverage is not the shop's address.
+  String? get deliveryCoverageLabel {
+    if (serviceAreas.isEmpty) return null;
+    if (serviceAreas.length == 1 && serviceAreas.first.toLowerCase() == 'nationwide') {
+      return 'Delivers nationwide';
+    }
+    if (serviceAreas.length <= 3) return 'Delivers to ${serviceAreas.join(', ')}';
+    return 'Delivers to ${serviceAreas.take(2).join(', ')} and '
+        '${serviceAreas.length - 2} more counties';
+  }
+
   /// The point the in-app map opens at, or null when there is none.
   ({double lat, double lng})? get mapPoint {
+    // A virtual store has no premises; a pin left over from an earlier
+    // physical setup is not a shopfront and must not be shown as one.
+    if (storeType == StoreType.virtual) return null;
     if (approxLat != null && approxLng != null) {
       return (lat: approxLat!, lng: approxLng!);
     }

@@ -20,6 +20,7 @@ import 'store_setup_controller.dart';
 // ── Titles ───────────────────────────────────────────────────────────────────
 
 String stepTitle(StoreSetupStep step) => switch (step) {
+      StoreSetupStep.type => 'What kind of business?',
       StoreSetupStep.name => 'Name your store',
       StoreSetupStep.link => 'Choose your link',
       StoreSetupStep.category => 'What you sell',
@@ -31,15 +32,29 @@ String stepTitle(StoreSetupStep step) => switch (step) {
     };
 
 String stepSubtitle(StoreSetupStep step) => switch (step) {
+      StoreSetupStep.type => 'This decides what buyers are shown and what you need to fill in',
       StoreSetupStep.name => 'Buyers see this at the top of your store',
       StoreSetupStep.link => 'Share it on WhatsApp, TikTok, Instagram and flyers',
       StoreSetupStep.category => 'Buyers find your store under this category',
       StoreSetupStep.location => 'So nearby buyers can find you',
       StoreSetupStep.logo => 'Optional - a square image works best',
+      StoreSetupStep.hours => 'Optional - buyers see when you are open',
+      StoreSetupStep.coverage => 'Where you deliver to, and how',
       StoreSetupStep.photos => 'Required - show buyers your shop',
       StoreSetupStep.email => 'Optional - where order updates go',
       StoreSetupStep.review => 'Check everything, then open your store',
     };
+
+/// "Mon-Sat 08:00-18:00, Sun closed" for the review screen.
+String _hoursSummary(StoreOpeningHours hours) {
+  final parts = <String>[];
+  for (final row in hours.week) {
+    if (row.closed) continue;
+    parts.add('${row.short} ${row.hours}');
+  }
+  if (parts.isEmpty) return 'Not provided';
+  return parts.length > 4 ? '${parts.take(3).join(', ')} and more' : parts.join(', ');
+}
 
 // ── Shared bits ──────────────────────────────────────────────────────────────
 
@@ -418,6 +433,391 @@ class CategoryStep extends StatelessWidget {
 }
 
 // ── Location ─────────────────────────────────────────────────────────────────
+
+
+// ── Type ─────────────────────────────────────────────────────────────────────
+
+/// Physical or virtual, explained in the seller's terms. The choice is a
+/// stored field; it changes which questions follow, not just a badge.
+class TypeStep extends StatelessWidget {
+  const TypeStep(this.c, {super.key});
+  final StoreSetupController c;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget option(StoreType type, IconData icon, String example) {
+      final selected = c.storeType == type;
+      return Semantics(
+        selected: selected,
+        button: true,
+        child: Material(
+          key: Key('store-type-${type.value}'),
+          color: selected
+              ? BrokaColors.gold.withOpacity(0.1)
+              : BrokaColors.bgCard.withOpacity(0.6),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(
+                color: selected ? BrokaColors.gold : BrokaColors.border,
+                width: selected ? 1.6 : 1),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () => c.setStoreType(type),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    color: (selected ? BrokaColors.gold : BrokaColors.textMid)
+                        .withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Icon(icon, color: selected ? BrokaColors.gold : BrokaColors.textMid,
+                      size: 22),
+                ),
+                const SizedBox(width: 13),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(type.label, style: const TextStyle(color: BrokaColors.textHigh,
+                      fontSize: 15.5, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  Text(type.description, style: const TextStyle(
+                      color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
+                  const SizedBox(height: 6),
+                  Text(example, style: const TextStyle(
+                      color: BrokaColors.textLow, fontSize: 12, height: 1.4)),
+                ])),
+                const SizedBox(width: 6),
+                Icon(selected ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    color: selected ? BrokaColors.gold : BrokaColors.textLow, size: 22),
+              ]),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      option(StoreType.physical, Icons.storefront_rounded,
+          'You will add your county, area, opening hours and a photo of the premises.'),
+      const SizedBox(height: 12),
+      option(StoreType.virtual, Icons.language_rounded,
+          'You will add where you deliver. No shop address, map pin or premises photo needed.'),
+      const SizedBox(height: 16),
+      const _Hint('You can change this before opening your store, and later in Settings. '
+          'Changing it never deletes what you already entered.'),
+    ]);
+  }
+}
+
+// ── Opening hours ────────────────────────────────────────────────────────────
+
+const _presetOpen = '08:00';
+const _presetClose = '18:00';
+
+/// The weekly schedule. Each day is closed, a time range, or 24 hours; a
+/// range may cross midnight (a kiosk open 20:00-02:00).
+class HoursStep extends StatelessWidget {
+  const HoursStep(this.c, {super.key});
+  final StoreSetupController c;
+
+  Future<void> _pickTimes(BuildContext context, String day) async {
+    final current = c.openingHours[day];
+    final open = await showTimePicker(
+      context: context,
+      helpText: '${openingDayLabels[day]} - opens',
+      initialTime: _parseTime(current?.open) ?? const TimeOfDay(hour: 8, minute: 0),
+    );
+    if (open == null || !context.mounted) return;
+    final close = await showTimePicker(
+      context: context,
+      helpText: '${openingDayLabels[day]} - closes',
+      initialTime: _parseTime(current?.close) ?? const TimeOfDay(hour: 18, minute: 0),
+    );
+    if (close == null || !context.mounted) return;
+    if (open == close) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Opening and closing times cannot be the same. Tick "Open 24 hours" '
+              'for a shop that never closes.')));
+      return;
+    }
+    c.setDayHours(day, OpeningHoursDay(open: _formatTime(open), close: _formatTime(close)));
+  }
+
+  static TimeOfDay? _parseTime(String? hhmm) {
+    if (hhmm == null) return null;
+    final parts = hhmm.split(':');
+    if (parts.length != 2) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return null;
+    return TimeOfDay(hour: h, minute: m);
+  }
+
+  static String _formatTime(TimeOfDay t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _menu(BuildContext context, String day, String choice) async {
+    switch (choice) {
+      case 'closed':
+        c.setDayHours(day, null);
+        break;
+      case 'all_day':
+        c.setDayHours(day, const OpeningHoursDay(allDay: true));
+        break;
+      case 'times':
+        await _pickTimes(context, day);
+        break;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (!c.hasOpeningHours) ...[
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: BrokaColors.bgCard.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: BrokaColors.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('No opening hours yet', style: TextStyle(color: BrokaColors.textHigh,
+                fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            const Text("Buyers will see \"Opening hours unavailable\" rather than a guess. "
+                'You can add them now or later in Settings.',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
+            const SizedBox(height: 14),
+            Wrap(spacing: 10, runSpacing: 10, children: [
+              FilledButton.icon(
+                key: const Key('hours-use-typical'),
+                style: FilledButton.styleFrom(
+                    backgroundColor: BrokaColors.gold, foregroundColor: Colors.black),
+                onPressed: () {
+                  c.clearOpeningHours();
+                  for (final day in openingDayKeys) {
+                    if (day == 'sun') continue;
+                    c.setDayHours(day,
+                        const OpeningHoursDay(open: _presetOpen, close: _presetClose));
+                  }
+                },
+                icon: const Icon(Icons.schedule_rounded, size: 18),
+                label: const Text('Mon-Sat, 8am-6pm'),
+              ),
+              OutlinedButton.icon(
+                key: const Key('hours-use-24h'),
+                onPressed: () {
+                  c.clearOpeningHours();
+                  for (final day in openingDayKeys) {
+                    c.setDayHours(day, const OpeningHoursDay(allDay: true));
+                  }
+                },
+                icon: const Icon(Icons.all_inclusive_rounded, size: 18),
+                label: const Text('Open 24 hours'),
+              ),
+            ]),
+          ]),
+        ),
+      ] else ...[
+        for (final day in openingDayKeys) ...[
+          _DayHoursRow(
+            day: day,
+            value: c.openingHours[day],
+            onMenu: (choice) => _menu(context, day, choice),
+            onPickTimes: () => _pickTimes(context, day),
+          ),
+          if (day != 'sun') const SizedBox(height: 8),
+        ],
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            key: const Key('hours-clear'),
+            onPressed: c.clearOpeningHours,
+            icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            label: const Text('Clear all hours'),
+            style: TextButton.styleFrom(foregroundColor: BrokaColors.textMid),
+          ),
+        ),
+      ],
+      const SizedBox(height: 14),
+      const _Hint('Times are East Africa Time (Africa/Nairobi). A closing time earlier than '
+          'the opening time means you close after midnight, such as 20:00 to 02:00.'),
+    ]);
+  }
+}
+
+class _DayHoursRow extends StatelessWidget {
+  const _DayHoursRow({
+    required this.day,
+    required this.value,
+    required this.onMenu,
+    required this.onPickTimes,
+  });
+
+  final String day;
+  final OpeningHoursDay? value;
+  final ValueChanged<String> onMenu;
+  final VoidCallback onPickTimes;
+
+  @override
+  Widget build(BuildContext context) {
+    final open = value != null;
+    return Container(
+      key: Key('hours-$day'),
+      padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+      ),
+      child: Row(children: [
+        SizedBox(
+          width: 96,
+          child: Text(openingDayLabels[day]!, style: TextStyle(
+              color: open ? BrokaColors.textHigh : BrokaColors.textMid,
+              fontSize: 13.5, fontWeight: FontWeight.w700)),
+        ),
+        Expanded(
+          child: open
+              ? (value!.allDay
+                  ? const Text('Open 24 hours', style: TextStyle(
+                      color: BrokaColors.textMid, fontSize: 13))
+                  : TextButton(
+                      onPressed: onPickTimes,
+                      style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
+                      child: Text(
+                        '${value!.open} – ${value!.close}'
+                        '${value!.crossesMidnight ? ' (next day)' : ''}',
+                        style: const TextStyle(color: BrokaColors.gold, fontSize: 13.5,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ))
+              : const Text('Closed', style: TextStyle(color: BrokaColors.textLow, fontSize: 13)),
+        ),
+        PopupMenuButton<String>(
+          tooltip: 'Change ${openingDayLabels[day]}',
+          icon: const Icon(Icons.more_horiz_rounded, color: BrokaColors.textMid),
+          onSelected: onMenu,
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'times', child: Text('Set opening and closing times')),
+            PopupMenuItem(value: 'all_day', child: Text('Open 24 hours')),
+            PopupMenuItem(value: 'closed', child: Text('Closed all day')),
+          ],
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Delivery coverage ────────────────────────────────────────────────────────
+
+/// Where the store delivers. Separate from where a physical shop is: a
+/// virtual store has no premises but almost always has a service area.
+class CoverageStep extends StatelessWidget {
+  const CoverageStep(this.c, {super.key});
+  final StoreSetupController c;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: BrokaColors.border),
+        ),
+        child: Row(children: [
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Deliver nationwide', style: TextStyle(color: BrokaColors.textHigh,
+                fontSize: 14.5, fontWeight: FontWeight.w700)),
+            SizedBox(height: 2),
+            Text('Buyers anywhere in Kenya can order', style: TextStyle(
+                color: BrokaColors.textMid, fontSize: 12.5)),
+          ])),
+          Switch(
+            key: const Key('coverage-nationwide'),
+            value: c.deliversNationwide,
+            activeTrackColor: BrokaColors.gold,
+            onChanged: c.setNationwide,
+          ),
+        ]),
+      ),
+      if (!c.deliversNationwide) ...[
+        const SizedBox(height: 16),
+        _label('Counties you deliver to'),
+        const SizedBox(height: 8),
+        if (c.serviceAreas.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              c.serviceAreas.length == 1
+                  ? c.serviceAreas.first
+                  : '${c.serviceAreas.length} counties selected',
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5),
+            ),
+          ),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final county in KenyaLocations.counties)
+            _FilterChip(
+              key: Key('coverage-${county.toLowerCase().replaceAll(' ', '-')}'),
+              label: county,
+              selected: c.serviceAreas.contains(county),
+              onTap: () => c.toggleServiceArea(county),
+            ),
+        ]),
+      ],
+      const SizedBox(height: 20),
+      _label('Delivery or pickup'),
+      const SizedBox(height: 8),
+      _SyncedField(
+        value: c.deliveryNote,
+        onChanged: c.setDeliveryNote,
+        label: 'How buyers get their order (optional)',
+        icon: Icons.local_shipping_outlined,
+        maxLength: 300,
+        maxLines: 3,
+        hint: 'e.g. Same-day delivery in Kisumu, 2-3 days elsewhere. Pickup at our shop in Kondele.',
+        textCapitalization: TextCapitalization.sentences,
+      ),
+      const SizedBox(height: 12),
+      const _Hint('Delivery coverage is separate from a shop address. A virtual store can '
+          'serve one county or the whole country.'),
+    ]);
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({super.key, required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: selected ? BrokaColors.gold.withOpacity(0.16) : BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: selected ? BrokaColors.gold : BrokaColors.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Text(label, style: TextStyle(
+                color: selected ? BrokaColors.gold : BrokaColors.textMid,
+                fontSize: 12.5, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+          ),
+        ),
+      );
+}
 
 class LocationStep extends StatefulWidget {
   const LocationStep(this.c, {super.key});
@@ -1083,6 +1483,7 @@ class ReviewStep extends StatelessWidget {
             icon: Icons.cloud_off_rounded, color: BrokaColors.warning),
         const SizedBox(height: 12),
       ],
+      _row('Store type', c.storeType.label, StoreSetupStep.type),
       _row('Name', c.name.trim(), StoreSetupStep.name),
       _row('Link', '${c.linkPrefix}${c.slug}', StoreSetupStep.link, locked: true),
       _row(c.categories.length > 1 ? 'Categories' : 'Category',
@@ -1090,15 +1491,30 @@ class ReviewStep extends StatelessWidget {
           StoreSetupStep.category),
       if (c.description.trim().isNotEmpty)
         _row('About', c.description.trim(), StoreSetupStep.category),
-      _row('Location', [
-        if ((c.landmark).trim().isNotEmpty) c.landmark.trim(),
-        if ((c.subcounty ?? '').isNotEmpty) c.subcounty!,
-        if ((c.county ?? '').isNotEmpty) c.county!,
-      ].join(', '), StoreSetupStep.location),
+      if (c.storeType == StoreType.physical)
+        _row('Location', [
+          if ((c.landmark).trim().isNotEmpty) c.landmark.trim(),
+          if ((c.subcounty ?? '').isNotEmpty) c.subcounty!,
+          if ((c.county ?? '').isNotEmpty) c.county!,
+        ].join(', '), StoreSetupStep.location)
+      else
+        _row('Location', 'Online store - no shop address', StoreSetupStep.type),
+      if (c.storeType == StoreType.physical)
+        _row('Opening hours',
+            c.hasOpeningHours ? _hoursSummary(c.openingHours) : 'Not provided',
+            StoreSetupStep.hours),
+      _row('Delivery', [
+        if (c.serviceAreas.isNotEmpty)
+          c.deliversNationwide ? 'Nationwide' : c.serviceAreas.join(', ')
+        else
+          'Not set',
+        if (c.deliveryNote.trim().isNotEmpty) c.deliveryNote.trim(),
+      ].join(' · '), StoreSetupStep.coverage),
       _row('Images', [
         c.logo != null ? 'Logo' : 'No logo',
         c.cover != null ? 'cover photo' : 'no cover',
-        '${c.photos.length} shop photo${c.photos.length == 1 ? '' : 's'}',
+        if (c.storeType == StoreType.physical)
+          '${c.photos.length} shop photo${c.photos.length == 1 ? '' : 's'}',
       ].join(', '), StoreSetupStep.logo),
       _row('Business email',
           c.email.trim().isEmpty ? 'None' : '${c.email.trim()}${c.emailVerified ? ' (verified)' : ''}',

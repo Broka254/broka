@@ -22,6 +22,17 @@ export interface StoreView {
   initial: string
   gradient: readonly string[]
   description: string
+  /** True when the business has no premises to visit. */
+  isVirtual: boolean
+  /** "Delivers to Nairobi, Kisumu" / "Delivers nationwide", or null. */
+  delivery: string | null
+  /** The owner's delivery note, when they wrote one. */
+  deliveryNote: string | null
+  /** The weekly schedule, Monday first; empty when none was provided. */
+  hours: NonNullable<Store['opening_hours_week']>
+  /** "Open now · closes 18:00" or "Opening hours unavailable" - never a guess. */
+  openLabel: string
+  openNow: boolean
 }
 
 export function storeView(store: Store): StoreView {
@@ -41,9 +52,21 @@ export function storeView(store: Store): StoreView {
     ...((store.photo_images ?? []).length ? [] : legacy.map((src) => ({ src, thumb: src }))),
   ]
   const path = storePath(store.slug)
+  const areas = (store.service_areas ?? []).filter(Boolean)
+  const delivery = areas.length === 0
+    ? null
+    : areas.length === 1 && areas[0]?.toLowerCase() === 'nationwide'
+      ? 'Delivers nationwide'
+      : `Delivers to ${areas.join(', ')}`
   return {
     store,
     path,
+    isVirtual: store.store_type === 'virtual',
+    delivery,
+    deliveryNote: store.delivery_note?.trim() || null,
+    hours: store.opening_hours_week ?? [],
+    openLabel: store.open_status?.label ?? 'Opening hours unavailable',
+    openNow: store.open_status?.state === 'open',
     url: absoluteUrl(path),
     place: placeLine(store.location_description, store.subcounty, store.county),
     cover: coverSizes
@@ -71,9 +94,10 @@ export function storePreviewImage(store: Store) {
 export function storeDescription(store: Store): string {
   if (store.description?.trim()) return clip(store.description)
   const where = placeLine(store.subcounty, store.county)
+  const virtual = store.store_type === 'virtual'
   return [
     store.category ? `${store.category} store` : 'Store',
-    where ? `in ${where}` : null,
+    virtual ? 'online' : where ? `in ${where}` : null,
     `· ${plural(store.listing_count, 'product')} on BROKA. ${PAY_RULE}.`,
   ]
     .filter(Boolean)
@@ -91,7 +115,9 @@ export function storeJsonLd(view: StoreView) {
     description: storeDescription(store),
     image: view.cover?.src.startsWith('http') ? view.cover.src : undefined,
     logo: view.logo?.startsWith('http') ? view.logo : undefined,
-    address: {
+    // A virtual store has no address. schema.org accepts Store without one;
+    // inventing a county would put premises in search results.
+    address: store.store_type === 'virtual' ? undefined : {
       '@type': 'PostalAddress',
       addressCountry: 'KE',
       addressRegion: store.county ?? undefined,

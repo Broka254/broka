@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { SITE_URL } from './config'
 import { API_URL } from './server-config'
+import { campaignToken } from './links'
 import {
   jsonLdScript,
   productJsonLd,
@@ -188,5 +189,53 @@ describe('structured data in the page', () => {
     const out = jsonLdScript({ name: '</script><script>alert(1)</script>' })
     expect(out).not.toContain('<')
     expect(JSON.parse(out)).toEqual({ name: '</script><script>alert(1)</script>' })
+  })
+})
+
+
+describe('store types on the storefront', () => {
+  it('describes a physical store by where it is and its hours', () => {
+    const view = storeView(store({
+      store_type: 'physical',
+      opening_hours_available: true,
+      opening_hours_week: [
+        { day: 'mon', label: 'Monday', short: 'Mon', hours: '08:00 – 18:00', closed: false, all_day: false },
+      ],
+      open_status: { state: 'open', label: 'Open now · closes 18:00', opens_at: null, closes_at: '18:00', next_day: null },
+      service_areas: ['Kisumu'],
+    }))
+    expect(view.isVirtual).toBe(false)
+    expect(view.place).toContain('Nairobi')
+    expect(view.hours).toHaveLength(1)
+    expect(view.openLabel).toBe('Open now · closes 18:00')
+    expect(view.openNow).toBe(true)
+  })
+
+  it('gives a virtual store delivery coverage and no address in its structured data', () => {
+    const data = storeJsonLd(storeView(store({
+      store_type: 'virtual',
+      county: null,
+      subcounty: null,
+      service_areas: ['Siaya'],
+      delivery_note: 'Same-day in Bondo.',
+    })))
+    expect(data.address).toBeUndefined()
+    expect(JSON.stringify(data)).not.toContain('Siaya')
+  })
+
+  it('reads nationwide coverage in words, and nothing when it is unset', () => {
+    expect(storeView(store({ service_areas: ['Nationwide'] })).delivery).toBe('Delivers nationwide')
+    expect(storeView(store({ service_areas: ['Nairobi', 'Kisumu'] })).delivery).toBe(
+      'Delivers to Nairobi, Kisumu',
+    )
+    expect(storeView(store({ service_areas: [] })).delivery).toBeNull()
+    expect(storeView(store({})).openLabel).toBe('Opening hours unavailable')
+  })
+
+  it('keeps only a well-formed campaign token from a link', () => {
+    expect(campaignToken('kAbC123_-xyz')).toBe('kAbC123_-xyz')
+    expect(campaignToken('short')).toBeUndefined()
+    expect(campaignToken('has space')).toBeUndefined()
+    expect(campaignToken(undefined)).toBeUndefined()
   })
 })

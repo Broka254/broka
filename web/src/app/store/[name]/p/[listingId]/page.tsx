@@ -25,7 +25,7 @@ import styles from '@/components/store.module.css'
 import { getListing, getStore, getStoreListings } from '@/lib/api'
 import { filtersQuery, toProductCard } from '@/lib/catalogue'
 import { clip, conditionLabel, formatPrice } from '@/lib/format'
-import { productPath, storeCartPath, storePath, viaTag } from '@/lib/links'
+import { campaignToken, productPath, storeCartPath, storePath, viaTag } from '@/lib/links'
 import { NO_DEPOSIT, PAY_LINE, SEE_FIRST } from '@/lib/safety'
 import { API_URL } from '@/lib/server-config'
 import {
@@ -76,8 +76,12 @@ export default async function ProductPage({ params, searchParams }: Props) {
   if (!found) notFound()
   const { store, listing } = found
   const via = viaTag(query.via)
+  const campaign = campaignToken(query.c)
   if (name !== store.slug) {
-    permanentRedirect(`${productPath(store.slug, listing.id)}${via ? `?via=${via}` : ''}`)
+    const q = new URLSearchParams()
+    if (via) q.set('via', via)
+    if (campaign) q.set('c', campaign)
+    permanentRedirect(`${productPath(store.slug, listing.id)}${q.size ? `?${q}` : ''}`)
   }
   // A paused store shows no products: its own page says it's paused, and a
   // product link shared before the pause goes there too, rather than
@@ -203,7 +207,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
             </div>
           </section>
         )}
-        <VisitBeacon storeId={store.id} via={via} />
+        <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: jsonLdScript(productJsonLd(view, store.name)) }}

@@ -274,7 +274,9 @@ class StoreDetailsView extends StatelessWidget {
           onRate: onRateStore,
         ),
       ],
-      if (photos.isNotEmpty) ...[
+      // A virtual store has no premises to photograph. Legacy shop photos
+      // left from an earlier setup are not passed off as a shopfront.
+      if (photos.isNotEmpty && !store.isVirtual) ...[
         const SizedBox(height: 22),
         _label('Photos of the shop'),
         _PhotoStrip(photos: photos, storeName: store.name),
@@ -285,33 +287,98 @@ class StoreDetailsView extends StatelessWidget {
         _card(child: Text(description, style: const TextStyle(
             color: BrokaColors.textHigh, fontSize: 14, height: 1.5))),
       ],
-      const SizedBox(height: 22),
-      _label('Location'),
-      _card(
-        key: const Key('store-location'),
-        padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _InfoRow(
-            icon: Icons.place_outlined,
-            label: store.locationLine ?? store.country,
-            value: (store.locationDescription?.trim().isNotEmpty ?? false)
-                ? store.locationDescription!.trim()
-                : null,
-          ),
-          if (place.length > 1)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const Key('store-open-map'),
-                onPressed: () => _open(context, Uri.https('www.google.com', '/maps/search/',
-                    {'api': '1', 'query': place.join(', ')})),
-                icon: const Icon(Icons.map_outlined, size: 18),
-                label: const Text('Find it on the map'),
-                style: TextButton.styleFrom(foregroundColor: _link),
-              ),
+      if (store.isVirtual) ...[
+        const SizedBox(height: 22),
+        _label('Delivery and service area'),
+        _card(
+          key: const Key('store-delivery'),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _InfoRow(
+              icon: Icons.local_shipping_outlined,
+              label: 'Delivers to',
+              value: store.deliveryCoverageLabel ?? 'Ask the store where it delivers',
             ),
-        ]),
-      ),
+            if ((store.deliveryNote ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(store.deliveryNote!.trim(), style: const TextStyle(
+                  color: BrokaColors.textHigh, fontSize: 13, height: 1.45)),
+            ],
+            const SizedBox(height: 8),
+            const Text(
+              'This is an online store: there is no shop to visit. Agree delivery or '
+              'collection with the seller in the product chat.',
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
+            ),
+          ]),
+        ),
+      ] else if (store.locationLine != null) ...[
+        const SizedBox(height: 22),
+        _label('Location'),
+        _card(
+          key: const Key('store-location'),
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _InfoRow(
+              icon: Icons.place_outlined,
+              label: store.locationLine ?? store.country,
+              value: (store.locationDescription?.trim().isNotEmpty ?? false)
+                  ? store.locationDescription!.trim()
+                  : null,
+            ),
+            if (place.length > 1)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: const Key('store-open-map'),
+                  onPressed: () => _open(context, Uri.https('www.google.com', '/maps/search/',
+                      {'api': '1', 'query': place.join(', ')})),
+                  icon: const Icon(Icons.map_outlined, size: 18),
+                  label: const Text('Find it on the map'),
+                  style: TextButton.styleFrom(foregroundColor: _link),
+                ),
+              ),
+          ]),
+        ),
+      ],
+      // Opening hours: a weekly schedule for a physical shop that gave one.
+      // No section at all when it didn't - a wall of "Closed" would claim
+      // knowledge BROKA doesn't have. The Store info row says "unavailable".
+      if (!store.isVirtual && store.openingHoursAvailable && store.openingHours != null) ...[
+        const SizedBox(height: 22),
+        _label('Opening hours'),
+        _card(
+          key: const Key('store-opening-hours'),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(store.liveOpenStatus.label, style: TextStyle(
+                color: store.liveOpenStatus.isOpen ? BrokaColors.success : BrokaColors.textHigh,
+                fontSize: 13.5, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            for (final row in store.openingHours!.week)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(children: [
+                  SizedBox(width: 96, child: Text(row.label, style: TextStyle(
+                      color: row.closed ? BrokaColors.textLow : BrokaColors.textMid,
+                      fontSize: 12.5))),
+                  Text(row.hours, style: TextStyle(
+                      color: row.closed ? BrokaColors.textLow : BrokaColors.textHigh,
+                      fontSize: 12.5, fontWeight: row.closed ? FontWeight.w400 : FontWeight.w600)),
+                ]),
+              ),
+            const SizedBox(height: 4),
+            const Text('Times are East Africa Time (Africa/Nairobi).',
+                style: TextStyle(color: BrokaColors.textLow, fontSize: 10.5)),
+          ]),
+        ),
+      ],
+      if (store.isVirtual && store.deliveryCoverageLabel == null) ...[
+        const SizedBox(height: 16),
+        const Text(
+          'This store has not said where it delivers yet. Ask in the product chat.',
+          style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
+        ),
+      ],
       const SizedBox(height: 22),
       _label('Contact'),
       _card(
@@ -345,9 +412,20 @@ class StoreDetailsView extends StatelessWidget {
       _card(
         padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
         child: Column(children: [
+          _InfoRow(icon: Icons.storefront_outlined, label: 'Type',
+              value: store.isVirtual ? 'Online store' : 'Physical store', dense: true),
           if (store.categories.isNotEmpty)
             _InfoRow(icon: Icons.category_outlined, label: 'Sells',
                 value: store.categories.join(', '), dense: true),
+          if (!store.isVirtual)
+            _InfoRow(icon: Icons.schedule_outlined, label: 'Opening hours',
+                value: store.openingHoursAvailable
+                    ? store.liveOpenStatus.label
+                    : 'Opening hours unavailable',
+                dense: true),
+          if (store.deliveryCoverageLabel != null)
+            _InfoRow(icon: Icons.local_shipping_outlined, label: 'Delivery',
+                value: store.deliveryCoverageLabel!, dense: true),
           _InfoRow(
             key: const Key('store-details-link'),
             icon: Icons.link_rounded,
@@ -429,11 +507,14 @@ class _Summary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A virtual store has no shopfront to name: what a buyer needs is where
+    // it delivers, not an address it never had.
     final place = [
       if (store.categories.isNotEmpty) store.categories.join(', '),
-      store.locationLine,
+      if (store.isVirtual) store.deliveryCoverageLabel else store.locationLine,
     ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     final color = store.isActive ? BrokaColors.success : BrokaColors.warning;
+    final openStatus = store.liveOpenStatus;
     return _card(
       key: const Key('store-details-summary'),
       child: Row(children: [
@@ -461,6 +542,38 @@ class _Summary extends StatelessWidget {
               child: Text(store.isActive ? 'Open' : 'Taking a break', style: TextStyle(
                   color: color, fontSize: 11.5, fontWeight: FontWeight.w700)),
             ),
+            // The type is a fact about the business, not a badge for a
+            // missing pin: it says how to buy from it.
+            Container(
+              key: const Key('store-details-type'),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              decoration: BoxDecoration(
+                color: BrokaColors.neonPurple.withOpacity(0.14),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: BrokaColors.neonPurple.withOpacity(0.55)),
+              ),
+              child: Text(store.isVirtual ? 'Online store' : 'Physical store',
+                  style: const TextStyle(color: BrokaColors.neonPurple, fontSize: 11.5,
+                      fontWeight: FontWeight.w700)),
+            ),
+            // Only when the schedule exists. A shop with no hours must not
+            // be described as open or closed - BROKA cannot know.
+            if (!store.isVirtual && openStatus.isKnown)
+              Container(
+                key: const Key('store-details-open-status'),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (openStatus.isOpen ? BrokaColors.success : BrokaColors.textMid)
+                      .withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: (openStatus.isOpen ? BrokaColors.success : BrokaColors.border)
+                          .withOpacity(0.6)),
+                ),
+                child: Text(openStatus.label, style: TextStyle(
+                    color: openStatus.isOpen ? BrokaColors.success : BrokaColors.textMid,
+                    fontSize: 11.5, fontWeight: FontWeight.w700)),
+              ),
             // The buyer's first question about a shop, in the one place a
             // buyer goes to judge it. Nothing at all when the distance is
             // unknown - a guess is worse than silence.

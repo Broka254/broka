@@ -48,6 +48,16 @@ from sqlalchemy import (
 )
 from api.database import Base
 
+# The two ways a business trades on BROKA. A physical store has premises a
+# customer can visit; a virtual store sells online only. The type is stored,
+# validated and used - it decides which setup fields are required, whether a
+# map point is published, and how the storefront describes the business. It
+# is deliberately a plain String + an application-side check rather than a
+# native PostgreSQL ENUM: adding a value to an enum needs ALTER TYPE, which
+# init_db's migrations cannot run (see api/database.py).
+STORE_TYPES = ("physical", "virtual")
+DEFAULT_STORE_TYPE = "physical"
+
 
 def slugify(value: str) -> str:
     """Deterministic, URL-safe normalization: lowercase, alphanumerics and
@@ -106,6 +116,33 @@ class Store(Base):
     category       = Column(String, nullable=True)
     specialization = Column(String, nullable=True)   # legacy, see category
     description    = Column(Text, nullable=True)
+
+    # "physical" | "virtual" (STORE_TYPES). Existing rows were all shops you
+    # could walk into, so the migration gives them "physical" - the migration
+    # must never invent a type from missing data.
+    store_type           = Column(
+        String(16), nullable=False, default=DEFAULT_STORE_TYPE,
+        server_default=DEFAULT_STORE_TYPE,
+    )
+
+    # Structured weekly opening hours, JSON text:
+    #   {"mon": {"open": "08:00", "close": "18:00"}, ..., "sun": null}
+    # A day is null/absent when closed, {"all_day": true} for 24 hours, or an
+    # open/close pair. close <= open is a window that crosses midnight (a
+    # kiosk open 20:00-02:00); api/domains/stores/opening_hours.py validates
+    # it and computes "Open now" in Africa/Nairobi. NULL = not provided -
+    # an unset schedule is unknown, never "closed".
+    opening_hours        = Column(Text, nullable=True)
+
+    # Where the store delivers or serves customers, JSON list. Either a list
+    # of Kenya's counties or the single entry ["Nationwide"]. This is
+    # delivery coverage, NOT the shop's address: a shop in Kisumu can serve
+    # the whole country, and a virtual store can serve one county. NULL = not
+    # stated, which is not the same as "nowhere".
+    service_areas        = Column(Text, nullable=True)
+    # Free text on how delivery/collection works ("Same-day in Kisumu,
+    # courier elsewhere"). Optional; never a promise BROKA makes.
+    delivery_note        = Column(String(200), nullable=True)
 
     country              = Column(String, nullable=False, default="Kenya")
     county               = Column(String, nullable=True)

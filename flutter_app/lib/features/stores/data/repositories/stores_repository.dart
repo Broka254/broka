@@ -10,6 +10,7 @@ import '../../../listings/domain/models/listing.dart';
 import '../../domain/models/store.dart';
 import '../../domain/models/store_insights.dart';
 import '../../domain/models/store_billing.dart';
+import '../../domain/models/store_campaign.dart';
 import '../../domain/models/store_product.dart';
 import '../../domain/models/store_reviews.dart';
 import '../../../../core/errors/user_facing_error.dart';
@@ -163,6 +164,8 @@ class StoresRepository {
     String storeId, {
     StoreProductState? state,
     String? search,
+    String? category,
+    String sort = 'newest',
     int limit = 20,
     int offset = 0,
   }) =>
@@ -172,6 +175,8 @@ class StoresRepository {
           'offset': offset.toString(),
           if (state != null) 'state': state.value,
           if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+          if (category != null && category.isNotEmpty) 'category': category,
+          if (sort != 'newest') 'sort': sort,
         }) as Map<String, dynamic>;
         return StoreProductsPage(
           items: [
@@ -281,6 +286,159 @@ class StoresRepository {
   Future<Result<StorePlanPayment>> storePaymentStatus(String storeId, String paymentId) =>
       _guard(() async => StorePlanPayment.fromJson(await _client.get(
           '/stores/$storeId/billing/payments/$paymentId') as Map<String, dynamic>));
+
+  /// Archives several of the store's products at once. The server validates
+  /// every id against this store and its owner before changing any of them;
+  /// anything it refused comes back in the failure message.
+  Future<Result<int>> archiveProducts(String storeId, List<String> listingIds) =>
+      _guard(() async {
+        final data = await _client.post(
+          '/stores/$storeId/manage/listings/bulk',
+          {'action': 'archive', 'listing_ids': listingIds},
+        ) as Map<String, dynamic>;
+        // The server answers {archived: [ids], already_archived: [ids]}.
+        return (data['archived'] as List?)?.length ?? 0;
+      });
+
+  // ── AI Marketing Studio ──────────────────────────────────────────────────
+  //
+  // Every call is owner-only on the server. Drafts never appear in a public
+  // response; the campaign's tracked links are what a buyer sees.
+
+  /// The owner's saved campaigns, newest first.
+  Future<Result<(List<MarketingCampaign>, int)>> getCampaigns(
+    String storeId, {
+    int limit = 20,
+    int offset = 0,
+  }) =>
+      _guard(() async {
+        final data = await _client.get('/stores/$storeId/marketing/campaigns', queryParams: {
+          'limit': limit.toString(),
+          'offset': offset.toString(),
+        }) as Map<String, dynamic>;
+        return (
+          [
+            for (final c in data['items'] as List? ?? const [])
+              MarketingCampaign.fromJson(c as Map<String, dynamic>),
+          ],
+          (data['total'] as num?)?.toInt() ?? 0,
+        );
+      });
+
+  Future<Result<MarketingCampaign>> getCampaign(String storeId, String campaignId) =>
+      _guard(() async => MarketingCampaign.fromJson(await _client.get(
+          '/stores/$storeId/marketing/campaigns/$campaignId') as Map<String, dynamic>));
+
+  /// Creates a campaign. With [generate] false only the configuration is
+  /// saved; generate later with [regenerateCampaign]. Product facts are read
+  /// by the server from the seller's listings - this payload names ids.
+  Future<Result<MarketingCampaign>> createCampaign(
+    String storeId, {
+    String? title,
+    required String objective,
+    List<String> productIds = const [],
+    required List<String> platforms,
+    String? audience,
+    String tone = 'friendly',
+    String language = 'en',
+    String? instructions,
+    bool generate = true,
+  }) =>
+      _guard(() async => MarketingCampaign.fromJson(await _client.post(
+            '/stores/$storeId/marketing/campaigns',
+            {
+              if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+              'objective': objective,
+              'product_ids': productIds,
+              'platforms': platforms,
+              if (audience != null && audience.trim().isNotEmpty) 'audience': audience.trim(),
+              'tone': tone,
+              'language': language,
+              if (instructions != null && instructions.trim().isNotEmpty)
+                'instructions': instructions.trim(),
+              'generate': generate,
+            },
+          ) as Map<String, dynamic>));
+
+  Future<Result<MarketingCampaign>> updateCampaign(
+    String storeId,
+    String campaignId, {
+    String? title,
+    String? audience,
+    String? instructions,
+  }) =>
+      _guard(() async => MarketingCampaign.fromJson(await _client.patch(
+            '/stores/$storeId/marketing/campaigns/$campaignId',
+            {
+              if (title != null) 'title': title,
+              if (audience != null) 'audience': audience,
+              if (instructions != null) 'instructions': instructions,
+            },
+          ) as Map<String, dynamic>));
+
+  Future<Result<MarketingCampaign>> regenerateCampaign(String storeId, String campaignId) =>
+      _guard(() async => MarketingCampaign.fromJson(await _client.post(
+          '/stores/$storeId/marketing/campaigns/$campaignId/regenerate') as Map<String, dynamic>));
+
+  Future<Result<MarketingCampaign>> updateCreative(
+    String storeId,
+    String campaignId,
+    String creativeId, {
+    String? headline,
+    String? body,
+    String? cta,
+    List<String>? hashtags,
+  }) =>
+      _guard(() async => MarketingCampaign.fromJson(await _client.patch(
+            '/stores/$storeId/marketing/campaigns/$campaignId/creatives/$creativeId',
+            {
+              if (headline != null) 'headline': headline,
+              if (body != null) 'body': body,
+              if (cta != null) 'cta': cta,
+              if (hashtags != null) 'hashtags': hashtags,
+            },
+          ) as Map<String, dynamic>));
+
+  Future<Result<void>> deleteCampaign(String storeId, String campaignId) =>
+      _guard(() async {
+        await _client.delete('/stores/$storeId/marketing/campaigns/$campaignId');
+      });
+
+  /// Records that the seller downloaded or shared a creative. These are
+  /// observed actions, never impressions.
+  Future<Result<void>> recordCampaignEvent(
+    String storeId,
+    String campaignId, {
+    required String kind,
+    String? platform,
+  }) =>
+      _guard(() async {
+        await _client.post(
+          '/stores/$storeId/marketing/campaigns/$campaignId/events',
+          {'kind': kind, if (platform != null && platform.isNotEmpty) 'platform': platform},
+        );
+      });
+
+  /// Suggestions for a title, description, caption or store description.
+  /// Nothing is saved to the listing.
+  Future<Result<CopySuggestions>> copySuggestions(
+    String storeId, {
+    required String field,
+    String? listingId,
+    String? text,
+    String language = 'en',
+    String tone = 'friendly',
+  }) =>
+      _guard(() async => CopySuggestions.fromJson(await _client.post(
+            '/stores/$storeId/marketing/copy',
+            {
+              'field': field,
+              if (listingId != null) 'listing_id': listingId,
+              if (text != null) 'text': text,
+              'language': language,
+              'tone': tone,
+            },
+          ) as Map<String, dynamic>));
 }
 
 final storesRepository = StoresRepository();

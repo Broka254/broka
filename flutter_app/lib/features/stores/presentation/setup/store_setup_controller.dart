@@ -27,7 +27,17 @@ import '../../domain/kenya_locations.dart';
 import '../../domain/models/store.dart';
 import '../../domain/store_categories.dart';
 
-enum StoreSetupStep { name, link, category, location, logo, photos, email, review }
+// `type` is asked first because it decides which later questions exist: a
+// virtual store has no premises to locate, photograph or open at set hours,
+// and a physical one can't publish without them.
+enum StoreSetupStep {
+  type, name, link, category, location, hours, coverage, logo, photos, email, review,
+}
+
+bool isPhysicalOnlyStep(StoreSetupStep step) =>
+    step == StoreSetupStep.location ||
+    step == StoreSetupStep.hours ||
+    step == StoreSetupStep.photos;
 
 /// The store wizard's and settings pages' picked images, in the app's own
 /// storage until the store is saved (see pickStoreImage).
@@ -134,6 +144,10 @@ class StoreSetupController extends ChangeNotifier {
     photos = s.photoImages.isNotEmpty
         ? [for (final p in s.photoImages) DraftImage(id: p.id, url: p.thumb)]
         : [for (final p in s.photos) DraftImage(url: p)];
+    storeType = s.storeType;
+    openingHours = s.openingHours ?? const StoreOpeningHours({});
+    serviceAreas = [...s.serviceAreas];
+    deliveryNote = s.deliveryNote ?? '';
     email = s.businessEmail ?? '';
     emailVerified = s.businessEmailVerified;
     _savedEmail = s.businessEmail;
@@ -184,6 +198,20 @@ class StoreSetupController extends ChangeNotifier {
   String? subcounty;
   String landmark = '';
 
+  /// Physical premises or online-only. Asked first in the wizard; changing
+  /// it later is a validated PATCH, never a silent relabel.
+  StoreType storeType = StoreType.physical;
+
+  /// The weekly schedule being edited. Empty days are closed; a physical
+  /// store may save with none and the storefront then says hours are
+  /// unavailable rather than guessing.
+  StoreOpeningHours openingHours = const StoreOpeningHours({});
+
+  /// Where the store delivers: Kenyan county names, or ["Nationwide"].
+  /// Kept apart from [county], which is the shop's own address.
+  List<String> serviceAreas = [];
+  String deliveryNote = '';
+
   /// The shop's own pin for "Near you". Null until the owner sets it at
   /// their shop; the county/subcounty above stay the fallback.
   double? storeLat;
@@ -221,13 +249,19 @@ class StoreSetupController extends ChangeNotifier {
 
   bool busy = false;
 
+  /// The questions this store actually has to answer, in order.
   List<StoreSetupStep> get steps => [
+        StoreSetupStep.type,
         StoreSetupStep.name,
         StoreSetupStep.link,
         StoreSetupStep.category,
-        StoreSetupStep.location,
+        if (storeType == StoreType.physical) ...[
+          StoreSetupStep.location,
+          StoreSetupStep.hours,
+        ] else
+          StoreSetupStep.coverage,
         StoreSetupStep.logo,
-        StoreSetupStep.photos,
+        if (storeType == StoreType.physical) StoreSetupStep.photos,
         StoreSetupStep.email,
         StoreSetupStep.review,
       ];
@@ -291,6 +325,13 @@ class StoreSetupController extends ChangeNotifier {
       landmark = d['landmark'] as String? ?? '';
       storeLat = (d['lat'] as num?)?.toDouble();
       storeLng = (d['lng'] as num?)?.toDouble();
+      storeType = StoreType.parse(d['store_type']);
+      openingHours = StoreOpeningHours.fromJson(d['opening_hours']) ??
+          const StoreOpeningHours({});
+      serviceAreas = (d['service_areas'] as List? ?? const [])
+          .whereType<String>()
+          .toList();
+      deliveryNote = d['delivery_note'] as String? ?? '';
       logo = DraftImage.fromJson(d['logo']);
       cover = DraftImage.fromJson(d['cover']);
       photos = [
@@ -348,6 +389,10 @@ class StoreSetupController extends ChangeNotifier {
         'landmark': landmark,
         'lat': storeLat,
         'lng': storeLng,
+        'store_type': storeType.value,
+        'opening_hours': openingHours.toJson(),
+        'service_areas': serviceAreas,
+        'delivery_note': deliveryNote,
         'logo': logo?.toJson(),
         'cover': cover?.toJson(),
         'photos': [for (final p in photos) p.toJson()],
@@ -489,6 +534,56 @@ class StoreSetupController extends ChangeNotifier {
   }
 
   void setDescription(String v) { description = v; _changed(); }
+
+  // ── Type, hours, coverage ────────────────────────────────────────────────
+
+  /// Chooses physical or virtual. The draft keeps whatever was entered for
+  /// the other type, so switching back before opening loses nothing; the
+  /// server does the same when an open store changes type.
+  void setStoreType(StoreType type) {
+    if (storeType == type) return;
+    storeType = type;
+    _changed();
+  }
+
+  void setDayHours(String day, OpeningHoursDay? hours) {
+    openingHours = openingHours.withDay(day, hours);
+    _changed();
+  }
+
+  /// "Apply to all days" - the common case, without seven time pickers.
+  void setHoursForEveryDay(String open, String close) {
+    openingHours = StoreOpeningHours({
+      for (final day in openingDayKeys) day: OpeningHoursDay(open: open, close: close),
+    });
+    _changed();
+  }
+
+  void clearOpeningHours() {
+    openingHours = const StoreOpeningHours({});
+    _changed();
+  }
+
+  bool get hasOpeningHours => openingHours.hasAny;
+
+  void toggleServiceArea(String county) {
+    serviceAreas = serviceAreas.contains(county)
+        ? ([...serviceAreas]..remove(county))
+        : [...serviceAreas, county];
+    _changed();
+  }
+
+  void setDeliveryNote(String v) { deliveryNote = v; _changed(); }
+
+  /// "Nationwide" is not a county: one switch, and the list is cleared so a
+  /// store never claims both a national reach and three named counties.
+  bool get deliversNationwide =>
+      serviceAreas.length == 1 && serviceAreas.first.toLowerCase() == 'nationwide';
+
+  void setNationwide(bool value) {
+    serviceAreas = value ? ['Nationwide'] : [];
+    _changed();
+  }
 
   void setCounty(String? v) {
     if (v == county) return;
@@ -700,6 +795,9 @@ class StoreSetupController extends ChangeNotifier {
   /// What stops [step] from being complete, or null.
   String? validate(StoreSetupStep step) {
     switch (step) {
+      case StoreSetupStep.type:
+        // Both values are valid; the choice is what decides the rest.
+        return null;
       case StoreSetupStep.name:
         final n = name.trim();
         if (n.length < 2) return 'Give your store a name.';
@@ -720,15 +818,34 @@ class StoreSetupController extends ChangeNotifier {
         }
         return null;
       case StoreSetupStep.location:
+        if (storeType == StoreType.virtual) return null;
         if (county == null || county!.isEmpty) return 'Choose your county.';
         if (subcounty == null || subcounty!.trim().isEmpty) return 'Choose or type your area.';
+        return null;
+      case StoreSetupStep.hours:
+        for (final day in openingDayKeys) {
+          final value = openingHours[day];
+          if (value == null) continue;
+          if (value.isClosed) return 'Choose times for ${openingDayLabels[day]}, or mark it closed.';
+          if (value.open == value.close) {
+            return '${openingDayLabels[day]}: opening and closing times cannot be the same.';
+          }
+        }
+        return null;
+      case StoreSetupStep.coverage:
+        // Optional: a store that hasn't said where it serves is honest
+        // about it, and there is nothing here the server would refuse.
+        if (deliveryNote.trim().length > 300) {
+          return 'Keep the delivery note under 300 characters.';
+        }
         return null;
       case StoreSetupStep.logo:
         return null;
       case StoreSetupStep.photos:
-        // A shop opens with at least one real photo of it. The API refuses
-        // a store without one too (for clients new enough to send a link
-        // name); this is the gate the person actually sees.
+        // A physical shop opens with at least one real photo of it. A
+        // virtual store has no premises to photograph, and the server no
+        // longer demands one of it.
+        if (storeType == StoreType.virtual) return null;
         if (photos.isEmpty) return 'Add at least one photo of your shop.';
         return null;
       case StoreSetupStep.email:
@@ -814,6 +931,11 @@ class StoreSetupController extends ChangeNotifier {
         'location_description': _clean(landmark),
         'lat': storeLat,
         'lng': storeLng,
+        'store_type': storeType.value,
+        if (storeType == StoreType.physical)
+          'opening_hours': openingHours.hasAny ? openingHours.toJson() : null,
+        'service_areas': serviceAreas,
+        'delivery_note': _clean(deliveryNote),
         ...await _imagePayload(),
         if (email.trim().isNotEmpty) ..._emailPayload(),
       };
@@ -852,7 +974,14 @@ class StoreSetupController extends ChangeNotifier {
       return SetupProblem(message, StoreSetupStep.email);
     }
     if (statusCode == 400 && message.toLowerCase().contains('photo')) {
-      return SetupProblem(message, StoreSetupStep.photos);
+      return SetupProblem(message,
+          storeType == StoreType.virtual ? null : StoreSetupStep.photos);
+    }
+    if (statusCode == 400 &&
+        (message.toLowerCase().contains('county') ||
+            message.toLowerCase().contains('location'))) {
+      return SetupProblem(message,
+          storeType == StoreType.virtual ? null : StoreSetupStep.location);
     }
     return SetupProblem(message);
   }
@@ -864,10 +993,27 @@ class StoreSetupController extends ChangeNotifier {
     if (store == null) return (null, const SetupProblem('Nothing to save.'));
     final problem = validate(step);
     if (problem != null) return (null, SetupProblem(problem, step));
+    // Switching an open store to physical needs a shop location the server
+    // will accept. Saying so here points at the page that collects it,
+    // instead of a 400 after the seller thought they were done.
+    if (step == StoreSetupStep.type &&
+        storeType == StoreType.physical &&
+        ((county ?? '').isEmpty || (subcounty ?? '').trim().isEmpty)) {
+      return (null, const SetupProblem(
+          'A physical store needs your county and area. Add them under Where to '
+          'find you, then switch the type again.',
+          StoreSetupStep.location));
+    }
     busy = true;
     notifyListeners();
     try {
       final Map<String, dynamic> payload = switch (step) {
+        StoreSetupStep.type => {
+            'store_type': storeType.value,
+            'opening_hours': openingHours.hasAny ? openingHours.toJson() : null,
+            'service_areas': serviceAreas,
+            'delivery_note': _clean(deliveryNote),
+          },
         StoreSetupStep.name => {'name': name.trim()},
         StoreSetupStep.category => {
             'category': categories.first,
@@ -883,6 +1029,13 @@ class StoreSetupController extends ChangeNotifier {
           },
         StoreSetupStep.logo => await _imagePayload(photosPart: false),
         StoreSetupStep.photos => await _imagePayload(logoPart: false),
+        StoreSetupStep.hours => {
+            'opening_hours': openingHours.hasAny ? openingHours.toJson() : null,
+          },
+        StoreSetupStep.coverage => {
+            'service_areas': serviceAreas,
+            'delivery_note': _clean(deliveryNote) ?? '',
+          },
         StoreSetupStep.email => _emailPayload(),
         _ => const {},
       };

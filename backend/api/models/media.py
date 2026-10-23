@@ -36,10 +36,14 @@ class MediaPurpose:
     # The optional background of a trader's card and profile header
     # (POST /traders/me/cover).
     TRADER_COVER     = "trader_cover"
+    # A promotional image rendered by the Marketing Studio from a seller's
+    # own product photo (api/domains/stores/marketing.py). Server-generated,
+    # so it is not in UPLOADABLE.
+    MARKETING_CREATIVE = "marketing_creative"
 
     ALL = frozenset({
         LISTING_PHOTO, LISTING_SHOWCASE, STORE_LOGO, STORE_COVER, STORE_PHOTO, AVATAR,
-        TRADER_COVER,
+        TRADER_COVER, MARKETING_CREATIVE,
     })
     # What a client may upload directly. Avatars are converted server-side
     # from the profile photo the signup and profile flows already send.
