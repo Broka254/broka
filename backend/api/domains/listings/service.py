@@ -1301,6 +1301,12 @@ class ListingService:
         if listing.seller_id != requester_id:
             raise HTTPException(status_code=403, detail="You can only delete your own listings.")
         if getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value:
+            if getattr(listing, "archived_at", None) is not None:
+                # Archiving and deleting share the cancelled status; clearing
+                # the archive marker is what takes an archived product out of
+                # its owner's Archived list for good.
+                listing.archived_at = None
+                await self.db.commit()
             return {"deleted": True, "listing_id": listing_id}
 
         if not is_stocked(listing):

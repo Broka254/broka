@@ -138,16 +138,28 @@ PLATFORM_SPECS: dict[str, dict] = {
     },
     "x": {
         "formats": ("post",),
-        "body_limit": 280,
-        "status_limit": 280,
+        # The 280 limit is for the finished post, and the app appends the
+        # tracked link and hashtags. The body is therefore kept short
+        # enough that the link always fits, rather than generating a
+        # caption the share step would have to cut.
+        "body_limit": 200,
+        "status_limit": 200,
         "hashtags": 3,
         "aspect": "16:9",
         "guidance": (
-            "An X post is at most 280 characters INCLUDING the link and "
-            "hashtags. Be concise: product, price, one reason, link."
+            "An X post is at most 280 characters including the link and "
+            "hashtags, which the app adds. Keep the body under 200 "
+            "characters: product, price, one reason."
         ),
     },
 }
+
+# Every shape any platform offers. A campaign stores one preferred shape;
+# it only applies on platforms whose PLATFORM_SPECS includes it.
+ALL_FORMATS = tuple(dict.fromkeys(
+    fmt for spec in PLATFORM_SPECS.values() for fmt in spec["formats"]
+))
+_URL_RE = re.compile(r"https?://\S+", re.I)
 
 OBJECTIVE_GUIDANCE = {
     "new_store": "Introduce the store itself: who it is, what it sells, and why someone should visit.",
@@ -176,14 +188,22 @@ def _clean(value: object, limit: int) -> Optional[str]:
     return text[:limit] or None
 
 
+def _multiline(value: object) -> str:
+    """Text with its line breaks kept and runs of spaces inside a line
+    collapsed. Bullets and script scenes are lines; flattening them into
+    one paragraph turns a readable message into a wall of text."""
+    lines = (str(value or "").replace("\r\n", "\n")).split("\n")
+    return "\n".join(" ".join(line.split()) for line in lines).strip()
+
+
 def _sentence_trim(text: str, limit: int) -> str:
-    """Cut to `limit`, preferring a sentence or word boundary - a truncated
-    post that stops mid-word looks like a bug, not brevity."""
-    text = " ".join((text or "").split())
+    """Cut to `limit`, preferring a sentence, line or word boundary - a
+    truncated post that stops mid-word looks like a bug, not brevity."""
+    text = _multiline(text)
     if len(text) <= limit:
         return text
     window = text[:limit]
-    for mark in (". ", "! ", "? ", "; "):
+    for mark in (". ", "! ", "? ", "; ", "\n"):
         cut = window.rfind(mark)
         if cut >= limit * 0.5:
             return window[: cut + 1].strip()
@@ -258,12 +278,14 @@ def _coverage_sentence(store: Store, swahili: bool) -> Optional[str]:
     return f"Tunawasilisha {coverage}." if swahili else f"Delivers to {coverage}."
 
 
-def _coverage_bullet(store: Store) -> Optional[str]:
+def _coverage_bullet(store: Store, swahili: bool = False) -> Optional[str]:
     """The short form used in a WhatsApp message's bullet list."""
     coverage = _coverage(store)
     if not coverage:
         return None
-    return "Nationwide delivery" if coverage == "Nationwide" else f"Delivers to {coverage}"
+    if coverage == "Nationwide":
+        return "Uwasilishaji nchini kote" if swahili else "Nationwide delivery"
+    return f"Tunawasilisha {coverage}" if swahili else f"Delivers to {coverage}"
 
 
 def campaign_link(store: Store, token: str, platform: str) -> str:
@@ -298,7 +320,12 @@ async def _load_products(db: AsyncSession, store: Store, product_ids: list[str],
     )).scalars().all()
     found = {row.id: row for row in rows}
     missing = [i for i in ids if i not in found]
-    if missing:
+    # A saved campaign is a record of what was promoted. Its product can
+    # later be moved to another store or removed outright; the campaign
+    # must still open, showing the products that remain. Only a fresh
+    # generation is refused, because it would promote a product the store
+    # does not own.
+    if missing and require_live:
         raise HTTPException(
             status_code=400,
             detail="Some of those products aren't in this store. Choose them again.",
@@ -382,6 +409,18 @@ def _prompt(store: Store, campaign: MarketingCampaign, products: list[dict],
         if campaign.objective == "discount" else
         f"Extra instructions from the seller: {campaign.instructions or '(none)'}"
     )
+    cta_note = (
+        f"The seller chose this call to action: {campaign.cta}. Use it, or a close "
+        "variation that keeps its meaning."
+        if campaign.cta else
+        "No call to action was chosen; write an honest one (open the link, ask on BROKA)."
+    )
+    format_note = (
+        f"The seller prefers the {campaign.creative_format} format. Use it on every "
+        "platform that offers it; elsewhere use a format that platform does offer."
+        if campaign.creative_format else
+        "Use the platform's natural shape."
+    )
     # A virtual store has no shop to visit, and its stored county is not an
     # address the model may hand to readers. Giving it the coverage instead
     # keeps the copy factual and stops "come to our shop in X" appearing
@@ -407,8 +446,11 @@ Audience: {campaign.audience or 'Kenyan shoppers'}
 Tone: {campaign.tone}
 Language: {LANGUAGE_NAME.get(campaign.language, 'English')} - write the body in this language.
 {discount_note}
+{cta_note}
+{format_note}
 
-Tracked links (use the link for the platform each creative is for):
+Tracked links (for reference only - BROKA appends the right one when the post is
+shared, so do NOT put any URL in a body):
 {links}
 
 Platform requirements:
@@ -421,8 +463,11 @@ Rules:
 - Never invent a shop address or tell readers to visit a shop that is not the
   physical location above. If the store is virtual, never imply it has premises.
 - The delivery line is the seller's coverage. Do not narrow it or widen it.
-- WhatsApp messages and Instagram/Facebook captions may be multi-line. X must be ≤280
-  characters including its link. TikTok output is a script/storyboard, never called a video.
+- Never paste a URL into a body - the app adds the campaign's tracked link once.
+- WhatsApp messages and Instagram/Facebook captions may be multi-line. X's body must be
+  ≤200 characters (the app's link and hashtags take the rest of the 280). TikTok output
+  is a script/storyboard with shots, on-screen text, voice-over lines and a duration,
+  never called a finished video.
 - Each platform must get genuinely different copy - not the same text with the platform name changed.
 - Calls to action must be honest: "Open the link", "Ask on BROKA", "Browse the store".
 
@@ -431,7 +476,9 @@ Return ONLY valid JSON in exactly this shape:
 "format": "message", "headline": "short headline or null", "body": "the copy",
 "hashtags": ["tag"], "cta": "short call to action",
 "media": {{"aspect_ratio": "9:16", "template": "bold_offer",
-"slides": [{{"text": "on-screen text"}}]}}}}],
+"slides": [{{"text": "on-screen text"}}],
+"scenes": [{{"shot": "what the camera shows", "on_screen_text": "text on screen",
+"voice_over": "what is said", "seconds": 3}}]}}}}],
 "plan": [{{"day": "Monday", "platform": "whatsapp", "format": "message",
 "product": "product name or null", "idea": "what to post"}}]}}
 Generate one main creative and one secondary format for each platform asked for.
@@ -499,8 +546,127 @@ def _json_from(text: str) -> dict:
 
 # ── Output validation and template fallback ──────────────────────────────────
 
+# Claims the prompt forbids unless the seller's own records contain them.
+# Kept deliberately short and literal: a broad rule would reject honest copy
+# ("the listing says 100% cotton") as often as it caught an invented one.
+_UNSUPPORTED_CLAIMS = (
+    "warranty", "guarantee", "guaranteed", "certified", "authentic", "genuine",
+    "original packaging", "free delivery", "free shipping", "same day",
+    "same-day", "next day", "next-day", "in stock", "while stocks last",
+    "limited stock", "today only", "money back", "money-back",
+)
+_MONEY_RE = re.compile(r"\b(?:kes|ksh|shs?|shillings?)\s*([0-9][0-9,]*(?:\.[0-9]+)?)", re.I)
+_COMMA_AMOUNT_RE = re.compile(r"\b([0-9]{1,3}(?:,[0-9]{3})+)\b")
+_PERCENT_RE = re.compile(r"\b([0-9]{1,3})\s*%")
+_NUMBER_RE = re.compile(r"\b[0-9][0-9,]*(?:\.[0-9]+)?\b")
+
+
+def _amount(value: str) -> Optional[float]:
+    try:
+        return float(value.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _seller_facts(store: Store, products: list[dict],
+                  campaign: Optional[MarketingCampaign] = None) -> str:
+    """Every sentence the model is allowed to treat as true, lowercased."""
+    bits: list[str] = [
+        store.name or "", store.description or "", store.delivery_note or "",
+    ]
+    if campaign is not None:
+        bits.extend([campaign.instructions or "", campaign.audience or "", campaign.cta or ""])
+    # The number of products in the campaign is a fact about this campaign,
+    # so copy may say "3 products" without that counting as invented.
+    bits.append(str(len(products)))
+    # A virtual store has no premises. Its stored county may be left over
+    # from before a type switch, so it must never make "visit us in ..."
+    # look supported. Coverage is a different fact and stays for both types.
+    if (store.store_type or "physical") != "virtual":
+        bits.extend([store.county or "", store.subcounty or "",
+                     store.location_description or ""])
+    bits.append(store.service_areas or "")
+    for product in products:
+        bits.extend([
+            product.get("name") or "", product.get("description") or "",
+            product.get("brand") or "", product.get("category") or "",
+            str(product.get("price") or ""), product.get("price_unit") or "",
+        ])
+    return " ".join(bits).lower()
+
+
+def _invented_number(text: str, facts: str) -> Optional[str]:
+    """A figure in [text] that isn't in the seller's own words.
+
+    Prices and percentages have their own checks; this catches everything
+    else a copywriter might add - a size, a year, "24/7", a stock count -
+    which would otherwise read as a fact about the product.
+    """
+    allowed = {_amount(m.group(0)) for m in _NUMBER_RE.finditer(facts)}
+    allowed.discard(None)
+    for match in _NUMBER_RE.finditer(text):
+        value = _amount(match.group(0))
+        if value is not None and value not in allowed:
+            return match.group(0)
+    return None
+
+
+def _unsupported_claim(text: str, store: Store, products: list[dict],
+                       campaign: Optional[MarketingCampaign] = None,
+                       extra_facts: str = "") -> Optional[str]:
+    """The first claim in [text] that the seller's records don't support.
+
+    This is the output check the module docstring promises: the prompt alone
+    cannot keep a model from adding a warranty or changing a price, and a
+    plausible wrong figure is exactly what a buyer would act on. The
+    template writer and the seller's own edits are not run through this -
+    only model output is.
+    """
+    if not text:
+        return None
+    facts = _seller_facts(store, products, campaign)
+    if extra_facts:
+        facts = f"{facts} {extra_facts.lower()}"
+    lowered = text.lower()
+    for phrase in _UNSUPPORTED_CLAIMS:
+        # "In stock" is the claim a new-stock campaign was explicitly asked
+        # to make, and the product is live (loaded by _load_products). The
+        # rule still stops a quantity, urgency or a stock claim in any
+        # other kind of campaign.
+        if phrase == "in stock" and getattr(campaign, "objective", "") == "new_stock":
+            continue
+        if phrase in lowered and phrase not in facts:
+            return phrase
+
+    allowed_amounts = {
+        _amount(str(p["price"])) for p in products if p.get("price") is not None
+    }
+    allowed_amounts.update(
+        _amount(m.group(1)) for m in _MONEY_RE.finditer(facts) if m.group(1)
+    )
+    allowed_amounts.update(
+        _amount(m.group(1)) for m in _COMMA_AMOUNT_RE.finditer(facts) if m.group(1)
+    )
+    for match in _MONEY_RE.finditer(text):
+        value = _amount(match.group(1))
+        if value is not None and value not in allowed_amounts:
+            return match.group(0)
+    # A bare comma-formatted figure ("2,500") is a price too, and one the
+    # model could have changed just as easily.
+    for match in _COMMA_AMOUNT_RE.finditer(text):
+        value = _amount(match.group(1))
+        if value is not None and value not in allowed_amounts:
+            return match.group(0)
+
+    allowed_percents = set(_PERCENT_RE.findall(facts))
+    for percent in _PERCENT_RE.findall(text):
+        if percent not in allowed_percents:
+            return f"{percent}%"
+    return None
+
+
 def _creative_dict(item: dict, platform: str, index: int, store: Store,
-                   products: list[dict]) -> Optional[dict]:
+                   products: list[dict], campaign: MarketingCampaign) -> Optional[dict]:
     """One validated creative, or None when the model's item is unusable.
 
     Lengths are enforced here rather than trusted: the provider's "280
@@ -510,12 +676,33 @@ def _creative_dict(item: dict, platform: str, index: int, store: Store,
         return None
     spec = PLATFORM_SPECS[platform]
     formats = spec["formats"]
+    preferred = getattr(campaign, "creative_format", None)
     fmt = item.get("format") if item.get("format") in formats else formats[index % len(formats)]
-    body = _sentence_trim(str(item.get("body") or ""), spec["body_limit"])
+    if index == 0 and preferred in formats:
+        # The seller's chosen shape leads for every platform that offers
+        # it; the second creative keeps the platform's other shape.
+        fmt = preferred
+    # The tracked link is appended by the app at share time (one place, one
+    # link). A link the model wrote itself is dropped here so a caption
+    # never carries the campaign URL twice - or an invented URL.
+    body = _sentence_trim(
+        _URL_RE.sub(" ", str(item.get("body") or "")), spec["body_limit"],
+    )
     if not body:
         return None
     headline = _clean(item.get("headline"), 160)
-    cta = _clean(item.get("cta"), 160)
+    # The seller's own CTA wins when they chose one; otherwise the model's
+    # honest CTA is used.
+    cta = campaign.cta or _clean(item.get("cta"), 160)
+    claim_text = " ".join(x for x in (headline, body, cta) if x)
+    if _unsupported_claim(claim_text, store, products, campaign):
+        return None
+    # A figure in a caption reads as a fact about the product. TikTok
+    # bodies carry production timings ("0-3s", scene lengths), which are
+    # directions to the seller, not claims - so those are exempt.
+    if platform != "tiktok" and _invented_number(
+            claim_text, _seller_facts(store, products, campaign)):
+        return None
     raw_tags = item.get("hashtags")
     tags: list[str] = []
     if isinstance(raw_tags, list):
@@ -527,10 +714,11 @@ def _creative_dict(item: dict, platform: str, index: int, store: Store,
     if not tags:
         tags = _hashtags_for(store, products, platform)
     media = item.get("media") if isinstance(item.get("media"), dict) else {}
+    default_aspect = "9:16" if fmt in ("status", "story", "script", "video_plan") else spec["aspect"]
     media = {
         **{k: v for k, v in media.items() if k in ("template", "slides", "scenes", "palette")},
         "aspect_ratio": media.get("aspect_ratio") if media.get("aspect_ratio") in (
-            "1:1", "9:16", "16:9", "4:5") else spec["aspect"],
+            "1:1", "9:16", "16:9", "4:5") else default_aspect,
     }
     if platform == "tiktok" and fmt in ("script", "video_plan"):
         media.setdefault("duration_seconds", 20)
@@ -542,7 +730,7 @@ def _creative_dict(item: dict, platform: str, index: int, store: Store,
 
 
 def _validate_ai_output(raw: dict, store: Store, products: list[dict],
-                        platforms: list[str]) -> Optional[dict]:
+                        platforms: list[str], campaign: MarketingCampaign) -> Optional[dict]:
     creatives = raw.get("creatives")
     if not isinstance(creatives, list):
         return None
@@ -550,7 +738,7 @@ def _validate_ai_output(raw: dict, store: Store, products: list[dict],
     for platform in platforms:
         mine = [c for c in creatives if isinstance(c, dict) and c.get("platform") == platform]
         for i, item in enumerate(mine[:2]):
-            creative = _creative_dict(item, platform, i, store, products)
+            creative = _creative_dict(item, platform, i, store, products, campaign)
             if creative:
                 out.append(creative)
     # Every requested platform must have at least one usable creative,
@@ -592,16 +780,16 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
     # in (physical stores only) and where the store delivers (either kind).
     premises = _premises(store)
     coverage = _coverage(store)
-    shop_line = (f"Duka la {store.name}" if sw else f"{store.name}")
+    shop_line = store.name
     delivery = _coverage_sentence(store, sw)
     if sw:
-        lead = f"{name} ipo {shop_line}."
+        lead = f"{name} inapatikana kwenye {shop_line}."
         detail = (f"Bei: {price}. " if price else "") + (f"{delivery} " if delivery else "")
-        cta = "Fungua kiungo kuona zaidi."
+        cta = campaign.cta or "Fungua kiungo kuona zaidi."
     else:
-        lead = f"{name} is available at {store.name}."
+        lead = f"{name} is available at {shop_line}."
         detail = (f"Price: {price}. " if price else "") + (f"{delivery} " if delivery else "")
-        cta = "Open the link to see more."
+        cta = campaign.cta or "Open the link to see more."
     description = (primary or {}).get("description") or (store.description or "")
     description = _sentence_trim(description, 180)
     # The discount is the seller's own statement (a discount campaign is
@@ -611,16 +799,16 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
              if campaign.objective == "discount" and campaign.instructions else None)
     out: list[dict] = []
     for platform in platforms:
-        link = campaign_link(store, campaign.link_token, platform)
         tags = _hashtags_for(store, products, platform)
         if platform == "whatsapp":
-            # A chat message: short lines, price and place as bullets, one
-            # link. Read on a phone in a conversation, not a web page.
+            # A chat message: short lines, price and place as bullets. The
+            # tracked link is appended by the app at share time, once.
             lines = [f"*{name}*", lead, "".join(f"• {x}\n" for x in [
                 price,
-                f"At {premises}" if premises else None,
-                _coverage_bullet(store) if coverage and coverage != premises else None,
-            ] if x).strip(), offer, description, f"{cta} {link}"]
+                (f"Tuko {premises}" if sw else f"At {premises}") if premises else None,
+                _coverage_bullet(store, sw)
+                if coverage and coverage != premises else None,
+            ] if x).strip(), offer, description, cta]
             body = "\n".join(x for x in lines if x)
             out.append({
                 "platform": platform, "format": "message",
@@ -640,9 +828,11 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
             # and more visual in tone than the WhatsApp message.
             hook = (f"New at {store.name}: {name}" if campaign.objective != "awareness"
                     else f"Meet {store.name}")
+            # Hashtags live in the creative's own hashtags field; the app
+            # adds them when composing the post. Repeating them in the body
+            # made every shared caption carry them twice.
             body = "\n\n".join(x for x in [
-                hook, detail.strip(), offer, description,
-                f"{cta} {link}", " ".join(f"#{t}" for t in tags),
+                hook, detail.strip(), offer, description, cta,
             ] if x)
             out.append({
                 "platform": platform, "format": "caption",
@@ -669,18 +859,24 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
                 "body": _sentence_trim(
                     "\n".join([
                         f"HOOK (0-3s): {hook}",
-                        f"SCENE 1: Show {name} clearly. On-screen: {name}.",
+                        f"SCENE 1: Show {name} clearly. On-screen: {name}."
+                        + (f" Voice-over: {lead}" if not sw else ""),
                         f"SCENE 2: Show the detail a buyer asks about. On-screen: {price or ''}",
                         f"SCENE 3: {cta}",
                     ]), 1800),
                 "hashtags": tags, "cta": cta,
                 "media": {"aspect_ratio": "9:16", "duration_seconds": 20,
                           "template": "vertical_script",
-                          "scenes": [{"shot": "Product on a clean surface",
-                                      "text": _sentence_trim(name, 50)},
-                                     {"shot": "Close-up detail",
-                                      "text": price or _sentence_trim(lead, 50)},
-                                     {"shot": "Store link card", "text": cta}]},
+                          "scenes": [
+                              {"shot": "Product on a clean surface",
+                               "on_screen_text": _sentence_trim(name, 50),
+                               "voice_over": lead, "seconds": 3},
+                              {"shot": "Close-up detail",
+                               "on_screen_text": price or _sentence_trim(lead, 50),
+                               "voice_over": detail.strip(), "seconds": 5},
+                              {"shot": "Store link card",
+                               "on_screen_text": cta, "voice_over": cta, "seconds": 4},
+                          ]},
             })
             out.append({
                 "platform": platform, "format": "video_plan",
@@ -699,7 +895,6 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
             body = "\n\n".join(x for x in [
                 f"{opening}: {name}.", detail.strip(), offer, description,
                 "Message the shop on BROKA or open the store link below.",
-                link,
             ] if x)
             out.append({
                 "platform": platform, "format": "post",
@@ -716,13 +911,23 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
                 "media": {"aspect_ratio": "9:16", "template": "bold_offer"},
             })
         else:  # x
-            body = _sentence_trim(f"{name} at {store.name}. {price or ''} {offer or ''} {link}", 280)
+            body = _sentence_trim(f"{name} at {store.name}. {price or ''} {offer or ''}", 200)
             out.append({
                 "platform": platform, "format": "post",
                 "headline": None, "body": body,
                 "hashtags": tags, "cta": cta,
                 "media": {"aspect_ratio": "16:9", "template": "link_card"},
             })
+    # The seller's preferred shape leads wherever the platform offers it.
+    # Both shapes are still written: a WhatsApp seller gets a message and
+    # a status, with the chosen one first.
+    if campaign.creative_format:
+        ordered: list[dict] = []
+        for platform in platforms:
+            mine = [c for c in out if c["platform"] == platform]
+            ordered.extend(c for c in mine if c["format"] == campaign.creative_format)
+            ordered.extend(c for c in mine if c["format"] != campaign.creative_format)
+        out = ordered
     return out
 
 
@@ -940,6 +1145,8 @@ class MarketingService:
             "tone": campaign.tone,
             "language": campaign.language,
             "instructions": campaign.instructions,
+            "cta": campaign.cta,
+            "creative_format": campaign.creative_format,
             "product_ids": self._json_list(campaign.product_ids),
             "products": products,
             "platforms": platforms,
@@ -1041,6 +1248,16 @@ class MarketingService:
                 detail="Describe the real discount (for example \"10% off until Friday\") - "
                        "BROKA won't invent one.",
             )
+        creative_format = _clean(data.get("creative_format"), 24)
+        if creative_format:
+            if creative_format not in ALL_FORMATS:
+                raise HTTPException(status_code=400, detail="Choose a creative format from the list.")
+            if not any(creative_format in PLATFORM_SPECS[p]["formats"] for p in platforms):
+                raise HTTPException(
+                    status_code=400,
+                    detail="That format isn't available on the platforms you chose. "
+                           "Pick a format one of them offers.",
+                )
         title = _clean(data.get("title"), MAX_TITLE)
         if not title:
             title = (f"Promote {len(product_ids)} products" if len(product_ids) > 1
@@ -1049,6 +1266,7 @@ class MarketingService:
             store_id=store.id, owner_id=owner_id, title=title, objective=objective,
             audience=_clean(data.get("audience"), MAX_AUDIENCE), tone=tone,
             language=language, instructions=instructions,
+            cta=_clean(data.get("cta"), 160), creative_format=creative_format,
             product_ids=json.dumps(product_ids), platforms=json.dumps(platforms),
             status="draft", link_token="k" + secrets.token_urlsafe(12),
         )
@@ -1080,7 +1298,9 @@ class MarketingService:
             try:
                 raw_text = await (_call_gemini(prompt) if provider == "gemini"
                                   else _call_deepseek(prompt))
-                validated = _validate_ai_output(_json_from(raw_text), store, products, platforms)
+                validated = _validate_ai_output(
+                    _json_from(raw_text), store, products, platforms, campaign,
+                )
                 if validated:
                     creatives = validated["creatives"]
                     plan = validated["plan"] or _template_plan(
@@ -1108,8 +1328,21 @@ class MarketingService:
             # edited posts is refused rather than silently replaced.
             raise GenerationUnavailable("unusable provider output")
         if not creatives:
+            # Either no provider is configured, or its answer failed the
+            # output checks above. Both are a template campaign: the
+            # generation record must say so, or the studio would credit
+            # the model with copy it never wrote.
             creatives = _template_creatives(store, campaign, products, platforms)
             plan = plan or _template_plan(store, products, platforms, campaign.language)
+            source = "template"
+            generation = {
+                "provider": "template", "fallback": True,
+                "reason": ("The AI provider didn't answer usefully; this campaign was "
+                           "written from your product details."
+                           if provider else
+                           "No AI provider is configured; this campaign was written "
+                           "from your product details."),
+            }
 
         # Replace the generated set. Editing happens afterwards on the new
         # rows; nothing is silently overwritten by a reload.
@@ -1140,11 +1373,17 @@ class MarketingService:
         # no image, which the studio already handles.
         await self.db.commit()
 
-        # One downloadable image per campaign, built from the first real
-        # product photo. A campaign without products (store introduction)
-        # still gets a poster when the store has a cover/photo.
-        if rows:
-            await self._refresh_poster(store, rows[0], products)
+        # One downloadable image per platform, built from the first real
+        # product photo, so every destination gets a saveable creative -
+        # not just whichever platform happened to be generated first. A
+        # campaign without products (store introduction) still gets a
+        # poster when the store has a cover/photo.
+        seen_platforms: set[str] = set()
+        for row in rows:
+            if row.platform in seen_platforms:
+                continue
+            seen_platforms.add(row.platform)
+            await self._refresh_poster(store, row, products)
             await self.db.commit()
 
     async def _refresh_poster(self, store: Store, creative: MarketingCreative,
@@ -1262,10 +1501,24 @@ class MarketingService:
         )).scalar_one_or_none()
         if creative is None:
             raise HTTPException(status_code=404, detail="Creative not found")
+        # Limits are the platform's, not one blanket number: a saved
+        # creative must be pasteable into the network it names. Silently
+        # truncating would let the seller believe the whole caption saved.
+        spec = PLATFORM_SPECS.get(creative.platform)
         if "body" in data:
-            body = _clean(data.get("body"), 2200)
+            # Line breaks are the seller's own shape - bullets in a message,
+            # scenes in a script - so only the spaces inside each line are
+            # normalised.
+            body = _multiline(data.get("body"))
+            limit = int(spec["body_limit"]) if spec else 2200
             if not body:
                 raise HTTPException(status_code=400, detail="The caption can't be empty.")
+            if len(body) > limit:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Keep this {creative.platform} copy under {limit} characters "
+                           f"(it is {len(body)}).",
+                )
             creative.body = body
         if "headline" in data:
             creative.headline = _clean(data.get("headline"), 160)
@@ -1275,8 +1528,18 @@ class MarketingService:
             raw = data.get("hashtags") or []
             if not isinstance(raw, list):
                 raise HTTPException(status_code=400, detail="Hashtags must be a list.")
+            maximum = int(spec["hashtags"]) if spec else 12
+            if len(raw) > maximum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{creative.platform} takes at most {maximum} hashtags.",
+                )
             tags = [t.strip().lstrip("#") for t in raw if isinstance(t, str)]
-            tags = [t for t in tags if _SAFE_HASHTAG.match(t)][:12]
+            if len(tags) != len(raw) or any(not _SAFE_HASHTAG.match(t) for t in tags):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Each hashtag must be letters, numbers or underscores, without spaces.",
+                )
             creative.hashtags = json.dumps(tags)
         creative.updated_at = datetime.utcnow()
         redraw = bool(creative.asset_id) and bool({"headline", "body", "cta"} & set(data))
@@ -1308,6 +1571,20 @@ class MarketingService:
             campaign.instructions = _clean(data.get("instructions"), MAX_INSTRUCTIONS)
         if "audience" in data:
             campaign.audience = _clean(data.get("audience"), MAX_AUDIENCE)
+        if "cta" in data:
+            campaign.cta = _clean(data.get("cta"), 160)
+        if "creative_format" in data:
+            creative_format = _clean(data.get("creative_format"), 24)
+            platforms = [p for p in self._json_list(campaign.platforms) if p in PLATFORMS]
+            if creative_format and (
+                creative_format not in ALL_FORMATS
+                or not any(creative_format in PLATFORM_SPECS[p]["formats"] for p in platforms)
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="That format isn't available on this campaign's platforms.",
+                )
+            campaign.creative_format = creative_format
         campaign.updated_at = datetime.utcnow()
         await self.db.commit()
         return await self._payload(store, campaign)
@@ -1420,6 +1697,30 @@ class MarketingService:
                 detail="There is no text to improve yet. Write a first version, then ask for suggestions.",
             )
 
+        # The field's real limit, so a suggestion can actually be saved in
+        # the normal editor. A "title" of 300 characters is not a title.
+        field_limit = {
+            "title": 120, "description": 2000, "caption": 2200, "store_description": 1000,
+        }[field]
+        products: list[dict] = []
+        if listing is not None:
+            try:
+                attributes = json.loads(listing.attributes or "{}")
+            except (TypeError, ValueError):
+                attributes = {}
+            products.append({
+                "name": listing.name or "",
+                "description": (listing.description or "")[:600],
+                "category": listing.category or "",
+                "condition": listing.condition or "",
+                "price": float(listing.price) if listing.price is not None else None,
+                "price_unit": listing.price_unit,
+                "brand": next(
+                    (str(v) for k, v in attributes.items() if "brand" in k.lower() and v),
+                    None,
+                ) if isinstance(attributes, dict) else None,
+            })
+
         if not _provider_available():
             return {
                 "field": field, "language": language,
@@ -1459,9 +1760,17 @@ class MarketingService:
             for item in (parsed.get("suggestions") or [])[:3]:
                 if not isinstance(item, dict):
                     continue
-                text = _clean(item.get("text"), 2200)
-                if text:
-                    suggestions.append({"text": text, "why": _clean(item.get("why"), 160)})
+                text = _multiline(item.get("text"))
+                if not text or len(text) > field_limit:
+                    continue
+                # The prompt asks for no new facts; the model can still add
+                # one. Nothing reaches the seller if it invents a warranty,
+                # a price, a figure or a shop they don't have.
+                if _unsupported_claim(
+                    text, store, products, extra_facts=current,
+                ) or _invented_number(text, f"{current} {json.dumps(facts)}"):
+                    continue
+                suggestions.append({"text": text, "why": _clean(item.get("why"), 160)})
             if suggestions:
                 return {"field": field, "language": language, "suggestions": suggestions,
                         "available": True, "provider": provider}

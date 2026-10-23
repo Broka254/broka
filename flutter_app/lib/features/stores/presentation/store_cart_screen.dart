@@ -482,8 +482,8 @@ class _CheckoutBar extends StatelessWidget {
             _GradientPill(
               key: const Key('cart-checkout'),
               onTap: onCheckout,
-              icon: Icons.lock_rounded,
-              label: 'Checkout',
+              icon: Icons.handshake_rounded,
+              label: 'Review items',
             ),
           ]),
         ),
@@ -519,9 +519,11 @@ class _GradientPill extends StatelessWidget {
       );
 }
 
-/// Checkout for a cart of several products: each one is paid in its own
-/// deal room, so the sheet lists them with a Pay button each, and ticks
-/// the ones already opened.
+/// A cart of several products: each one is agreed in its own deal room, so
+/// the sheet lists them with an Open deal button each, and ticks the ones
+/// already opened. Nothing here collects a payment - BROKA holds no money
+/// for a store purchase, and an action labelled "Pay" must not merely open
+/// a conversation.
 class _CheckoutSheet extends StatefulWidget {
   const _CheckoutSheet({required this.storeName, required this.items, required this.onPay});
   final String storeName;
@@ -550,7 +552,7 @@ class _CheckoutSheetState extends State<_CheckoutSheet> {
                   color: BrokaColors.border, borderRadius: BorderRadius.circular(2))),
             ),
             const SizedBox(height: 16),
-            Text('Checkout · ${widget.storeName}', maxLines: 2, overflow: TextOverflow.ellipsis,
+            Text('Your items · ${widget.storeName}', maxLines: 2, overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: BrokaColors.textHigh, fontSize: 19,
                     fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
@@ -601,7 +603,7 @@ class _CheckoutSheetState extends State<_CheckoutSheet> {
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
                           ),
-                          child: const Text('Pay'),
+                          child: const Text('Open deal'),
                         ),
                 ]),
               ),

@@ -811,16 +811,20 @@ void main() {
       expect(find.textContaining('escrow'), findsNothing);
     });
 
-    testWidgets('checkout pays each product in its own deal room', (tester) async {
+    testWidgets('reviewing a cart opens each product in its own deal room', (tester) async {
       final opened = await pumpCart(
           tester, [item('l1', 'Samsung A15', 18000), item('l2', 'Case', 500)]);
+      expect(find.text('Review items'), findsOneWidget);
       await tester.tap(find.byKey(const Key('cart-checkout')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('checkout-sheet')), findsOneWidget);
-      expect(find.text('Checkout · Clanix Electronics'), findsOneWidget);
+      expect(find.text('Your items · Clanix Electronics'), findsOneWidget);
       expect(find.textContaining('pay the store directly once you have seen it'), findsOneWidget);
       expect(find.textContaining('pay through an escrow service'), findsOneWidget);
       expect(find.textContaining('BROKA escrow'), findsNothing);
+      // Opening a deal room is not a payment: it must never say "Pay".
+      expect(find.text('Pay'), findsNothing);
+      expect(find.text('Open deal'), findsNWidgets(2));
 
       await tester.tap(find.byKey(const Key('checkout-pay-l2')));
       await tester.pumpAndSettle();

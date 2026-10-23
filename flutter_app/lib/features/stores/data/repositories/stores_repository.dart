@@ -342,6 +342,8 @@ class StoresRepository {
     String tone = 'friendly',
     String language = 'en',
     String? instructions,
+    String? cta,
+    String? creativeFormat,
     bool generate = true,
   }) =>
       _guard(() async => MarketingCampaign.fromJson(await _client.post(
@@ -356,6 +358,8 @@ class StoresRepository {
               'language': language,
               if (instructions != null && instructions.trim().isNotEmpty)
                 'instructions': instructions.trim(),
+              if (cta != null && cta.trim().isNotEmpty) 'cta': cta.trim(),
+              if (creativeFormat != null) 'creative_format': creativeFormat,
               'generate': generate,
             },
           ) as Map<String, dynamic>));

@@ -376,6 +376,11 @@ class Listing(Base):
     location_subcounty  = Column(String, nullable=True)
     listing_type  = Column(Enum(ListingType), default=ListingType.direct)
     status        = Column(Enum(ListingStatus), default=ListingStatus.active, index=True)
+    # When the seller archived this product from My Store. Archiving and
+    # deleting both end at status "cancelled", but only an archived row is
+    # listed back to its owner (StoreService.list_owner_listings); a delete
+    # stays "for good" as its docstring promises.
+    archived_at   = Column(DateTime, nullable=True)
     views         = Column(Integer, default=0)
     target_bidders= Column(Integer, nullable=True)
     auction_date  = Column(DateTime, nullable=True)
@@ -1836,6 +1841,16 @@ async def _init_db_impl():
             "ALTER TABLE stores ADD COLUMN opening_hours TEXT",
             "ALTER TABLE stores ADD COLUMN service_areas TEXT",
             "ALTER TABLE stores ADD COLUMN delivery_note VARCHAR(200)",
+            # Marketing Studio (2026-10-23): the seller's chosen call to
+            # action and preferred creative shape, persisted with the
+            # campaign. NULL on campaigns saved before the fields existed -
+            # they keep generating with the default wording and format.
+            "ALTER TABLE marketing_campaigns ADD COLUMN cta VARCHAR(160)",
+            "ALTER TABLE marketing_campaigns ADD COLUMN creative_format VARCHAR(24)",
+            # My Store archive (2026-10-23): archive and delete both set
+            # status "cancelled"; this marker is what tells an archived
+            # product - still listed for its owner - from a deleted one.
+            "ALTER TABLE listings ADD COLUMN archived_at TIMESTAMP",
             # Review attribution (2026-10-19): a deal review names the store
             # whose product was sold, so one shop's record cannot lift
             # another's. NULL on chat-only reviews (no listing, so no honest

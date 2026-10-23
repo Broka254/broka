@@ -258,8 +258,10 @@ class StoreSetupController extends ChangeNotifier {
         if (storeType == StoreType.physical) ...[
           StoreSetupStep.location,
           StoreSetupStep.hours,
-        ] else
-          StoreSetupStep.coverage,
+        ],
+        // Where a shop delivers is a separate fact from where it stands:
+        // a physical store can serve a county or the whole country too.
+        StoreSetupStep.coverage,
         StoreSetupStep.logo,
         if (storeType == StoreType.physical) StoreSetupStep.photos,
         StoreSetupStep.email,

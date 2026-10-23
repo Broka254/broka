@@ -224,9 +224,12 @@ def open_status(schedule: Optional[dict], now: Optional[datetime] = None) -> dic
                     "opens_at": None, "closes_at": _fmt(close_t), "next_day": None}
 
     # Closed: find the next opening, today later or the first open day ahead.
+    # A crossing-midnight window still opens later today (15:00 before a
+    # 20:00-02:00 shift); skipping it because it crosses midnight would
+    # claim the shop is shut until next week.
     if value and not value.get("all_day"):
-        open_m, _, crosses = _window(today, value)
-        if minutes < open_m and not crosses:
+        open_m, _, _ = _window(today, value)
+        if minutes < open_m:
             open_t = _parse_time(value["open"], today)
             return {"state": "closed", "label": f"Closed now · opens {_fmt(open_t)}",
                     "opens_at": _fmt(open_t), "closes_at": None, "next_day": None}

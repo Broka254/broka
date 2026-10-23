@@ -1219,16 +1219,28 @@ class _PicturesCard extends StatelessWidget {
       for (final p in store.photoImages) (thumb: p.medium, large: p.large),
     ];
     final legacyCount = store.photoImages.isEmpty ? store.photos.length : 0;
+    // A virtual store has no shopfront to photograph. Its logo is the whole
+    // visual identity; asking for "photos of your shop" would be a task it
+    // can never complete honestly.
+    final needsShopPhotos = !store.isVirtual;
     return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        const Expanded(child: Text('Your pictures', style: TextStyle(
+        Expanded(child: Text(needsShopPhotos ? 'Your pictures' : 'Your logo', style: const TextStyle(
             color: BrokaColors.textHigh, fontWeight: FontWeight.w800, fontSize: 15))),
-        TextButton(
-          key: const Key('edit-photos'),
-          onPressed: () => onEdit(StoreSetupStep.photos),
-          child: const Text('Change photos', style: TextStyle(
-              color: BrokaColors.gold, fontWeight: FontWeight.w700, fontSize: 12.5)),
-        ),
+        if (needsShopPhotos)
+          TextButton(
+            key: const Key('edit-photos'),
+            onPressed: () => onEdit(StoreSetupStep.photos),
+            child: const Text('Change photos', style: TextStyle(
+                color: BrokaColors.gold, fontWeight: FontWeight.w700, fontSize: 12.5)),
+          )
+        else
+          TextButton(
+            key: const Key('edit-logo'),
+            onPressed: () => onEdit(StoreSetupStep.logo),
+            child: const Text('Change logo', style: TextStyle(
+                color: BrokaColors.gold, fontWeight: FontWeight.w700, fontSize: 12.5)),
+          ),
       ]),
       const SizedBox(height: 2),
       Row(children: [
@@ -1254,54 +1266,58 @@ class _PicturesCard extends StatelessWidget {
             ]),
           ),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: shop.isEmpty
-              ? TextButton.icon(
-                  key: const Key('add-shop-photos'),
-                  onPressed: () => onEdit(StoreSetupStep.photos),
-                  icon: Icon(legacyCount > 0
-                          ? Icons.photo_library_outlined
-                          : Icons.add_a_photo_outlined,
-                      size: 16, color: BrokaColors.gold),
-                  label: Text(
-                      legacyCount > 0
-                          ? '$legacyCount shop photo${legacyCount == 1 ? '' : 's'} '
-                              '- change them'
-                          : 'Add photos of your shop',
-                      textAlign: TextAlign.start,
-                      style: const TextStyle(color: BrokaColors.gold, fontSize: 12.5)),
-                )
-              : SizedBox(
-                  height: 56,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: shop.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 8),
-                    itemBuilder: (_, i) => GestureDetector(
-                      key: Key('shop-photo-$i'),
-                      onTap: () => onEdit(StoreSetupStep.photos),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: SizedBox(
-                          width: 74, height: 56,
-                          child: BrokaImage(shop[i].thumb, fit: BoxFit.cover),
+        if (needsShopPhotos) ...[
+          const SizedBox(width: 12),
+          Expanded(
+            child: shop.isEmpty
+                ? TextButton.icon(
+                    key: const Key('add-shop-photos'),
+                    onPressed: () => onEdit(StoreSetupStep.photos),
+                    icon: Icon(legacyCount > 0
+                            ? Icons.photo_library_outlined
+                            : Icons.add_a_photo_outlined,
+                        size: 16, color: BrokaColors.gold),
+                    label: Text(
+                        legacyCount > 0
+                            ? '$legacyCount shop photo${legacyCount == 1 ? '' : 's'} '
+                                '- change them'
+                            : 'Add photos of your shop',
+                        textAlign: TextAlign.start,
+                        style: const TextStyle(color: BrokaColors.gold, fontSize: 12.5)),
+                  )
+                : SizedBox(
+                    height: 56,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: shop.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (_, i) => GestureDetector(
+                        key: Key('shop-photo-$i'),
+                        onTap: () => onEdit(StoreSetupStep.photos),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: SizedBox(
+                            width: 74, height: 56,
+                            child: BrokaImage(shop[i].thumb, fit: BoxFit.cover),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-        ),
+          ),
+        ],
       ]),
       const SizedBox(height: 10),
       Text(
-        shop.isNotEmpty
-            ? '${shop.length} picture${shop.length == 1 ? '' : 's'} of your shop. '
-                'A dull or unclear one is often why a listing is not selling.'
-            : legacyCount > 0
-                ? 'Your shop photos were uploaded by an older version of BROKA. '
-                    'Take new ones to replace them.'
-                : "Buyers see BROKA's logo and no photos of your shop yet.",
+        !needsShopPhotos
+            ? 'Your logo appears at the top of your store and on every link you share.'
+            : shop.isNotEmpty
+                ? '${shop.length} picture${shop.length == 1 ? '' : 's'} of your shop. '
+                    'A dull or unclear one is often why a listing is not selling.'
+                : legacyCount > 0
+                    ? 'Your shop photos were uploaded by an older version of BROKA. '
+                        'Take new ones to replace them.'
+                    : "Buyers see BROKA's logo and no photos of your shop yet.",
         style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
       ),
     ]));
@@ -1333,15 +1349,18 @@ class _SetupChecklist extends StatelessWidget {
         hint: 'It sits at the top of your store and on every link you share',
         onTap: () => onEdit(StoreSetupStep.logo),
       ),
-      (
-        key: 'cover',
-        // A shop photo, not the cover: since 2026-10-16 at least one is
-        // what opens a store, so this is the item that says what's missing.
-        done: store.photoImages.isNotEmpty || store.photos.isNotEmpty,
-        title: 'Add photos of your shop',
-        hint: 'At least one real photo of your shop is needed',
-        onTap: () => onEdit(StoreSetupStep.photos),
-      ),
+      if (!store.isVirtual)
+        (
+          key: 'cover',
+          // A shop photo, not the cover: since 2026-10-16 at least one is
+          // what opens a store, so this is the item that says what's missing.
+          // A virtual store has no shopfront to photograph and is never
+          // asked for one.
+          done: store.photoImages.isNotEmpty || store.photos.isNotEmpty,
+          title: 'Add photos of your shop',
+          hint: 'At least one real photo of your shop is needed',
+          onTap: () => onEdit(StoreSetupStep.photos),
+        ),
       (
         key: 'about',
         done: (store.description ?? '').trim().isNotEmpty,
@@ -1427,6 +1446,7 @@ Color _stateColor(StoreProductState state) => switch (state) {
       StoreProductState.hidden => BrokaColors.warning,
       StoreProductState.inDeal => BrokaColors.neonBlue,
       StoreProductState.sold => BrokaColors.textMid,
+      StoreProductState.archived => BrokaColors.textMid,
     };
 
 // BrokaColors.gold is under 4:1 on a card; this lighter violet reads at 7:1
@@ -2026,6 +2046,11 @@ class _ProductsTabState extends State<_ProductsTab> {
           Icons.sell_outlined,
           'Nothing sold yet',
           'Products show here once their deal is complete.'),
+      StoreProductState.archived => (
+          Icons.archive_outlined,
+          'Nothing archived',
+          'Products you take out of the store stay here, out of buyers\' sight '
+              'but still on BROKA for good.'),
       _ => (
           Icons.storefront_outlined,
           'Nothing live right now',
@@ -2150,6 +2175,7 @@ String? _stateNote(StoreProduct p) => switch (p.state) {
           ? "Its listing time ran out, so buyers can't see it"
           : "Not paid for yet, so buyers can't see it",
       StoreProductState.inDeal => 'A buyer agreed a deal on it',
+      StoreProductState.archived => "Out of your store - buyers can't see it",
       StoreProductState.live when p.endingSoon && p.paidUntil != null =>
         'Listing time ends ${_shortDate(p.paidUntil!)}',
       _ => null,
@@ -2251,6 +2277,26 @@ class _ProductRow extends StatelessWidget {
                   if (note != null)
                     Text(note, style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
                 ]),
+                // The server's own checks, in its words: a product missing a
+                // photo, a category or a real description is the kind that
+                // never sells, and the owner cannot guess which it is.
+                if (p.actionableIssues.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 1),
+                      child: Icon(Icons.error_outline_rounded,
+                          size: 13, color: BrokaColors.warning),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(child: Text(
+                      p.actionableIssues.map((i) => i.label).join(' · '),
+                      maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: BrokaColors.warning,
+                          fontSize: 11.5, height: 1.35),
+                    )),
+                  ]),
+                ],
               ])),
               if (onPay != null)
                 TextButton(
@@ -2283,6 +2329,7 @@ class _ProductActionsSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = product;
     final hidden = p.state == StoreProductState.hidden;
+    final archived = p.state == StoreProductState.archived;
     Widget tile(_ProductAction action, IconData icon, String title,
             {String? subtitle, Color? color}) =>
         ListTile(
@@ -2334,18 +2381,32 @@ class _ProductActionsSheet extends StatelessWidget {
           if (p.priceEditable)
             tile(_ProductAction.price, Icons.sell_outlined, 'Change the price',
                 subtitle: 'Up to twice a week'),
-          tile(_ProductAction.improve, Icons.auto_fix_high_rounded,
-              'Improve the copy with AI',
-              subtitle: 'Suggestions for the title or description - nothing changes until you save'),
+          if (!archived)
+            tile(_ProductAction.improve, Icons.auto_fix_high_rounded,
+                'Improve the copy with AI',
+                subtitle: 'Suggestions for the title or description - nothing changes until you save'),
           if (p.state == StoreProductState.live)
             tile(_ProductAction.share, Icons.ios_share_rounded, 'Share this product',
                 subtitle: 'WhatsApp, your status, SMS and more'),
           tile(_ProductAction.insights, Icons.insights_rounded, "See how it's doing"),
-          tile(_ProductAction.view, Icons.visibility_outlined, 'See it as buyers do'),
-          tile(_ProductAction.remove, Icons.remove_circle_outline_rounded,
-              'Take it out of the store',
-              subtitle: 'It stays on BROKA as your own listing',
-              color: BrokaColors.textMid),
+          // An archived product is no longer for sale anywhere, so there is
+          // no buyer view to open and nothing left to take out.
+          if (!archived)
+            tile(_ProductAction.view, Icons.visibility_outlined, 'See it as buyers do'),
+          if (!archived)
+            tile(_ProductAction.remove, Icons.remove_circle_outline_rounded,
+                'Take it out of the store',
+                subtitle: 'It stays on BROKA as your own listing',
+                color: BrokaColors.textMid),
+          if (archived)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 6, 20, 4),
+              child: Text(
+                'This product was taken off sale, so buyers can no longer see it. '
+                "Its past deals and reviews are kept.",
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
+              ),
+            ),
           const SizedBox(height: 8),
         ]),
       ),

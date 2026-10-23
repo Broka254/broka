@@ -868,7 +868,9 @@ class TestOwnerProducts:
             "Live phone": "live", "Unpaid charger": "hidden", "Expired cable": "hidden",
             "Phone in a deal": "in_deal", "Sold laptop": "sold",
         }
-        assert body["counts"] == {"live": 1, "hidden": 2, "in_deal": 1, "sold": 1, "all": 5}
+        assert body["counts"] == {
+            "live": 1, "hidden": 2, "in_deal": 1, "sold": 1, "archived": 0, "all": 5,
+        }
         fees = {p["name"]: p["listing_fee"]["status"] for p in body["items"]}
         assert fees["Unpaid charger"] == "unpaid" and fees["Expired cable"] == "expired"
         assert all(p["listing_fee"]["needs_payment"] for p in body["items"]
@@ -890,7 +892,9 @@ class TestOwnerProducts:
 
         phones = await get(search="phone")
         assert {p["name"] for p in phones["items"]} == {"Live phone", "Phone in a deal"}
-        assert phones["counts"] == {"live": 1, "hidden": 0, "in_deal": 1, "sold": 0, "all": 2}
+        assert phones["counts"] == {
+            "live": 1, "hidden": 0, "in_deal": 1, "sold": 0, "archived": 0, "all": 2,
+        }
 
         # "_" is text, not a wildcard (api/core/text_search.py).
         assert (await get(search="_"))["counts"]["all"] == 0

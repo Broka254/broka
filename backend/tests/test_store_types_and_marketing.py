@@ -3,12 +3,14 @@ catalogue tools, and the AI Marketing Studio.
 
 Every test drives the real HTTP API against a real (SQLite) database, as the
 app and the web storefront do - no frontend state stands in for a stored
-record. The AI provider is always absent or instructed to fail here: the
-studio's template writer is part of the feature, and a test that needed a
-paid key could not run in CI.
+record. The AI provider is never called for real here: it is absent, made to
+fail, or replaced with canned output. The studio's template writer and its
+output checks are part of the feature, and a test that needed a paid key
+could not run in CI.
 """
 import io
 import itertools
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -147,6 +149,21 @@ class TestStoreTypes:
         assert r.status_code == 400
         assert "photo" in r.json()["detail"].lower()
 
+    async def test_a_physical_store_also_needs_a_place_buyers_can_go(self, client):
+        _, headers = await _register(client)
+        # A photo is not an address. An explicit physical store with no
+        # county, area, description or pin would publish "Kenya" as its
+        # premises, so the server refuses it rather than inventing one.
+        r = await _create_store(
+            client, headers, name="Photo Only", slug="photo-only",
+            store_type="physical", photos=[_SHOP_PHOTO],
+        )
+        assert r.status_code == 400
+        assert "county" in r.json()["detail"].lower()
+        # Nothing was half-created by the refused request.
+        listed = (await client.get("/stores", params={"search": "Photo Only"})).json()
+        assert listed == []
+
     async def test_an_old_client_gets_a_physical_store(self, client):
         _, headers = await _register(client)
         store = await _store(client, headers, name="Legacy Shop", slug="legacy-shop")
@@ -264,11 +281,46 @@ class TestStoreTypes:
         # The owner's own data isn't destroyed by the switch...
         assert owner_view["county"] == "Nairobi"
         assert owner_view["lat"] == -1.285
-        # ...and the public page stops claiming premises or a map pin.
+        # ...and the public page stops claiming premises, an address or a
+        # distance: a client that reads county directly must not draw it.
         public = (await client.get(f"/stores/{store['id']}")).json()
-        assert public["county"] == "Nairobi"
+        assert public["county"] is None
+        assert public["subcounty"] is None
+        assert public["location_description"] is None
         assert public["has_location"] is False
         assert public["approx_lat"] is None
+        # Even with the buyer's coordinates, an online-only shop has no
+        # distance to them - and no place in a "nearest" rail.
+        listed = (await client.get("/stores", params={
+            "search": "Shop And Online", "lat": -1.3, "lng": 36.8,
+        })).json()
+        assert [s["id"] for s in listed] == [store["id"]]
+        assert listed[0]["distance_km"] is None and listed[0]["distance_label"] is None
+        assert listed[0]["county"] is None
+
+    async def test_a_virtual_store_hides_stored_hours_from_buyers(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Hours Then Online", slug="hours-then-online",
+            store_type="physical", county="Nairobi", subcounty="Westlands",
+            photos=[_SHOP_PHOTO], opening_hours=WORKING_WEEK,
+        )
+        # The physical store publishes its week...
+        physical = (await client.get(f"/stores/{store['id']}")).json()
+        assert physical["opening_hours_available"] is True
+        assert physical["opening_hours"]["mon"] == {"open": "08:00", "close": "18:00"}
+
+        r = await client.patch(f"/stores/{store['id']}", json={"store_type": "virtual"},
+                               headers=headers)
+        assert r.status_code == 200, r.text
+        # The owner still sees the stored schedule they can edit or restore.
+        assert r.json()["opening_hours_available"] is True
+        # An online-only shop has no door: stored hours from before the
+        # switch must not be published as if it did.
+        public = (await client.get(f"/stores/{store['id']}")).json()
+        assert public["opening_hours_available"] is False
+        assert public["opening_hours"] is None
+        assert public["open_status"]["state"] == "unknown"
 
     async def test_the_directory_lists_both_kinds_and_filters_by_type(self, client):
         _, virtual_owner = await _register(client)
@@ -280,6 +332,7 @@ class TestStoreTypes:
         physical = await _store(
             client, physical_owner, name="Directory Physical", slug="directory-physical",
             store_type="physical", category="Electronics", photos=[_SHOP_PHOTO],
+            county="Nairobi", subcounty="Westlands",
         )
         all_items = (await client.get("/stores", params={"search": "Directory"})).json()
         ids = {s["id"] for s in all_items}
@@ -352,6 +405,28 @@ class TestOpeningHoursRules:
         now = datetime(2026, 10, 27, 0, 0, tzinfo=timezone.utc)   # Tue 03:00
         assert opening_hours.open_status(schedule, now)["state"] == "closed"
 
+    def test_a_midnight_window_that_has_not_opened_yet_is_today_not_next_week(self):
+        # Friday 20:00-02:00, checked at Friday 15:00. The shop is closed,
+        # but it opens in five hours - saying "opens Fri" a week away (or
+        # scanning past today because the window crosses midnight) is wrong.
+        schedule = opening_hours.normalize({"fri": {"open": "20:00", "close": "02:00"}})
+        now = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)  # Fri 15:00 Nairobi
+        status = opening_hours.open_status(schedule, now)
+        assert status["state"] == "closed"
+        assert status["opens_at"] == "20:00"
+        assert status["next_day"] is None
+        assert status["label"] == "Closed now · opens 20:00"
+
+    def test_after_a_midnight_window_closes_the_next_opening_is_named(self):
+        # Saturday 03:00, Friday's window (20:00-02:00) ended an hour ago.
+        # The next opening is next Friday - clearly not today.
+        schedule = opening_hours.normalize({"fri": {"open": "20:00", "close": "02:00"}})
+        now = datetime(2026, 10, 31, 0, 0, tzinfo=timezone.utc)  # Sat 03:00 Nairobi
+        status = opening_hours.open_status(schedule, now)
+        assert status["state"] == "closed"
+        assert status["next_day"] == "Fri"
+        assert "20:00" in status["label"]
+
     def test_the_public_week_has_all_seven_days_and_closed_days(self):
         rows = opening_hours.weekly_schedule(opening_hours.normalize(WORKING_WEEK))
         assert [r["day"] for r in rows] == list(opening_hours.DAYS)
@@ -365,6 +440,7 @@ class TestOpeningHoursApi:
         _, headers = await _register(client)
         store = await _store(client, headers, name="Hours Shop", slug="hours-shop",
                              store_type="physical", photos=[_SHOP_PHOTO],
+                             county="Nairobi", subcounty="Westlands",
                              opening_hours=WORKING_WEEK)
         public = (await client.get(f"/stores/{store['id']}")).json()
         assert public["opening_hours_available"] is True
@@ -508,6 +584,59 @@ class TestOwnerCatalogue:
         # Archived, not deleted: the row survives, and buyers stop seeing it.
         assert (await client.get(f"/listings/{mine['id']}")).json()["status"] == "cancelled"
 
+    async def test_archived_products_remain_findable_for_their_owner(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Archived Shop", slug="archived-shop")
+        listing = await _listing(client, headers, store["id"], name="Old Stock")
+        assert (await client.post(
+            f"/stores/{store['id']}/manage/listings/bulk",
+            json={"action": "archive", "listing_ids": [listing["id"]]},
+            headers=headers,
+        )).status_code == 200
+
+        url = f"/stores/{store['id']}/manage/listings"
+        everything = (await client.get(url, headers=headers)).json()
+        assert everything["counts"]["archived"] == 1
+        assert everything["counts"]["all"] == 1
+        archived = (await client.get(url, params={"state": "archived"}, headers=headers)).json()
+        assert [item["id"] for item in archived["items"]] == [listing["id"]]
+        assert archived["items"][0]["store_state"] == "archived"
+        # Archived is the only issue left: photo or fee advice on a product
+        # that is no longer for sale would send the seller to fix the wrong
+        # thing.
+        assert archived["items"][0]["health"]["issues"] == [
+            {"code": "archived", "label": "Archived", "fix": "details"},
+        ]
+        # It is not masquerading as a live product in the other filters.
+        assert (await client.get(
+            url, params={"state": "live"}, headers=headers,
+        )).json()["items"] == []
+
+    async def test_deleting_an_archived_product_removes_it_for_good(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Archive Then Delete",
+                             slug="archive-then-delete")
+        listing = await _listing(client, headers, store["id"], name="Gone For Good")
+        url = f"/stores/{store['id']}/manage/listings"
+        assert (await client.post(
+            f"/stores/{store['id']}/manage/listings/bulk",
+            json={"action": "archive", "listing_ids": [listing["id"]]},
+            headers=headers,
+        )).status_code == 200
+        assert (await client.get(url, headers=headers)).json()["counts"]["archived"] == 1
+
+        # Archiving and deleting both set status cancelled. Deleting an
+        # archived product must remove it from Archived too, not leave it
+        # there forever under a softer name.
+        assert (await client.delete(
+            f"/listings/{listing['id']}", headers=headers,
+        )).status_code == 200
+        body = (await client.get(url, headers=headers)).json()
+        assert body["items"] == []
+        assert body["counts"] == {
+            "live": 0, "hidden": 0, "in_deal": 0, "sold": 0, "archived": 0, "all": 0,
+        }
+
     async def test_bulk_archive_refuses_a_product_in_a_deal(self, client):
         _, headers = await _register(client)
         store = await _store(client, headers, name="Deal Shop", slug="deal-shop")
@@ -587,6 +716,169 @@ class TestMarketingCampaigns:
         assert campaign["generation"]["fallback"] is True
         assert all(c["source"] == "template" for c in creatives)
         assert campaign["plan"]
+
+    async def test_template_posts_carry_no_urls_and_the_links_stay_tracked(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Link Shop", slug="link-shop",
+                             store_type="virtual", service_areas=["Nairobi"])
+        listing = await _listing(client, headers, store["id"], name="Link Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+
+        # The tracked link is appended once by the app when sharing. Copy
+        # that already carried its own URL was shared with two links (and
+        # the second was not tracked at all).
+        for creative in campaign["creatives"]:
+            assert "http" not in creative["body"].lower()
+            assert "http" not in (creative["headline"] or "").lower()
+        assert all("http" in link for link in campaign["links"].values())
+        assert len(set(campaign["links"].values())) == len(campaign["platforms"])
+
+    async def test_template_messages_keep_their_bullets_and_script_lines(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Lines Shop", slug="lines-shop")
+        listing = await _listing(client, headers, store["id"], name="Line Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+
+        # A WhatsApp message is read as lines - name, lead, bullets, ask -
+        # and a TikTok script as scenes. Flattening them into one paragraph
+        # is not the same post.
+        message = next(c for c in campaign["creatives"]
+                       if c["platform"] == "whatsapp" and c["format"] == "message")
+        assert "\n" in message["body"]
+        assert "•" in message["body"]
+        script = next(c for c in campaign["creatives"]
+                      if c["platform"] == "tiktok" and c["format"] == "script")
+        assert "\n" in script["body"]
+        assert "HOOK (0-3s)" in script["body"]
+
+    async def test_the_seller_s_cta_and_format_are_saved_and_used(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Format Shop", slug="format-shop")
+        listing = await _listing(client, headers, store["id"], name="Status Item")
+        r = await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(
+                store, listing, platforms=["whatsapp"],
+                cta="Chat with us on BROKA", creative_format="status",
+            ),
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        campaign = r.json()
+        assert campaign["cta"] == "Chat with us on BROKA"
+        assert campaign["creative_format"] == "status"
+        # The chosen shape leads, and the platform's other shape is still
+        # written so the seller has both.
+        assert campaign["creatives"][0]["format"] == "status"
+        message = next(c for c in campaign["creatives"] if c["format"] == "message")
+        assert message["cta"] == "Chat with us on BROKA"
+        assert "Chat with us on BROKA" in message["body"]
+
+        patched = await client.patch(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}",
+            json={"cta": "Message the shop"}, headers=headers,
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["cta"] == "Message the shop"
+        reopened = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=headers,
+        )).json()
+        assert reopened["cta"] == "Message the shop"
+        assert reopened["creative_format"] == "status"
+
+        # A shape none of this campaign's platforms offers is refused, at
+        # creation and on edit, rather than silently ignored.
+        bad = await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["whatsapp"],
+                                creative_format="caption"),
+            headers=headers,
+        )
+        assert bad.status_code == 400
+        assert "format" in bad.json()["detail"].lower()
+        bad_edit = await client.patch(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}",
+            json={"creative_format": "caption"}, headers=headers,
+        )
+        assert bad_edit.status_code == 400
+
+    async def test_x_edits_are_held_to_x_limits(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Short Post Shop", slug="short-post-shop")
+        listing = await _listing(client, headers, store["id"], name="Short Item", price=2500)
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["x"]), headers=headers,
+        )).json()
+        creative = campaign["creatives"][0]
+        url = f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}/creatives/{creative['id']}"
+
+        too_long = await client.patch(url, json={"body": "x" * 201}, headers=headers)
+        assert too_long.status_code == 400
+        assert "200" in too_long.json()["detail"]
+        too_many = await client.patch(
+            url, json={"hashtags": ["one", "two", "three", "four"]}, headers=headers,
+        )
+        assert too_many.status_code == 400
+        assert "3" in too_many.json()["detail"]
+
+        # The app adds the link and hashtags, so the body is kept at 200 -
+        # the whole post still fits X's 280.
+        ok = await client.patch(
+            url, json={"body": "Repriced at KES 2,500. Ask on BROKA.",
+                       "hashtags": ["BROKA", "Kenya", "Solar"]},
+            headers=headers,
+        )
+        assert ok.status_code == 200, ok.text
+        saved = next(c for c in ok.json()["creatives"] if c["id"] == creative["id"])
+        assert saved["body"] == "Repriced at KES 2,500. Ask on BROKA."
+        assert saved["hashtags"] == ["BROKA", "Kenya", "Solar"]
+
+    async def test_a_new_stock_campaign_may_say_in_stock(self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Inventory Shop", slug="inventory-shop")
+        listing = await _listing(client, headers, store["id"], name="Solar Lantern", price=2500)
+
+        async def in_stock(prompt):
+            return json.dumps({
+                "title": "Back in stock",
+                "creatives": [
+                    {"platform": "whatsapp", "format": "message",
+                     "headline": "Solar Lantern",
+                     "body": "Our Solar Lantern is back in stock at KES 2,500. Ask us on BROKA.",
+                     "cta": "Chat with us", "hashtags": []},
+                ],
+                "plan": [],
+            })
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", in_stock)
+
+        announced = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["whatsapp"]), headers=headers,
+        )).json()
+        assert announced["generation"]["fallback"] is False
+        assert announced["creatives"][0]["source"] == "ai"
+        assert "in stock" in announced["creatives"][0]["body"].lower()
+
+        # The same sentence in any other campaign is still an invented
+        # stock claim: the provider output is dropped and the template,
+        # which makes no such claim, covers the campaign.
+        strict = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["whatsapp"],
+                                objective="product"), headers=headers,
+        )).json()
+        assert strict["generation"]["fallback"] is True
+        assert all("in stock" not in c["body"].lower() for c in strict["creatives"])
 
     async def test_a_virtual_store_s_copy_never_claims_premises_it_lacks(self, client):
         _, headers = await _register(client)
@@ -724,6 +1016,26 @@ class TestMarketingCampaigns:
         # The listing itself is untouched.
         assert (await client.get(f"/listings/{listing['id']}")).json()["name"] == "Original Listing Name"
 
+    async def test_editing_a_script_keeps_its_lines(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Script Shop", slug="script-shop",
+                             store_type="virtual", service_areas=["Nairobi"])
+        listing = await _listing(client, headers, store["id"], name="Script Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["tiktok"]), headers=headers,
+        )).json()
+        creative = campaign["creatives"][0]
+        body = "HOOK (0-3s): Look at this.\nSCENE 1: Show it.\nSCENE 2: Open the link."
+        r = await client.patch(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}"
+            f"/creatives/{creative['id']}",
+            json={"body": body}, headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        saved = next(c for c in r.json()["creatives"] if c["id"] == creative["id"])
+        assert saved["body"] == body
+
     async def test_campaigns_are_saved_listed_and_deleted(self, client):
         _, headers = await _register(client)
         store = await _store(client, headers, name="Archive Shop", slug="archive-shop")
@@ -755,6 +1067,29 @@ class TestMarketingCampaigns:
             f"/stores/{store['id']}/marketing/campaigns", headers=headers,
         )).json()["total"] == 0
 
+    async def test_a_campaign_still_opens_after_its_product_leaves_the_store(self, client):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Moving Shop", slug="moving-shop")
+        listing = await _listing(client, headers, store["id"], name="Moving Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+
+        # The seller returns the product to their personal listings, so it
+        # no longer belongs to this store. The campaign is history - it must
+        # still open rather than fail forever on one vanished product.
+        assert (await client.delete(
+            f"/listings/{listing['id']}/store", headers=headers,
+        )).status_code == 200
+
+        reopened = await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=headers,
+        )
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["products"] == []
+        assert reopened.json()["creatives"]
+
     async def test_a_provider_failure_falls_back_without_losing_the_campaign(self, client, monkeypatch):
         _, headers = await _register(client)
         store = await _store(client, headers, name="Fallback Shop", slug="fallback-shop")
@@ -783,6 +1118,136 @@ class TestMarketingCampaigns:
         )
         assert again.status_code == 200
         assert len(again.json()["creatives"]) == len(body["creatives"])
+
+    async def test_ai_copy_with_an_invented_price_is_dropped(self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Claim Shop", slug="claim-shop")
+        listing = await _listing(client, headers, store["id"], name="Solar Lantern", price=2500)
+
+        async def inventing(prompt):
+            return json.dumps({
+                "title": "Solar week",
+                "creatives": [
+                    {"platform": "whatsapp", "format": "message",
+                     "headline": "Huge saving",
+                     "body": "Solar Lantern now KES 9,999. Message us.",
+                     "cta": "Open the link", "hashtags": []},
+                    {"platform": "whatsapp", "format": "status",
+                     "headline": "Solar Lantern",
+                     "body": "Solar Lantern at KES 2,500. Ask on BROKA.",
+                     "cta": "Open the link", "hashtags": []},
+                ],
+                "plan": [],
+            })
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", inventing)
+
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["whatsapp"]), headers=headers,
+        )).json()
+        bodies = [c["body"] for c in campaign["creatives"]]
+        # The invented price never reaches the seller, and the accurate
+        # caption beside it still does.
+        assert all("9,999" not in body for body in bodies)
+        assert any("2,500" in body for body in bodies)
+        assert campaign["generation"]["fallback"] is False
+
+    async def test_ai_copy_with_an_unstated_warranty_falls_back_to_the_template(
+            self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Kettle Shop", slug="kettle-shop")
+        listing = await _listing(client, headers, store["id"], name="Plain Kettle", price=1800)
+
+        async def inventing(prompt):
+            return json.dumps({
+                "title": "Warranty week",
+                "creatives": [
+                    {"platform": "whatsapp", "format": "message",
+                     "headline": "Plain Kettle",
+                     "body": "Plain Kettle at KES 1,800 with a two-year warranty.",
+                     "cta": "Open the link", "hashtags": []},
+                ],
+                "plan": [],
+            })
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", inventing)
+
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["whatsapp"]), headers=headers,
+        )).json()
+        assert campaign["generation"]["fallback"] is True
+        text = " ".join(c["body"] for c in campaign["creatives"]).lower()
+        assert "warranty" not in text
+        assert "1,800" in text
+
+    async def test_ai_copy_with_an_invented_year_falls_back_to_the_template(
+            self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Year Shop", slug="year-shop")
+        listing = await _listing(client, headers, store["id"], name="Solar Lantern", price=2500)
+
+        async def inventing(prompt):
+            return json.dumps({
+                "title": "Since 2015",
+                "creatives": [
+                    {"platform": "whatsapp", "format": "message",
+                     "headline": "Solar Lantern",
+                     "body": "A trusted Solar Lantern, sold since 2015, now KES 2,500.",
+                     "cta": "Chat with us", "hashtags": []},
+                ],
+                "plan": [],
+            })
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", inventing)
+
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["whatsapp"]), headers=headers,
+        )).json()
+        # A year the seller never stated is a product fact the model made
+        # up; the caption is dropped and the template covers the campaign.
+        assert campaign["generation"]["fallback"] is True
+        assert all("2015" not in c["body"] for c in campaign["creatives"])
+
+    async def test_a_tiktok_script_keeps_its_production_timings(self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Timing Shop", slug="timing-shop")
+        listing = await _listing(client, headers, store["id"], name="Solar Lantern", price=2500)
+
+        async def script(prompt):
+            return json.dumps({
+                "title": "Vertical launch",
+                "creatives": [
+                    {"platform": "tiktok", "format": "script",
+                     "headline": "Looking for a Solar Lantern?",
+                     "body": "HOOK (0-3s): Looking for a Solar Lantern? "
+                             "SCENE 1 (3-8s): Show it in daylight. Price KES 2,500. "
+                             "SCENE 2 (8-20s): Ask on BROKA.",
+                     "cta": "Ask on BROKA", "hashtags": []},
+                ],
+                "plan": [],
+            })
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", script)
+
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing, platforms=["tiktok"]), headers=headers,
+        )).json()
+        # Scene timings are directions to the seller, not claims about the
+        # product, so a usable script is kept rather than replaced.
+        assert campaign["generation"]["fallback"] is False
+        assert "0-3s" in campaign["creatives"][0]["body"]
 
     async def test_a_failed_regenerate_keeps_the_seller_s_edited_posts(self, client, monkeypatch):
         _, headers = await _register(client)
@@ -1013,6 +1478,44 @@ class TestMarketingCampaigns:
         )).json()
         assert after["events"]["by_kind"]["product_view"] == later["events"]["by_kind"]["product_view"] + 1
 
+        # The usual journey: the store home is opened from the campaign
+        # link first (visit counted), then a product is tapped. The second
+        # request is not a new visit, but it is a real product view and the
+        # campaign must get it.
+        _, browser = await _register(client, tier=None)
+        home = await client.post(
+            f"/stores/{store['id']}/visit",
+            json={"via": "whatsapp", "campaign": campaign["link_token"],
+                  "visitor": "buyer-home-first"},
+            headers=browser,
+        )
+        assert home.json()["counted"] is True
+        before = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=owner,
+        )).json()["events"]["by_kind"]["product_view"]
+        product = await client.post(
+            f"/stores/{store['id']}/visit",
+            json={"via": "whatsapp", "campaign": campaign["link_token"],
+                  "product_view": True, "visitor": "buyer-home-first"},
+            headers=browser,
+        )
+        assert product.json()["counted"] is False
+        after_home = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=owner,
+        )).json()["events"]["by_kind"]["product_view"]
+        assert after_home == before + 1
+        # ...and a reload of the product page still adds nothing.
+        await client.post(
+            f"/stores/{store['id']}/visit",
+            json={"via": "whatsapp", "campaign": campaign["link_token"],
+                  "product_view": True, "visitor": "buyer-home-first"},
+            headers=browser,
+        )
+        reloaded = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=owner,
+        )).json()["events"]["by_kind"]["product_view"]
+        assert reloaded == after_home
+
         # Another store cannot be credited with this campaign's token.
         _, other = await _register(client)
         other_store = await _store(client, other, name="Wrong Store", slug="wrong-store")
@@ -1035,6 +1538,41 @@ class TestMarketingCampaigns:
         assert r.json()["available"] is False
         assert r.json()["suggestions"] == []
         assert (await client.get(f"/listings/{listing['id']}")).json()["name"] == "Copy Item"
+
+    async def test_copywriter_drops_suggestions_that_invent_facts(self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Copy Claims Shop", slug="copy-claims-shop")
+        listing = await _listing(client, headers, store["id"], name="Solar Lantern", price=2500)
+
+        async def suggestions(prompt):
+            return json.dumps({"suggestions": [
+                {"text": "Solar Lantern with a two-year warranty, now KES 9,999.",
+                 "why": "stronger"},
+                {"text": "Solar Lantern, tested in Nairobi and available for KES 2,500.",
+                 "why": "clear"},
+                {"text": "Solar Lantern, a trusted brand since 2015, KES 2,500.",
+                 "why": "history"},
+            ]})
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", suggestions)
+
+        r = await client.post(
+            f"/stores/{store['id']}/marketing/copy",
+            json={"field": "description", "listing_id": listing["id"]}, headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["available"] is True and body["provider"] == "gemini"
+        # The warranty and the changed price are the seller's facts to
+        # state, not the model's; "since 2015" is a figure from nowhere.
+        assert [s["text"] for s in body["suggestions"]] == [
+            "Solar Lantern, tested in Nairobi and available for KES 2,500.",
+        ]
+        # A suggestion is returned, never applied.
+        assert (await client.get(f"/listings/{listing['id']}")).json()[
+            "description"].startswith("Brand new")
 
     async def test_the_owner_can_save_a_draft_without_a_provider(self, client):
         _, headers = await _register(client)

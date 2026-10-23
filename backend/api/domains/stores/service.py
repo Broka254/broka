@@ -181,6 +181,25 @@ class StoreService:
                     detail="Add at least one photo of your shop before opening your store. "
                            "A store with no premises can open as a virtual store.",
                 )
+            # A current client that explicitly chooses a physical store
+            # must name a place a buyer could go. An app build that predates
+            # store types sends no store_type: it opens as it always did.
+            # The wizard's location step is not enough on its own - the
+            # server is what the storefront later publishes.
+            if store_type == "physical" and "store_type" in data:
+                has_place = bool(
+                    (text_values.get("county") or "").strip()
+                    or (text_values.get("subcounty") or "").strip()
+                    or (text_values.get("location_description") or "").strip()
+                    or coords is not None
+                )
+                if not has_place:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Add your county and area before opening a physical store - "
+                               "buyers need somewhere to go. A store with no premises can "
+                               "open as a virtual store.",
+                    )
             slug = chosen_slug or await self._unique_slug(name)
             store = Store(
                 owner_id=owner_id, name=name, slug=slug, category=category,
@@ -532,6 +551,12 @@ class StoreService:
         a 25 km filter. Rounding survives only in the mappable point the
         payload hands out, so no read can triangulate an exact spot."""
         if store is not None:
+            # A virtual store has no premises. A county it kept from before
+            # the switch (or a pin its owner entered for deliveries) is not
+            # a place a buyer can go, so it never becomes a distance, a map
+            # point or a "nearest" ranking.
+            if (getattr(store, "store_type", None) or DEFAULT_STORE_TYPE) == "virtual":
+                return None, False
             pin = cls._valid_point(getattr(store, "lat", None), getattr(store, "lng", None))
             if pin is not None:
                 return pin, False
@@ -764,12 +789,15 @@ class StoreService:
         for its listing fee - the products that most need the owner. This
         lists them all, newest first, each with the state My Store shows:
 
-          live     buyers can see it
-          hidden   active, but its listing fee is unpaid or ran out
-          in_deal  a buyer agreed a deal (status pending)
-          sold     the deal completed
+          live      buyers can see it
+          hidden    active, but its listing fee is unpaid or ran out
+          in_deal   a buyer agreed a deal (status pending)
+          sold      the deal completed
+          archived  the seller took it off sale (status cancelled)
 
-        Deleted (cancelled) listings are left out. `counts` has how many are
+        Archived listings are a state, not a deletion: the row survives so
+        deals, reviews and history keep pointing at it, and the owner can
+        still find it under the Archived filter. `counts` has how many are
         in each state (and "all"), for the search when there is one, so the
         filter chips say what tapping them will show.
         """
@@ -779,16 +807,27 @@ class StoreService:
         # With billing on, every active listing of an unpaid store reads
         # "hidden" here too - the SQL counts below say the same thing.
         store_live = await store_billing.store_live(self.db, store, now)
+        archived = and_(
+            Listing.status == ListingStatus.cancelled,
+            Listing.archived_at.is_not(None),
+        )
         in_state = {
             "live": and_(Listing.status == ListingStatus.active, live),
             "hidden": and_(Listing.status == ListingStatus.active, not_(live)),
             "in_deal": Listing.status == ListingStatus.pending,
             "sold": Listing.status == ListingStatus.completed,
+            "archived": archived,
         }
         where = [
             Listing.store_id == store.id,
-            Listing.status.in_([
-                ListingStatus.active, ListingStatus.pending, ListingStatus.completed]),
+            # A deleted listing is also status "cancelled"; only one the
+            # seller archived stays visible here.
+            or_(
+                Listing.status.in_([
+                    ListingStatus.active, ListingStatus.pending, ListingStatus.completed,
+                ]),
+                archived,
+            ),
         ]
         terms = search_terms(search)
         if terms:
@@ -849,6 +888,14 @@ class StoreService:
         """
         from api.domains.media.service import parse_id_list
 
+        # A product that is no longer for sale has exactly one issue worth
+        # stating. "Listing fee unpaid - buyers cannot see it" on an
+        # archived row would name the wrong reason and send the seller to
+        # pay for a listing they deliberately took down.
+        if getattr(listing.status, "value", listing.status) == ListingStatus.cancelled.value:
+            return {"issues": [{"code": "archived", "label": "Archived", "fix": "details"}],
+                    "ok": False}
+
         issues: list[dict] = []
         photo_ids = parse_id_list(getattr(listing, "photo_ids", None))
         has_photo = bool(photo_ids) or bool(getattr(listing, "verified_photos", None)) or bool(
@@ -874,10 +921,6 @@ class StoreService:
             issues.append({"code": "unpaid_listing_fee",
                            "label": "Listing fee unpaid - buyers cannot see it",
                            "fix": "fee"})
-        status = getattr(listing.status, "value", listing.status)
-        if status == ListingStatus.cancelled.value:
-            issues.append({"code": "archived", "label": "Archived",
-                           "fix": "details"})
         return {"issues": issues, "ok": not issues}
 
     async def bulk_archive_listings(
@@ -928,6 +971,7 @@ class StoreService:
             if getattr(row.status, "value", row.status) == ListingStatus.cancelled.value:
                 continue
             row.status = ListingStatus.cancelled
+            row.archived_at = datetime.utcnow()
             row.is_featured = False
             archived.append(row.id)
         if archived:
@@ -937,6 +981,8 @@ class StoreService:
     @staticmethod
     def _owner_state(listing: Listing, now: datetime, store_live: bool = True) -> str:
         status = getattr(listing.status, "value", listing.status)
+        if status == ListingStatus.cancelled.value:
+            return "archived" if getattr(listing, "archived_at", None) else "deleted"
         if status == ListingStatus.pending.value:
             return "in_deal"
         if status == ListingStatus.completed.value:
@@ -1672,14 +1718,36 @@ class StoreService:
             "store_type": store.store_type or DEFAULT_STORE_TYPE,
             # Weekly hours, the rows a storefront draws, and "open now" -
             # computed here, in Africa/Nairobi, so neither client has to
-            # and neither can disagree with the other.
-            **opening_hours.public_payload(store.opening_hours),
+            # and neither can disagree with the other. A virtual store has
+            # no opening times: stored hours from before a type switch stay
+            # editable for the owner but are never published as if there
+            # were a door to open.
+            **opening_hours.public_payload(
+                store.opening_hours
+                if owner_view or store_type_public != "virtual" else None
+            ),
             "service_areas": self._service_area_list(store.service_areas),
             "delivery_note": store.delivery_note,
-            "country": store.country,
-            "county": store.county,
-            "subcounty": store.subcounty,
-            "location_description": store.location_description,
+            # A virtual store keeps its stored address for the owner (so the
+            # switch can be reversed and the owner can still edit it), but a
+            # public read never publishes premises it does not have. Clients
+            # that drew county/subcounty unconditionally would otherwise put
+            # an invented shopfront on the page.
+            **(
+                {
+                    "country": store.country,
+                    "county": store.county,
+                    "subcounty": store.subcounty,
+                    "location_description": store.location_description,
+                }
+                if owner_view or store_type_public != "virtual"
+                else {
+                    "country": None,
+                    "county": None,
+                    "subcounty": None,
+                    "location_description": None,
+                }
+            ),
             # Public reads show only a verified address: an unverified one
             # (saved by app builds that couldn't verify) may be a typo or
             # someone else's. The owner always sees what they saved.

@@ -16,11 +16,21 @@ import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
 
+/// What the share sheet reported. A dismissed sheet is not a share, and
+/// `unconfirmed` means the platform could not say - neither may be counted
+/// as something BROKA observed.
+enum CreativeShareOutcome {
+  shared,
+  dismissed,
+  unconfirmed,
+  failed,
+}
+
 abstract class CreativeShare {
   /// Saves or sends the rendered poster at [url], with [caption] attached
-  /// so the seller does not have to retype it. Returns false when the image
+  /// so the seller does not have to retype it. [failed] when the image
   /// could not be fetched or no share sheet opened.
-  Future<bool> image(
+  Future<CreativeShareOutcome> image(
     String url, {
     required String caption,
     String? fileName,
@@ -28,14 +38,20 @@ abstract class CreativeShare {
   });
 
   /// Saves or sends text only: a caption with its tracked store link.
-  Future<bool> text(String text, {Rect? origin});
+  Future<CreativeShareOutcome> text(String text, {Rect? origin});
 }
+
+CreativeShareOutcome _outcomeOf(ShareResult result) => switch (result.status) {
+      ShareResultStatus.success => CreativeShareOutcome.shared,
+      ShareResultStatus.dismissed => CreativeShareOutcome.dismissed,
+      ShareResultStatus.unavailable => CreativeShareOutcome.unconfirmed,
+    };
 
 class DeviceCreativeShare implements CreativeShare {
   const DeviceCreativeShare();
 
   @override
-  Future<bool> image(
+  Future<CreativeShareOutcome> image(
     String url, {
     required String caption,
     String? fileName,
@@ -47,7 +63,9 @@ class DeviceCreativeShare implements CreativeShare {
       final response = await http
           .get(Uri.parse(url))
           .timeout(const Duration(seconds: 20));
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) return false;
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        return CreativeShareOutcome.failed;
+      }
       final result = await Share.shareXFiles(
         [
           XFile.fromData(
@@ -59,19 +77,19 @@ class DeviceCreativeShare implements CreativeShare {
         text: caption,
         sharePositionOrigin: origin,
       );
-      return result.status != ShareResultStatus.unavailable;
+      return _outcomeOf(result);
     } catch (_) {
-      return false;
+      return CreativeShareOutcome.failed;
     }
   }
 
   @override
-  Future<bool> text(String text, {Rect? origin}) async {
+  Future<CreativeShareOutcome> text(String text, {Rect? origin}) async {
     try {
       final result = await Share.share(text, sharePositionOrigin: origin);
-      return result.status != ShareResultStatus.unavailable;
+      return _outcomeOf(result);
     } catch (_) {
-      return false;
+      return CreativeShareOutcome.failed;
     }
   }
 }

@@ -239,7 +239,9 @@ StoreOpenStatus computeStoreOpenStatus(StoreOpeningHours? hours, DateTime nairob
       return StoreOpenStatus(state: 'open', label: 'Open now · closes ${value.close}',
           closesAt: value.close);
     }
-    if (minutes < openM && !value.crossesMidnight) {
+    // A crossing-midnight window still opens later today; treating it as
+    // "not open and not opening today" pushed the next opening a week out.
+    if (minutes < openM) {
       return StoreOpenStatus(state: 'closed', label: 'Closed now · opens ${value.open}',
           opensAt: value.open);
     }

@@ -61,12 +61,20 @@ String _dateLabel(DateTime? date) {
   return '${date.day} ${months[date.month - 1]} ${date.year}';
 }
 
-Future<void> _copy(BuildContext context, String text, String what) async {
-  await Clipboard.setData(ClipboardData(text: text));
-  if (!context.mounted) return;
+Future<bool> _copy(BuildContext context, String text, String what) async {
+  var copied = false;
+  try {
+    await Clipboard.setData(ClipboardData(text: text));
+    copied = true;
+  } catch (_) {
+    // A clipboard write can fail on a locked device; the caller must not
+    // report a copy that never happened.
+  }
+  if (!context.mounted) return copied;
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text('$what copied')));
+    ..showSnackBar(SnackBar(content: Text(copied ? '$what copied' : "Couldn't copy $what")));
+  return copied;
 }
 
 Future<bool> _openExternal(String url) async {
@@ -115,19 +123,23 @@ class _MarketingStudioTabState extends State<MarketingStudioTab> {
     _load();
   }
 
-  Future<void> _load() async {
+  /// Loads the newest campaigns, or appends the next page when [more] -
+  /// a seller with more than a page of campaigns can still reach the old
+  /// ones instead of seeing only the first twenty.
+  Future<void> _load({bool more = false}) async {
     if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
     });
-    final result = await widget.repo.getCampaigns(widget.store.id);
+    final result = await widget.repo.getCampaigns(
+        widget.store.id, offset: more ? _campaigns.length : 0);
     if (!mounted) return;
     setState(() {
       _loading = false;
       switch (result) {
         case Success(:final data):
-          _campaigns = data.$1;
+          _campaigns = more ? [..._campaigns, ...data.$1] : data.$1;
           _total = data.$2;
         case Failure(:final message):
           _error = message;
@@ -250,12 +262,29 @@ class _MarketingStudioTabState extends State<MarketingStudioTab> {
                 ),
               ]),
             )
-          else
+          else ...[
             for (final campaign in _campaigns)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: _CampaignCard(campaign: campaign, onTap: () => _open(campaign.id)),
               ),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator(color: BrokaColors.gold)),
+              )
+            else if (_campaigns.length < _total)
+              OutlinedButton(
+                key: const Key('older-campaigns'),
+                onPressed: () => _load(more: true),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: BrokaColors.textHigh,
+                  side: const BorderSide(color: BrokaColors.border),
+                  minimumSize: const Size(0, 44),
+                ),
+                child: Text('Show older campaigns (${_total - _campaigns.length})'),
+              ),
+          ],
         ],
       ),
     );
@@ -353,6 +382,7 @@ class CampaignBuilderScreen extends StatefulWidget {
 class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
   final _audience = TextEditingController();
   final _instructions = TextEditingController();
+  final _cta = TextEditingController();
   final _productSearch = TextEditingController();
 
   bool _wholeStore = true;
@@ -365,6 +395,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
   final Set<CampaignPlatform> _platforms = {CampaignPlatform.whatsapp};
   CampaignTone _tone = CampaignTone.friendly;
   String _language = CampaignLanguage.en;
+  String? _format;
 
   bool _busy = false;
   String? _error;
@@ -379,6 +410,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
   void dispose() {
     _audience.dispose();
     _instructions.dispose();
+    _cta.dispose();
     _productSearch.dispose();
     super.dispose();
   }
@@ -410,12 +442,40 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
       _objective == CampaignObjective.newStock ||
       _objective == CampaignObjective.discount;
 
+  /// The shapes this campaign's platform actually offers. With several
+  /// platforms selected there is no single list - each gets its natural
+  /// shape - so the picker only appears for one.
+  List<String> get _availableFormats => switch (_platforms.length) {
+        1 => switch (_platforms.single) {
+            CampaignPlatform.whatsapp => const ['message', 'status'],
+            CampaignPlatform.instagram => const ['caption', 'story', 'carousel'],
+            CampaignPlatform.tiktok => const ['script', 'video_plan'],
+            CampaignPlatform.facebook => const ['post', 'story'],
+            CampaignPlatform.x => const ['post'],
+          },
+        _ => const [],
+      };
+
+  static String _formatLabel(String format) => switch (format) {
+        'message' => 'Chat message',
+        'status' => 'Status',
+        'caption' => 'Caption',
+        'story' => 'Story',
+        'carousel' => 'Carousel',
+        'script' => 'Script',
+        'video_plan' => 'Video plan',
+        'post' => 'Post',
+        _ => format,
+      };
+
   String? _validate() {
     if (_platforms.isEmpty) return 'Choose at least one platform.';
-    if (!_wholeStore && _selected.isEmpty) return 'Choose the product or products to promote.';
-    if (_needsProduct && _selected.isEmpty) {
-      return 'This objective needs a product. Choose what to promote.';
+    if (_needsProduct && _wholeStore) {
+      // The server refuses a product objective without products; saying so
+      // here points at the picker rather than at a hidden requirement.
+      return 'This objective needs a product. Choose "Products" above and pick what to promote.';
     }
+    if (!_wholeStore && _selected.isEmpty) return 'Choose the product or products to promote.';
     if (_selected.length > 10) return 'Choose at most 10 products for one campaign.';
     if (_objective == CampaignObjective.discount && _instructions.text.trim().isEmpty) {
       return 'Describe the real discount (for example "10% off until Friday"). '
@@ -443,6 +503,8 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
       tone: _tone.value,
       language: _language,
       instructions: _instructions.text,
+      cta: _cta.text,
+      creativeFormat: _format,
       generate: generate,
     );
     if (!mounted) return;
@@ -556,12 +618,36 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                 selected: _platforms.contains(platform),
                 onTap: () => setState(() {
                   if (!_platforms.remove(platform)) _platforms.add(platform);
+                  if (_format != null && !_availableFormats.contains(_format)) {
+                    _format = null;
+                  }
                 }),
               ),
           ]),
           const SizedBox(height: 6),
           const Text('Each platform gets its own shape and length - not the same copy five times.',
               style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+          if (_availableFormats.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _sectionLabel('Creative format'),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final format in _availableFormats)
+                _Chip(
+                  key: Key('creative-format-$format'),
+                  label: _formatLabel(format),
+                  selected: _format == format,
+                  onTap: () => setState(
+                      () => _format = _format == format ? null : format),
+                ),
+            ]),
+            const SizedBox(height: 6),
+            const Text('Choose one, or leave it to BROKA.',
+                style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+          ] else if (_platforms.length > 1) ...[
+            const SizedBox(height: 6),
+            const Text('With several platforms, each gets its natural format.',
+                style: TextStyle(color: BrokaColors.textLow, fontSize: 12)),
+          ],
           const SizedBox(height: 20),
           _sectionLabel('Voice and language'),
           Wrap(spacing: 8, runSpacing: 8, children: [
@@ -587,6 +673,16 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
           ]),
           const SizedBox(height: 20),
           _sectionLabel('Anything else?'),
+          TextField(
+            key: const Key('campaign-cta'),
+            controller: _cta,
+            maxLength: 160,
+            style: const TextStyle(color: BrokaColors.textHigh),
+            decoration: _fieldDecoration(
+                'Call to action (optional)', Icons.touch_app_outlined,
+                hint: 'e.g. Open the link and order today'),
+          ),
+          const SizedBox(height: 8),
           TextField(
             key: const Key('campaign-audience'),
             controller: _audience,
@@ -945,60 +1041,77 @@ class _CampaignDetailScreenState extends State<CampaignDetailScreen> {
     return box.localToGlobal(Offset.zero) & box.size;
   }
 
-  Future<void> _copyCaption(CampaignCreative creative) async {
-    _record('shared', creative.platform);
-    await _copy(context, creative.caption, 'Caption');
+  /// A copy is not a share: BROKA did not see the post leave the phone, so
+  /// nothing is counted. Only an actual share-sheet result is recorded.
+  Future<void> _copyCaption(CampaignCreative creative) =>
+      _copy(context, creative.caption, 'Caption');
+
+  String _captionWithLink(CampaignCreative creative) {
+    final link = _campaign?.linkFor(creative.platform) ?? '';
+    return creative.shareText(link);
   }
 
   /// Saves or sends the campaign's rendered poster - the one file the
-  /// studio actually produced. Recorded as `downloaded`: the image has left
-  /// BROKA for the seller's own use, not been posted by BROKA.
+  /// studio actually produced. Recorded as `downloaded` only when the
+  /// share sheet says it completed: a dismissed sheet saved nothing.
   Future<void> _saveImage(CampaignCreative creative) async {
     final image = creative.image?.large ?? creative.image?.medium ?? creative.image?.thumb;
     if (image == null) return;
-    final ok = await widget.share.image(
+    // The link travels with the poster so a creative sent on WhatsApp still
+    // leads somewhere the campaign can count.
+    final outcome = await widget.share.image(
       image,
-      caption: creative.caption,
+      caption: _captionWithLink(creative),
       fileName: 'broka-${creative.platform}-${creative.id}.png',
       origin: _shareOrigin(),
     );
     if (!mounted) return;
-    if (ok) {
-      _record('downloaded', creative.platform);
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Image saved or sent')));
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't get the image ready - copy the caption instead.")));
+    switch (outcome) {
+      case CreativeShareOutcome.shared:
+        _record('downloaded', creative.platform);
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Image saved or sent')));
+      case CreativeShareOutcome.dismissed:
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Nothing was saved.')));
+      case CreativeShareOutcome.unconfirmed:
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("The sheet closed without confirming a save, so it wasn't counted.")));
+      case CreativeShareOutcome.failed:
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Couldn't get the image ready - copy the caption instead.")));
     }
   }
 
   /// Hands the written post (with its tracked link) to any app on the phone.
   Future<void> _sharePost(CampaignCreative creative) async {
-    final link = _campaign?.linkFor(creative.platform) ?? '';
-    final text = [creative.caption, if (link.isNotEmpty) link].join('\n\n');
-    final ok = await widget.share.text(text, origin: _shareOrigin());
+    final outcome = await widget.share.text(
+        _captionWithLink(creative), origin: _shareOrigin());
     if (!mounted) return;
-    if (ok) {
-      _record('shared', creative.platform);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't open the share sheet - copy the caption instead.")));
+    switch (outcome) {
+      case CreativeShareOutcome.shared:
+        _record('shared', creative.platform);
+      case CreativeShareOutcome.dismissed:
+        break;
+      case CreativeShareOutcome.unconfirmed:
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("The sheet closed without confirming it was sent, so it wasn't counted.")));
+      case CreativeShareOutcome.failed:
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Couldn't open the share sheet - copy the caption instead.")));
     }
   }
 
   Future<void> _copyLink(MarketingCampaign campaign, String platform) async {
     final link = campaign.linkFor(platform);
     if (link.isEmpty) return;
-    _record('shared', platform);
+    // Copying the link proves nothing about where it went; only a share
+    // sheet result is recorded.
     await _copy(context, link, 'Campaign link');
   }
 
   Future<void> _openPlatform(CampaignCreative creative, MarketingCampaign campaign) async {
-    final link = campaign.linkFor(creative.platform);
-    final text = [creative.caption, if (link.isNotEmpty) link].join('\n\n');
-    _record('shared', creative.platform);
-    final ok = await _openExternal(_composeUrl(creative.platform, text));
+    final ok = await _openExternal(_composeUrl(creative.platform, _captionWithLink(creative)));
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Couldn't open that app on this phone - copy the caption instead.")));
@@ -1292,6 +1405,11 @@ class _CreativeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final image = creative.image?.medium ?? creative.image?.thumb;
     final ratio = creative.media['aspect_ratio'] as String?;
+    final duration = (creative.media['duration_seconds'] as num?)?.toInt();
+    final scenes = [
+      for (final s in (creative.media['scenes'] as List? ?? const []))
+        if (s is Map) s.cast<String, dynamic>(),
+    ];
     return _card(
       key: Key('creative-${creative.id}'),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -1307,8 +1425,11 @@ class _CreativeCard extends StatelessWidget {
                 fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
           ),
           const Spacer(),
-          if (ratio != null)
-            Text(ratio, style: const TextStyle(color: BrokaColors.textLow, fontSize: 11)),
+          if (ratio != null || duration != null)
+            Text([
+              if (ratio != null) ratio,
+              if (duration != null) '${duration}s',
+            ].join(' · '), style: const TextStyle(color: BrokaColors.textLow, fontSize: 11)),
           IconButton(
             key: Key('edit-creative-${creative.id}'),
             tooltip: 'Edit this text',
@@ -1340,6 +1461,20 @@ class _CreativeCard extends StatelessWidget {
           const SizedBox(height: 6),
           SelectableText(creative.body, style: const TextStyle(
               color: BrokaColors.textHigh, fontSize: 13, height: 1.5)),
+        ],
+        if (scenes.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            const Icon(Icons.movie_creation_outlined, size: 15, color: BrokaColors.textMid),
+            const SizedBox(width: 6),
+            Text('Shot list', style: const TextStyle(color: BrokaColors.textHigh,
+                fontSize: 12.5, fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 6),
+          for (var i = 0; i < scenes.length; i++) _SceneRow(index: i, scene: scenes[i]),
+          Text('A script and shot list to film yourself - BROKA has not filmed, '
+              'published or scheduled anything here.',
+              style: const TextStyle(color: BrokaColors.textLow, fontSize: 10.5, height: 1.3)),
         ],
         if (creative.hashtags.isNotEmpty) ...[
           const SizedBox(height: 6),
@@ -1405,6 +1540,58 @@ class _CreativeCard extends StatelessWidget {
                 visualDensity: VisualDensity.compact),
           ),
         ]),
+      ]),
+    );
+  }
+}
+
+/// One shot from a video creative's storyboard: what to film, what to put
+/// on screen and what to say over it. A plan for the seller's own camera.
+class _SceneRow extends StatelessWidget {
+  const _SceneRow({required this.index, required this.scene});
+  final int index;
+  final Map<String, dynamic> scene;
+
+  @override
+  Widget build(BuildContext context) {
+    String text(String key) => (scene[key] as String? ?? '').trim();
+    final seconds = (scene['seconds'] as num?)?.toInt();
+    final shot = text('shot');
+    final onScreen = text('on_screen_text');
+    final voice = text('voice_over');
+    return Container(
+      key: Key('scene-$index'),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgMid.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: BrokaColors.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('Shot ${index + 1}', style: const TextStyle(color: _accent,
+              fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 0.2)),
+          const Spacer(),
+          if (seconds != null)
+            Text('${seconds}s', style: const TextStyle(
+                color: BrokaColors.textLow, fontSize: 11)),
+        ]),
+        if (shot.isNotEmpty) ...[
+          const SizedBox(height: 3),
+          Text(shot, style: const TextStyle(color: BrokaColors.textHigh,
+              fontSize: 12.5, height: 1.35)),
+        ],
+        if (onScreen.isNotEmpty) ...[
+          const SizedBox(height: 3),
+          Text('On screen: $onScreen', style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 11.5, height: 1.35)),
+        ],
+        if (voice.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text('Voice-over: $voice', style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 11.5, height: 1.35)),
+        ],
       ]),
     );
   }

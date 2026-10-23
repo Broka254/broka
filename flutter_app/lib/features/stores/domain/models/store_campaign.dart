@@ -192,6 +192,47 @@ class CampaignCreative {
         if (body.trim().isNotEmpty) body.trim(),
         if (hashtags.isNotEmpty) hashtags.map((t) => '#$t').join(' '),
       ].join('\n\n');
+
+  /// The text exactly as it will be shared: the caption plus the tracked
+  /// link. On X the whole post must fit 280 characters, link included, so
+  /// the body is shortened at a word boundary rather than letting the
+  /// network cut the link off. Other platforms leave the text alone.
+  ///
+  /// Campaigns generated before the link moved out of the body may still
+  /// contain the URL or hashtags there; neither is appended twice.
+  String shareText(String link) {
+    final url = link.trim();
+    var bodyText = body.trim();
+    // A URL already in a saved creative is the campaign's own (the writer
+    // used to paste it). Drop every URL and append the tracked one once,
+    // at the end, where the seller can see it.
+    if (url.isNotEmpty) {
+      bodyText = bodyText.replaceAll(RegExp(r'https?://\S+'), '').trim();
+    }
+    final tagsInBody = hashtags.isNotEmpty &&
+        hashtags.every((t) => bodyText.contains('#$t'));
+    final tags = tagsInBody ? '' : hashtags.map((t) => '#$t').join(' ');
+    final captionText = [if (bodyText.isNotEmpty) bodyText, if (tags.isNotEmpty) tags]
+        .where((x) => x.isNotEmpty)
+        .join('\n\n');
+    if (platform != 'x') {
+      return [captionText, if (url.isNotEmpty) url]
+          .where((x) => x.isNotEmpty)
+          .join('\n\n');
+    }
+    final tail = [if (tags.isNotEmpty) tags, if (url.isNotEmpty) url].join('\n\n');
+    final room = 280 - tail.length - (tail.isEmpty ? 0 : 2);
+    if (bodyText.length <= room) {
+      return [if (bodyText.isNotEmpty) bodyText, if (tail.isNotEmpty) tail]
+          .join('\n\n');
+    }
+    if (room <= 0) return tail.length <= 280 ? tail : url;
+    var cut = bodyText.substring(0, room);
+    final space = cut.lastIndexOf(RegExp(r'\s'));
+    if (space > room * 0.5) cut = cut.substring(0, space);
+    cut = cut.trimRight();
+    return [if (cut.isNotEmpty) cut, if (tail.isNotEmpty) tail].join('\n\n');
+  }
 }
 
 /// A day in the suggested week. Nothing here has been posted or scheduled:
@@ -257,6 +298,10 @@ class MarketingCampaign {
   final String tone;
   final String language;
   final String? instructions;
+  /// The seller's chosen call to action and preferred shape, if any. The
+  /// shape only applies on platforms that offer it.
+  final String? cta;
+  final String? creativeFormat;
   final List<String> productIds;
   final List<CampaignProduct> products;
   final List<String> platforms;
@@ -284,6 +329,8 @@ class MarketingCampaign {
     this.tone = 'friendly',
     this.language = 'en',
     this.instructions,
+    this.cta,
+    this.creativeFormat,
     this.productIds = const [],
     this.products = const [],
     this.platforms = const [],
@@ -307,6 +354,8 @@ class MarketingCampaign {
         tone: json['tone'] as String? ?? 'friendly',
         language: json['language'] as String? ?? 'en',
         instructions: json['instructions'] as String?,
+        cta: json['cta'] as String?,
+        creativeFormat: json['creative_format'] as String?,
         productIds:
             (json['product_ids'] as List?)?.whereType<String>().toList() ?? const [],
         products: [

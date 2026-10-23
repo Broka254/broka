@@ -189,6 +189,11 @@ class CampaignIn(BaseModel):
     tone: Literal["friendly", "professional", "bold", "playful", "premium"] = "friendly"
     language: Literal["en", "sw"] = "en"
     instructions: Optional[str] = Field(default=None, max_length=600)
+    # The seller's chosen call to action and preferred shape. The service
+    # checks the format against the selected platforms - formats differ by
+    # platform, and a "story" for X would be a promise BROKA can't keep.
+    cta: Optional[str] = Field(default=None, max_length=160)
+    creative_format: Optional[str] = Field(default=None, max_length=24)
     # False saves the configuration as a draft; the seller can generate
     # later. True (the default) creates it and generates in one step.
     generate: bool = True
@@ -198,6 +203,8 @@ class CampaignPatchIn(BaseModel):
     title: Optional[str] = Field(default=None, max_length=120)
     audience: Optional[str] = Field(default=None, max_length=120)
     instructions: Optional[str] = Field(default=None, max_length=600)
+    cta: Optional[str] = Field(default=None, max_length=160)
+    creative_format: Optional[str] = Field(default=None, max_length=24)
 
 
 class CreativePatchIn(BaseModel):
@@ -506,7 +513,7 @@ async def get_store_listings(
 @router.get("/{store_id}/manage/listings")
 async def get_owner_listings(
     store_id: str,
-    state: Literal["all", "live", "hidden", "in_deal", "sold"] = "all",
+    state: Literal["all", "live", "hidden", "in_deal", "sold", "archived"] = "all",
     search: Optional[str] = Query(None, max_length=100),
     category: Optional[str] = Query(None, max_length=120),
     sort: Literal["newest", "oldest", "name", "price_low", "price_high"] = "newest",
@@ -594,15 +601,23 @@ async def record_visit(
     counted = await store_stats.record_visit(
         db, store_id, body.surface, source, visitor, client=client,
     )
-    if counted and body.campaign:
-        # Credited only when the visit itself counted, so reloading the page
-        # can't inflate a campaign - the same rule the visit follows.
-        # A product page credits a product view as well; the visitor was
-        # recorded once, so both counters move at most once per half hour.
+    if body.campaign:
         marketing = MarketingService(db)
-        await marketing.attribute(store_id, body.campaign, "visit")
+        if counted:
+            await marketing.attribute(store_id, body.campaign, "visit")
         if body.product_view:
-            await marketing.attribute(store_id, body.campaign, "product_view")
+            # A product view is credited once per visitor per campaign per
+            # window, whether or not this request was the one that counted
+            # the visit. Gating it on `counted` starved the most common
+            # journey: a buyer opens the campaign link (visit counted),
+            # then taps a product. That page reported the same visitor
+            # inside the same window, so its product view was discarded.
+            first_view = await store_stats.seen.first_time(
+                f"campaign_view:{store_id}:{body.campaign}:{visitor}",
+                store_stats.VISIT_WINDOW_SECONDS,
+            )
+            if first_view:
+                await marketing.attribute(store_id, body.campaign, "product_view")
     return {"counted": counted}
 
 

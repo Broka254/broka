@@ -67,6 +67,11 @@ class MarketingCampaign(Base):
     # fallback templates are written in both.
     language   = Column(String(8), nullable=False, default="en")
     instructions = Column(Text, nullable=True)
+    # The seller's chosen call to action and preferred creative shape. A
+    # preference, not a promise: a format only applies on platforms that
+    # offer it (PLATFORM_SPECS), and an empty CTA lets the writer choose.
+    cta          = Column(String(160), nullable=True)
+    creative_format = Column(String(24), nullable=True)
     # JSON lists. product_ids is [] for a whole-store campaign.
     product_ids  = Column(Text, nullable=False, default="[]")
     platforms    = Column(Text, nullable=False, default="[]")
