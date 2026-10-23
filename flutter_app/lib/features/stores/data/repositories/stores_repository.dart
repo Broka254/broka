@@ -378,7 +378,8 @@ class StoresRepository {
 
   Future<Result<MarketingCampaign>> regenerateCampaign(String storeId, String campaignId) =>
       _guard(() async => MarketingCampaign.fromJson(await _client.post(
-          '/stores/$storeId/marketing/campaigns/$campaignId/regenerate') as Map<String, dynamic>));
+          '/stores/$storeId/marketing/campaigns/$campaignId/regenerate',
+          const {}) as Map<String, dynamic>));
 
   Future<Result<MarketingCampaign>> updateCreative(
     String storeId,

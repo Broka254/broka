@@ -236,8 +236,11 @@ void main() {
         'business_category': 'Electronics',
         'business_location': 'Sira',
       });
-      // Back in the store setup, starting from the business just set up.
-      expect(find.text('Name your store'), findsOneWidget);
+      // Back in the store setup, starting from the business just set up -
+      // and from the question that decides which steps follow.
+      expect(find.text('What kind of business?'), findsOneWidget);
+      await tapContinue(tester);
+      // The business name it just collected is prefilled on the name step.
       expect(find.text('Clanix'), findsWidgets);
       expect(find.text('THE DASHBOARD'), findsNothing);
     });
@@ -256,7 +259,7 @@ void main() {
           home: StoreSetupScreen(animateBackground: false)));
       await _settle(tester);
       expect(find.text('Online stores are for businesses'), findsNothing);
-      expect(find.text('Name your store'), findsOneWidget);
+      expect(find.text('What kind of business?'), findsOneWidget);
     });
   });
 }

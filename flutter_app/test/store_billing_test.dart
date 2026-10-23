@@ -663,6 +663,10 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
+      await tester.tap(find.byKey(const Key('store-type-physical'))); // type
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Continue')); // name
       await tester.pumpAndSettle();
       await tester.tap(find.text('Continue')); // link
@@ -673,6 +677,10 @@ void main() {
       c.setSubcounty('Starehe');
       await tester.pump();
       await tester.tap(find.text('Continue')); // location
+      await tester.pumpAndSettle();
+      // Opening hours are optional for a physical shop, so the button
+      // says so rather than pretending to continue.
+      await tester.tap(find.text('Skip for now')); // hours
       await tester.pumpAndSettle();
       await tester.tap(find.text('Skip for now')); // logo
       await tester.pumpAndSettle();

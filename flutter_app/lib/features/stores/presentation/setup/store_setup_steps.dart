@@ -14,6 +14,7 @@ import '../../../../widgets/list_picker.dart';
 import '../../../../widgets/otp_code_field.dart';
 import '../../../categories/domain/category_visual.dart';
 import '../../domain/kenya_locations.dart';
+import '../../domain/models/store.dart';
 import '../../domain/store_categories.dart';
 import 'store_setup_controller.dart';
 
@@ -25,6 +26,8 @@ String stepTitle(StoreSetupStep step) => switch (step) {
       StoreSetupStep.link => 'Choose your link',
       StoreSetupStep.category => 'What you sell',
       StoreSetupStep.location => 'Where you are',
+      StoreSetupStep.hours => 'When you are open',
+      StoreSetupStep.coverage => 'Where you deliver',
       StoreSetupStep.logo => 'Your logo',
       StoreSetupStep.photos => 'Store photos',
       StoreSetupStep.email => 'Business email',

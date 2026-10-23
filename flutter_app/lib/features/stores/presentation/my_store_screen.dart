@@ -1508,6 +1508,16 @@ class _ProductsTabState extends State<_ProductsTab> {
     'price_high': 'Price: high to low',
   };
 
+  /// The trigger's own words. The menu keeps the full sentence; the button
+  /// has to fit beside "Select" on a 320dp phone.
+  static const _sortShort = <String, String>{
+    'newest': 'Newest',
+    'oldest': 'Oldest',
+    'name': 'Name A-Z',
+    'price_low': 'Price \u2191',
+    'price_high': 'Price \u2193',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -1831,33 +1841,44 @@ class _ProductsTabState extends State<_ProductsTab> {
             ),
           ],
           const SizedBox(height: 8),
-          Row(children: [
-            PopupMenuButton<String>(
-              key: const Key('product-sort'),
-              initialValue: _sort,
-              onSelected: _setSort,
-              color: BrokaColors.bgMid,
-              itemBuilder: (_) => [
-                for (final entry in _sorts.entries)
-                  PopupMenuItem(value: entry.key, child: Text(entry.value)),
-              ],
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.swap_vert_rounded, size: 17, color: BrokaColors.textMid),
-                const SizedBox(width: 5),
-                Text(_sorts[_sort]!, style: const TextStyle(
-                    color: BrokaColors.textMid, fontSize: 12.5,
-                    fontWeight: FontWeight.w600)),
-                const Icon(Icons.arrow_drop_down_rounded, color: BrokaColors.textMid),
-              ]),
+          // The sort label is the only flexible thing here: at 320dp a full
+          // "Price: low to high" plus a padded Select button is wider than
+          // the row and used to overflow. The label ellipsises instead of
+          // pushing the Select action off the screen.
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Flexible(
+              child: PopupMenuButton<String>(
+                key: const Key('product-sort'),
+                initialValue: _sort,
+                onSelected: _setSort,
+                color: BrokaColors.bgMid,
+                itemBuilder: (_) => [
+                  for (final entry in _sorts.entries)
+                    PopupMenuItem(value: entry.key, child: Text(entry.value)),
+                ],
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.swap_vert_rounded, size: 17, color: BrokaColors.textMid),
+                  const SizedBox(width: 5),
+                  Flexible(child: Text(_sortShort[_sort]!, maxLines: 1,
+                      overflow: TextOverflow.ellipsis, style: const TextStyle(
+                          color: BrokaColors.textMid, fontSize: 12.5,
+                          fontWeight: FontWeight.w600))),
+                  const Icon(Icons.arrow_drop_down_rounded, color: BrokaColors.textMid),
+                ]),
+              ),
             ),
-            const Spacer(),
             if (_items.isNotEmpty)
               TextButton.icon(
                 key: const Key('products-select'),
                 onPressed: _toggleSelecting,
                 icon: Icon(_selecting ? Icons.close_rounded : Icons.checklist_rounded, size: 18),
                 label: Text(_selecting ? 'Cancel' : 'Select'),
-                style: TextButton.styleFrom(foregroundColor: BrokaColors.textMid),
+                style: TextButton.styleFrom(
+                  foregroundColor: BrokaColors.textMid,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 40),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
               ),
           ]),
           const SizedBox(height: 6),

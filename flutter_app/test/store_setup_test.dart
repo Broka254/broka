@@ -448,7 +448,8 @@ void main() {
       final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
       await c.load();
       expect(c.needsBusiness, isFalse);
-      expect(c.steps.first, StoreSetupStep.name);
+      expect(c.steps.first, StoreSetupStep.type,
+          reason: 'physical or virtual is asked before anything else');
       expect(c.name, 'Clanix Electronics');
       expect(c.slug, 'clanix-electronics');
       expect(c.categories, ['Electronics'], reason: "from the signup category");
@@ -472,7 +473,7 @@ void main() {
         final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
         await c.load();
         expect(c.needsBusiness, isTrue, reason: '$type/$tier');
-        expect(c.steps.first, StoreSetupStep.name);
+        expect(c.steps.first, StoreSetupStep.type);
         // The wizard used to turn a buyer into a long-term seller from a
         // step of its own, skipping the questions every other way asks.
         expect(backend.bodiesFor('POST', '/auth/upgrade-to-seller'), isEmpty);
@@ -894,6 +895,13 @@ void main() {
 
       expect(find.byType(ConstellationBackground), findsOneWidget);
       expect(find.byType(WizardProgress), findsOneWidget);
+      // The first question is what kind of business this is: it decides
+      // which of the following steps exist at all.
+      expect(find.text('What kind of business?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('store-type-physical')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
       expect(find.text('Name your store'), findsOneWidget);
       expect(find.text('Clanix Electronics'), findsWidgets);
 
@@ -1142,7 +1150,11 @@ void main() {
     testWidgets('the setup checklist shows what is left, and goes once it is all done',
         (tester) async {
       await openMyStore(tester);
-      // Described, and 4 products: done. No logo, cover or email yet.
+      // Described, and 4 products: done. No logo, cover or email yet. The
+      // business and picture cards sit above it, so it is a short scroll in.
+      await tester.dragUntilVisible(find.byKey(const Key('setup-checklist')),
+          find.byKey(const Key('overview-list')), const Offset(0, -200));
+      await tester.pumpAndSettle();
       expect(find.byKey(const Key('setup-checklist')), findsOneWidget);
       expect(find.text('2 of 5 done'), findsOneWidget);
       expect(find.text('Add your logo'), findsOneWidget);
@@ -1397,10 +1409,13 @@ void main() {
             error: 'Something needs fixing on this step before you continue.',
             animateBackground: false,
             child: switch (step) {
+              StoreSetupStep.type => TypeStep(c),
               StoreSetupStep.name => NameStep(c),
               StoreSetupStep.link => LinkStep(c),
               StoreSetupStep.category => CategoryStep(c),
               StoreSetupStep.location => LocationStep(c),
+              StoreSetupStep.hours => HoursStep(c),
+              StoreSetupStep.coverage => CoverageStep(c),
               StoreSetupStep.logo => LogoStep(c),
               StoreSetupStep.photos => PhotosStep(c),
               StoreSetupStep.email => EmailStep(c, onError: (_) {}),
