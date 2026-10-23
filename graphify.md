@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-263 endpoints served by `backend/main.py`. **Auth** is read from each
+274 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 45, optional 4, public 61, token 4, user 149.
+Counts: admin 45, optional 4, public 62, token 4, user 159.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -279,30 +279,41 @@ Counts: admin 45, optional 4, public 61, token 4, user 149.
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:54) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
-| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:164) |
-| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:151) |
-| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:280) |
-| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:288) |
-| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:213) |
-| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:232) |
-| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:192) |
-| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:201) |
-| GET | `/stores/slug/{slug}` | optional | `get_store_by_slug` (backend/api/domains/stores/router.py:249) |
-| GET | `/stores/{store_id}` | optional | `get_store` (backend/api/domains/stores/router.py:297) |
-| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:311) |
-| DELETE | `/stores/{store_id}` | user | `delete_store` (backend/api/domains/stores/router.py:335) |
-| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:346) |
-| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:360) |
-| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:384) |
-| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:435) |
-| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:524) |
-| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:394) |
-| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:418) |
-| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:441) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:493) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:512) |
-| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:325) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:454) |
+| GET | `/stores` | public | `list_stores` (backend/api/domains/stores/router.py:246) |
+| POST | `/stores` | user | `create_store` (backend/api/domains/stores/router.py:233) |
+| POST | `/stores/billing/callback` | public | `store_billing_callback` (backend/api/domains/stores/router.py:365) |
+| POST | `/stores/billing/callback/{secret}` | public | `store_billing_callback_secured` (backend/api/domains/stores/router.py:373) |
+| POST | `/stores/email/request-code` | user | `request_business_email_code` (backend/api/domains/stores/router.py:298) |
+| POST | `/stores/email/verify` | user | `verify_business_email_code` (backend/api/domains/stores/router.py:317) |
+| GET | `/stores/mine` | user | `get_my_store` (backend/api/domains/stores/router.py:277) |
+| GET | `/stores/name-available` | user | `name_available` (backend/api/domains/stores/router.py:286) |
+| GET | `/stores/slug/{slug}` | optional | `get_store_by_slug` (backend/api/domains/stores/router.py:334) |
+| GET | `/stores/{store_id}` | optional | `get_store` (backend/api/domains/stores/router.py:382) |
+| PATCH | `/stores/{store_id}` | user | `update_store` (backend/api/domains/stores/router.py:396) |
+| DELETE | `/stores/{store_id}` | user | `delete_store` (backend/api/domains/stores/router.py:420) |
+| GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:431) |
+| POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:445) |
+| GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:469) |
+| POST | `/stores/{store_id}/campaign/{token}/event` | public | `attribute_campaign_event` (backend/api/domains/stores/router.py:620) |
+| GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:539) |
+| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:786) |
+| GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:479) |
+| GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:503) |
+| POST | `/stores/{store_id}/manage/listings/bulk` | user | `bulk_listing_action` (backend/api/domains/stores/router.py:525) |
+| GET | `/stores/{store_id}/marketing/campaigns` | user | `list_campaigns` (backend/api/domains/stores/router.py:643) |
+| POST | `/stores/{store_id}/marketing/campaigns` | user | `create_campaign` (backend/api/domains/stores/router.py:658) |
+| GET | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `get_campaign` (backend/api/domains/stores/router.py:674) |
+| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `update_campaign` (backend/api/domains/stores/router.py:686) |
+| DELETE | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `delete_campaign` (backend/api/domains/stores/router.py:699) |
+| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}/creatives/{creative_id}` | user | `update_creative` (backend/api/domains/stores/router.py:726) |
+| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/events` | user | `record_campaign_event` (backend/api/domains/stores/router.py:743) |
+| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/regenerate` | user | `regenerate_campaign` (backend/api/domains/stores/router.py:711) |
+| POST | `/stores/{store_id}/marketing/copy` | user | `copy_suggestions` (backend/api/domains/stores/router.py:759) |
+| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:545) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:601) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:774) |
+| POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:410) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:558) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -458,8 +469,10 @@ Counts: admin 45, optional 4, public 61, token 4, user 149.
 - `billing.py` — Running a store: its plan, the M-Pesa prompt that pays for it, and what a payment buys.
 - `categories.py` — A store's category: one of BROKA's top-level categories.
 - `insights.py` — What a store owner actually needs to know — the store dashboard's data.
+- `marketing.py` — The AI Marketing Studio: campaign configuration, platform-specific content generation, saved drafts, tracked links and measured attribution.
 - `media.py` — Store Media — small abstraction over Store.logo_url / Store.photos.
 - `naming.py` — Store link names: the `clanix` in https://broka.co.ke/store/clanix.
+- `opening_hours.py` — Structured opening hours for a physical store.
 - `rating.py` — Store rating — a shop's own number, 0-10.
 - `review_scope.py` — Which reviews belong to a store.
 - `router.py` — Stores router.
@@ -571,6 +584,7 @@ Counts: admin 45, optional 4, public 61, token 4, user 149.
 - `legal.py` — Durable evidence of what a user accepted, and when.
 - `listing.py` — Listing, Interest, Bid models — re-exported from api.database.
 - `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
+- `marketing.py` — Marketing campaigns and the content generated for them.
 - `media.py` — Image assets - one uploaded image, stored as a few resized WebP files.
 - `payment.py` — FeaturedPayment and VerificationPayment models — re-exported from api.database (duplicate-table fix, see models/user.py).
 - `payment_callback.py` — Durable inbox for payment-provider callbacks that arrive before BROKA can match them to its own payment row.
@@ -633,8 +647,11 @@ Counts: admin 45, optional 4, public 61, token 4, user 149.
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
 | `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1006 |
 | `listings` | `Listing` | backend/api/database.py:349 |
-| `media_assets` | `MediaAsset` | backend/api/models/media.py:70 |
-| `media_blobs` | `MediaBlob` | backend/api/models/media.py:104 |
+| `marketing_campaign_events` | `MarketingCampaignEvent` | backend/api/models/marketing.py:133 |
+| `marketing_campaigns` | `MarketingCampaign` | backend/api/models/marketing.py:51 |
+| `marketing_creatives` | `MarketingCreative` | backend/api/models/marketing.py:95 |
+| `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
+| `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
 | `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1065 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:508 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
@@ -650,12 +667,12 @@ Counts: admin 45, optional 4, public 61, token 4, user 149.
 | `service_communications` | `ServiceCommunication` | backend/api/models/service_communication.py:40 |
 | `sold_out_reports` | `SoldOutReport` | backend/api/models/sold_out_report.py:23 |
 | `store_billing_meta` | `StoreBillingMeta` | backend/api/models/store_billing.py:96 |
-| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:166 |
-| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:185 |
+| `store_category_links` | `StoreCategoryLink` | backend/api/models/store.py:203 |
+| `store_daily_counts` | `StoreDailyCount` | backend/api/models/store.py:222 |
 | `store_payments` | `StorePayment` | backend/api/models/store_billing.py:62 |
-| `store_rating_snapshots` | `StoreRatingSnapshot` | backend/api/models/store.py:219 |
+| `store_rating_snapshots` | `StoreRatingSnapshot` | backend/api/models/store.py:256 |
 | `store_subscriptions` | `StoreSubscription` | backend/api/models/store_billing.py:39 |
-| `stores` | `Store` | backend/api/models/store.py:65 |
+| `stores` | `Store` | backend/api/models/store.py:75 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:569 |
@@ -692,7 +709,7 @@ of a change.
 - **reviews** — domains: stores; core: audit, events; database, security
 - **service_communications** — core: audit, client_ip, config, idempotency, observability, permissions, push_devices, rate_limit, timeutil, workers; database, security
 - **showcase** — domains: media, premium; core: hf_image_client, image_processing, rate_limit; database, security
-- **stores** — domains: auth, categories, listings, media, payments, pricing, reviews, trust; core: audit, client_ip, config, geo, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
+- **stores** — domains: auth, categories, listings, media, payments, pricing, reviews, trust; core: audit, client_ip, config, gemini, geo, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
 - **traders** — domains: listings, media, trust; core: geo, text_search; database, security
 - **trending** — domains: listings; database
 - **trust** — domains: listings; core: config; database
@@ -740,7 +757,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-124 files in `backend/tests/`.
+126 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -848,7 +865,9 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_sold_out_reports.py` — Sold out with payments outside BROKA: agreed deals no longer take a listing off sale (listings/stock.py), buyers report an item gone and it…
 - `test_store_billing.py` — Online store plans (PRICING.md §5; api/domains/stores/billing.py).
 - `test_store_rating.py` — Store rating, directory order, and the store insights endpoint.
+- `test_store_schema_migration.py` — The store-type migration on a database that predates it.
 - `test_store_setup.py` — Online Stores phase 2: setting a store up, and what its owner sees.
+- `test_store_types_and_marketing.py` — Physical/virtual stores, opening hours, delivery coverage, the owner's catalogue tools, and the AI Marketing Studio.
 - `test_stores.py` — BROKA - Store Feature Tests Run: pytest backend/tests/test_stores.py -v
 - `test_stores_hardening.py` — Regression tests for the Store implementation audit (2026-09-14).
 - `test_text_guard.py` — Contact-leak scanning (api/core/text_guard.py) and where its findings go.
@@ -1032,11 +1051,13 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/kenya_locations.dart` — Kenya's 47 counties and their subcounties, for location pickers.
 - `domain/models/store.dart` — BROKA — Store domain model
 - `domain/models/store_billing.dart` — BROKA — Store billing domain model
+- `domain/models/store_campaign.dart` — BROKA — AI Marketing Studio models
 - `domain/models/store_insights.dart` — BROKA — the store dashboard's data
 - `domain/models/store_product.dart` — A product in the owner's own store, as My Store manages it (GET /stores/{id}/manage/listings): the listing, whether buyers can see it, and…
 - `domain/models/store_reviews.dart` — A store's buyer reviews, as GET /stores/{id}/reviews returns them (backend/api/domains/stores/service.py: store_reviews).
 - `domain/store_categories.dart` — A store's category is one of BROKA's top-level categories (the home screen's category rail).
 - `domain/store_locator.dart` — BROKA — a live location fix, as the store screens ask for one.
+- `presentation/marketing_studio_screen.dart` — BROKA — AI Marketing Studio.
 - `presentation/my_store_screen.dart` — My Store - the owner's dashboard.
 - `presentation/nearby_stores_screen.dart` — BROKA — Stores near you
 - `presentation/setup/store_setup_controller.dart` — State behind the store setup wizard and the store's settings pages.
