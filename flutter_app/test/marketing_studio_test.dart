@@ -17,6 +17,7 @@ import 'package:broka/features/stores/domain/models/store.dart';
 import 'package:broka/features/stores/domain/models/store_campaign.dart';
 import 'package:broka/features/stores/presentation/marketing_studio_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_api.dart';
@@ -104,9 +105,21 @@ void main() {
   setUpAll(installFakeApi);
   late _FakeShare share;
 
+  String? copied;
   setUp(() {
     share = _FakeShare();
     clearFakeRequests();
+    // A widget test has no clipboard behind SystemChannels.platform: without
+    // a handler the write never completes, so the screen never says it copied
+    // and the phone's own clipboard has to stand in here.
+    copied = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String?;
+      }
+      return null;
+    });
   });
 
   Future<void> pump(WidgetTester tester, {Map<String, dynamic>? campaign}) async {
@@ -192,6 +205,7 @@ void main() {
 
     // The caption reached the clipboard, but BROKA did not see it posted:
     // "Times you shared" must stay untouched.
+    expect(copied, contains('KES 2,500'));
     expect(find.text('Caption copied'), findsOneWidget);
     expect(fakeRequests.where((r) => r.method == 'POST'), isEmpty);
   });

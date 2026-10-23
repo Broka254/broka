@@ -682,6 +682,10 @@ void main() {
       // says so rather than pretending to continue.
       await tester.tap(find.text('Skip for now')); // hours
       await tester.pumpAndSettle();
+      // Coverage is its own step for a physical shop too, and is optional:
+      // no counties and no delivery note means the button offers a skip.
+      await tester.tap(find.text('Skip for now')); // coverage
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Skip for now')); // logo
       await tester.pumpAndSettle();
       // Shop photos are compulsory: the button no longer offers a skip, so
