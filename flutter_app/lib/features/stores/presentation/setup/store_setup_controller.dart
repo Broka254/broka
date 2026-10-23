@@ -835,8 +835,8 @@ class StoreSetupController extends ChangeNotifier {
       case StoreSetupStep.coverage:
         // Optional: a store that hasn't said where it serves is honest
         // about it, and there is nothing here the server would refuse.
-        if (deliveryNote.trim().length > 300) {
-          return 'Keep the delivery note under 300 characters.';
+        if (deliveryNote.trim().length > 200) {
+          return 'Keep the delivery note under 200 characters.';
         }
         return null;
       case StoreSetupStep.logo:

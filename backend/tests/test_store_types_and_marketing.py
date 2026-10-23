@@ -7,6 +7,7 @@ record. The AI provider is always absent or instructed to fail here: the
 studio's template writer is part of the feature, and a test that needed a
 paid key could not run in CI.
 """
+import io
 import itertools
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +23,15 @@ from api.domains.stores import opening_hours
 from api.models.marketing import MarketingCampaign, MarketingCreative
 from api.models.store import Store
 from tests.legal_payload import legal_payload
+
+
+def _jpeg() -> bytes:
+    """A real image, so the poster renderer has something to draw on."""
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (640, 480), (24, 58, 120)).save(buffer, format="JPEG")
+    return buffer.getvalue()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -185,7 +195,24 @@ class TestStoreTypes:
         # Nothing changed on the failed switch.
         assert (await client.get(f"/stores/{store['id']}")).json()["store_type"] == "virtual"
 
-    async def test_switching_to_physical_with_a_photo_works(self, client):
+    async def test_switching_to_physical_requires_a_location_too(self, client):
+        _, headers = await _register(client)
+        store = (await _create_store(
+            client, headers, name="Nowhere Virtual", slug="nowhere-virtual",
+            store_type="virtual",
+        )).json()
+        # A photo alone is not premises: a physical storefront with no place
+        # a buyer can go would publish "Kenya" as its address.
+        r = await client.patch(
+            f"/stores/{store['id']}",
+            json={"store_type": "physical", "photos": [_SHOP_PHOTO]},
+            headers=headers,
+        )
+        assert r.status_code == 400
+        assert "county" in r.json()["detail"].lower()
+        assert (await client.get(f"/stores/{store['id']}")).json()["store_type"] == "virtual"
+
+    async def test_switching_to_physical_with_a_photo_and_a_location_works(self, client):
         _, headers = await _register(client)
         store = (await _create_store(
             client, headers, name="Virtual Then Real", slug="virtual-then-real",
@@ -193,7 +220,29 @@ class TestStoreTypes:
         )).json()
         r = await client.patch(
             f"/stores/{store['id']}",
-            json={"store_type": "physical", "photos": [_SHOP_PHOTO]},
+            json={
+                "store_type": "physical", "photos": [_SHOP_PHOTO],
+                "county": "Nairobi", "subcounty": "Westlands",
+            },
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["store_type"] == "physical"
+        assert r.json()["county"] == "Nairobi"
+
+    async def test_a_store_with_a_pin_can_become_physical(self, client):
+        _, headers = await _register(client)
+        store = (await _create_store(
+            client, headers, name="Pinned Online", slug="pinned-online",
+            store_type="virtual",
+        )).json()
+        r = await client.patch(
+            f"/stores/{store['id']}",
+            json={
+                "store_type": "physical", "photos": [_SHOP_PHOTO],
+                "lat": -1.286, "lng": 36.817,
+                "location_description": "Kimathi Street",
+            },
             headers=headers,
         )
         assert r.status_code == 200, r.text
@@ -539,6 +588,47 @@ class TestMarketingCampaigns:
         assert all(c["source"] == "template" for c in creatives)
         assert campaign["plan"]
 
+    async def test_a_virtual_store_s_copy_never_claims_premises_it_lacks(self, client):
+        _, headers = await _register(client)
+        # A virtual store that once had an address on file: the switch keeps
+        # it, and the copy must not turn it back into "come to our shop".
+        store = await _store(
+            client, headers, name="Shoreline Online", slug="shoreline-online",
+            store_type="virtual", county="Mombasa", subcounty="Nyali",
+            service_areas=["Siaya"], delivery_note="Courier within Siaya.",
+        )
+        listing = await _listing(client, headers, store["id"], name="Beach Towel")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing),
+            headers=headers,
+        )).json()
+
+        body = " ".join(c["body"] + " " + (c["headline"] or "") for c in campaign["creatives"])
+        # No shopfront, and no Mombasa address dressed up as one.
+        assert "Nyali" not in body
+        assert "Mombasa" not in body
+        # The declared coverage is what a buyer is told.
+        assert "Siaya" in body
+
+    async def test_a_physical_store_s_copy_keeps_its_shop_and_its_coverage(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Kisumu Hardware", slug="kisumu-hardware",
+            store_type="physical", county="Kisumu", subcounty="Kisumu Central",
+            service_areas=["Nationwide"], photos=[_SHOP_PHOTO],
+        )
+        listing = await _listing(client, headers, store["id"], name="Paint Brush")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing),
+            headers=headers,
+        )).json()
+        whatsapp = [c for c in campaign["creatives"] if c["platform"] == "whatsapp"][0]
+        # Where to walk in and where it delivers are both true and both said.
+        assert "Kisumu Central" in whatsapp["body"]
+        assert "Nationwide" in whatsapp["body"]
+
     async def test_a_discount_needs_the_seller_to_state_it(self, client):
         _, headers = await _register(client)
         store = await _store(client, headers, name="Discount Shop", slug="discount-shop")
@@ -694,6 +784,159 @@ class TestMarketingCampaigns:
         assert again.status_code == 200
         assert len(again.json()["creatives"]) == len(body["creatives"])
 
+    async def test_a_failed_regenerate_keeps_the_seller_s_edited_posts(self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Edits Shop", slug="edits-shop")
+        listing = await _listing(client, headers, store["id"], name="Edited Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+        creative = campaign["creatives"][0]
+        edited = "My own caption, written by hand at KES 2,500."
+        assert (await client.patch(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}/creatives/{creative['id']}",
+            json={"body": edited}, headers=headers,
+        )).status_code == 200
+
+        async def broken(prompt):
+            raise RuntimeError("provider is down")
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", broken)
+
+        r = await client.post(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}/regenerate",
+            headers=headers,
+        )
+        # Actionable failure, and the edited post is exactly as it was.
+        assert r.status_code == 502
+        assert "unchanged" in r.json()["detail"]
+        kept = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=headers,
+        )).json()
+        assert [c["body"] for c in kept["creatives"] if c["id"] == creative["id"]] == [edited]
+
+    async def test_an_unusable_provider_answer_also_keeps_edited_posts(self, client, monkeypatch):
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Garbled Shop", slug="garbled-shop")
+        listing = await _listing(client, headers, store["id"], name="Garbled Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+        creative = campaign["creatives"][0]
+        edited = "Hand-written caption with the true price KES 2,500."
+        await client.patch(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}/creatives/{creative['id']}",
+            json={"body": edited}, headers=headers,
+        )
+
+        async def garbled(prompt):
+            return "not json at all"
+
+        import api.domains.stores.marketing as marketing
+        monkeypatch.setattr(marketing, "_provider_available", lambda: "gemini")
+        monkeypatch.setattr(marketing, "_call_gemini", garbled)
+
+        r = await client.post(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}/regenerate",
+            headers=headers,
+        )
+        assert r.status_code == 502
+        kept = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=headers,
+        )).json()
+        assert [c["body"] for c in kept["creatives"] if c["id"] == creative["id"]] == [edited]
+
+    async def test_editing_a_poster_backed_creative_redraws_the_image(self, client):
+        from api.models.media import AttachState, MediaAsset
+
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Redraw Shop", slug="redraw-shop")
+        upload = await client.post(
+            "/media/images", headers=headers, data={"purpose": "listing_photo"},
+            files={"file": ("photo.jpg", _jpeg(), "image/jpeg")},
+        )
+        assert upload.status_code == 201, upload.text
+        listing = (await client.post("/listings/", json={
+            "description": "Brand new, sealed in the box with a one-year shop receipt. "
+                           "Works on all Kenyan networks.",
+            "name": "Redraw Item", "category": "Electronics", "price": 3200,
+            "lat": -1.0, "lng": 36.0, "store_id": store["id"],
+            "photo_ids": [upload.json()["id"]],
+        }, headers=headers)).json()
+
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+        creative = campaign["creatives"][0]
+        assert creative["asset"], "a campaign with a real photo gets a poster"
+        old_asset = creative["asset"]["id"]
+
+        edited = "Now KES 2,900 - the shop's own words."
+        r = await client.patch(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}/creatives/{creative['id']}",
+            json={"body": edited}, headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        updated = next(c for c in r.json()["creatives"] if c["id"] == creative["id"])
+        # The saved image says what the post now says: a new file, not the
+        # old one that still carries the previous caption.
+        assert updated["asset"]["id"] != old_asset
+
+        async with AsyncSessionLocal() as db:
+            old = (await db.execute(
+                select(MediaAsset).where(MediaAsset.id == old_asset)
+            )).scalar_one()
+        assert old.attach_state in (AttachState.DELETING, AttachState.PURGED)
+
+    async def test_a_campaign_poster_is_retired_when_the_campaign_is_deleted(self, client):
+        from api.models.media import AttachState, MediaAsset, MediaPurpose
+
+        _, headers = await _register(client)
+        store = await _store(client, headers, name="Poster Shop", slug="poster-shop")
+        listing = await _listing(client, headers, store["id"], name="Poster Item")
+        campaign = (await client.post(
+            f"/stores/{store['id']}/marketing/campaigns",
+            json=_campaign_body(store, listing), headers=headers,
+        )).json()
+
+        # A poster asset standing in for the rendered PNG (no object storage
+        # in the test): the row is what the sweep reads.
+        async with AsyncSessionLocal() as db:
+            asset = MediaAsset(
+                owner_id=(await db.execute(
+                    select(Store).where(Store.id == store["id"])
+                )).scalar_one().owner_id,
+                purpose=MediaPurpose.MARKETING_CREATIVE, storage="db",
+                width=1080, height=1080, sha256="0" * 64, variants="{}",
+                attach_state=AttachState.ATTACHED,
+            )
+            db.add(asset)
+            await db.flush()
+            await db.execute(
+                update(MarketingCreative)
+                .where(MarketingCreative.campaign_id == campaign["id"])
+                .values(asset_id=asset.id)
+            )
+            await db.commit()
+            asset_id = asset.id
+
+        assert (await client.delete(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=headers,
+        )).status_code == 200
+
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(
+                select(MediaAsset).where(MediaAsset.id == asset_id)
+            )).scalar_one()
+        # Queued for the media sweep, not left attached forever.
+        assert row.attach_state == AttachState.DELETING
+        assert row.deleted_at is not None
+
     async def test_download_and_share_events_are_counted_as_actions(self, client):
         _, headers = await _register(client)
         store = await _store(client, headers, name="Events Shop", slug="events-shop")
@@ -745,6 +988,30 @@ class TestMarketingCampaigns:
             f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=owner,
         )).json()
         assert later["events"]["by_kind"]["product_view"] >= 1
+
+        # A product page opened from a campaign link credits the product
+        # view in the same counted visit - and a reload inside the visit
+        # window credits nothing, so it cannot be inflated.
+        _, reader = await _register(client, tier=None)
+        pv1 = await client.post(
+            f"/stores/{store['id']}/visit",
+            json={"via": "tiktok", "campaign": campaign["link_token"],
+                  "product_view": True, "visitor": "buyer-prodview-1"},
+            headers=reader,
+        )
+        assert pv1.status_code == 202
+        assert pv1.json()["counted"] is True
+        pv2 = await client.post(
+            f"/stores/{store['id']}/visit",
+            json={"via": "tiktok", "campaign": campaign["link_token"],
+                  "product_view": True, "visitor": "buyer-prodview-1"},
+            headers=reader,
+        )
+        assert pv2.json()["counted"] is False
+        after = (await client.get(
+            f"/stores/{store['id']}/marketing/campaigns/{campaign['id']}", headers=owner,
+        )).json()
+        assert after["events"]["by_kind"]["product_view"] == later["events"]["by_kind"]["product_view"] + 1
 
         # Another store cannot be credited with this campaign's token.
         _, other = await _register(client)

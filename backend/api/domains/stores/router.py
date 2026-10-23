@@ -147,6 +147,10 @@ class VisitIn(BaseModel):
     # belongs to this store counts; anything else is ignored, and the
     # campaign is credited only when the visit itself was counted.
     campaign: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,32}$")
+    # The page was opened on a product, not just the store's home: the same
+    # counted visit also credits the campaign with a product view, with no
+    # second call and no separate visitor identity.
+    product_view: bool = False
 
     @field_validator("via")
     @classmethod
@@ -593,7 +597,12 @@ async def record_visit(
     if counted and body.campaign:
         # Credited only when the visit itself counted, so reloading the page
         # can't inflate a campaign - the same rule the visit follows.
-        await MarketingService(db).attribute(store_id, body.campaign, "visit")
+        # A product page credits a product view as well; the visitor was
+        # recorded once, so both counters move at most once per half hour.
+        marketing = MarketingService(db)
+        await marketing.attribute(store_id, body.campaign, "visit")
+        if body.product_view:
+            await marketing.attribute(store_id, body.campaign, "product_view")
     return {"counted": counted}
 
 

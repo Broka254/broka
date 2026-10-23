@@ -45,6 +45,11 @@ dependencies:
   path_provider: ^2.1.2
   http_parser: ^4.0.2
   qr_flutter: ^4.1.0
+  # The end of the Marketing Studio workflow: a generated poster is saved to
+  # the gallery or handed to WhatsApp through the phone's own share sheet.
+  # BROKA has no publishing permission, and copying a caption is not the
+  # same as getting the image out.
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:

@@ -953,7 +953,7 @@ class _BusinessCard extends StatelessWidget {
   }
 }
 
-/// The store's plan at a glance, above the open/paused switch: unpaid and/// The store's plan at a glance, above the open/paused switch: unpaid and
+/// The store's plan at a glance, above the open/paused switch: unpaid and
 /// the shop is hidden from buyers, or paid up until a date. Tapping either
 /// opens the billing screen (stores/billing.py).
 class _StorePlanCard extends StatelessWidget {

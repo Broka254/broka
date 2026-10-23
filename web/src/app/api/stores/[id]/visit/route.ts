@@ -15,5 +15,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       typeof body.campaign === 'string' && /^[A-Za-z0-9_-]{8,32}$/.test(body.campaign)
         ? body.campaign
         : undefined,
+    // A product page credits the campaign with a product view as well; the
+    // API applies it to the same counted visit, so a reload cannot inflate
+    // either number.
+    ...(body.product_view === true ? { product_view: true } : {}),
   }))
 }

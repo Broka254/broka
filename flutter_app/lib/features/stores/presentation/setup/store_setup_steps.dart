@@ -784,7 +784,9 @@ class CoverageStep extends StatelessWidget {
         onChanged: c.setDeliveryNote,
         label: 'How buyers get their order (optional)',
         icon: Icons.local_shipping_outlined,
-        maxLength: 300,
+        // The server stores this column as VARCHAR(200); a longer note
+        // would only fail at save after the seller typed it.
+        maxLength: 200,
         maxLines: 3,
         hint: 'e.g. Same-day delivery in Kisumu, 2-3 days elsewhere. Pickup at our shop in Kondele.',
         textCapitalization: TextCapitalization.sentences,

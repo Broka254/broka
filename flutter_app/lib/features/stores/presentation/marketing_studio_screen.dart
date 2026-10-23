@@ -27,6 +27,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/utils/result.dart';
 import '../../../main.dart' show BrokaColors;
 import '../../../widgets/broka_image.dart';
+import '../data/creative_share.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store.dart';
 import '../domain/models/store_campaign.dart';
@@ -389,8 +390,10 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
     });
     // Only live products: the server refuses to promote anything buyers
     // can't see right now, so offering them here would only fail later.
+    // The server's page ceiling: everything a seller can promote in one
+    // campaign is reachable here, not just the first fifty products.
     final result = await widget.repo.getOwnerProducts(widget.store.id,
-        state: StoreProductState.live, limit: 50);
+        state: StoreProductState.live, limit: 100);
     if (!mounted) return;
     setState(() {
       _productsLoading = false;
@@ -791,10 +794,14 @@ class _ProductChoice extends StatelessWidget {
 
 class CampaignDetailScreen extends StatefulWidget {
   const CampaignDetailScreen({super.key, required this.store, required this.repo,
-      required this.campaignId});
+      required this.campaignId, this.share = const DeviceCreativeShare()});
   final Store store;
   final StoresRepository repo;
   final String campaignId;
+
+  /// How a poster or post leaves the phone. Injected in tests; on a device
+  /// it is the OS share sheet (data/creative_share.dart).
+  final CreativeShare share;
 
   @override
   State<CampaignDetailScreen> createState() => _CampaignDetailScreenState();
@@ -930,9 +937,54 @@ class _CampaignDetailScreenState extends State<CampaignDetailScreen> {
         kind: kind, platform: platform);
   }
 
+  /// The rectangle the iPad share popover points at. Null elsewhere, and
+  /// harmless there - phones ignore it.
+  Rect? _shareOrigin() {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
+
   Future<void> _copyCaption(CampaignCreative creative) async {
     _record('shared', creative.platform);
     await _copy(context, creative.caption, 'Caption');
+  }
+
+  /// Saves or sends the campaign's rendered poster - the one file the
+  /// studio actually produced. Recorded as `downloaded`: the image has left
+  /// BROKA for the seller's own use, not been posted by BROKA.
+  Future<void> _saveImage(CampaignCreative creative) async {
+    final image = creative.image?.large ?? creative.image?.medium ?? creative.image?.thumb;
+    if (image == null) return;
+    final ok = await widget.share.image(
+      image,
+      caption: creative.caption,
+      fileName: 'broka-${creative.platform}-${creative.id}.png',
+      origin: _shareOrigin(),
+    );
+    if (!mounted) return;
+    if (ok) {
+      _record('downloaded', creative.platform);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Image saved or sent')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Couldn't get the image ready - copy the caption instead.")));
+    }
+  }
+
+  /// Hands the written post (with its tracked link) to any app on the phone.
+  Future<void> _sharePost(CampaignCreative creative) async {
+    final link = _campaign?.linkFor(creative.platform) ?? '';
+    final text = [creative.caption, if (link.isNotEmpty) link].join('\n\n');
+    final ok = await widget.share.text(text, origin: _shareOrigin());
+    if (!mounted) return;
+    if (ok) {
+      _record('shared', creative.platform);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Couldn't open the share sheet - copy the caption instead.")));
+    }
   }
 
   Future<void> _copyLink(MarketingCampaign campaign, String platform) async {
@@ -1033,6 +1085,10 @@ class _CampaignDetailScreenState extends State<CampaignDetailScreen> {
                               onCopyCaption: () => _copyCaption(creative),
                               onCopyLink: () => _copyLink(campaign, creative.platform),
                               onOpenPlatform: () => _openPlatform(creative, campaign),
+                              onSaveImage: creative.image == null
+                                  ? null
+                                  : () => _saveImage(creative),
+                              onSharePost: () => _sharePost(creative),
                             ),
                           ),
                       ],
@@ -1216,6 +1272,8 @@ class _CreativeCard extends StatelessWidget {
     required this.onCopyCaption,
     required this.onCopyLink,
     required this.onOpenPlatform,
+    required this.onSaveImage,
+    required this.onSharePost,
   });
 
   final CampaignCreative creative;
@@ -1224,6 +1282,11 @@ class _CreativeCard extends StatelessWidget {
   final VoidCallback onCopyCaption;
   final VoidCallback onCopyLink;
   final VoidCallback onOpenPlatform;
+
+  /// Null when this creative has no rendered poster (only the first one
+  /// does): a Save button that saves nothing would be a lie.
+  final VoidCallback? onSaveImage;
+  final VoidCallback onSharePost;
 
   @override
   Widget build(BuildContext context) {
@@ -1300,6 +1363,23 @@ class _CreativeCard extends StatelessWidget {
         ],
         const SizedBox(height: 6),
         Wrap(spacing: 4, runSpacing: 2, children: [
+          if (onSaveImage != null)
+            TextButton.icon(
+              key: Key('save-image-${creative.id}'),
+              onPressed: onSaveImage,
+              icon: const Icon(Icons.download_rounded, size: 16),
+              label: const Text('Save image'),
+              style: TextButton.styleFrom(foregroundColor: BrokaColors.gold,
+                  visualDensity: VisualDensity.compact),
+            ),
+          TextButton.icon(
+            key: Key('share-post-${creative.id}'),
+            onPressed: onSharePost,
+            icon: const Icon(Icons.ios_share_rounded, size: 16),
+            label: const Text('Share post'),
+            style: TextButton.styleFrom(foregroundColor: BrokaColors.textHigh,
+                visualDensity: VisualDensity.compact),
+          ),
           TextButton.icon(
             key: Key('copy-caption-${creative.id}'),
             onPressed: onCopyCaption,
@@ -1386,6 +1466,10 @@ class _MeasuredCard extends StatelessWidget {
         Row(children: [
           tile(Icons.visibility_outlined, '${events.visits}', 'Shop visits\nfrom links'),
           tile(Icons.shopping_bag_outlined, '${events.productViews}', 'Product views\nfrom links'),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          tile(Icons.download_rounded, '${events.downloads}', 'Images saved\nor sent'),
           tile(Icons.ios_share_rounded, '${events.shares}', 'Times you\nshared'),
         ]),
         const SizedBox(height: 12),

@@ -56,6 +56,29 @@ describe('storefront API routes', () => {
       visitor: 'abcdefgh1234',
     })
   })
+  it('credits a campaign product view only when the page says it is a product', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 202 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const make = (body: Record<string, unknown>) =>
+      new Request('https://broka.co.ke/api/stores/s1/visit', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+    await visit(make({ campaign: 'krafty-token-1', product_view: true }), params({ id: 's1' }))
+    const [, productInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(productInit.body))).toMatchObject({
+      campaign: 'krafty-token-1',
+      product_view: true,
+    })
+
+    // A store home page carries the token but not a product view.
+    await visit(make({ campaign: 'krafty-token-1' }), params({ id: 's1' }))
+    const [, homeInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(homeInit.body))).not.toHaveProperty('product_view')
+  })
+
   it("sends the visitor's address with the storefront key, and nothing without the key", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 202 }))
     vi.stubGlobal('fetch', fetchMock)

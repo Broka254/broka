@@ -21,7 +21,18 @@ function visitorId(): string | undefined {
   }
 }
 
-export function VisitBeacon({ storeId, via, campaign }: { storeId: string; via?: string; campaign?: string }) {
+export function VisitBeacon({
+  storeId,
+  via,
+  campaign,
+  productView = false,
+}: {
+  storeId: string
+  via?: string
+  campaign?: string
+  /** The page is a product, so a campaign also gets the product view. */
+  productView?: boolean
+}) {
   const sent = useRef(false)
   useEffect(() => {
     if (sent.current) return
@@ -32,11 +43,12 @@ export function VisitBeacon({ storeId, via, campaign }: { storeId: string; via?:
       body: JSON.stringify({
         via,
         campaign,
+        product_view: productView || undefined,
         referrer: document.referrer ? document.referrer.slice(0, 500) : undefined,
         visitor: visitorId(),
       }),
       keepalive: true,
     }).catch(() => {})
-  }, [storeId, via, campaign])
+  }, [storeId, via, campaign, productView])
   return null
 }

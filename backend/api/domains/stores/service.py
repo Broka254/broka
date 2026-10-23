@@ -1102,13 +1102,21 @@ class StoreService:
             # Switching changes what the storefront may claim, not what the
             # owner already told us: a move to virtual keeps the address and
             # pin stored (they are not destroyed), it just stops publishing
-            # them as premises. A move to physical needs a real shop photo,
-            # because a physical storefront without one is the state the
-            # original rule exists to prevent.
+            # them as premises. A move to physical needs both a real shop
+            # photo and a location buyers could find, because a physical
+            # storefront with neither is exactly the state the rules exist
+            # to prevent. Checked here, not only in the app: any client can
+            # PATCH store_type, and the server is what the storefront reads.
             if requested_type == "physical" and not self._has_shop_photo(store):
                 raise HTTPException(
                     status_code=400,
                     detail="Add at least one photo of your shop before switching to a physical store.",
+                )
+            if requested_type == "physical" and not self._has_premises_location(store):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Add your county and area under Where to find you before "
+                           "switching to a physical store - buyers need somewhere to go.",
                 )
             store.store_type = requested_type
         if "opening_hours" in data:
@@ -1252,6 +1260,19 @@ class StoreService:
                 detail="Choose a physical or virtual store.",
             )
         return value.strip().lower()
+
+    @staticmethod
+    def _has_premises_location(store: Store) -> bool:
+        """Whether the store has enough location information to be published
+        as a place a buyer can visit: a county, a written location, or a pin
+        the owner set at their shop. A virtual store that was given an
+        address already satisfies this, so switching it back loses nothing.
+        """
+        if (store.county or "").strip():
+            return True
+        if (store.location_description or "").strip():
+            return True
+        return store.lat is not None and store.lng is not None
 
     @staticmethod
     def _opening_hours_column(data: dict) -> Optional[str]:

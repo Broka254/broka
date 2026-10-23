@@ -58,7 +58,7 @@ from api.models.marketing import (
     LANGUAGES, OBJECTIVES, PLATFORMS, TONES, MarketingCampaign,
     MarketingCampaignEvent, MarketingCreative,
 )
-from api.models.media import MediaPurpose
+from api.models.media import AttachState, MediaAsset, MediaPurpose
 from api.models.store import Store, StoreDailyCount
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,16 @@ MAX_INSTRUCTIONS = 600
 MAX_AUDIENCE = 120
 MAX_TITLE = 120
 MAX_CREATIVES = 12
+
+
+class GenerationUnavailable(Exception):
+    """The AI provider errored on a campaign that already has creatives.
+
+    Regenerating must not trade the seller's edited posts for template
+    output they did not ask for, so the caller turns this into an
+    actionable error and leaves the campaign exactly as it was.
+    """
+
 
 # Each platform has its own shape and limits. They are applied to model
 # output too - a 900-character "tweet" is truncated at a sentence boundary,
@@ -203,6 +213,59 @@ def _price_label(product: dict) -> Optional[str]:
     return f"KES {price:,.0f}" + (f" per {unit}" if unit else "")
 
 
+def _premises(store: Store) -> Optional[str]:
+    """Where a buyer can walk in, or None for a store without premises.
+
+    A virtual store keeps any address it had (the switch never destroys
+    it), so this checks the TYPE, not the presence of a county: reusing
+    the stored county as "where we are" would put a shopfront in copy for
+    a business that has none.
+    """
+    if (store.store_type or "physical") == "virtual":
+        return None
+    return ", ".join(x for x in [store.subcounty, store.county] if x) or None
+
+
+def _coverage(store: Store) -> Optional[str]:
+    """Where the store delivers - its declared service areas, then (for a
+    shop only) its own town. Delivery coverage is not the address: a shop
+    in Kisumu may deliver nationwide."""
+    try:
+        areas = json.loads(store.service_areas or "[]")
+    except (TypeError, ValueError):
+        areas = []
+    areas = (
+        [a for a in areas if isinstance(a, str) and a.strip()]
+        if isinstance(areas, list) else []
+    )
+    if areas:
+        return "Nationwide" if len(areas) == 1 and areas[0].lower() == "nationwide" \
+            else ", ".join(areas)
+    return _premises(store)
+
+
+def _coverage_sentence(store: Store, swahili: bool) -> Optional[str]:
+    """A full sentence about delivery, or None when nothing is declared.
+
+    "Delivers to Nationwide" is not English; the national case gets its own
+    wording in both languages.
+    """
+    coverage = _coverage(store)
+    if not coverage:
+        return None
+    if coverage == "Nationwide":
+        return "Tunawasilisha nchini kote." if swahili else "Delivers nationwide."
+    return f"Tunawasilisha {coverage}." if swahili else f"Delivers to {coverage}."
+
+
+def _coverage_bullet(store: Store) -> Optional[str]:
+    """The short form used in a WhatsApp message's bullet list."""
+    coverage = _coverage(store)
+    if not coverage:
+        return None
+    return "Nationwide delivery" if coverage == "Nationwide" else f"Delivers to {coverage}"
+
+
 def campaign_link(store: Store, token: str, platform: str) -> str:
     """The storefront link a campaign hands out. It carries both the
     platform and the campaign token, so a visit can be attributed to the
@@ -319,11 +382,23 @@ def _prompt(store: Store, campaign: MarketingCampaign, products: list[dict],
         if campaign.objective == "discount" else
         f"Extra instructions from the seller: {campaign.instructions or '(none)'}"
     )
+    # A virtual store has no shop to visit, and its stored county is not an
+    # address the model may hand to readers. Giving it the coverage instead
+    # keeps the copy factual and stops "come to our shop in X" appearing
+    # for a business that has no shopfront.
+    virtual = (store.store_type or "physical") == "virtual"
+    if virtual:
+        place_line = "No shop customers can visit - an online store only."
+    else:
+        place_line = _premises(store) or "Kenya (no town stated)"
+    coverage_line = ("nationwide" if _coverage(store) == "Nationwide"
+                     else _coverage(store) or "not stated")
     return f"""You write social media marketing for a Kenyan small business on BROKA.
 Store: {store.name}
-Type: {store.store_type or 'physical'}
+Type: {"virtual (online only, no shop to visit)" if virtual else "physical (a shop customers can visit)"}
 What it sells: {store.category or 'general goods'}
-Where it is: {', '.join(x for x in [store.subcounty, store.county] if x) or 'Kenya'}
+Where it is: {place_line}
+Delivers to: {coverage_line}
 Products (these are the ONLY facts you may state):
 {chr(10).join(product_lines) or '(the store itself, no single product)'}
 
@@ -343,6 +418,9 @@ Rules:
 - Use only the product facts above. Do not invent warranties, specifications, certifications,
   stock counts, delivery promises, prices, discounts, deadlines or brand claims.
 - Never say BROKA holds payments, guarantees delivery or verifies the product.
+- Never invent a shop address or tell readers to visit a shop that is not the
+  physical location above. If the store is virtual, never imply it has premises.
+- The delivery line is the seller's coverage. Do not narrow it or widen it.
 - WhatsApp messages and Instagram/Facebook captions may be multi-line. X must be ≤280
   characters including its link. TikTok output is a script/storyboard, never called a video.
 - Each platform must get genuinely different copy - not the same text with the platform name changed.
@@ -510,19 +588,19 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
     primary = products[0] if products else None
     name = primary["name"] if primary else store.name
     price = _price_label(primary) if primary else None
-    place = ", ".join(x for x in [store.subcounty, store.county] if x)
+    # Two different facts, deliberately kept apart: where a buyer can walk
+    # in (physical stores only) and where the store delivers (either kind).
+    premises = _premises(store)
+    coverage = _coverage(store)
     shop_line = (f"Duka la {store.name}" if sw else f"{store.name}")
+    delivery = _coverage_sentence(store, sw)
     if sw:
         lead = f"{name} ipo {shop_line}."
-        detail = (f"Bei: {price}. " if price else "") + (
-            f"Tunawasilisha {place}. " if place else ""
-        )
+        detail = (f"Bei: {price}. " if price else "") + (f"{delivery} " if delivery else "")
         cta = "Fungua kiungo kuona zaidi."
     else:
         lead = f"{name} is available at {store.name}."
-        detail = (f"Price: {price}. " if price else "") + (
-            f"Serving {place}. " if place else ""
-        )
+        detail = (f"Price: {price}. " if price else "") + (f"{delivery} " if delivery else "")
         cta = "Open the link to see more."
     description = (primary or {}).get("description") or (store.description or "")
     description = _sentence_trim(description, 180)
@@ -539,7 +617,9 @@ def _template_creatives(store: Store, campaign: MarketingCampaign,
             # A chat message: short lines, price and place as bullets, one
             # link. Read on a phone in a conversation, not a web page.
             lines = [f"*{name}*", lead, "".join(f"• {x}\n" for x in [
-                price, f"At {place}" if place else None,
+                price,
+                f"At {premises}" if premises else None,
+                _coverage_bullet(store) if coverage and coverage != premises else None,
             ] if x).strip(), offer, description, f"{cta} {link}"]
             body = "\n".join(x for x in lines if x)
             out.append({
@@ -973,13 +1053,19 @@ class MarketingService:
             status="draft", link_token="k" + secrets.token_urlsafe(12),
         )
 
-    async def _generate(self, store: Store, campaign: MarketingCampaign) -> None:
+    async def _generate(self, store: Store, campaign: MarketingCampaign,
+                        keep_on_provider_error: bool = False) -> None:
         """Generate and persist creatives, replacing the campaign's old set.
 
-        The campaign configuration and any previously saved work stay; only
-        the generated creatives are replaced, so a provider failure leaves
-        the seller with what they already had rather than an empty screen.
+        On a first generation the campaign has nothing to lose, so a
+        provider failure falls through to the template writer. An explicit
+        regenerate (`keep_on_provider_error`) is different: the seller may
+        have edited every caption, and a provider outage must not silently
+        overwrite that with template output - it raises
+        GenerationUnavailable and leaves the campaign untouched.
         """
+        existing = await self._creatives(campaign.id) if keep_on_provider_error else []
+        previous_assets = {c.asset_id for c in existing if c.asset_id}
         products = await _load_products(
             self.db, store, self._json_list(campaign.product_ids),
         )
@@ -1009,18 +1095,29 @@ class MarketingService:
                     generation = {"provider": provider, "fallback": False}
             except Exception as exc:  # noqa: BLE001 - fall back, never fail
                 logger.warning("[marketing] %s generation failed: %s", provider, exc)
+                if existing:
+                    # Nothing has been written yet at this point; the old
+                    # creatives and their poster are still the campaign.
+                    raise GenerationUnavailable("provider error") from exc
                 generation = {"provider": provider, "fallback": True,
                               "reason": "The AI provider didn't answer usefully; "
                                         "this campaign was written from your product details."}
+        if not creatives and provider and existing:
+            # Configured, answered, and the answer was unusable - the same
+            # rule as an error: a rewrite that would lose the seller's
+            # edited posts is refused rather than silently replaced.
+            raise GenerationUnavailable("unusable provider output")
         if not creatives:
             creatives = _template_creatives(store, campaign, products, platforms)
             plan = plan or _template_plan(store, products, platforms, campaign.language)
 
         # Replace the generated set. Editing happens afterwards on the new
         # rows; nothing is silently overwritten by a reload.
+        old_asset_ids = previous_assets or await self._creative_asset_ids(campaign.id)
         await self.db.execute(
             delete(MarketingCreative).where(MarketingCreative.campaign_id == campaign.id)
         )
+        await self._retire_assets(old_asset_ids)
         rows: list[MarketingCreative] = []
         for item in creatives[:MAX_CREATIVES]:
             row = MarketingCreative(
@@ -1031,34 +1128,88 @@ class MarketingService:
             )
             self.db.add(row)
             rows.append(row)
-        await self.db.flush()
-
-        # One downloadable image per campaign, built from the first real
-        # product photo. A campaign without products (store introduction)
-        # still gets a poster when the store has a cover/photo.
-        image_bytes = await self._poster_source(store, products)
-        headline = next((c.headline for c in rows if c.headline), store.name)
-        body = next((c.body for c in rows if c.body), "")
-        poster = await asyncio.to_thread(
-            _render_poster, image_bytes, headline, body,
-            "Open the store", (rows[0].media and json.loads(rows[0].media).get("aspect_ratio")) or "1:1",
-        ) if rows else None
-        if poster and rows:
-            try:
-                from api.domains.media.service import create_image_asset
-                asset = await create_image_asset(
-                    self.db, store.owner_id, MediaPurpose.MARKETING_CREATIVE,
-                    poster, attached=True,
-                )
-                rows[0].asset_id = asset.id
-            except Exception as exc:  # noqa: BLE001 - text still works
-                logger.warning("[marketing] poster storage skipped: %s", exc)
-
         campaign.plan = json.dumps(plan)
         campaign.generation = json.dumps(generation)
         campaign.status = "generated"
         campaign.updated_at = datetime.utcnow()
+        await self.db.flush()
+        # Commit the text BEFORE drawing the poster: the database storage
+        # driver writes each size through its own session, so an open write
+        # transaction locks it out on SQLite (see media/service.py). The
+        # worst case if the second commit fails is a campaign with copy and
+        # no image, which the studio already handles.
         await self.db.commit()
+
+        # One downloadable image per campaign, built from the first real
+        # product photo. A campaign without products (store introduction)
+        # still gets a poster when the store has a cover/photo.
+        if rows:
+            await self._refresh_poster(store, rows[0], products)
+            await self.db.commit()
+
+    async def _refresh_poster(self, store: Store, creative: MarketingCreative,
+                              products: list[dict]) -> None:
+        """Draw this creative's poster from its current text.
+
+        Used on generation and again after the seller edits a caption: the
+        PNG carries the headline and body, so a stale file would let them
+        save an image that no longer matches the post (a removed discount,
+        a corrected price). Art failure never fails the campaign - the text
+        is still the campaign, and no image is better than a wrong one.
+        """
+        try:
+            media = json.loads(creative.media or "{}")
+        except (TypeError, ValueError):
+            media = {}
+        aspect = media.get("aspect_ratio") if isinstance(media, dict) else None
+        image_bytes = await self._poster_source(store, products)
+        poster = await asyncio.to_thread(
+            _render_poster, image_bytes, creative.headline or store.name,
+            creative.body or "", creative.cta or "Open the store", aspect or "1:1",
+        )
+        if not poster:
+            return
+        old_asset_id = creative.asset_id
+        try:
+            from api.domains.media.service import create_image_asset
+            asset = await create_image_asset(
+                self.db, store.owner_id, MediaPurpose.MARKETING_CREATIVE,
+                poster, attached=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - text still works
+            logger.warning("[marketing] poster storage skipped: %s", exc)
+            return
+        creative.asset_id = asset.id
+        if old_asset_id:
+            await self._retire_assets({old_asset_id})
+
+    async def _creative_asset_ids(self, campaign_id: str) -> set[str]:
+        rows = (await self.db.execute(
+            select(MarketingCreative.asset_id).where(
+                MarketingCreative.campaign_id == campaign_id,
+                MarketingCreative.asset_id.is_not(None),
+            )
+        )).scalars().all()
+        return {row for row in rows if row}
+
+    async def _retire_assets(self, asset_ids: set[str]) -> None:
+        """Queue replaced or deleted campaign posters for the media sweep.
+
+        Without this every regenerate left the previous PNG attached
+        forever - attached assets are deliberately exempt from the
+        abandoned-upload cleanup, so nothing else would ever remove them.
+        The row is marked `deleting` in this transaction; the 5-minute
+        sweep purges the stored files (api/domains/media/cleanup.py).
+        """
+        if not asset_ids:
+            return
+        await self.db.execute(
+            update(MediaAsset)
+            .where(MediaAsset.id.in_(asset_ids),
+                   MediaAsset.attach_state == AttachState.ATTACHED)
+            .values(attach_state=AttachState.DELETING, deleted_at=datetime.utcnow())
+            .execution_options(synchronize_session=False)
+        )
 
     async def _poster_source(self, store: Store, products: list[dict]) -> Optional[bytes]:
         from api.domains.media.service import load_assets, read_variant, parse_id_list
@@ -1128,7 +1279,20 @@ class MarketingService:
             tags = [t for t in tags if _SAFE_HASHTAG.match(t)][:12]
             creative.hashtags = json.dumps(tags)
         creative.updated_at = datetime.utcnow()
+        redraw = bool(creative.asset_id) and bool({"headline", "body", "cta"} & set(data))
+        # The edit is saved first; a poster that cannot be redrawn must never
+        # cost the seller the words they just wrote (same lock reason as
+        # _generate: blobs are written through their own session).
         await self.db.commit()
+        if redraw:
+            # The poster is the seller's to save, so it has to say what the
+            # post now says. Products are read without the live check: a
+            # campaign whose product just sold must still be editable.
+            products = await _load_products(
+                self.db, store, self._json_list(campaign.product_ids), require_live=False,
+            )
+            await self._refresh_poster(store, creative, products)
+            await self.db.commit()
         return await self._payload(store, campaign)
 
     async def update_campaign(self, store_id: str, requester_id: str,
@@ -1152,13 +1316,24 @@ class MarketingService:
         store = await self._store(store_id, requester_id)
         campaign = await self._campaign(store, campaign_id)
         campaign.deleted_at = datetime.utcnow()
+        # Its posters go too: a deleted campaign is gone from every read, so
+        # nothing can ever show those images again.
+        await self._retire_assets(await self._creative_asset_ids(campaign.id))
         await self.db.commit()
         return {"deleted": True, "campaign_id": campaign.id}
 
     async def regenerate(self, store_id: str, requester_id: str, campaign_id: str) -> dict:
         store = await self._store(store_id, requester_id)
         campaign = await self._campaign(store, campaign_id)
-        await self._generate(store, campaign)
+        try:
+            await self._generate(store, campaign, keep_on_provider_error=True)
+        except GenerationUnavailable:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail="The AI provider didn't answer, so your saved posts are unchanged. "
+                       "Try again in a moment, or edit the posts you have.",
+            )
         await record_event(campaign, "generated", db=self.db)
         await self.db.refresh(campaign)
         return await self._payload(store, campaign)

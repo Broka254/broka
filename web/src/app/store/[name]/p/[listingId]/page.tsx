@@ -207,7 +207,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
             </div>
           </section>
         )}
-        <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
+        <VisitBeacon storeId={store.id} via={via} campaign={campaign} productView />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: jsonLdScript(productJsonLd(view, store.name)) }}
