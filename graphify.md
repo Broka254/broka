@@ -1128,6 +1128,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `errors/user_facing_error.dart` — What the user is told when something fails.
 - `legal/legal_documents.dart` — The legal documents the app shows, the revisions it submits, and the exact declarations a new account must make.
 - `network/api_client.dart` — BROKA v3.0 - Core API Client Centralises HTTP logic: base URL, auth headers, error handling, retries.
+- `network/api_config.dart` — The BROKA API this build talks to - HTTP and WebSocket in one place.
 - `network/auction_ws_client.dart` — lib/core/network/auction_ws_client.dart Mirrors deal_ws_client.dart's exact reconnect contract: 25s JSON pings, backoff starting at 1s and…
 - `network/deal_ws_client.dart` — BROKA v3.0 - Deal Status WebSocket Client
 - `state/marketplace_state.dart` — lib/core/state/marketplace_state.dart Backs the Goods/Traders segmented toggle on the home screen (Design Journal Volume 6, Ch.5/Ch.26).
@@ -1242,7 +1243,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### Tests (`flutter_app/test/`)
 
 - `answer_from_notification_test.dart` — Answering a call from its notification (2026-10-08).
-- `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
+- `api_endpoints_test.dart` — The app's backend address is compiled in, from one place now: lib/core/network/api_config.dart.
 - `auth_gate_test.dart` — The "Create a free account" sheet (2026-10-14).
 - `broka_image_fallback_test.dart` — A photo's small file going missing no longer blanks the photo (2026-10-19).
 - `broka_tts_parts_test.dart`
