@@ -184,8 +184,8 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | POST | `/disputes/v2/{case_id}/execute` | user | `execute_fund_action` (backend/api/domains/disputes/router.py:234) |
 | GET | `/disputes/v2/{case_id}/timeline` | user | `get_timeline` (backend/api/domains/disputes/router.py:259) |
 | POST | `/escrow/confirm-delivery/{deal_id}` | user | `confirm_delivery` (backend/api/routers/escrow.py:32) |
-| POST | `/escrow/open-dispute/{deal_id}` | user | `freeze_for_dispute` (backend/api/routers/escrow.py:105) |
-| GET | `/escrow/state/{deal_id}` | user | `get_escrow_state` (backend/api/routers/escrow.py:129) |
+| POST | `/escrow/open-dispute/{deal_id}` | user | `freeze_for_dispute` (backend/api/routers/escrow.py:107) |
+| GET | `/escrow/state/{deal_id}` | user | `get_escrow_state` (backend/api/routers/escrow.py:131) |
 | POST | `/featured/boost` | user | `boost_listing` (backend/api/routers/featured.py:105) |
 | POST | `/featured/callback` | public | `boost_callback` (backend/api/routers/featured.py:159) |
 | POST | `/featured/callback/{secret}` | public | `boost_callback_secured` (backend/api/routers/featured.py:180) |
@@ -231,26 +231,26 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4652) |
-| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1806) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4667) |
+| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1819) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4549) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3435) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4564) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3450) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4213) |
-| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1882) |
-| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3589) |
-| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3637) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4228) |
+| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1895) |
+| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3604) |
+| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3652) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4616) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3275) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3678) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4077) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4121) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4168) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4145) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4631) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3290) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3693) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4092) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4136) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4183) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4160) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -624,7 +624,7 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | Table | Model | Defined at |
 |---|---|---|
 | `auction_meta` | `AuctionMeta` | backend/api/database.py:620 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1240 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1241 |
 | `bids` | `Bid` | backend/api/database.py:609 |
 | `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:749 |
 | `categories` | `Category` | backend/api/database.py:332 |
@@ -638,8 +638,8 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1188 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1259 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1189 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1260 |
 | `interests` | `Interest` | backend/api/database.py:485 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
@@ -679,7 +679,7 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:574 |
 | `user_specializations` | `UserSpecialization` | backend/api/database.py:734 |
 | `users` | `User` | backend/api/database.py:195 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1208 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1209 |
 | `wishlists` | `Wishlist` | backend/api/database.py:707 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
@@ -695,7 +695,7 @@ of a change.
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
 - **auth** — domains: media, reviews, trust; core: client_ip, config, email, events, fraud, geo, legal_documents, nudge_templates, presence, push_devices, rate_limit, sms, text_search, timeutil; database, security
-- **buy_agent** — domains: ai_broker, categories, listings, premium; core: config, push, rate_limit; database, security
+- **buy_agent** — domains: ai_broker, categories, listings, premium, reviews; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
 - **deal_ws** — core: deal_hub; database, security
