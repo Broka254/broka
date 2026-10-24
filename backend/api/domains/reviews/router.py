@@ -10,23 +10,41 @@ from __future__ import annotations
 
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
 from api.security import get_current_user
-from .service import ReviewService
+from .service import MAX_REVIEW_COMMENT, ReviewService
 
 router = APIRouter()
 
 
 class ReviewIn(BaseModel):
-    deal_id: str
+    """What a review is, enforced at the edge as well as in the service:
+    a valid deal, 1-5 stars, and the same comment limit the app and web
+    show. An over-long comment is refused with a field error, never cut."""
+    deal_id: str = Field(min_length=1, max_length=100)
+    rating: int = Field(ge=1, le=5)
+    comment: Optional[str] = Field("", max_length=MAX_REVIEW_COMMENT)
+
+
+class PublicReviewOut(BaseModel):
+    """A review card: no deal, reviewer or seller id."""
+    id: str
     rating: int
-    comment: Optional[str] = ""
+    comment: Optional[str] = None
+    created_at: Optional[str] = None
+    reviewer_name: Optional[str] = None
 
 
-@router.post("/", status_code=201)
+class ReviewSummaryOut(BaseModel):
+    avg: Optional[float]
+    count: int
+    distribution: dict[str, int]
+
+
+@router.post("/", status_code=201, response_model=PublicReviewOut)
 async def submit_review(
     body: ReviewIn,
     current_user: dict = Depends(get_current_user),
@@ -41,7 +59,7 @@ async def submit_review(
     )
 
 
-@router.get("/seller/{seller_id}")
+@router.get("/seller/{seller_id}", response_model=list[PublicReviewOut])
 async def get_seller_reviews(
     seller_id: str,
     limit: int = Query(20, ge=1, le=100),
@@ -52,7 +70,7 @@ async def get_seller_reviews(
     return await svc.get_seller_reviews(seller_id, limit=limit, offset=offset)
 
 
-@router.get("/summary/{seller_id}")
+@router.get("/summary/{seller_id}", response_model=ReviewSummaryOut)
 async def get_review_summary(
     seller_id: str,
     db: AsyncSession = Depends(get_db),

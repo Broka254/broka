@@ -47,6 +47,7 @@ import '../utils/backend_time.dart';
 import '../widgets/broka_image.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/motion_widgets.dart';
+import '../widgets/rating_stars.dart';
 import '../widgets/seller_standing_tiles.dart';
 
 enum _Load { loading, loaded, notFound, failed }
@@ -75,8 +76,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   List<SellerReview> _reviews = [];
   bool _loadingReviews = true;
 
-  /// The viewer's completed purchases from this seller. Null until known;
-  /// only a buyer with one not yet reviewed is offered "Write a review".
+  /// The viewer's deals with this seller. Null until known; only a buyer
+  /// with one not yet reviewed is offered "Write a review".
   List<ReviewableDeal>? _reviewable;
 
   static const _listingLimit = 40;
@@ -734,8 +735,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           const SizedBox(height: 4),
           Text(
             _isSelf
-                ? 'Buyers can review you once a deal with you completes.'
-                : 'Buyers can review $_displayName once a deal with them completes.',
+                ? 'Buyers can review you once they have a deal with you.'
+                : 'Buyers can review $_displayName once they have a deal with them.',
             textAlign: TextAlign.center,
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5, height: 1.4)),
         ]),
@@ -768,7 +769,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final deals = _reviewable;
     if (_isSelf || deals == null || _toReview.isNotEmpty) return null;
     if (deals.isNotEmpty) return "You've reviewed your deals with $_displayName.";
-    return 'Only buyers who completed a deal with $_displayName can review them.';
+    return 'Only buyers who had a deal with $_displayName can review them.';
   }
 
   Widget _buildReviewSummary(ReviewSummary s) {
@@ -777,10 +778,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       key: const Key('reviews-summary'),
       child: Row(children: [
         Column(children: [
-          Text(avg.toStringAsFixed(1), style: const TextStyle(
-              color: BrokaColors.textHigh, fontSize: 34, fontWeight: FontWeight.w900, height: 1.0)),
+          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(avg.toStringAsFixed(1), style: const TextStyle(
+                color: BrokaColors.textHigh, fontSize: 34, fontWeight: FontWeight.w900, height: 1.0)),
+            // The buyer-review scale, spelled out. The seller standing
+            // above is 0-10 and is a different figure.
+            const Padding(
+              padding: EdgeInsets.only(left: 3, bottom: 4),
+              child: Text('/ 5', style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+            ),
+          ]),
           const SizedBox(height: 4),
-          _stars(avg.round(), 13),
+          RatingStars(
+            key: const Key('reviews-stars'),
+            value: buyerStars(avg),
+            size: 13,
+            semanticLabel: 'Buyer rating ${avg.toStringAsFixed(1)} out of 5',
+          ),
           const SizedBox(height: 3),
           Text(s.count == 1 ? '1 review' : '${s.count} reviews',
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
@@ -817,13 +831,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
-  Widget _stars(int filled, double size) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(5, (i) => Icon(
-            i < filled ? Icons.star_rounded : Icons.star_outline_rounded,
-            color: BrokaColors.gold, size: size)),
-      );
-
   Widget _buildReviewCard(SellerReview r) {
     final when = r.createdAt?.toLocal();
     final name = r.reviewerName;
@@ -854,7 +861,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               Text('${when.day}/${when.month}/${when.year}',
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
           ])),
-          _stars(r.rating, 13),
+          RatingStars(
+            value: buyerStars(r.rating.toDouble()),
+            size: 13,
+            semanticLabel: '${r.rating} out of 5 stars',
+          ),
         ]),
         if (r.comment.isNotEmpty) ...[
           const SizedBox(height: 8),

@@ -53,6 +53,9 @@ class BrokaListing {
   final bool sellerVerified;
   final double sellerRating;
   final int sellerCompletedDeals;
+  /// How many buyer reviews [sellerRating] is built from. A rating renders
+  /// only when this is above zero - deals are not reviews.
+  final int sellerReviewCount;
   // Added (home-redesign brief, 2026-08-16) - see listings/service.py
   // _listing_dict's matching addition. Null is a real, expected state
   // (most sellers won't have uploaded one) - the card falls back to an
@@ -106,6 +109,7 @@ class BrokaListing {
     this.sellerVerified = false,
     this.sellerRating = 0,
     this.sellerCompletedDeals = 0,
+    this.sellerReviewCount = 0,
     this.sellerProfilePhoto,
     this.sellerAvatarUrl,
     this.storeId,
@@ -152,6 +156,7 @@ class BrokaListing {
       sellerVerified:        json['seller_verified']         as bool? ?? false,
       sellerRating:          (json['seller_rating']          as num?)?.toDouble() ?? 0,
       sellerCompletedDeals:  json['seller_completed_deals']  as int? ?? 0,
+      sellerReviewCount:     (json['seller_review_count']    as num?)?.toInt() ?? 0,
       sellerProfilePhoto:    json['seller_profile_photo']    as String?,
       sellerAvatarUrl:       json['seller_avatar_url']       as String?,
       storeId:    json['store_id']    as String?,

@@ -9,21 +9,47 @@
 // Its own page (/store/<name>/about), linked from "More details" under the
 // store's name, so the store's home is left to its products.
 import { monthYearOf, placeLine, plural, yearOf } from '@/lib/format'
-import { asset } from '@/lib/links'
+import { asset, storeDetailsPath } from '@/lib/links'
+import {
+  buyerStars,
+  replyTimeLabel,
+  reviewCountLabel,
+  reviewDate,
+  starsFromStoreScore,
+} from '@/lib/ratings'
 import { PAYING_SAFELY } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
+import type { StoreReviews } from '@/lib/types'
 
 import { EscrowBox } from './EscrowBox'
+import { Stars } from './Stars'
 import styles from './store.module.css'
 
-export function StoreDetails({ view }: { view: StoreView }) {
+export function StoreDetails({
+  view,
+  reviews = null,
+  reviewsFailed = false,
+}: {
+  view: StoreView
+  /** The shop's buyer reviews; null when the API sent none. */
+  reviews?: StoreReviews | null
+  /** The reviews request failed - say so rather than claim there are none. */
+  reviewsFailed?: boolean
+}) {
   const { store } = view
   const owner = store.owner
   const ownerName = owner?.name?.trim() || `The owner of ${store.name}`
   const deals = owner?.completed_deals ?? 0
-  // A rating only means something once there are deals behind it.
-  const rating = deals > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null
+  // Buyer reviews, not deals, make a seller average. A seller can finish
+  // many deals and still have been rated by nobody; the legacy 5.0 account
+  // default must not stand in for a review (backend reviews/stats.py).
+  const ownerReviews = owner?.review_count ?? 0
+  const sellerRating =
+    ownerReviews > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null
   const since = yearOf(owner?.member_since)
+  const storeReviewCount = store.review_count ?? 0
+  const reply = replyTimeLabel(reviews?.seller_standing?.median_response_minutes)
+  const summary = reviews?.summary ?? null
   const opened = monthYearOf(store.created_at)
   // For an online store the equivalent of "where it is" is where it
   // delivers; the county fields are for premises and must not be shown as
@@ -60,6 +86,39 @@ export function StoreDetails({ view }: { view: StoreView }) {
         </div>
       </div>
 
+      {store.rating != null && (
+        <section aria-labelledby="score-title">
+          <h2 id="score-title" className={styles.detailsLabel}>
+            Store score
+          </h2>
+          <div className={`card ${styles.detailsCard} ${styles.scoreCard}`}>
+            <div className={styles.scoreHeadline}>
+              {/* The scale is part of the figure. Without it, 6.5 beside five
+                  stars reads as 6.5/5 (and drew as five filled stars). */}
+              <p className={styles.scoreNumber}>
+                {store.rating.toFixed(1)}
+                <span className={styles.scoreScale}>/10</span>
+              </p>
+              <Stars
+                value={starsFromStoreScore(store.rating)}
+                label={`Store score ${store.rating.toFixed(1)} out of 10`}
+                size={16}
+              />
+            </div>
+            <div className={styles.scoreEvidence}>
+              <p className={styles.strongLine}>
+                {storeReviewCount === 0 ? 'No buyer reviews yet' : `${reviewCountLabel(storeReviewCount)} so far`}
+              </p>
+              <p className={styles.mutedLine}>
+                Built from this shop&apos;s buyer reviews, how fast it answers and how long it has traded
+                on BROKA. Different from the seller&apos;s buyer rating below, which is out of 5.
+              </p>
+              {reply && <p className={styles.mutedLine}>⏱ {reply}</p>}
+            </div>
+          </div>
+        </section>
+      )}
+
       <section aria-labelledby="owner-title">
         <h2 id="owner-title" className={styles.detailsLabel}>
           The seller
@@ -88,12 +147,12 @@ export function StoreDetails({ view }: { view: StoreView }) {
               </dd>
             </div>
             <div>
-              <dt>{rating ? 'Rating' : 'No rating yet'}</dt>
+              <dt>{sellerRating ? `Rating · ${reviewCountLabel(ownerReviews)}` : 'No reviews yet'}</dt>
               <dd>
                 <span className={`${styles.factIcon} ${styles.star}`} aria-hidden="true">
                   ★
                 </span>
-                {rating ?? 'New'}
+                {sellerRating ? `${sellerRating}/5` : 'New'}
               </dd>
             </div>
             <div>
@@ -109,6 +168,92 @@ export function StoreDetails({ view }: { view: StoreView }) {
             </div>
           </dl>
         </div>
+      </section>
+
+      <section aria-labelledby="reviews-title" id="reviews">
+        <h2 id="reviews-title" className={styles.detailsLabel}>
+          Buyer reviews
+        </h2>
+        {reviewsFailed ? (
+          <div className={`card ${styles.detailsCard}`}>
+            <p className={styles.strongLine}>Reviews aren&apos;t available right now.</p>
+            <p className={styles.mutedLine}>
+              The rest of the store is fine.{' '}
+              <a className={styles.reviewsRetry} href={storeDetailsPath(store.slug)}>
+                Try again
+              </a>
+            </p>
+          </div>
+        ) : summary == null || summary.count === 0 ? (
+          <div className={`card ${styles.detailsCard}`}>
+            <p className={styles.strongLine}>No reviews yet</p>
+            <p className={styles.mutedLine}>
+              Reviews come from buyers who had a deal on this store&apos;s products. They are written in
+              the BROKA app, and yours will help the next buyer.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className={`card ${styles.detailsCard} ${styles.reviewSummary}`}>
+              <div>
+                {/* The buyer-review scale, labelled. The shop score above is
+                    a different figure out of 10. */}
+                <p className={styles.scoreNumber}>
+                  {(summary.avg ?? 0).toFixed(1)}
+                  <span className={styles.scoreScale}>/5</span>
+                </p>
+                <Stars
+                  value={buyerStars(summary.avg ?? 0)}
+                  label={`Buyer rating ${(summary.avg ?? 0).toFixed(1)} out of 5`}
+                />
+                <p className={styles.mutedLine}>{reviewCountLabel(summary.count)}</p>
+              </div>
+              <div className={styles.distribution} aria-label="Ratings breakdown">
+                {[5, 4, 3, 2, 1].map((star) => {
+                  const n = summary.distribution[String(star)] ?? 0
+                  return (
+                    <div key={star} className={styles.distributionRow}>
+                      <span className={styles.distributionStar}>{star} ★</span>
+                      <span className={styles.distributionBar}>
+                        <span style={{ width: `${(n / summary.count) * 100}%` }} />
+                      </span>
+                      <span className={styles.distributionCount}>{n}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <ul className={styles.reviews} aria-label={`Buyer reviews of ${store.name}`}>
+              {reviews?.reviews.map((review) => {
+                const name = review.reviewer_name?.trim() || 'BROKA buyer'
+                const date = reviewDate(review.created_at)
+                return (
+                  <li key={review.id} className={`card ${styles.reviewCard}`}>
+                    <div className={styles.reviewHead}>
+                      <span className={styles.reviewAvatar} aria-hidden="true">
+                        {Array.from(name)[0] ?? 'B'}
+                      </span>
+                      <div>
+                        <p className={styles.reviewName}>{name}</p>
+                        {date && <p className={styles.reviewDate}>{date}</p>}
+                      </div>
+                      <Stars value={review.rating} label={`${review.rating} out of 5 stars`} size={13} />
+                    </div>
+                    {review.comment?.trim() && <p className={styles.reviewText}>{review.comment.trim()}</p>}
+                  </li>
+                )
+              })}
+            </ul>
+            {summary.count > (reviews?.reviews.length ?? 0) && (
+              <p className={styles.mutedLine}>
+                Showing {reviews?.reviews.length ?? 0} of {reviewCountLabel(summary.count)}
+              </p>
+            )}
+            <p className={styles.reviewsNote}>
+              Reviews are written in the BROKA app by buyers who had a deal on this store&apos;s products.
+            </p>
+          </>
+        )}
       </section>
 
       {view.photos.length > 0 && !view.isVirtual && (

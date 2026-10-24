@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProductCardData } from '@/lib/catalogue'
 import { storeView } from '@/lib/storefront'
-import type { ImageSizes, Store } from '@/lib/types'
+import type { ImageSizes, Store, StoreReviews } from '@/lib/types'
 
 import { cart } from '@/lib/cart'
 import { ESCROW_PROVIDERS, ESCROW_SERVICES, PAYING_SAFELY } from '@/lib/safety'
@@ -96,7 +96,14 @@ const shop = (over: Partial<Store> = {}): Store => ({
   photo_images: [sizes('p1')],
   logo_url: null,
   photos: [],
-  owner: { name: 'Jane Wanjiru', verified: true, rating: 4.84, completed_deals: 12, member_since: '2025-01-10T00:00:00' },
+  owner: {
+    name: 'Jane Wanjiru',
+    verified: true,
+    rating: 4.84,
+    review_count: 12,
+    completed_deals: 12,
+    member_since: '2025-01-10T00:00:00',
+  },
   is_active: true,
   listing_count: 3,
   created_at: '2026-09-02T08:00:00',
@@ -115,7 +122,9 @@ describe('StoreHero', () => {
       '/store-assets/logo.png',
     )
     expect(screen.queryByText('C')).toBeNull()
-    expect(screen.getByText('4.8')).toBeTruthy()
+    // The owner's buyer rating is out of 5 and counts its reviews.
+    expect(screen.getByText('4.8/5')).toBeTruthy()
+    expect(screen.getByText('(12)')).toBeTruthy()
     expect(screen.getByText('12 deals')).toBeTruthy()
     expect(screen.getByText('3 products')).toBeTruthy()
     expect(screen.getByText('Store details').closest('a')!.getAttribute('href')).toBe('/store/clanix/about')
@@ -154,6 +163,27 @@ describe('StoreHero', () => {
     expect(screen.getByText('New seller')).toBeTruthy()
     expect(screen.queryByText('5.0')).toBeNull()
   })
+
+  it('labels the 0-10 store score, with its reviews, and links to them', () => {
+    render(
+      <StoreHero
+        view={storeView(
+          shop({
+            rating: 6.5,
+            review_count: 2,
+            owner: { ...shop().owner!, rating: 3.4, review_count: 9 },
+          }),
+        )}
+      />,
+    )
+    const link = screen.getByRole('link', { name: /Store score 6.5 out of 10, from 2 reviews/ })
+    expect(link.getAttribute('href')).toBe('/store/clanix/about#reviews')
+    expect(within(link).getByText('6.5/10')).toBeTruthy()
+    expect(within(link).getByText('(2)')).toBeTruthy()
+    // The shop's number is not passed off as a five-star seller rating.
+    expect(screen.queryByText('6.5/5')).toBeNull()
+    expect(screen.queryByText('3.4/5')).toBeNull()
+  })
 })
 
 describe('Perks', () => {
@@ -184,10 +214,11 @@ describe('StoreDetails', () => {
     expect(screen.getByText('Genuine phones and accessories.')).toBeTruthy()
     expect(screen.getByText('Jane Wanjiru')).toBeTruthy()
     expect(screen.getByText('✓ Verified seller')).toBeTruthy()
-    // Deals done, rating and the year joined, each in its own tile.
+    // Deals done, the buyer rating (with its review count) and the year
+    // joined, each in its own tile.
     for (const [label, value] of [
       ['Deals done', '12'],
-      ['Rating', '4.8'],
+      ['Rating · 12 reviews', '4.8/5'],
       ['On BROKA since', '2025'],
     ] as const) {
       expect(within(screen.getByText(label).parentElement!).getByText(value)).toBeTruthy()
@@ -249,7 +280,7 @@ describe('StoreDetails', () => {
     expect(screen.queryByText('Monday')).toBeNull()
   })
 
-  it('never shows an unverified email, a rating without deals, or photos it does not have', () => {
+  it('never shows an unverified email, a rating without reviews, or photos it does not have', () => {
     render(
       <StoreDetails
         view={storeView(
@@ -265,7 +296,9 @@ describe('StoreDetails', () => {
     )
     expect(screen.queryAllByRole('img')).toEqual([])
     expect(screen.queryByText('sales@clanix.co.ke')).toBeNull()
-    expect(within(screen.getByText('No rating yet').parentElement!).getByText('New')).toBeTruthy()
+    const seller = screen.getByRole('heading', { name: 'The seller' }).parentElement!
+    expect(within(seller).getByText('No reviews yet')).toBeTruthy()
+    expect(within(seller).getByText('New')).toBeTruthy()
     expect(screen.queryByText('5.0')).toBeNull()
     expect(within(screen.getByText('On BROKA since').parentElement!).getByText('–')).toBeTruthy()
     expect(screen.getByText('Not verified yet')).toBeTruthy()
@@ -275,21 +308,85 @@ describe('StoreDetails', () => {
     expect(screen.getByText('The owner of Clanix')).toBeTruthy()
     expect(screen.getByText('Taking a break')).toBeTruthy()
   })
+
+  it('keeps the 0-10 store score apart from the 1-5 buyer reviews', () => {
+    const reviews: StoreReviews = {
+      summary: { avg: 4.5, count: 2, distribution: { '5': 1, '4': 1, '3': 0, '2': 0, '1': 0 } },
+      reviews: [
+        {
+          id: 'r1',
+          rating: 5,
+          comment: 'Phone exactly as described.',
+          created_at: '2026-09-20T10:00:00',
+          reviewer_name: 'Amina W.',
+        },
+        {
+          id: 'r2',
+          rating: 4,
+          comment: 'Good price.',
+          created_at: '2026-09-10T10:00:00',
+          reviewer_name: 'Brian O.',
+        },
+      ],
+      seller_standing: {
+        overall_rating: 8.5,
+        dcr: null,
+        dcr_provisional: false,
+        median_response_minutes: 25,
+        completed_deals: 12,
+        as_of: '2026-09-29',
+      },
+    }
+    render(<StoreDetails view={storeView(shop({ rating: 6.5, review_count: 2 }))} reviews={reviews} />)
+
+    // The shop score is labelled /10, drawn from its own 0-10 scale.
+    const score = screen.getByRole('heading', { name: 'Store score' }).parentElement!
+    expect(score.textContent).toContain('6.5/10')
+    expect(within(score).getByRole('img', { name: 'Store score 6.5 out of 10' })).toBeTruthy()
+    expect(within(score).getByText('2 reviews so far')).toBeTruthy()
+    expect(within(score).getByText(/Usually replies in about 25 min/)).toBeTruthy()
+
+    // Buyer reviews are a different figure, on a different scale.
+    const buyer = screen.getByRole('heading', { name: 'Buyer reviews' }).parentElement!
+    expect(buyer.textContent).toContain('4.5/5')
+    expect(within(buyer).getByRole('img', { name: 'Buyer rating 4.5 out of 5' })).toBeTruthy()
+    expect(within(buyer).getByText('2 reviews')).toBeTruthy()
+    expect(within(buyer).getByText('5 ★')).toBeTruthy()
+    expect(within(buyer).getByText('Amina W.')).toBeTruthy()
+    expect(within(buyer).getByText('Brian O.')).toBeTruthy()
+    expect(within(buyer).getByText('20 Sept 2026')).toBeTruthy()
+    expect(within(buyer).getByText('Phone exactly as described.')).toBeTruthy()
+    expect(within(buyer).getByText('Good price.')).toBeTruthy()
+    // The 0-10 score is never rendered as a five-star figure.
+    expect(document.body.textContent).not.toContain('6.5/5')
+    expect(document.body.textContent).not.toContain('6.5 out of 5')
+  })
+
+  it('says reviews are unavailable instead of claiming there are none', () => {
+    render(<StoreDetails view={storeView(shop())} reviewsFailed />)
+    const reviews = screen.getByRole('heading', { name: 'Buyer reviews' }).parentElement!
+    expect(within(reviews).getByText("Reviews aren't available right now.")).toBeTruthy()
+    expect(within(reviews).queryByText('No reviews yet')).toBeNull()
+  })
 })
 
 describe('TrustChips', () => {
-  it('shows a rating only when there are deals behind it', () => {
+  it('shows a rating only when buyer reviews are behind it', () => {
     const { rerender } = render(<TrustChips verified completedDeals={0} rating={5} memberSince="2025-03-01" />)
     expect(screen.getByText('Verified seller')).toBeTruthy()
     expect(screen.queryByText('5.0')).toBeNull()
     expect(screen.getByText('On BROKA since 2025')).toBeTruthy()
-    rerender(<TrustChips verified={false} completedDeals={12} rating={4.84} />)
+    // Deals alone are not reviews: the 5.0 account default stays hidden.
+    rerender(<TrustChips verified={false} completedDeals={12} rating={5} reviewCount={0} />)
     expect(screen.getByText('12 deals done')).toBeTruthy()
-    expect(screen.getByText('4.8')).toBeTruthy()
+    expect(screen.queryByText(/5\.0/)).toBeNull()
+    // Real reviews carry their count and the /5 scale.
+    rerender(<TrustChips verified={false} completedDeals={12} rating={4.84} reviewCount={6} />)
+    expect(screen.getByText('4.8/5 (6)')).toBeTruthy()
     expect(screen.queryByText('Verified seller')).toBeNull()
   })
   it('says how long deals take, once there are deals to time', () => {
-    const { rerender } = render(<TrustChips verified={false} completedDeals={12} rating={4.8} dealTimeMinutes={2520} />)
+    const { rerender } = render(<TrustChips verified={false} completedDeals={12} rating={4.8} reviewCount={3} dealTimeMinutes={2520} />)
     expect(screen.getByText('Deals take about 2 days')).toBeTruthy()
     rerender(<TrustChips verified={false} completedDeals={0} rating={null} dealTimeMinutes={2520} />)
     expect(screen.queryByText(/Deals take/)).toBeNull()

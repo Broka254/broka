@@ -557,12 +557,17 @@ async def get_store_reviews(
     store_id: str,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ):
-    """{summary, reviews, seller_standing} - the owner's buyer reviews and
-    published figures, for the store's details screen. Public; reviewer
-    names only, no ids."""
-    return await StoreService(db).store_reviews(store_id, limit=limit, offset=offset)
+    """{summary, reviews, seller_standing}, plus `viewer` for a signed-in
+    caller - whether they can still review a purchase from this shop.
+    Public; reviewer names only, no ids. Authentication is optional so an
+    anonymous storefront read stays open; an invalid token still 401s."""
+    return await StoreService(db).store_reviews(
+        store_id, limit=limit, offset=offset,
+        viewer_id=current_user["id"] if current_user else None,
+    )
 
 
 @router.post("/{store_id}/visit", status_code=202)

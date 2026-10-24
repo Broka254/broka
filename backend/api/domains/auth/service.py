@@ -723,7 +723,9 @@ class AuthService:
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        return self._user_dict(user)
+        from api.domains.reviews.stats import seller_review_figures
+        review = (await seller_review_figures(self.db, [user.id])).get(user.id, (0, None))
+        return self._user_dict(user, review)
 
     async def update_profile(
         self,
@@ -764,9 +766,11 @@ class AuthService:
         # _user_dict - email, phone, trust score, fraud flag, admin bit - for
         # up to 20 matches of any text, to any signed-in account.
         users = await self.repo.search(q, exclude_id=viewer_id)
+        from api.domains.reviews.stats import seller_review_figures
+        figures = await seller_review_figures(self.db, [u.id for u in users])
         results = []
         for u in users:
-            d = self._public_user_dict(u)
+            d = self._public_user_dict(u, figures.get(u.id, (0, None)))
             distance = self._public_distance_km(u, viewer_lat, viewer_lng)
             if distance is not None:
                 d["distance_km"] = distance
@@ -783,20 +787,22 @@ class AuthService:
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+        from api.domains.reviews.stats import seller_review_figures
+        review = (await seller_review_figures(self.db, [user.id])).get(user.id, (0, None))
         # The account itself gets everything (the seller dashboard reads its
         # own trust and DCR here); anyone else gets the public view - the chat
         # header, the product page's seller block and the profile screen need
         # nothing more.
         own = viewer_id is not None and viewer_id == user.id
         if own:
-            d = self._user_dict(user)
+            d = self._user_dict(user, review)
             if (viewer_lat is not None and viewer_lng is not None
                     and user.lat is not None and user.lng is not None):
                 dist = round_distance_km(haversine_km(viewer_lat, viewer_lng, user.lat, user.lng))
                 if dist is not None:
                     d["distance_km"] = dist
         else:
-            d = self._public_user_dict(user)
+            d = self._public_user_dict(user, review)
             distance = self._public_distance_km(user, viewer_lat, viewer_lng)
             if distance is not None:
                 d["distance_km"] = distance
@@ -864,7 +870,9 @@ class AuthService:
         return round_distance_km(haversine_km(viewer_lat, viewer_lng, point[0], point[1]))
 
     @classmethod
-    def _public_user_dict(cls, user) -> dict:
+    def _public_user_dict(
+        cls, user, review: tuple[int, Optional[float]] = (0, None),
+    ) -> dict:
         """What one user may see of another.
 
         Everything a public surface shows - the chat header, a product's
@@ -872,10 +880,16 @@ class AuthService:
         trust score or fraud flag, no admin bit, no language or security
         settings. [_user_dict] is for the account itself (/auth/me, and
         /auth/user/{id} on your own id).
+
+        `rating` is the buyer-review average from the reviews themselves,
+        and null when there are none. User.rating starts at 5.0, which is
+        not a score anyone gave; publishing it made unreviewed sellers
+        look perfect. Callers pass the figures they loaded.
         """
         from api.core.presence import online_status
         is_online, last_seen_label = online_status(user.last_seen)
         point = cls._approx_point(user)
+        review_count, review_avg = review
         return {
             "id": user.id,
             "name": user.name,
@@ -889,7 +903,8 @@ class AuthService:
             "business_location": user.business_location if user.location_visible else None,
             "lat": point[0] if point else None,
             "lng": point[1] if point else None,
-            "rating": user.rating,
+            "rating": review_avg,
+            "review_count": review_count,
             "completed_deals": user.completed_deals,
             "is_verified": user.is_verified,
             "profile_photo": user.profile_photo,
@@ -900,10 +915,13 @@ class AuthService:
         }
 
     @staticmethod
-    def _user_dict(user) -> dict:
+    def _user_dict(
+        user, review: tuple[int, Optional[float]] = (0, None),
+    ) -> dict:
         from api.core.fraud import trust_band
         from api.core.presence import online_status
         is_online, last_seen_label = online_status(user.last_seen)
+        review_count, review_avg = review
         return {
             "id": user.id,
             "name": user.name,
@@ -923,7 +941,11 @@ class AuthService:
             "business_display_name": user.business_display_name,
             "lat": user.lat if user.location_visible else None,
             "lng": user.lng if user.location_visible else None,
-            "rating": user.rating,
+            # The buyer-review average, from the reviews; null when there
+            # are none. The User.rating column is only a cache and starts
+            # at 5.0 without anyone having rated this account.
+            "rating": review_avg,
+            "review_count": review_count,
             "completed_deals": user.completed_deals,
             "is_verified": user.is_verified,
             "verify_tier": user.verify_tier,

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from api.core.geo import format_distance_km, haversine_km, round_distance_km
 from api.core.text_search import matches_all_terms, search_terms
-from api.database import ListingStatus, Review, User, UserSpecialization, Listing, Category
+from api.database import ListingStatus, User, UserSpecialization, Listing, Category
 from api.domains.listings.paid import live_clause
 from api.domains.media.service import asset_urls, load_assets, require_owned_assets
 from api.models.media import MediaPurpose
@@ -63,6 +63,11 @@ class TradersService:
             return []
 
         user_ids = [u.id for u in users]
+        # Real buyer-review figures, one grouped query for the page. The
+        # User.rating column starts at 5.0 for every account and is not a
+        # score anyone gave; `rating` below is the review average or null.
+        from api.domains.reviews.stats import seller_review_figures
+        review_figures = await seller_review_figures(self.db, user_ids)
 
         # FIX (redesign-guide audit): previously ran one COUNT(*) query PER
         # trader in the list (N+1) - batched into a single grouped query.
@@ -104,6 +109,7 @@ class TradersService:
                 specializations=specializations,
                 viewer_lat=viewer_lat, viewer_lng=viewer_lng,
                 cover=covers.get(u.id),
+                review=review_figures.get(u.id, (0, None)),
             ))
         return result
 
@@ -161,15 +167,21 @@ class TradersService:
             {"id": s.category_id, "name": categories.get(s.category_id, "Unknown")} for s in specs
         ]
 
+        from api.domains.reviews.stats import seller_review_figures
+        review = (await seller_review_figures(self.db, [user.id])).get(
+            user.id, (0, None))
         out = self._trader_dict(
             user, listing_count=listing_count, specializations=specializations,
             viewer_lat=viewer_lat, viewer_lng=viewer_lng,
             cover=(await self._covers([user])).get(user.id),
+            review=review,
         )
-        out.update(await self._profile_details(user))
+        out.update(await self._profile_details(user, review))
         return out
 
-    async def _profile_details(self, user: User) -> dict:
+    async def _profile_details(
+        self, user: User, review: tuple[int, float | None] = (0, None),
+    ) -> dict:
         """What the trader's own page adds to the card: who they are, how
         long they've sold here, what buyers say, how fast they answer, their
         stores, and what is on sale now."""
@@ -182,10 +194,7 @@ class TradersService:
                 Listing.status == ListingStatus.active,
                 live_clause())
         )).scalar_one()
-        review_avg, review_count = (await self.db.execute(
-            select(func.avg(Review.rating), func.count(Review.id))
-            .where(Review.seller_id == user.id)
-        )).one()
+        review_count, review_avg = review
         stores = (await self.db.execute(
             select(Store.id, Store.name, Store.slug).where(Store.owner_id == user.id)
         )).all()
@@ -195,9 +204,9 @@ class TradersService:
             "about": (user.business_description or "").strip() or None,
             "member_since": user.created_at.isoformat() if user.created_at else None,
             "active_listings": int(active or 0),
-            "review_count": int(review_count or 0),
+            "review_count": int(review_count),
             # None, not 0, with no reviews: no average is not a bad one.
-            "review_avg": round(float(review_avg), 1) if review_count else None,
+            "review_avg": round(review_avg, 1) if review_avg is not None else None,
             "median_response_minutes": standing.get("median_response_minutes"),
             "is_online": bool(seen and (datetime.utcnow() - seen).total_seconds() < ONLINE_WINDOW_SECONDS),
             "last_seen": seen.isoformat() if seen else None,
@@ -208,10 +217,15 @@ class TradersService:
         self, u: User, listing_count: int, specializations: list[dict],
         viewer_lat: float | None = None, viewer_lng: float | None = None,
         cover: dict | None = None,
+        review: tuple[int, float | None] = (0, None),
     ) -> dict:
+        review_count, review_avg = review
         out = {
             "id": u.id, "business_name": u.business_name or u.name,
-            "is_verified": u.is_verified, "rating": u.rating,
+            "is_verified": u.is_verified,
+            # Buyer-review average, or null when nobody has reviewed them.
+            "rating": review_avg,
+            "review_count": review_count,
             "completed_deals": u.completed_deals, "listing_count": listing_count,
             "specializations": specializations,
             # Deliberately not including a Deal Completion Rate field: the

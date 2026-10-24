@@ -48,8 +48,9 @@ Map<String, dynamic> _store({bool active = true, String? description, bool photo
       'location_description': 'Moi Avenue, opposite the Hilton',
       'business_email': 'sales@clanix.co.ke',
       'business_email_verified': true,
-      'owner': {'name': 'Jane Wanjiru', 'verified': true, 'rating': 4.8, 'completed_deals': 12,
-          'member_since': '2025-01-10T00:00:00', 'online': online, 'last_active': online ? 'Active now' : 'Active 3h ago'},
+      'owner': {'name': 'Jane Wanjiru', 'verified': true, 'rating': 4.8, 'review_count': 4,
+          'completed_deals': 12, 'member_since': '2025-01-10T00:00:00', 'online': online,
+          'last_active': online ? 'Active now' : 'Active 3h ago'},
       'is_active': active,
       'listing_count': 3,
       'cover': photos ? _image('c1') : null,
@@ -201,7 +202,7 @@ void main() {
       expect(find.descendant(of: find.byKey(const Key('store-presence')),
           matching: find.text('Online now')), findsOneWidget);
       expect(find.descendant(of: find.byKey(const Key('hero-rating')),
-          matching: find.text('4.8')), findsOneWidget);
+          matching: find.text('4.8/5 · 4 reviews')), findsOneWidget);
       expect(find.descendant(of: find.byKey(const Key('hero-deals')),
           matching: find.text('12 deals')), findsOneWidget);
       // The rest is under More, not crowding the header.
@@ -309,7 +310,7 @@ void main() {
       // Deals done, rating and the year joined, each in its own tile.
       for (final (key, value, label) in [
         ('owner-deals', '12', 'Deals done'),
-        ('owner-rating', '4.8', 'Rating'),
+        ('owner-rating', '4.8/5', 'Rating · 4 reviews'),
         ('owner-since', '2025', 'On BROKA since'),
       ]) {
         final tile = find.byKey(Key(key));
@@ -462,7 +463,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: StoreDetailsScreen(
         store: Store.fromJson({
           ..._store(),
-          'owner': {'verified': false, 'rating': 5.0, 'completed_deals': 0},
+          'owner': {'verified': false, 'rating': 5.0, 'review_count': 0, 'completed_deals': 0},
         }),
         animateBackground: false,
       )));

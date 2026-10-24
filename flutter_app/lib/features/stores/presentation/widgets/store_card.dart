@@ -546,7 +546,10 @@ class _RatingChip extends StatelessWidget {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Icon(Icons.star_rounded, size: 13, color: BrokaColors.gold),
-            Text(rating.toStringAsFixed(1),
+            // The /10 stays attached to the number: it is the shop score,
+            // not a five-star buyer rating, and a bare "7.2" beside a star
+            // read as seven stars' worth.
+            Text('${rating.toStringAsFixed(1)}/10',
                 style: const TextStyle(
                     color: BrokaColors.gold,
                     fontSize: 12,

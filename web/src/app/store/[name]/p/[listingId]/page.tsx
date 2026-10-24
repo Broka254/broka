@@ -185,6 +185,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 verified={listing.seller_verified}
                 completedDeals={listing.seller_completed_deals}
                 rating={listing.seller_rating}
+                reviewCount={listing.seller_review_count ?? 0}
                 dealTimeMinutes={listing.seller_avg_deal_time_minutes}
                 memberSince={store.owner?.member_since}
               />

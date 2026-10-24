@@ -178,6 +178,195 @@
   object-fit: cover;
 }
 
+/* ── Store score and buyer reviews ──────────────────────────────────────── */
+
+/* The shop's 0-10 composite, beside what it is built from. */
+.scoreCard {
+  display: grid;
+  gap: 12px;
+}
+
+.scoreHeadline {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.scoreNumber {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "/10" or "/5" beside a figure: the scale is never left implicit. */
+.scoreScale {
+  margin-left: 3px;
+  color: var(--text-mid);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.scoreEvidence {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.scoreEvidence p {
+  margin: 0;
+}
+
+/* One star row, five outlines with an exact fractional overlay. */
+.stars {
+  position: relative;
+  display: inline-block;
+  color: rgb(255 255 255 / 0.22);
+  letter-spacing: 2px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.starsFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  overflow: hidden;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+/* The buyer-review summary: average on the left, 5-to-1 bars beside it. */
+.reviewSummary {
+  display: grid;
+  gap: 14px;
+}
+
+.reviewSummary p {
+  margin: 0 0 5px;
+}
+
+.distribution {
+  display: grid;
+  gap: 4px;
+}
+
+.distributionRow {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-mid);
+  font-size: 12px;
+}
+
+.distributionStar {
+  white-space: nowrap;
+}
+
+.distributionBar {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--bg-mid);
+  overflow: hidden;
+}
+
+.distributionBar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8b5cf6, #22d3ee);
+}
+
+.distributionCount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.reviews {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reviewCard {
+  padding: 13px 15px;
+}
+
+.reviewHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reviewAvatar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #8b5cf6, #3b82f6, #22d3ee);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.reviewHead > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.reviewName {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.reviewDate {
+  margin: 2px 0 0;
+  color: var(--text-mid);
+  font-size: 11px;
+}
+
+.reviewText {
+  margin: 10px 0 0;
+  color: var(--text-mid);
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.reviewsNote {
+  margin: 10px 0 0;
+  color: var(--text-mid);
+  font-size: 12px;
+}
+
+.reviewsRetry {
+  color: #b69cff;
+  font-weight: 700;
+}
+
+/* Tablet and up: the score and its evidence sit side by side; the review
+   average and distribution do too. Both collapse to one column on phones. */
+@media (min-width: 640px) {
+  .scoreCard {
+    grid-template-columns: 180px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .reviewSummary {
+    grid-template-columns: minmax(0, 150px) minmax(0, 1fr);
+    align-items: center;
+  }
+}
+
 .owner {
   display: flex;
   align-items: center;

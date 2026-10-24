@@ -590,7 +590,15 @@ class ListingService:
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
-        d = self._listing_dict(listing, seller=seller, store=store, assets=assets)
+        from api.domains.reviews.stats import seller_review_figures
+        seller_review = (
+            (await seller_review_figures(self.db, [seller.id])).get(seller.id, (0, None))
+            if seller else (0, None)
+        )
+        d = self._listing_dict(
+            listing, seller=seller, store=store, assets=assets,
+            seller_review=seller_review,
+        )
         d.update(await self._availability(listing))
         # Buyer-facing standing, matching the app's seller tiles. This is a
         # fresh-enough nightly snapshot and deliberately excludes rank/backlog.
@@ -904,12 +912,17 @@ class ListingService:
 
         # Images: one query for the page's photos, showcases and avatars.
         assets = await load_listing_media(self.db, candidates, sellers_by_id.values())
+        # Review figures for the whole page in one grouped query: a card's
+        # star average comes from reviews, never the User.rating default.
+        from api.domains.reviews.stats import seller_review_figures
+        seller_reviews = await seller_review_figures(self.db, sellers_by_id.keys())
 
         for listing in candidates:
             d = self._listing_dict(
                 listing, seller=sellers_by_id.get(listing.seller_id),
                 store=stores_by_id.get(listing.store_id),
                 assets=assets, card=True,
+                seller_review=seller_reviews.get(listing.seller_id, (0, None)),
             )
             if viewer_lat is not None and viewer_lng is not None:
                 dist = round_distance_km(haversine_km(viewer_lat, viewer_lng, listing.lat, listing.lng))
@@ -1024,9 +1037,14 @@ class ListingService:
             stores = {s.id: s for s in (await self.db.execute(
                 select(Store).where(Store.id.in_(store_ids)))).scalars().all()}
         assets = await load_listing_media(self.db, rows, sellers.values())
+        from api.domains.reviews.stats import seller_review_figures
+        seller_reviews = await seller_review_figures(self.db, sellers.keys())
         return [
-            self._listing_dict(l, seller=sellers.get(l.seller_id),
-                               store=stores.get(l.store_id), assets=assets, card=True)
+            self._listing_dict(
+                l, seller=sellers.get(l.seller_id),
+                store=stores.get(l.store_id), assets=assets, card=True,
+                seller_review=seller_reviews.get(l.seller_id, (0, None)),
+            )
             for l in rows
         ]
 
@@ -1374,6 +1392,7 @@ class ListingService:
     def _listing_dict(
         listing: Listing, seller: Optional[User] = None, store: Optional[Store] = None,
         assets: Optional[dict] = None, card: bool = False,
+        seller_review: tuple[int, Optional[float]] = (0, None),
     ) -> dict:
         """PUBLIC listing payload. Anything added here is world-readable.
 
@@ -1512,7 +1531,12 @@ class ListingService:
             # (empty-trust) dict instead of an error.
             "seller_name": (seller.business_name or seller.name) if seller else None,
             "seller_verified": bool(seller.is_verified) if seller else False,
-            "seller_rating": (seller.rating or 0) if seller else 0,
+            # The seller's buyer-review average and how many reviews it is
+            # over. `rating` is null when nobody has reviewed them: the
+            # User.rating column starts at 5.0, which is not a score anyone
+            # gave, and a card that showed it made every new seller perfect.
+            "seller_rating": seller_review[1] if seller else None,
+            "seller_review_count": int(seller_review[0]) if seller else 0,
             "seller_completed_deals": (seller.completed_deals or 0) if seller else 0,
             # FIX (home-redesign brief, 2026-08-16): needed for the listing
             # card's trader-avatar requirement - User.profile_photo already

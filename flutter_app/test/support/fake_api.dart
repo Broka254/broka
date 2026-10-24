@@ -88,7 +88,8 @@ const List<String> fakeTopLevelCategories = [
 ];
 
 Map<String, dynamic> fakeListingJson(int i,
-        {double price = 1300, String category = 'Electronics'}) =>
+        {double price = 1300, String category = 'Electronics',
+        double? sellerRating = 4.8, int sellerReviewCount = 3}) =>
     {
       'id': 'listing-$i',
       'seller_id': 'seller-$i',
@@ -102,7 +103,8 @@ Map<String, dynamic> fakeListingJson(int i,
       'seller_name': 'Xavier Bravin',
       'seller_verified': true,
       'seller_completed_deals': 3,
-      'seller_rating': 4.8,
+      'seller_rating': sellerRating,
+      'seller_review_count': sellerReviewCount,
     };
 
 Object? defaultRoute(Uri uri) {
@@ -176,6 +178,7 @@ Map<String, dynamic> fakeTraderJson(int i) => {
       'business_name': 'Trader $i',
       'is_verified': i.isEven,
       'rating': 4.5,
+      'review_count': 6,
       'completed_deals': 7,
       'listing_count': 12,
       'location_name': 'Nairobi',

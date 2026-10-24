@@ -719,6 +719,7 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
     ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     final verified = owner?.verified ?? false;
     final rating = owner?.shownRating;
+    final reviews = owner?.reviewCount ?? 0;
     final deals = owner?.completedDeals ?? 0;
 
     return Padding(
@@ -823,7 +824,19 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
                           key: const Key('hero-rating'),
                           icon: Icons.star_rounded,
                           iconColor: BrokaColors.zoneAmber,
-                          label: rating != null ? rating.toStringAsFixed(1) : 'New seller',
+                          // The seller's buyer-review average, on its own
+                          // /5 scale and with the count behind it. Deals
+                          // alone used to produce a rating here (the 5.0
+                          // default), and a bare number read as the shop's
+                          // 0-10 score.
+                          label: rating != null
+                              ? '${rating.toStringAsFixed(1)}/5 · '
+                                  '${reviews == 1 ? '1 review' : '$reviews reviews'}'
+                              : 'New seller',
+                          semantics: rating != null
+                              ? 'Seller rating ${rating.toStringAsFixed(1)} out of 5 '
+                                  'from $reviews reviews'
+                              : 'Seller has no reviews yet',
                         ),
                         _GlassChip(
                           key: const Key('hero-deals'),

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/features/reviews/domain/models/review.dart';
 import 'package:broka/features/reviews/presentation/review_prompt.dart';
 import 'package:broka/screens/review_screen.dart';
 import 'package:broka/services/api_service.dart';
@@ -74,7 +75,7 @@ void main() {
     expect(find.text('Review Submitted! 🌟'), findsOneWidget);
   });
 
-  testWidgets("the backend's refusal is shown as it says it", (tester) async {
+  testWidgets('a duplicate is closed with the already-reviewed state, not an error', (tester) async {
     setFakeRoute((uri) => uri.path == '/reviews/'
         ? const FakeResponse({'detail': 'You have already reviewed this deal'}, statusCode: 409)
         : null);
@@ -84,7 +85,56 @@ void main() {
     await tester.ensureVisible(find.text('Submit Review'));
     await tester.tap(find.text('Submit Review'));
     await tester.pumpAndSettle();
-    expect(find.text('You have already reviewed this deal'), findsOneWidget);
+    // Retrying a 409 can never succeed: the form closes and the buyer is
+    // told the review already exists, rather than being invited to try again.
+    expect(find.byKey(const Key('review-closed')), findsOneWidget);
+    expect(find.text("You've already reviewed this deal. Thank you!"), findsOneWidget);
+    expect(find.byKey(const Key('submit-review')), findsNothing);
+  });
+
+  testWidgets('a comment past the limit is refused, never silently cut', (tester) async {
+    setFakeRoute((uri) => uri.path == '/reviews/'
+        ? const FakeResponse({'id': 'r1'}, statusCode: 201)
+        : null);
+    await open(tester, {'seller_id': 'seller-1', 'deal_id': 'd1'});
+    await tester.tap(find.byIcon(Icons.star_outline_rounded).at(3));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'x' * (maxReviewCommentLength + 1));
+    await tester.ensureVisible(find.text('Submit Review'));
+    await tester.tap(find.text('Submit Review'));
+    await tester.pumpAndSettle();
+
+    // The whole comment is still in the field: nothing truncated it.
+    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text.length,
+        maxReviewCommentLength + 1);
+    expect(find.textContaining('The limit is 500'), findsOneWidget);
+    expect(fakeRequests.where((r) => r.method == 'POST'), isEmpty);
+
+    // At the limit, exactly, it posts - trimmed.
+    await tester.enterText(
+        find.byType(TextField), '  ${'y' * maxReviewCommentLength}  ');
+    await tester.ensureVisible(find.text('Submit Review'));
+    await tester.tap(find.text('Submit Review'));
+    await tester.pumpAndSettle();
+    final post = fakeRequests.singleWhere((r) => r.method == 'POST');
+    expect((post.json as Map)['comment'], 'y' * maxReviewCommentLength);
+  });
+
+  testWidgets('a double tap submits once', (tester) async {
+    setFakeRoute((uri) => uri.path == '/reviews/'
+        ? const FakeResponse({'id': 'r1'}, statusCode: 201,
+            delay: Duration(milliseconds: 300))
+        : null);
+    await open(tester, {'seller_id': 'seller-1', 'deal_id': 'd1'});
+    await tester.tap(find.byIcon(Icons.star_outline_rounded).at(3));
+    await tester.pump();
+    await tester.ensureVisible(find.text('Submit Review'));
+    await tester.tap(find.text('Submit Review'));
+    await tester.tap(find.text('Submit Review'), warnIfMissed: false);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(fakeRequests.where((r) => r.method == 'POST'), hasLength(1));
+    expect(find.text('Review Submitted! 🌟'), findsOneWidget);
   });
 
   group('opened from the "Deal Complete" notification', () {

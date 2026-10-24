@@ -8,6 +8,11 @@
 // offering the button at all, and which shop the deal was on.
 import '../../../../utils/backend_time.dart';
 
+/// The server's MAX_REVIEW_COMMENT (backend reviews/service.py). The form
+/// counts to this and refuses longer text before sending it; the API
+/// enforces the same number and answers 400, never truncates.
+const int maxReviewCommentLength = 500;
+
 /// Every review of a seller, summed up.
 class ReviewSummary {
   const ReviewSummary({this.average, this.count = 0, this.distribution = const {}});

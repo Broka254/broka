@@ -234,14 +234,18 @@ class ProductCard extends StatelessWidget {
 
   // FIX (2026-08-18, reported: "a 5.0 rating with 0 reviews/deals is
   // mathematically impossible... users will assume the app is fake/bots"):
-  // User.rating defaults to 5.0 at account creation (database.py) and is
-  // only ever nudged upward from there on a completed deal - so a brand
-  // new seller with zero completed deals shows a perfect, untouched 5.0,
-  // indistinguishable from a seller with a real track record. The rating
-  // getter above still returns the raw value (never fabricated - it's a
-  // real column), but display is gated on _sellerCompletedDeals > 0 below
-  // so a rating only renders once there's at least one real deal behind
-  // it, not the untouched signup default.
+  // User.rating defaults to 5.0 at account creation (database.py). The API
+  // now sends the real review average (null when there is none) and the
+  // count, and the card shows a rating only when that count is above zero -
+  // deals are not reviews, so _sellerCompletedDeals no longer gates this.
+  int get _sellerReviewCount {
+    try {
+      return (item.sellerReviewCount as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   int get _sellerCompletedDeals {
     try {
       return (item.sellerCompletedDeals as num?)?.toInt() ?? 0;
@@ -839,10 +843,10 @@ class ProductCard extends StatelessWidget {
           const SizedBox(width: 3),
           const Icon(Icons.verified, size: 11, color: Color(0xFF4DD6A5)),
         ],
-        if (_sellerRating > 0 && _sellerCompletedDeals > 0) ...[
+        if (_sellerRating > 0 && _sellerReviewCount > 0) ...[
           const SizedBox(width: 3),
           const Icon(Icons.star_rounded, size: 11, color: BrokaColors.gold),
-          Text(_sellerRating.toStringAsFixed(1),
+          Text('${_sellerRating.toStringAsFixed(1)} ($_sellerReviewCount)',
               style: const TextStyle(color: _priceTint, fontSize: 10, fontWeight: FontWeight.w700)),
         ] else if (_sellerCompletedDeals == 0 && !hasStore) ...[
           // Not on a store's row: beside the store's name it cut the name to

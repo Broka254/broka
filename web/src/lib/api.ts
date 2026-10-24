@@ -6,7 +6,15 @@ import 'server-only'
 import { PAGE_SIZE, REVALIDATE_SECONDS } from './config'
 import { API_URL } from './server-config'
 import { PRICE_BANDS } from './catalogue'
-import type { ConditionKey, Listing, PriceBandKey, SortKey, Store, StoreCategory } from './types'
+import type {
+  ConditionKey,
+  Listing,
+  PriceBandKey,
+  SortKey,
+  Store,
+  StoreCategory,
+  StoreReviews,
+} from './types'
 
 /** The API answered with an error, or didn't answer. */
 export class ApiUnavailableError extends Error {
@@ -46,6 +54,14 @@ export async function getStore(name: string): Promise<Store | null> {
 
 export async function getStoreCategories(storeId: string): Promise<StoreCategory[]> {
   return (await apiGet<StoreCategory[]>(`/stores/${storeId}/categories`, [`store-id:${storeId}`])) ?? []
+}
+
+const STORE_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+/** A store's buyer reviews: its own summary, never the seller's record. */
+export async function getStoreReviews(storeId: string): Promise<StoreReviews | null> {
+  if (!STORE_ID.test(storeId)) return null
+  return apiGet<StoreReviews>(`/stores/${storeId}/reviews`, [`store-reviews:${storeId}`])
 }
 
 export interface CatalogueQuery {

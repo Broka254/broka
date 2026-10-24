@@ -15,9 +15,10 @@ import { StoreHeader } from '@/components/StoreHeader'
 import { VisitBeacon } from '@/components/VisitBeacon'
 import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
-import { getStore } from '@/lib/api'
+import { getStore, getStoreReviews } from '@/lib/api'
 import { absoluteUrl, campaignToken, storeCartPath, storeDetailsPath, viaTag } from '@/lib/links'
 import { storeDescription, storePreviewImage, storeView } from '@/lib/storefront'
+import type { StoreReviews } from '@/lib/types'
 
 type Props = {
   params: Promise<{ name: string }>
@@ -60,6 +61,16 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
   }
 
   const view = storeView(store)
+  // Reviews are additive: an API nap must not blank the seller's record,
+  // photos and safety advice, so a failure is shown inside the reviews
+  // section instead of thrown to the page's error boundary.
+  let reviews: StoreReviews | null = null
+  let reviewsFailed = false
+  try {
+    reviews = await getStoreReviews(store.id)
+  } catch {
+    reviewsFailed = true
+  }
   return (
     <>
       <StoreHeader view={view} />
@@ -70,7 +81,7 @@ export default async function StoreDetailsPage({ params, searchParams }: Props) 
           <span aria-current="page">Store details</span>
         </nav>
         <h1 className={styles.detailsTitle}>Store details</h1>
-        <StoreDetails view={view} />
+        <StoreDetails view={view} reviews={reviews} reviewsFailed={reviewsFailed} />
         <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
       </main>
       <StoreFooter view={view} />

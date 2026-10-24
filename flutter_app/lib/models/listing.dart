@@ -53,6 +53,9 @@ class Listing {
   final String? sellerName;
   final double? sellerRating;
   final int?    sellerCompletedDeals;
+  /// How many buyer reviews the average is built from. Zero means
+  /// [sellerRating] is not shown at all.
+  final int?    sellerReviewCount;
   /// Buyer-facing standing snapshot returned by the public listing detail.
   final Map<String, dynamic>? sellerStanding;
   final double? sellerDcr;
@@ -108,6 +111,7 @@ class Listing {
     this.sellerName,
     this.sellerRating,
     this.sellerCompletedDeals,
+    this.sellerReviewCount,
     this.sellerStanding,
     this.sellerDcr,
     this.sellerDcrProvisional = false,
@@ -161,6 +165,7 @@ class Listing {
         sellerName:           j['seller_name']      as String?,
         sellerRating:         (j['seller_rating']   as num?)?.toDouble(),
         sellerCompletedDeals: (j['seller_completed_deals'] as num?)?.toInt(),
+        sellerReviewCount:    (j['seller_review_count'] as num?)?.toInt(),
         sellerStanding:       j['seller_standing'] is Map
             ? Map<String, dynamic>.from(j['seller_standing'] as Map) : null,
         sellerDcr:             (j['seller_dcr'] as num?)?.toDouble(),

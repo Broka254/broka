@@ -157,6 +157,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   Future<void> _submit() async {
+    // The form is replaced by the submitting view, but two taps in one frame
+    // would otherwise post the review twice - the second gets a 409 and
+    // turns a success into an error.
+    if (_step == _ReviewStep.submitting) return;
     final id = _pickedDealId ?? _dealId;
     if (id.isEmpty) {
       setState(() => _errorMsg = 'Please select a deal first.');
@@ -166,11 +170,21 @@ class _ReviewScreenState extends State<ReviewScreen> {
       setState(() => _errorMsg = 'Please select a star rating before submitting.');
       return;
     }
+    final comment = _commentCtrl.text.trim();
+    // maxLength with MaxLengthEnforcement.none lets the counter go past the
+    // limit instead of silently deleting what was typed. The refusal is
+    // explicit, and the API refuses it too rather than truncating.
+    if (comment.length > maxReviewCommentLength) {
+      setState(() => _errorMsg =
+          'Your comment is ${comment.length} characters. The limit is '
+          '$maxReviewCommentLength - please shorten it.');
+      return;
+    }
     setState(() { _step = _ReviewStep.submitting; _errorMsg = null; });
     final result = await reviewsRepository.submitReview(
       dealId:  id,
       rating:  _rating,
-      comment: _commentCtrl.text.trim(),
+      comment: comment,
     );
     if (!mounted) return;
     result.fold(
@@ -178,9 +192,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
         HapticFeedback.heavyImpact();
         setState(() => _step = _ReviewStep.success);
       },
-      onFailure: (message, _) => setState(() {
-        _errorMsg = message;
-        _step = _ReviewStep.form;
+      onFailure: (message, statusCode) => setState(() {
+        // 409 is the duplicate-deal refusal. Retrying can never succeed, so
+        // the form closes with the already-reviewed state the notification
+        // path shows, instead of an error the buyer would keep resubmitting.
+        if (statusCode == 409) {
+          _closedMessage = "You've already reviewed this deal. Thank you!";
+          _step = _ReviewStep.closed;
+        } else {
+          _errorMsg = message;
+          _step = _ReviewStep.form;
+        }
       }),
     );
   }
@@ -575,7 +597,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
           child: TextField(
             controller: _commentCtrl,
             maxLines: 5,
-            maxLength: 500,
+            maxLength: maxReviewCommentLength,
+            // No silent truncation: past 500 the counter shows the overflow
+            // and Submit explains the limit (backend enforces the same 500).
+            maxLengthEnforcement: MaxLengthEnforcement.none,
             style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14),
             decoration: const InputDecoration(
               hintText: 'e.g. Item was exactly as described, very quick to respond. Would buy again!',

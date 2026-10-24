@@ -14,7 +14,14 @@ class StoreOwnerFacts {
   /// "Store details".
   final String? name;
   final bool verified;
+
+  /// The owner's buyer-review average, 1-5. Null when nobody has reviewed
+  /// them - not the 5.0 an account starts at, and not the shop's 0-10
+  /// composite score ([Store.rating]).
   final double? rating;
+
+  /// How many buyer reviews [rating] is over. Zero is "no rating yet".
+  final int reviewCount;
   final int completedDeals;
   final DateTime? memberSince;
 
@@ -30,6 +37,7 @@ class StoreOwnerFacts {
     this.name,
     this.verified = false,
     this.rating,
+    this.reviewCount = 0,
     this.completedDeals = 0,
     this.memberSince,
     this.online = false,
@@ -43,6 +51,7 @@ class StoreOwnerFacts {
       name: name == null || name.isEmpty ? null : name,
       verified: j['verified'] as bool? ?? false,
       rating: (j['rating'] as num?)?.toDouble(),
+      reviewCount: (j['review_count'] as num?)?.toInt() ?? 0,
       completedDeals: (j['completed_deals'] as num?)?.toInt() ?? 0,
       memberSince: DateTime.tryParse(j['member_since'] as String? ?? ''),
       online: j['online'] as bool? ?? false,
@@ -50,8 +59,11 @@ class StoreOwnerFacts {
     );
   }
 
-  /// A rating counts only with deals behind it (Store details' rule).
-  double? get shownRating => completedDeals > 0 ? rating : null;
+  /// A rating counts only with reviews behind it. Deals are not reviews:
+  /// a seller can finish a hundred deals and still have been rated by
+  /// nobody, and displaying the signup default then is the fake 5.0 this
+  /// gate exists to prevent.
+  double? get shownRating => reviewCount > 0 ? rating : null;
 }
 
 /// How a business trades: from premises a customer can visit, or online only.

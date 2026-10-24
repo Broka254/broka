@@ -16,6 +16,7 @@ class StoreReviews {
     this.summary = const ReviewSummary(),
     this.reviews = const [],
     this.sellerStanding,
+    this.viewer,
   });
 
   final ReviewSummary summary;
@@ -25,6 +26,11 @@ class StoreReviews {
   /// to publish. Response time lives here.
   final SellerStanding? sellerStanding;
 
+  /// Present only for a signed-in caller: their own eligible deals on this
+  /// shop. Null for a visitor, so the screen shows no button it could not
+  /// back with a review the backend would accept.
+  final StoreReviewsViewer? viewer;
+
   factory StoreReviews.fromJson(Map<String, dynamic> json) => StoreReviews(
         summary: ReviewSummary.fromJson(
             (json['summary'] as Map?)?.cast<String, dynamic>() ?? const {}),
@@ -33,7 +39,42 @@ class StoreReviews {
             if (r is Map) SellerReview.fromJson(r.cast<String, dynamic>()),
         ],
         sellerStanding: SellerStanding.fromJson(json['seller_standing']),
+        viewer: StoreReviewsViewer.fromJson(json['viewer']),
       );
+}
+
+/// What the signed-in viewer may do here, computed by the backend from
+/// their own deals (backend stores/service.py: store_reviews). It saves the
+/// app a second request, and keeps the button and the server's answer in
+/// step: a review submitted a moment ago arrives back as already_reviewed.
+class StoreReviewsViewer {
+  const StoreReviewsViewer({
+    this.canReview = false,
+    this.alreadyReviewed = false,
+    this.deals = const [],
+  });
+
+  final bool canReview;
+
+  /// True only when every sale this buyer had on this shop is reviewed.
+  /// A visitor with no deal at all is neither can_review nor reviewed.
+  final bool alreadyReviewed;
+  final List<ReviewableDeal> deals;
+
+  /// How many deals are still open to review, for the button's label.
+  int get unreviewedCount => deals.where((d) => !d.alreadyReviewed).length;
+
+  static StoreReviewsViewer? fromJson(Object? json) {
+    if (json is! Map) return null;
+    return StoreReviewsViewer(
+      canReview: json['can_review'] == true,
+      alreadyReviewed: json['already_reviewed'] == true,
+      deals: [
+        for (final d in json['reviewable_deals'] as List? ?? const [])
+          if (d is Map) ReviewableDeal.fromJson(d.cast<String, dynamic>()),
+      ],
+    );
+  }
 }
 
 /// How the store's reply time reads on its details screen, or null when

@@ -158,7 +158,7 @@ void main() {
     expect(
         find.descendant(
             of: find.byKey(const Key('store-rating-s1')),
-            matching: find.text('8.4')),
+            matching: find.text('8.4/10')),
         findsOneWidget);
     expect(find.text('(0)'), findsNothing);
   });

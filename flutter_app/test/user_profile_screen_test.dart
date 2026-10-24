@@ -23,7 +23,8 @@ Map<String, dynamic> _seller({Map<String, dynamic> extra = const {}}) => {
       'nickname': null,
       'account_type': 'buyer_seller',
       'business_location': 'Westlands, Nairobi',
-      'rating': 5.0,
+      'rating': 4.5,
+      'review_count': 2,
       'completed_deals': 14,
       'is_verified': true,
       'profile_photo': null,
@@ -176,7 +177,8 @@ void main() {
       // A new seller: no snapshot, no deals, a rating still at its 5.0 start.
       backend(profile: {
         'id': 'seller-1', 'name': 'New Seller', 'account_type': 'buyer_seller',
-        'rating': 5.0, 'completed_deals': 0, 'last_seen': '2026-09-30T13:05:00',
+        'rating': 5.0, 'review_count': 0, 'completed_deals': 0,
+        'last_seen': '2026-09-30T13:05:00',
         'created_at': '2026-09-01T09:00:00',
       }, summary: {'avg': null, 'count': 0, 'distribution': {}}, reviews: <Object?>[]);
       await open(tester);
@@ -237,7 +239,7 @@ void main() {
       await open(tester);
       await tester.scrollUntilVisible(find.text('Phone exactly as described.'), 200);
       expect(textIn(tester, const Key('reviews-summary')),
-          allOf(contains('4.5'), contains('2 reviews')));
+          allOf(contains('4.5'), contains('/ 5'), contains('2 reviews')));
       expect(find.text('Amina W.'), findsOneWidget);
       expect(find.text('Brian O.'), findsOneWidget);
       // The distribution's keys come as strings ("4"), and were read as ints.
@@ -253,7 +255,7 @@ void main() {
       expect(find.byKey(const Key('write-review')), findsNothing);
       await tester.scrollUntilVisible(find.byKey(const Key('review-eligibility')), 200);
       expect(textIn(tester, const Key('review-eligibility')),
-          'Only buyers who completed a deal with Grace Akinyi can review them.');
+          'Only buyers who had a deal with Grace Akinyi can review them.');
       // Asked about this seller's deals only.
       final ask = fakeRequests.singleWhere((r) => r.uri.path == '/reviews/my-deals');
       expect(ask.uri.queryParameters['seller_id'], 'seller-1');

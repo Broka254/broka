@@ -16,7 +16,14 @@ export interface StoreOwner {
   /** Who runs the store. Absent from API versions before "Store details". */
   name?: string | null
   verified: boolean
+  /**
+   * The owner's buyer-review average, 1-5. Null when nobody has reviewed
+   * them - never the old account default of 5.0. This is the person's
+   * record, not the shop's 0-10 composite score (`Store.rating`).
+   */
   rating: number | null
+  /** How many buyer reviews that average is over. 0 = no rating yet. */
+  review_count?: number | null
   completed_deals: number
   member_since: string | null
   /** A heartbeat in the last five minutes (API versions before it: absent). */
@@ -129,7 +136,10 @@ export interface Listing {
   showcase_image_url: string | null
   seller_name: string | null
   seller_verified: boolean
+  /** The seller's buyer-review average, 1-5; null when nobody reviewed them. */
   seller_rating: number | null
+  /** How many buyer reviews `seller_rating` is over (older APIs: absent). */
+  seller_review_count?: number | null
   seller_completed_deals: number
   /**
    * The seller's average deal time, agreement to payout, in minutes - on the
@@ -141,6 +151,52 @@ export interface Listing {
   store_id: string | null
   store_slug: string | null
   store_name: string | null
+}
+
+/** The buyer-review figures for one store (GET /stores/{id}/reviews). */
+export interface ReviewSummary {
+  /** 1-5, one decimal; null when `count` is zero. */
+  avg: number | null
+  count: number
+  /** Keyed "1".."5"; every key is present. */
+  distribution: Record<string, number>
+}
+
+/** A public review card. The API sends no reviewer, deal or seller id. */
+export interface PublicReview {
+  id: string
+  /** 1-5. */
+  rating: number
+  comment: string | null
+  created_at: string | null
+  /** A display name such as "Amina W."; null if the buyer has none. */
+  reviewer_name: string | null
+}
+
+/**
+ * The owner's separate 0-10 trust snapshot (backend trust/public_standing.py).
+ * Not the shop's composite score and not the 1-5 buyer-review average.
+ */
+export interface SellerStanding {
+  overall_rating: number | null
+  dcr: number | null
+  dcr_provisional: boolean
+  median_response_minutes: number | null
+  completed_deals: number
+  as_of: string | null
+}
+
+/** The store's buyer reviews, plus the owner's seller standing. */
+export interface StoreReviews {
+  summary: ReviewSummary
+  reviews: PublicReview[]
+  seller_standing?: SellerStanding | null
+  /** Present only for a signed-in caller; the storefront is anonymous. */
+  viewer?: {
+    can_review: boolean
+    already_reviewed: boolean
+    reviewable_deals: unknown[]
+  } | null
 }
 
 export type SortKey = 'featured' | 'newest' | 'price_low' | 'price_high'

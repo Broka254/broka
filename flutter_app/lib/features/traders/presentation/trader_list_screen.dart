@@ -382,9 +382,23 @@ class _TraderCard extends StatelessWidget {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Row(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.star_rounded, size: 14, color: BrokaColors.gold),
+                    Icon(
+                        trader.reviewCount > 0
+                            ? Icons.star_rounded
+                            : Icons.star_outline_rounded,
+                        size: 14,
+                        color: trader.reviewCount > 0
+                            ? BrokaColors.gold
+                            : BrokaColors.textMid),
                     const SizedBox(width: 3),
-                    Text(trader.rating.toStringAsFixed(1),
+                    // The buyer-review average and its count, or plainly no
+                    // reviews. The old bare rating printed the legacy 5.0
+                    // default for traders nobody had reviewed.
+                    Text(
+                        trader.reviewCount > 0
+                            ? '${trader.rating.toStringAsFixed(1)} '
+                                '(${trader.reviewCount})'
+                            : 'No reviews yet',
                         style: const TextStyle(
                             color: BrokaColors.textMid,
                             fontSize: 12,

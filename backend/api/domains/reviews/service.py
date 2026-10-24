@@ -19,6 +19,13 @@ wrong (ESCROW_AUDIT.md, STORES_RATING_PLAN.md §2).
 
 Its review row also carries the deal's store (reviews.store_id) so a shop
 is rated from its own sales, never from its owner's other shop.
+
+AFTER SUBMISSION: a review is the buyer's account of a deal that happened,
+so it is not removed or recomputed because that deal is later cancelled,
+refunded or disputed. Deleting it would let one side erase the other's
+record by changing the deal's status. Status only decides whether a review
+may be WRITTEN (NOT_A_PURCHASE below); moderation, not a status change, is
+the only way a review leaves the record.
 """
 from __future__ import annotations
 
@@ -48,6 +55,13 @@ REVIEWABLE_STATUSES = tuple(s for s in DealStatus if s not in NOT_A_PURCHASE)
 # 404 that looks like a broken screen.
 CHAT_REVIEW_PREFIX = "chat:"
 
+# One limit for every surface that writes or displays a review comment.
+# The API schema enforces it before the body reaches here; this check is
+# what a direct service call gets. A comment over the limit is refused,
+# never cut: the buyer wrote those words, and saving half of them would
+# publish a sentence they did not write.
+MAX_REVIEW_COMMENT = 500
+
 
 class ReviewService:
     def __init__(self, db: AsyncSession):
@@ -62,6 +76,12 @@ class ReviewService:
     ) -> dict:
         if not (1 <= rating <= 5):
             raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+        text = (comment or "").strip()
+        if len(text) > MAX_REVIEW_COMMENT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A review comment can be at most {MAX_REVIEW_COMMENT} characters",
+            )
         if deal_id.startswith(CHAT_REVIEW_PREFIX):
             raise HTTPException(
                 status_code=403,
@@ -101,7 +121,7 @@ class ReviewService:
             seller_id=deal.seller_id,
             store_id=listing_store,
             rating=rating,
-            comment=comment[:1000],
+            comment=text,
         ))
 
     async def _save(self, review: Review) -> dict:
@@ -302,10 +322,14 @@ class ReviewService:
         r = await self.db.execute(
             select(func.avg(Review.rating)).where(Review.seller_id == seller_id)
         )
-        avg = r.scalar() or 5.0
+        avg = r.scalar()
         ur = await self.db.execute(select(User).where(User.id == seller_id))
         seller = ur.scalar_one_or_none()
-        if seller:
+        # No reviews is no average. This column is only a cache now - every
+        # public surface reads reviews/stats.py - but writing 5.0 into it
+        # would recreate the "unreviewed seller looks perfect" bug for any
+        # legacy reader.
+        if seller and avg is not None:
             seller.rating = round(float(avg), 2)
 
     @staticmethod
@@ -319,11 +343,11 @@ class ReviewService:
 
     @staticmethod
     def _review_dict(r: Review) -> dict:
+        """A review as the public reads it: the words, the stars and when -
+        never the deal, reviewer or seller id. Those are for the audit row
+        and the event, both of which stay inside BROKA."""
         return {
             "id": r.id,
-            "deal_id": r.deal_id,
-            "reviewer_id": r.reviewer_id,
-            "seller_id": r.seller_id,
             "rating": r.rating,
             "comment": r.comment,
             "created_at": r.created_at.isoformat() if r.created_at else None,

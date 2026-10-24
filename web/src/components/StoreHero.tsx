@@ -24,8 +24,11 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
     .filter(Boolean)
     .join(' · ')
   const deals = owner?.completed_deals ?? 0
-  // A rating only means something once there are deals behind it.
-  const rating = deals > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null
+  // Buyer reviews, not deals: a seller with a hundred deals and no review
+  // has no average, and the legacy 5.0 account default must never stand in
+  // for one (backend reviews/stats.py).
+  const ownerReviews = owner?.review_count ?? 0
+  const sellerRating = ownerReviews > 0 && owner?.rating != null ? owner.rating : null
   // The SHOP's own rating, 0-10, from its reviews, reply speed and tenure
   // (backend stores/rating.py). Shown ahead of the owner's seller rating:
   // a buyer is judging this shop, not the person's whole history. Absent
@@ -93,12 +96,26 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
             <li className={styles.glassChip}>
               <Icon name="star" size={15} className={styles.starIcon} />
               {storeRating != null ? (
-                <span aria-label="Store rating">
-                  {storeRating.toFixed(1)}
+                // The scale is part of the figure: an unlabelled 6.5 beside
+                // a five-star icon read as 6.5 out of 5. It links to the
+                // buyer reviews that help build it.
+                <Link
+                  href={`${storeDetailsPath(store.slug)}#reviews`}
+                  className={styles.factLink}
+                  aria-label={`Store score ${storeRating.toFixed(1)} out of 10${
+                    reviewCount > 0 ? `, from ${plural(reviewCount, 'review')}` : ''
+                  }`}
+                >
+                  <span>{storeRating.toFixed(1)}/10</span>
                   {reviewCount > 0 && <span className={styles.factMuted}> ({reviewCount})</span>}
+                </Link>
+              ) : sellerRating != null ? (
+                <span aria-label={`Seller rating ${sellerRating.toFixed(1)} out of 5, from ${plural(ownerReviews, 'review')}`}>
+                  <span>{sellerRating.toFixed(1)}/5</span>
+                  <span className={styles.factMuted}> ({ownerReviews})</span>
                 </span>
               ) : (
-                rating ?? 'New seller'
+                'New seller'
               )}
             </li>
             <li className={styles.glassChip}>

@@ -464,6 +464,11 @@ class StoreService:
         assets = await self._assets_for(stores)
         owners = await self._owners_for(stores)
         links = await self._categories_for([s.id for s in stores])
+        # The owners' real buyer-review figures, one query for the page -
+        # User.rating is a legacy cache whose 5.0 starting value would show
+        # every new seller as perfect.
+        from api.domains.reviews.stats import seller_review_figures
+        owner_reviews = await seller_review_figures(self.db, owners.keys())
         subs = (await store_billing.subscriptions_for(self.db, [s.id for s in stores])
                 if store_billing.enabled() else {})
         items = [
@@ -471,6 +476,7 @@ class StoreService:
                 s, listing_count=counts.get(s.id, 0), assets=assets, owner=owners.get(s.owner_id),
                 billing_subs=subs, category_names=links.get(s.id, []),
                 viewer_lat=viewer_lat, viewer_lng=viewer_lng,
+                owner_reviews=owner_reviews,
             )
             for s in stores
         ]
@@ -1113,7 +1119,10 @@ class StoreService:
             for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], order.get(kv[0], 99)))
         ]
 
-    async def store_reviews(self, store_id: str, limit: int = 20, offset: int = 0) -> dict:
+    async def store_reviews(
+        self, store_id: str, limit: int = 20, offset: int = 0,
+        *, viewer_id: Optional[str] = None,
+    ) -> dict:
         """A store's buyer reviews plus the owner's published standing.
 
         Store-scoped since 2026-10-19: these are the reviews of deals whose
@@ -1126,6 +1135,11 @@ class StoreService:
         seller; they appear on the seller's profile, not on any shop. A
         paused or unpaid store still reports its reviews: the shop's
         visibility governs the shop, not what buyers already said about it.
+
+        A signed-in viewer also gets `viewer`: whether they have a sale on
+        this shop they can still review, and the deals to choose from. It
+        is computed from their own deals, so a buyer's other shops' deals
+        can never appear here.
         """
         from api.domains.reviews.service import ReviewService
         from api.domains.trust.public_standing import public_seller_standing
@@ -1137,7 +1151,7 @@ class StoreService:
         rows = await reviews_service.get_store_reviews(
             store.id, limit=limit, offset=offset,
             owner_id=store.owner_id, include_seller_chat=sole)
-        return {
+        payload = {
             "summary": await reviews_service.get_store_summary(
                 store.id, owner_id=store.owner_id, include_seller_chat=sole),
             # Only what a review card shows: no reviewer, seller or deal id.
@@ -1155,6 +1169,18 @@ class StoreService:
             # still worth knowing, it is just no longer the shop's number.
             "seller_standing": await public_seller_standing(self.db, store.owner_id),
         }
+        if viewer_id:
+            deals = await reviews_service.my_reviewable_deals(
+                viewer_id, store_id=store.id)
+            unreviewed = [d for d in deals if not d["already_reviewed"]]
+            payload["viewer"] = {
+                "can_review": bool(unreviewed),
+                # True only when every sale they had here is already
+                # reviewed; a shopper with no deal at all is neither.
+                "already_reviewed": bool(deals) and not unreviewed,
+                "reviewable_deals": deals,
+            }
+        return payload
 
     # ── Update ────────────────────────────────────────────────────────────
 
@@ -1686,7 +1712,10 @@ class StoreService:
         return {u.id: u for u in rows}
 
     @staticmethod
-    def _owner_facts(owner: Optional[User]) -> Optional[dict]:
+    def _owner_facts(
+        owner: Optional[User],
+        review: tuple[int, Optional[float]] = (0, None),
+    ) -> Optional[dict]:
         if owner is None:
             return None
         # The name is what a buyer needs to know who runs the store (the
@@ -1695,11 +1724,18 @@ class StoreService:
         # Online is the chat header's rule (api/core/presence.py): a
         # heartbeat in the last five minutes. An owner who has never sent
         # one has no "last active" - "Recently active" would be a guess.
+        #
+        # `rating` is the owner's BUYER-REVIEW average, from the reviews
+        # themselves: null when nobody has reviewed them. User.rating's
+        # 5.0 starting value is not a score anyone gave, and the shop's
+        # own 0-10 composite is published separately as `rating` above.
         online, last_active = online_status(owner.last_seen)
+        review_count, review_avg = review
         return {
             "name": (owner.name or "").strip() or None,
             "verified": bool(owner.is_verified),
-            "rating": round(float(owner.rating), 1) if owner.rating is not None else None,
+            "rating": round(review_avg, 1) if review_avg is not None else None,
+            "review_count": review_count,
             "completed_deals": int(owner.completed_deals or 0),
             "member_since": owner.created_at.isoformat() if owner.created_at else None,
             "online": online,
@@ -1717,6 +1753,7 @@ class StoreService:
         category_names: Optional[list[str]] = None,
         viewer_lat: Optional[float] = None,
         viewer_lng: Optional[float] = None,
+        owner_reviews: Optional[dict[str, tuple[int, Optional[float]]]] = None,
     ) -> dict:
         """The store payload. owner_view=True only for responses to the
         owner themselves (create, update, status, /stores/mine); every other
@@ -1744,6 +1781,16 @@ class StoreService:
             assets = await self._assets_for([store])
         if owner is None:
             owner = await self.db.get(User, store.owner_id)
+        if owner_reviews is not None:
+            owner_review = owner_reviews.get(owner.id, (0, None)) if owner else (0, None)
+        elif owner is not None:
+            # One grouped read for a single store; list_stores passes the
+            # whole page's figures in rather than doing this per shop.
+            from api.domains.reviews.stats import seller_review_figures
+            owner_review = (await seller_review_figures(self.db, [owner.id])).get(
+                owner.id, (0, None))
+        else:
+            owner_review = (0, None)
         logo = asset_urls(assets.get(store.logo_id)) if store.logo_id else None
         cover = asset_urls(assets.get(store.cover_id)) if store.cover_id else None
         photo_images = [
@@ -1847,7 +1894,7 @@ class StoreService:
                 if owner_view or store.business_email_verified else None
             ),
             "business_email_verified": bool(store.business_email_verified),
-            "owner": self._owner_facts(owner),
+            "owner": self._owner_facts(owner, owner_review),
             "rating": rating_block["rating"],
             "review_count": rating_block["review_count"],
             "response_minutes": rating_block["response_minutes"],

@@ -766,6 +766,17 @@
   color: #fbbf24;
 }
 
+/* The store score links to the buyer reviews behind it. */
+.factLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.factLink:hover,
+.factLink:focus-visible {
+  text-decoration: underline;
+}
+
 /* The review count beside the store rating: a smaller, dimmer number so it
    reads as evidence for the rating rather than a second score. */
 .factMuted {

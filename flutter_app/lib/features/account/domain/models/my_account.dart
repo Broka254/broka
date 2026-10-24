@@ -19,6 +19,7 @@ class MyAccount {
   final String? sellerTier;
   final bool isVerified;
   final double? rating;
+  final int reviewCount;
   final int completedDeals;
   final bool locationVisible;
   final String? createdAt;
@@ -35,6 +36,7 @@ class MyAccount {
     this.sellerTier,
     this.isVerified = false,
     this.rating,
+    this.reviewCount = 0,
     this.completedDeals = 0,
     this.locationVisible = true,
     this.createdAt,
@@ -52,6 +54,7 @@ class MyAccount {
         sellerTier: j['seller_tier'] as String?,
         isVerified: j['is_verified'] as bool? ?? false,
         rating: (j['rating'] as num?)?.toDouble(),
+        reviewCount: (j['review_count'] as num?)?.toInt() ?? 0,
         completedDeals: (j['completed_deals'] as num?)?.toInt() ?? 0,
         locationVisible: j['location_visible'] as bool? ?? true,
         createdAt: j['created_at'] as String?,
@@ -76,11 +79,11 @@ class MyAccount {
     return parts.isEmpty ? 'B' : parts.first[0].toUpperCase();
   }
 
-  /// A rating only means something once someone has rated a finished deal;
-  /// before that the column holds its default, which is not a score anyone
-  /// gave.
+  /// A rating only means something once someone has reviewed a finished
+  /// deal. Deals are not reviews, and the column's default is not a score
+  /// anyone gave, so both a review and its average must exist.
   String get ratingLabel =>
-      completedDeals > 0 && rating != null ? rating!.toStringAsFixed(1) : 'New';
+      reviewCount > 0 && rating != null ? rating!.toStringAsFixed(1) : 'New';
 
   /// Phone first - it's how BROKA accounts are identified - else email.
   String? get contactLine {

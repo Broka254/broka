@@ -29,13 +29,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../main.dart' show BrokaColors;
 import '../../../../core/utils/result.dart';
-import '../../../../services/api_service.dart' show ApiService;
 import '../../../../models/seller_standing.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/constellation_background.dart';
+import '../../../../widgets/rating_stars.dart';
 import '../../../../widgets/seller_standing_tiles.dart' show SellerStandingTiles;
-import '../../../reviews/data/repositories/reviews_repository.dart';
-import '../../../reviews/domain/models/review.dart';
 import '../../../safe_payment/payments_shown.dart';
 import '../../../safe_payment/safe_payment.dart';
 import '../../data/repositories/stores_repository.dart';
@@ -85,30 +83,31 @@ class StoreDetailsScreen extends StatefulWidget {
 }
 
 class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
+  /// The shop as last read from the server. It starts as the card's copy
+  /// and is replaced after a review, because a new review moves the shop's
+  /// composite score and its buyer-review count - numbers the card handed
+  /// this screen before the review existed.
+  late Store _store;
   StoreReviews? _reviews;
   bool _loading = false;
   String? _error;
 
-  /// The signed-in buyer's unreviewed deals on this shop's products. Empty
-  /// for a visitor, or one with no deal here - there is no button to show
-  /// them, because the backend would refuse the review anyway.
-  List<ReviewableDeal> _reviewable = const [];
-
   @override
   void initState() {
     super.initState();
+    _store = widget.store;
     if (widget.repository != null) {
       _loading = true;
       _fetch();
     }
-    if (ApiService.isLoggedIn) _fetchReviewable();
   }
 
   Future<void> _fetch() async {
-    final result = await widget.repository!.getStoreReviews(widget.store.id);
+    final result = await widget.repository!.getStoreReviews(_store.id);
     if (!mounted) return;
     setState(() {
       _loading = false;
+      _error = null;
       switch (result) {
         case Success(:final data):
           _reviews = data;
@@ -118,14 +117,32 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
     });
   }
 
-  /// Asks the reviews API which of the buyer's deals were on this shop's
-  /// products. A failure just means no button - the reviews themselves are
-  /// public and already loaded.
-  Future<void> _fetchReviewable() async {
-    final result = await reviewsRepository.myReviewableDeals(storeId: widget.store.id);
-    if (!mounted || result is! Success<List<ReviewableDeal>>) return;
-    setState(() => _reviewable =
-        result.data.where((deal) => !deal.alreadyReviewed).toList());
+  /// After a review is posted: one pair of reads, not a retry plus a
+  /// separate eligibility call. The reviews response carries the viewer's
+  /// new eligibility (backend stores/service.py: store_reviews), and the
+  /// store read brings the recomputed composite and review count.
+  Future<void> _refreshAfterReview() async {
+    final repository = widget.repository;
+    if (repository == null) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final reviewsCall = repository.getStoreReviews(_store.id);
+    final storeCall = repository.getStore(_store.id);
+    final reviews = await reviewsCall;
+    final store = await storeCall;
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      switch (reviews) {
+        case Success(:final data):
+          _reviews = data;
+        case Failure(:final message):
+          _error = message;
+      }
+      if (store case Success(:final data)) _store = data;
+    });
   }
 
   void _retry() {
@@ -141,12 +158,11 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
   /// seller's and the shop's at once (backend reviews/service.py).
   Future<void> _rateStore() async {
     final wrote = await Navigator.pushNamed(context, '/review', arguments: {
-      'store_id': widget.store.id,
-      'seller_name': widget.store.name,
+      'store_id': _store.id,
+      'seller_name': _store.name,
     });
     if (!mounted || wrote != true) return;
-    _retry();
-    _fetchReviewable();
+    await _refreshAfterReview();
   }
 
   @override
@@ -167,14 +183,16 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
             StoreDetailsView(
-              store: widget.store,
+              store: _store,
               openUrl: widget.openUrl,
               reviews: _reviews,
               reviewsLoading: _loading,
               reviewsError: _error,
               onRetryReviews: _retry,
-              reviewableDeals: _reviewable.length,
-              onRateStore: _reviewable.isEmpty ? null : _rateStore,
+              reviewableDeals: _reviews?.viewer?.unreviewedCount ?? 0,
+              onRateStore: (_reviews?.viewer?.unreviewedCount ?? 0) == 0
+                  ? null
+                  : _rateStore,
             ),
           ],
         ),
@@ -256,7 +274,10 @@ class StoreDetailsView extends StatelessWidget {
       _Summary(store: store),
       if (store.rating != null) ...[
         const SizedBox(height: 22),
-        _label('Store rating'),
+        // Named for its scale. The buyer-review average further down is a
+        // different number on a different scale, and "rating" for both made
+        // 6.5/10 look like a five-star score.
+        _label('Store score (out of 10)'),
         _StoreRatingCard(store: store),
       ],
       const SizedBox(height: 22),
@@ -721,7 +742,14 @@ class _StoreRatingCard extends StatelessWidget {
           ),
           const Spacer(),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            _ReviewsSection._stars(store.rating!.round(), 13),
+            // 0-10 in, stars out: 6.5/10 is 3.25/5. Passing the score
+            // straight to a five-star row drew it as 5/5.
+            RatingStars(
+              key: const Key('store-score-stars'),
+              value: starsFromStoreScore(store.rating!),
+              semanticLabel:
+                  'Store score ${store.rating!.toStringAsFixed(1)} out of 10',
+            ),
             const SizedBox(height: 3),
             Text(
                 reviews == 0
@@ -762,8 +790,11 @@ class _OwnerCard extends StatelessWidget {
     final verified = owner?.verified ?? false;
     final deals = owner?.completedDeals ?? 0;
     final since = owner?.memberSince;
-    // A rating only means something once there are deals behind it.
-    final rating = deals > 0 ? owner?.rating : null;
+    final reviews = owner?.reviewCount ?? 0;
+    // Buyer reviews, not deals: a seller with a hundred deals and no review
+    // has no average to show. The old gate on deals let the legacy 5.0
+    // default through as a perfect score (backend reviews/stats.py).
+    final rating = reviews > 0 ? owner?.rating : null;
 
     return _card(
       key: const Key('store-owner'),
@@ -812,8 +843,12 @@ class _OwnerCard extends StatelessWidget {
             key: const Key('owner-rating'),
             icon: Icons.star_rounded,
             iconColor: const Color(0xFFFBBF24),
-            value: rating != null ? rating.toStringAsFixed(1) : 'New',
-            label: rating != null ? 'Rating' : 'No rating yet',
+            // /5 is the buyer-review scale, and it is spelled out so it
+            // cannot be read as the shop's 0-10 score two sections up.
+            value: rating != null ? '${rating.toStringAsFixed(1)}/5' : 'New',
+            label: rating != null
+                ? (reviews == 1 ? 'Rating · 1 review' : 'Rating · $reviews reviews')
+                : 'No reviews yet',
           ),
           const SizedBox(width: 8),
           _fact(
@@ -945,6 +980,9 @@ class _ReviewsSection extends StatelessWidget {
           if (_canRate) ...[
             const SizedBox(height: 12),
             _rateButton(),
+          ] else if (_viewerNote() != null) ...[
+            const SizedBox(height: 12),
+            _viewerNote()!,
           ],
         ]),
       );
@@ -956,11 +994,26 @@ class _ReviewsSection extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Column(children: [
-              Text((summary.average ?? 0).toStringAsFixed(1), style: const TextStyle(
-                  color: BrokaColors.textHigh, fontSize: 34,
-                  fontWeight: FontWeight.w900, height: 1.0)),
+              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text((summary.average ?? 0).toStringAsFixed(1), style: const TextStyle(
+                    color: BrokaColors.textHigh, fontSize: 34,
+                    fontWeight: FontWeight.w900, height: 1.0)),
+                // The buyer-review scale, beside the number. The shop's
+                // composite above is out of 10 and is a different figure.
+                const Padding(
+                  padding: EdgeInsets.only(left: 3, bottom: 4),
+                  child: Text('/ 5', style: TextStyle(
+                      color: BrokaColors.textMid, fontSize: 11.5)),
+                ),
+              ]),
               const SizedBox(height: 4),
-              _stars((summary.average ?? 0).round(), 13),
+              RatingStars(
+                key: const Key('store-reviews-stars'),
+                value: buyerStars(summary.average ?? 0),
+                size: 13,
+                semanticLabel:
+                    'Buyer rating ${(summary.average ?? 0).toStringAsFixed(1)} out of 5',
+              ),
               const SizedBox(height: 3),
               Text(summary.count == 1 ? '1 review' : '${summary.count} reviews',
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
@@ -1001,6 +1054,9 @@ class _ReviewsSection extends StatelessWidget {
           if (_canRate) ...[
             const SizedBox(height: 12),
             _rateButton(),
+          ] else if (_viewerNote() != null) ...[
+            const SizedBox(height: 12),
+            _viewerNote()!,
           ],
         ]),
       ),
@@ -1047,11 +1103,39 @@ class _ReviewsSection extends StatelessWidget {
     ]);
   }
 
-  static Widget _stars(int filled, double size) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(5, (i) => Icon(
-            i < filled ? Icons.star_rounded : Icons.star_outline_rounded,
-            color: BrokaColors.gold, size: size)),
+  /// Why there is no button, when the server knows who is looking. A buyer
+  /// who has reviewed everything they bought here should not be invited
+  /// again; a passer-by should be told what a review actually requires.
+  Widget? _viewerNote() {
+    final viewer = reviews?.viewer;
+    if (viewer == null) return null;
+    if (viewer.alreadyReviewed) {
+      return _note(
+        key: const Key('store-reviews-already-reviewed'),
+        icon: Icons.check_circle_outline_rounded,
+        text: "You've reviewed this store. Thanks - your review is above.",
+      );
+    }
+    if (viewer.deals.isEmpty) {
+      return _note(
+        key: const Key('store-reviews-ineligible'),
+        icon: Icons.shopping_bag_outlined,
+        text: 'Only buyers who had a deal with this store can review it. '
+            'Once you have one, you can rate it here.',
+      );
+    }
+    return null;
+  }
+
+  Widget _note({required Key key, required IconData icon, required String text}) => Row(
+        key: key,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: BrokaColors.textMid),
+          const SizedBox(width: 7),
+          Expanded(child: Text(text, style: const TextStyle(
+              color: BrokaColors.textMid, fontSize: 12, height: 1.4))),
+        ],
       );
 }
 
@@ -1092,7 +1176,11 @@ class _ReviewCard extends StatelessWidget {
               Text('${when.day}/${when.month}/${when.year}',
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
           ])),
-          _ReviewsSection._stars(review.rating, 13),
+          RatingStars(
+            value: buyerStars(review.rating.toDouble()),
+            size: 13,
+            semanticLabel: '${review.rating} out of 5 stars',
+          ),
         ]),
         if (review.comment.isNotEmpty) ...[
           const SizedBox(height: 8),
