@@ -345,6 +345,284 @@ class TestStoreTypes:
         assert [s["id"] for s in only_physical] == [physical["id"]]
 
 
+# ── Management integrity across edits and type switches ────────────────────
+
+@pytest.mark.asyncio
+class TestStoreManagementIntegrity:
+    async def test_editing_hours_and_coverage_persists(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Editable Hours Shop", slug="editable-hours-shop",
+            store_type="physical", county="Nairobi", subcounty="Westlands",
+            opening_hours=WORKING_WEEK, service_areas=["Nairobi"],
+        )
+        week = {**WORKING_WEEK, "sat": {"open": "10:00", "close": "16:00"}}
+        r = await client.patch(f"/stores/{store['id']}", json={
+            "name": "Editable Hours Shop Renamed",
+            "opening_hours": week,
+            "service_areas": ["Nairobi", "Kisumu"],
+            "delivery_note": "Courier countrywide.",
+        }, headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["slug"] == store["slug"]
+
+        public = (await client.get(f"/stores/{store['id']}")).json()
+        assert public["name"] == "Editable Hours Shop Renamed"
+        # The whole week is stored, not just the edited day, and the
+        # Monday window from setup survives the edit.
+        assert public["opening_hours_available"] is True
+        assert public["opening_hours"]["mon"] == {"open": "08:00", "close": "18:00"}
+        assert public["opening_hours"]["sat"] == {"open": "10:00", "close": "16:00"}
+        assert public["opening_hours"]["sun"] is None
+        assert len(public["opening_hours_week"]) == 7
+        assert public["service_areas"] == ["Nairobi", "Kisumu"]
+        assert public["delivery_note"] == "Courier countrywide."
+
+    async def test_switching_type_keeps_the_link_and_the_catalogue(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Link Stable Shop", slug="link-stable-shop",
+            store_type="physical", county="Nairobi", subcounty="Westlands",
+        )
+        listing = await _listing(client, headers, store["id"], name="Link Stable Product")
+
+        to_virtual = await client.patch(
+            f"/stores/{store['id']}", json={"store_type": "virtual"}, headers=headers)
+        assert to_virtual.status_code == 200, to_virtual.text
+        assert to_virtual.json()["slug"] == store["slug"]
+        assert to_virtual.json()["url"] == store["url"]
+
+        public = (await client.get(f"/stores/{store['id']}")).json()
+        assert public["county"] is None and public["subcounty"] is None
+        managed = await client.get(
+            f"/stores/{store['id']}/manage/listings", headers=headers)
+        assert managed.status_code == 200
+        assert listing["id"] in [item["id"] for item in managed.json()["items"]]
+
+        # The address and photos were kept through the switch, so moving
+        # back to physical needs no re-entry - and changes neither the
+        # link nor the catalogue.
+        back = await client.patch(
+            f"/stores/{store['id']}", json={"store_type": "physical"}, headers=headers)
+        assert back.status_code == 200, back.text
+        assert back.json()["store_type"] == "physical"
+        assert back.json()["slug"] == store["slug"]
+        assert back.json()["county"] == "Nairobi"
+        managed_again = await client.get(
+            f"/stores/{store['id']}/manage/listings", headers=headers)
+        assert listing["id"] in [item["id"] for item in managed_again.json()["items"]]
+        assert (await client.get(f"/listings/{listing['id']}")).json()["name"] == "Link Stable Product"
+
+    async def test_a_virtual_store_can_change_its_coverage_and_keep_it(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Coverage Editor Online", store_type="virtual",
+            service_areas=["Nairobi"],
+        )
+        r = await client.patch(f"/stores/{store['id']}", json={
+            "service_areas": ["Kisumu", "Siaya"],
+            "delivery_note": "Two-day courier.",
+        }, headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["service_areas"] == ["Kisumu", "Siaya"]
+
+        public = (await client.get(f"/stores/{store['id']}")).json()
+        assert public["service_areas"] == ["Kisumu", "Siaya"]
+        assert public["delivery_note"] == "Two-day courier."
+
+        # The new coverage is what the directory filters on.
+        in_kisumu = (await client.get("/stores", params={
+            "search": "Coverage Editor Online", "county": "Kisumu"})).json()
+        assert store["id"] in [s["id"] for s in in_kisumu]
+        in_nairobi = (await client.get("/stores", params={
+            "search": "Coverage Editor Online", "county": "Nairobi"})).json()
+        assert store["id"] not in [s["id"] for s in in_nairobi]
+
+
+# ── Directory discovery by area and coverage ───────────────────────────────
+
+@pytest.mark.asyncio
+class TestServiceAreaDiscovery:
+    """A buyer filtering by county/area is asking who can serve them there.
+
+    The three honest answers are separate facts: where a physical shop is,
+    where any shop says it delivers, and who has promised nationwide
+    coverage. A virtual shop's kept-over address is not premises, and
+    coverage never manufactures a distance.
+    """
+
+    async def _found(self, client, search: str, **params) -> list[str]:
+        r = await client.get("/stores", params={"search": search, **params})
+        assert r.status_code == 200, r.text
+        return [s["id"] for s in r.json()]
+
+    async def test_a_physical_store_is_found_where_it_is(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Discovery Located Shop", store_type="physical",
+            county="Nairobi", subcounty="Westlands",
+        )
+        assert store["id"] in await self._found(
+            client, "Discovery Located Shop", county="Nairobi")
+        # Older app builds saved "Nairobi County"; the filter still means
+        # the same place to a buyer.
+        assert store["id"] in await self._found(
+            client, "Discovery Located Shop", county="nairobi county")
+        assert store["id"] not in await self._found(
+            client, "Discovery Located Shop", county="Mombasa")
+
+    async def test_a_physical_store_is_found_where_it_delivers(self, client):
+        _, headers = await _register(client)
+        # Premises in Mombasa, coverage in Nairobi: both are true, and a
+        # Nairobi buyer should find the shop even though it is far away.
+        store = await _store(
+            client, headers, name="Discovery Delivering Shop", store_type="physical",
+            county="Mombasa", subcounty="Mvita", service_areas=["Nairobi"],
+        )
+        assert store["id"] in await self._found(
+            client, "Discovery Delivering Shop", county="Nairobi")
+        assert store["id"] not in await self._found(
+            client, "Discovery Delivering Shop", county="Kisumu")
+
+    async def test_a_virtual_store_is_found_through_its_declared_coverage(self, client):
+        _, headers = await _register(client)  # the seller's GPS is in Nairobi
+        store = await _store(
+            client, headers, name="Discovery Virtual Coverage", store_type="virtual",
+            service_areas=["Nairobi"],
+        )
+        assert store["id"] in await self._found(
+            client, "Discovery Virtual Coverage", county="Nairobi")
+        assert store["id"] not in await self._found(
+            client, "Discovery Virtual Coverage", county="Kisumu")
+
+        # Being found by coverage is not a location: even with the buyer's
+        # coordinates - and the owner's Nairobi GPS on the account - a
+        # virtual store publishes neither a distance nor a map point.
+        r = await client.get("/stores", params={
+            "search": "Discovery Virtual Coverage", "county": "Nairobi",
+            "lat": -1.286, "lng": 36.817,
+        })
+        row = next(s for s in r.json() if s["id"] == store["id"])
+        assert row["distance_km"] is None and row["distance_label"] is None
+        assert row["has_location"] is False and row["approx_lat"] is None
+
+    async def test_nationwide_virtual_stores_are_found_everywhere(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Discovery Nationwide Shop", store_type="virtual",
+            service_areas=["Nationwide"],
+        )
+        for county in ("Nairobi", "Kisumu", "Kwale"):
+            assert store["id"] in await self._found(
+                client, "Discovery Nationwide Shop", county=county), county
+        # A subcounty is inside the promise too, with or without the
+        # county the app normally sends beside it.
+        assert store["id"] in await self._found(
+            client, "Discovery Nationwide Shop", county="Nairobi", subcounty="Westlands")
+        assert store["id"] in await self._found(
+            client, "Discovery Nationwide Shop", subcounty="Westlands")
+
+    async def test_a_virtual_store_is_not_found_by_its_kept_over_address(self, client):
+        _, headers = await _register(client)
+        # The switch to virtual keeps the address for the owner, but it is
+        # not a place a buyer can go: only the declared coverage counts.
+        store = await _store(
+            client, headers, name="Discovery Old Address Shop", store_type="virtual",
+            county="Mombasa", subcounty="Nyali", service_areas=["Siaya"],
+        )
+        assert store["id"] not in await self._found(
+            client, "Discovery Old Address Shop", county="Mombasa")
+        assert store["id"] in await self._found(
+            client, "Discovery Old Address Shop", county="Siaya")
+
+    async def test_a_virtual_store_without_declared_coverage_is_not_placed(self, client):
+        _, headers = await _register(client)
+        store = await _store(
+            client, headers, name="Discovery Unknown Coverage", store_type="virtual",
+            county="Nairobi", subcounty="Westlands",
+        )
+        assert store["id"] not in await self._found(
+            client, "Discovery Unknown Coverage", county="Nairobi")
+        assert store["id"] not in await self._found(
+            client, "Discovery Unknown Coverage", county="Nairobi", subcounty="Westlands")
+
+    async def test_a_subcounty_filter_finds_local_and_serving_shops(self, client):
+        prefix = "Discovery Subcounty"
+
+        async def shop(**fields):
+            # One store per seller, so each shop gets its own account.
+            _, headers = await _register(client)
+            return await _store(client, headers, **fields)
+
+        local = await shop(
+            name=f"{prefix} Local", store_type="physical",
+            county="Nairobi", subcounty="Westlands",
+        )
+        serving = await shop(
+            name=f"{prefix} Serving", store_type="physical",
+            county="Mombasa", subcounty="Mvita", service_areas=["Nairobi"],
+        )
+        virtual = await shop(
+            name=f"{prefix} Virtual", store_type="virtual",
+            service_areas=["Nairobi"],
+        )
+        nationwide = await shop(
+            name=f"{prefix} Nationwide", store_type="virtual",
+            service_areas=["Nationwide"],
+        )
+        silent = await shop(
+            name=f"{prefix} Silent", store_type="virtual",
+        )
+
+        found = await self._found(
+            client, prefix, county="Nairobi", subcounty="Westlands")
+        assert {local["id"], serving["id"], virtual["id"], nationwide["id"]} <= set(found)
+        assert silent["id"] not in found
+
+    async def test_distance_stays_separate_from_coverage(self, client):
+        prefix = "Discovery Distance"
+        _, first = await _register(client)
+        _, second = await _register(client)
+        far_but_serving = await _store(
+            client, first, name=f"{prefix} Far", store_type="physical",
+            county="Mombasa", subcounty="Mvita", service_areas=["Nairobi"],
+        )
+        virtual = await _store(
+            client, second, name=f"{prefix} Online", store_type="virtual",
+            service_areas=["Nationwide"],
+        )
+
+        # Coverage finds both...
+        anywhere = await self._found(
+            client, prefix, county="Nairobi", lat=-1.286, lng=36.817)
+        assert {far_but_serving["id"], virtual["id"]} <= set(anywhere)
+        # ...but a radius around the buyer is a physical question. A shop
+        # 400 km away does not become near by delivering here, and a
+        # virtual shop has no point to measure at all.
+        nearby = await self._found(
+            client, prefix, county="Nairobi", lat=-1.286, lng=36.817,
+            max_distance_km=25)
+        assert far_but_serving["id"] not in nearby
+        assert virtual["id"] not in nearby
+
+    async def test_a_physical_store_without_coordinates_is_found_by_its_declared_area(self, client):
+        _, headers = await _register(client)
+        # No store pin, no map point - just the county/area the owner
+        # typed. It is still a physical shop a local buyer can find.
+        store = await _store(
+            client, headers, name="Discovery No Pin Shop", store_type="physical",
+            county="Nairobi", subcounty="Westlands",
+        )
+        assert store["lat"] is None and store["lng"] is None
+        r = await client.get("/stores", params={
+            "search": "Discovery No Pin Shop", "county": "Nairobi",
+            "lat": -1.286, "lng": 36.817,
+        })
+        row = next(s for s in r.json() if s["id"] == store["id"])
+        assert row["distance_km"] is not None
+        assert row["distance_approximate"] is True
+
+
 # ── Opening hours ───────────────────────────────────────────────────────────
 
 class TestOpeningHoursRules:

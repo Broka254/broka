@@ -21,6 +21,14 @@ A store with any real photo - `photo_ids` holding at least one asset id,
 or legacy `photos` holding at least one data URI/URL - is untouched.
 A logo or a cover does not count, exactly as on create.
 
+Virtual stores are never in scope. The photo rule exists because a
+physical shopfront a buyer cannot see is worse than no shopfront; an
+online-only store has no premises to photograph, and create_store lets it
+open without one (models/store.py). Treating a virtual store as a
+photo-less physical shop would delete the very shops the type was added
+for. A row with no stored type is physical - the migration's default and
+every row that predates store types was a walk-in shop.
+
 Usage:
     python backend/cleanup_photoless_stores.py                # report only
     python backend/cleanup_photoless_stores.py --store grt    # one store, dry run
@@ -40,7 +48,7 @@ from sqlalchemy import select
 from api.database import AsyncSessionLocal, Listing, ListingStatus
 from api.domains.media.service import parse_id_list
 from api.domains.stores.media import parse_photo_list
-from api.models.store import Store
+from api.models.store import DEFAULT_STORE_TYPE, Store
 
 
 def has_shop_photo(store: Store) -> bool:
@@ -51,10 +59,15 @@ def has_shop_photo(store: Store) -> bool:
 
 
 async def photo_less(db) -> list[Store]:
+    """Open physical stores with no real photo of the shop. Virtual stores
+    are left alone whatever images they have - or don't have."""
     rows = (await db.execute(
         select(Store).where(Store.deleted_at.is_(None)).order_by(Store.name)
     )).scalars().all()
-    return [s for s in rows if not has_shop_photo(s)]
+    return [
+        s for s in rows
+        if (s.store_type or DEFAULT_STORE_TYPE) != "virtual" and not has_shop_photo(s)
+    ]
 
 
 async def remove(db, store: Store, apply: bool) -> bool:
@@ -96,9 +109,10 @@ async def main(slugs: list[str], apply: bool) -> None:
             stores = [s for s in stores if s.slug.lower() in wanted or s.id in slugs]
             missing = wanted - {s.slug.lower() for s in stores} - {s.id for s in stores}
             for name in sorted(missing):
-                print(f"  {name}: no open store with that slug/id and no photo - nothing to do.")
+                print(f"  {name}: no open physical store with that slug/id and no photo - "
+                      "nothing to do.")
         if not stores:
-            print("Every open store has a photo of the shop. Nothing to remove.")
+            print("Every open physical store has a photo of the shop. Nothing to remove.")
             return
         print(f"{'Removing' if apply else 'Dry run - would remove'} "
               f"{len(stores)} store(s) with no photo of the shop:")

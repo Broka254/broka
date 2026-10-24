@@ -215,6 +215,40 @@ describe('StoreDetails', () => {
     expect(within(safety).getByTestId('escrow-box')).toBeTruthy()
   })
 
+  it('gives an online-only store coverage, never the premises it kept on file', () => {
+    render(
+      <StoreDetails
+        view={storeView(
+          shop({
+            store_type: 'virtual',
+            // The public API nulls these for a virtual store; the page
+            // must not resurrect them from any stale copy either.
+            county: null,
+            subcounty: null,
+            location_description: null,
+            service_areas: ['Siaya'],
+            delivery_note: 'Courier within Siaya, two days.',
+            opening_hours_available: true,
+            opening_hours_week: [
+              { day: 'mon', label: 'Monday', short: 'Mon', hours: '08:00 – 18:00', closed: false, all_day: false },
+            ],
+          }),
+        )}
+      />
+    )
+    expect(screen.getByText('Online store · no shop to visit')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Delivery and service area' })).toBeTruthy()
+    expect(screen.getAllByText(/Delivers to Siaya/).length).toBeGreaterThan(0)
+    expect(screen.getByText('Courier within Siaya, two days.')).toBeTruthy()
+    // No address, no map link and no shop hours for premises it lacks.
+    expect(screen.queryByText('Starehe, Nairobi')).toBeNull()
+    expect(screen.queryByText('Moi Avenue, Bazaar Plaza')).toBeNull()
+    expect(screen.queryByText('Find it on the map')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Location' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Opening hours' })).toBeNull()
+    expect(screen.queryByText('Monday')).toBeNull()
+  })
+
   it('never shows an unverified email, a rating without deals, or photos it does not have', () => {
     render(
       <StoreDetails

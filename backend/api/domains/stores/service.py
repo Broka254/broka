@@ -353,7 +353,16 @@ class StoreService:
         with nearest_first they come nearest first for the 'Stores near
         you' rail. A store with no pin, no declared county and no visible
         owner point has no distance and is left out of a max-distance
-        filter.
+        filter. Distance is physical proximity only: coverage never
+        invents one, and a virtual store never has a distance at all.
+
+        county/subcounty filter by the area a buyer wants to buy in, not
+        by the shop's address alone (see _area_clause): a physical shop is
+        found where it is or where it delivers, a virtual shop is found
+        through its declared service areas, and a Nationwide shop is found
+        everywhere it promises. A virtual store's kept-over address is
+        never treated as premises; its coverage is the only geography it
+        publishes.
 
         A deleted store (Store.deleted_at) never appears: deleting is a
         soft delete, so the row survives for its listings and payments
@@ -413,10 +422,10 @@ class StoreService:
                     ),
                     Store.id.in_(self._stores_stocking(wanted)),
                 ))
-        if county:
-            q = q.where(Store.county == county)
-        if subcounty:
-            q = q.where(Store.subcounty == subcounty)
+        if county or subcounty:
+            area_clause = self._area_clause(county, subcounty)
+            if area_clause is not None:
+                q = q.where(area_clause)
 
         total = None
         if with_total:
@@ -484,6 +493,88 @@ class StoreService:
             items = items[offset: offset + limit]
             return {"items": items, "total": total} if with_total else items
         return {"items": items, "total": total} if with_total else items
+
+    @classmethod
+    def _area_clause(cls, county: Optional[str], subcounty: Optional[str]):
+        """The directory's county/subcounty filter, in terms of the buyer's
+        question: which shops can serve me here?
+
+        Three true answers, because a shop's address and its coverage are
+        different facts (models/store.py):
+
+          * a physical store whose premises are in the selected area;
+          * any store - physical or virtual - that declares the area in
+            its service areas;
+          * a store declaring Nationwide, which covers every county.
+
+        A virtual store's stored county/subcounty never counts: it has no
+        shopfront there, so treating a leftover address as a place a buyer
+        can find it would invent premises. With only a subcounty selected,
+        coverage is matched on Nationwide alone - service areas are
+        counties, and nothing maps every constituency to its county here.
+
+        This is deliberately separate from distance: serving an area does
+        not make a far shop near, and max_distance_km is applied later to
+        physical points only.
+        """
+        located: list = []
+        if county and county.strip():
+            located.append(cls._place_clause(Store.county, county, canonical_county(county)))
+        if subcounty and subcounty.strip():
+            located.append(cls._place_clause(Store.subcounty, subcounty, None))
+
+        covered: list = []
+        known_county = canonical_county(county) if county else None
+        if known_county:
+            covered.append(cls._service_area_clause(known_county))
+        elif subcounty and subcounty.strip():
+            covered.append(Store.service_areas.like('%"Nationwide"%'))
+
+        clauses: list = []
+        if located:
+            # Only premises can be "located in" an area. A virtual store
+            # cannot satisfy this arm even if it kept an old address.
+            clauses.append(and_(Store.store_type != "virtual", *located))
+        clauses.extend(covered)
+        return or_(*clauses) if clauses else None
+
+    @staticmethod
+    def _place_key_sql(column):
+        """A county/area name as SQL, compared the way buyers spell it:
+        case, surrounding space, hyphens and apostrophes don't matter
+        ("Tharaka-Nithi", "tharaka nithi", "Muranga", "Murang'a")."""
+        text = func.replace(func.lower(func.trim(column)), "-", " ")
+        return func.replace(text, "'", "")
+
+    @classmethod
+    def _place_keys(cls, value: str, canonical: Optional[str]) -> list[str]:
+        """The stored spellings that mean `value`, including the official
+        one and the common "… County" suffix older clients typed."""
+        keys: set[str] = set()
+        for candidate in (value, canonical):
+            if not candidate:
+                continue
+            text = " ".join(candidate.split()).casefold()
+            text = text.replace("-", " ").replace("'", "")
+            text = " ".join(text.split())
+            if not text:
+                continue
+            keys.update({text, f"{text} county", f"{text} city county"})
+        return sorted(keys)
+
+    @classmethod
+    def _place_clause(cls, column, value: str, canonical: Optional[str]):
+        return cls._place_key_sql(column).in_(cls._place_keys(value, canonical))
+
+    @staticmethod
+    def _service_area_clause(county: str):
+        """Stored service areas that cover `county`: the county itself, or
+        Nationwide. Values are JSON text written by _coverage_columns, so
+        a quoted token matches a whole entry and never part of one."""
+        return or_(
+            Store.service_areas.like(f'%"{county}"%'),
+            Store.service_areas.like('%"Nationwide"%'),
+        )
 
     @staticmethod
     def _clean_coords(data: dict) -> Optional[tuple]:
