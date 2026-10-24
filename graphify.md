@@ -757,7 +757,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-126 files in `backend/tests/`.
+127 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -788,6 +788,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_chat_media_images.py` — Photos sent in a negotiation chat (POST /media/upload, content_type=image) go through the same processing as listing photos (api/core/image…
 - `test_chat_settlement_econfirm.py` — Chat-intent settlement ("Yes, all good" / "I want a refund") must not settle an E-Confirm deal as if BROKA held the money.
 - `test_circuit_breaker.py` — Tests for the circuit breaker (new in v4.0).
+- `test_cleanup_photoless_stores.py` — cleanup_photoless_stores.py must only ever target physical shops.
 - `test_client_invariants.py` — Static guards on the Flutter client, run by the suite that actually executes.
 - `test_client_ip.py` — Who is really calling: api/core/client_ip.py, and what depends on it.
 - `test_cloudflare_turn.py` — BROKA - Cloudflare TURN Tests Run: pytest backend/tests/test_cloudflare_turn.py -v
