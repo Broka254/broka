@@ -96,6 +96,16 @@ describe('store details page', () => {
     expect(screen.getByText('Phone exactly as described.')).toBeTruthy()
   })
 
+  it('takes the store score card count from the reviews, not a stale payload', async () => {
+    // The store read can lag a just-posted review. Before this, the score
+    // card said "No buyer reviews yet" beside two listed reviews.
+    api.getStore.mockResolvedValue({ ...store, review_count: 0 })
+    render(await StoreDetailsPage(props()))
+    const score = screen.getByRole('heading', { name: 'Store score' }).parentElement!
+    expect(score.textContent).toContain('2 reviews so far')
+    expect(score.textContent).not.toContain('No buyer reviews yet')
+  })
+
   it('keeps the rest of the page when reviews cannot load', async () => {
     api.getStoreReviews.mockRejectedValue(new Error('API asleep'))
     render(await StoreDetailsPage(props()))

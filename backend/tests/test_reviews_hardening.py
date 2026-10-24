@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from main import app
 from api.database import (
@@ -391,3 +392,200 @@ class TestAfterSubmission:
         async with AsyncSessionLocal() as db:
             assert len((await db.execute(
                 select(Review).where(Review.deal_id == deal))).all()) == 1
+
+
+# ── Who may review, and only once ───────────────────────────────────────────
+
+
+class TestReviewEligibility:
+    @pytest.mark.asyncio
+    async def test_only_the_buyer_of_that_deal_may_review_it(self, client):
+        seller_id, _ = await _user("Eligible Seller")
+        buyer_id, _ = await _user("Eligible Buyer")
+        _, as_other = await _user("Other Buyer")
+        deal = await _deal(seller_id, buyer_id, await _listing(seller_id))
+
+        res = await _review(client, as_other, deal, 5)
+        assert res.status_code == 403
+        async with AsyncSessionLocal() as db:
+            assert (await db.execute(
+                select(Review).where(Review.deal_id == deal))).first() is None
+
+    @pytest.mark.asyncio
+    async def test_a_seller_cannot_review_themselves(self, client):
+        seller_id, as_seller = await _user("Self Reviewer")
+        # A deal an account opened with itself: the buyer check passes
+        # because the ids match, so the self-review guard must hold.
+        deal = await _deal(seller_id, seller_id, await _listing(seller_id))
+
+        res = await _review(client, as_seller, deal, 5)
+        assert res.status_code == 403
+        async with AsyncSessionLocal() as db:
+            assert (await db.execute(
+                select(Review).where(Review.deal_id == deal))).first() is None
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_or_refunded_deal_cannot_be_reviewed(self, client):
+        seller_id, _ = await _user("Unwound Seller")
+        buyer_id, as_buyer = await _user("Unwound Buyer")
+        listing = await _listing(seller_id)
+
+        for status in (DealStatus.cancelled, DealStatus.refunded):
+            deal = await _deal(seller_id, buyer_id, listing, status=status)
+            res = await _review(client, as_buyer, deal, 5)
+            assert res.status_code == 400, (status, res.text)
+            async with AsyncSessionLocal() as db:
+                assert (await db.execute(
+                    select(Review).where(Review.deal_id == deal))).first() is None
+
+    @pytest.mark.asyncio
+    async def test_a_second_review_of_the_same_deal_is_refused(self, client):
+        seller_id, _ = await _user("One Review Seller")
+        buyer_id, as_buyer = await _user("One Review Buyer")
+        deal = await _deal(seller_id, buyer_id, await _listing(seller_id))
+
+        assert (await _review(client, as_buyer, deal, 5, "First")).status_code == 201
+        second = await _review(client, as_buyer, deal, 1, "Second")
+        assert second.status_code == 409
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(Review).where(Review.deal_id == deal))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].comment == "First"
+
+    @pytest.mark.asyncio
+    async def test_the_database_refuses_a_duplicate_even_without_the_service_check(self):
+        """Two submissions sent together both pass `_already_reviewed`;
+        the unique index is what actually holds the one-review rule."""
+        seller_id, _ = await _user("Race Seller")
+        buyer_id, _ = await _user("Race Buyer")
+        deal = await _deal(seller_id, buyer_id, await _listing(seller_id))
+
+        async with AsyncSessionLocal() as db:
+            db.add(Review(deal_id=deal, reviewer_id=buyer_id,
+                          seller_id=seller_id, rating=5))
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            db.add(Review(deal_id=deal, reviewer_id=buyer_id,
+                          seller_id=seller_id, rating=1))
+            with pytest.raises(IntegrityError):
+                await db.commit()
+            await db.rollback()
+
+
+# ── The store score moves with the review ───────────────────────────────────
+
+
+class TestStoreCompositeRefresh:
+    @pytest.mark.asyncio
+    async def test_a_review_refreshes_the_stored_store_rating_immediately(self, client):
+        seller_id, _ = await _user("Composite Seller")
+        store_id = await _store(seller_id, "Composite Shop")
+        buyer_id, as_buyer = await _user("Composite Buyer")
+        deal = await _deal(seller_id, buyer_id, await _listing(seller_id, store_id=store_id))
+
+        before = (await client.get(f"/stores/{store_id}")).json()
+        assert before["rating"] == 6.5
+        assert before["review_count"] == 0
+
+        assert (await _review(client, as_buyer, deal, 5)).status_code == 201
+
+        after = (await client.get(f"/stores/{store_id}")).json()
+        assert after["review_count"] == 1
+        # Five stars on a brand-new shop: 0.55 * ((5+20)/6/5) + 0.30 * 0.7
+        # + ~0 tenure = 6.68, not the 5.5 a flat star average would give and
+        # not the untouched 6.5 a missed refresh would leave.
+        assert after["rating"] == pytest.approx(6.68, abs=0.05)
+        async with AsyncSessionLocal() as db:
+            stored = (await db.execute(
+                select(Store.rating).where(Store.id == store_id))).scalar_one()
+        assert stored == pytest.approx(6.68, abs=0.05)
+
+
+# ── Legacy rating defaults must not leak into ranking or prompts ────────────
+
+
+class TestLegacyDefaultDoesNotLeak:
+    @pytest.mark.asyncio
+    async def test_traders_with_real_reviews_rank_above_unreviewed_ones(self, client):
+        reviewed_id, _ = await _user("Ranked Reviewed", completed_deals=3)
+        unreviewed_id, _ = await _user("Ranked Unreviewed", completed_deals=3)
+        buyer_id, as_buyer = await _user("Ranked Buyer")
+        listing = await _listing(reviewed_id)
+        deal = await _deal(reviewed_id, buyer_id, listing)
+        assert (await _review(client, as_buyer, deal, 4)).status_code == 201
+
+        traders = (await client.get("/traders", params={"limit": 100})).json()
+        ids = [t["id"] for t in traders]
+        # The unreviewed account's User.rating is still the 5.0 default;
+        # ranking on that column put it first. A real 4.0 must win.
+        assert ids.index(reviewed_id) < ids.index(unreviewed_id)
+
+    @pytest.mark.asyncio
+    async def test_zenos_trust_map_reads_reviews_not_the_user_column(self):
+        from api.domains.buy_agent.actions import _seller_trust_map, _trust_score
+
+        reviewed_id, _ = await _user("Trust Reviewed")
+        unreviewed_id, _ = await _user("Trust Unreviewed")
+        buyer_id, _ = await _user("Trust Buyer")
+        deal = await _deal(reviewed_id, buyer_id, await _listing(reviewed_id))
+        async with AsyncSessionLocal() as db:
+            db.add(Review(deal_id=deal, reviewer_id=buyer_id,
+                          seller_id=reviewed_id, rating=4))
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            trust = await _seller_trust_map(db, {reviewed_id, unreviewed_id})
+
+        assert trust[reviewed_id]["rating"] == 4.0
+        assert trust[reviewed_id]["review_count"] == 1
+        assert trust[unreviewed_id]["rating"] is None
+        assert trust[unreviewed_id]["review_count"] == 0
+        assert _trust_score({"seller_id": reviewed_id}, trust) > \
+            _trust_score({"seller_id": unreviewed_id}, trust)
+
+    @pytest.mark.asyncio
+    async def test_zenos_context_never_quotes_the_unearned_default(self):
+        from api.routers.negotiate import _context_block
+
+        fresh_id, _ = await _user("Prompt Fresh")
+        rated_id, _ = await _user("Prompt Rated")
+        buyer_id, _ = await _user("Prompt Buyer")
+        fresh_listing = await _listing(fresh_id, name="Fresh")
+        rated_listing = await _listing(rated_id, name="Rated")
+        deal = await _deal(rated_id, buyer_id, rated_listing)
+        async with AsyncSessionLocal() as db:
+            db.add(Review(deal_id=deal, reviewer_id=buyer_id,
+                          seller_id=rated_id, rating=4))
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            fresh_block = await _context_block(
+                db, await db.get(Listing, fresh_listing), await db.get(User, fresh_id),
+                "Prompt Buyer", "")
+            rated_block = await _context_block(
+                db, await db.get(Listing, rated_listing), await db.get(User, rated_id),
+                "Prompt Buyer", "")
+        assert "Seller rating:     no buyer reviews yet" in fresh_block
+        assert "5.0/5.0" not in fresh_block
+        assert "Seller rating:     4.0/5.0 from 1 buyer review" in rated_block
+
+    @pytest.mark.asyncio
+    async def test_releasing_a_deal_does_not_invent_stars(self, client):
+        seller_id, _ = await _user("Release Seller", completed_deals=4)
+        buyer_id, as_buyer = await _user("Release Buyer")
+        deal = await _deal(seller_id, buyer_id, await _listing(seller_id))
+        async with AsyncSessionLocal() as db:
+            seller = await db.get(User, seller_id)
+            seller.rating = 4.0
+            await db.commit()
+
+        res = await client.post(f"/escrow/confirm-delivery/{deal}", headers=as_buyer)
+        assert res.status_code == 200, res.text
+
+        async with AsyncSessionLocal() as db:
+            seller = await db.get(User, seller_id)
+        assert seller.completed_deals == 5
+        assert seller.rating == 4.0
+

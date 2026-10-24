@@ -1153,9 +1153,10 @@ class Dispute(Base):
     resolved_at     = Column(DateTime, nullable=True)
 
 class Review(Base):
-    """Buyer review of a seller: after a deal, or - while reviews don't
-    require a completed deal - after talking with them (no deal_id; see
-    domains/reviews/service.py)."""
+    """Buyer review of a seller, written after a deal (any status except
+    cancelled/refunded - see domains/reviews/service.py). A row with no
+    deal_id is a legacy chat-only review from before a deal was required:
+    still counted, never created again."""
     __tablename__ = "reviews"
     id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     deal_id     = Column(String, ForeignKey("deals.id"), nullable=True, index=True)

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from api.core.geo import format_distance_km, haversine_km, round_distance_km
 from api.core.text_search import matches_all_terms, search_terms
-from api.database import ListingStatus, User, UserSpecialization, Listing, Category
+from api.database import ListingStatus, Review, User, UserSpecialization, Listing, Category
 from api.domains.listings.paid import live_clause
 from api.domains.media.service import asset_urls, load_assets, require_owned_assets
 from api.models.media import MediaPurpose
@@ -57,7 +57,20 @@ class TradersService:
             store_named = exists(select(Store.id).where(
                 Store.owner_id == User.id, matches_all_terms(terms, (Store.name,))))
             query = query.where(or_(matches_all_terms(terms, (shown_name,)), store_named))
-        query = query.order_by(User.rating.desc()).limit(limit)
+        # Rank on reviews buyers actually left, not `User.rating` - that
+        # column starts every account at 5.0, so ordering by it put
+        # never-reviewed sellers above ones with a real 4.8 average. The
+        # coalesce sends sellers with no reviews behind those with any,
+        # then completed deals separate them.
+        review_avg = (
+            select(func.avg(Review.rating))
+            .where(Review.seller_id == User.id)
+            .correlate(User)
+            .scalar_subquery()
+        )
+        query = query.order_by(
+            func.coalesce(review_avg, -1).desc(), User.completed_deals.desc()
+        ).limit(limit)
         users = (await self.db.execute(query)).scalars().all()
         if not users:
             return []

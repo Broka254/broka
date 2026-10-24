@@ -22,8 +22,9 @@ SEARCH_PRODUCTS reuses ListingService.list_listings entirely for
 filtering/pagination (§20: "Flutter must not perform large-scale
 marketplace filtering" - and neither should this module reinvent it) and
 adds the one genuinely new piece: ranking by optimization_code. Ranking
-signals are real columns only - price, computed distance, User.rating /
-completed_deals / is_verified. Deal Completion Rate is NOT one of them: it
+signals are real columns only - price, computed distance, a seller's
+buyer-review average (read from `reviews`, never the unearned `User.rating`
+default) / completed_deals / is_verified. Deal Completion Rate is NOT one of them: it
 doesn't exist anywhere in this codebase (see traders/service.py's own note
 on this), so TRUST/BEST_VALUE use verification + rating + completed_deals
 instead of inventing a DCR number.
@@ -792,10 +793,22 @@ async def _seller_trust_map(db: AsyncSession, seller_ids: set) -> Dict[str, dict
     if not seller_ids:
         return {}
     rows = (await db.execute(
-        select(User.id, User.is_verified, User.rating, User.completed_deals).where(User.id.in_(seller_ids))
+        select(User.id, User.is_verified, User.completed_deals).where(User.id.in_(seller_ids))
     )).all()
-    return {r.id: {"is_verified": r.is_verified, "rating": r.rating or 0, "completed_deals": r.completed_deals or 0}
-            for r in rows}
+    # `User.rating` starts at 5.0 for every account, so ranking on it
+    # treated a never-reviewed seller as perfect. `None` here means no
+    # buyer has reviewed them - `_trust_score` gives that no rating credit.
+    from api.domains.reviews.stats import seller_review_figures
+    figures = await seller_review_figures(db, seller_ids)
+    return {
+        r.id: {
+            "is_verified": r.is_verified,
+            "rating": figures.get(r.id, (0, None))[1],
+            "review_count": figures.get(r.id, (0, None))[0],
+            "completed_deals": r.completed_deals or 0,
+        }
+        for r in rows
+    }
 
 
 def _relevance(listing: dict, query: Optional[str]) -> float:
@@ -816,13 +829,17 @@ def _trust_score(listing: dict, trust_by_seller: Dict[str, dict]) -> float:
     t = trust_by_seller.get(listing["seller_id"])
     if not t:
         return 0.0
-    # rating is 0-5, completed_deals is uncapped - compress with a log-ish
-    # curve so one seller with 500 deals doesn't totally dominate one with
-    # 20 solid deals; verification is a flat bonus, not the whole signal.
-    # rating is clamped: User.rating is a plain Float column with no
-    # constraint behind it, and a single out-of-range row would otherwise
-    # let one seller outscore every real signal combined.
-    rating_component = (min(5.0, max(0.0, float(t["rating"]))) / 5.0) * 0.5
+    # rating is 0-5 (or None when nobody has reviewed the seller, which
+    # earns no credit rather than the column's unearned 5.0 default),
+    # completed_deals is uncapped - compress with a log-ish curve so one
+    # seller with 500 deals doesn't totally dominate one with 20 solid
+    # deals; verification is a flat bonus, not the whole signal. rating is
+    # clamped: the average comes from stored integers, but a defensive
+    # clamp keeps one bad row from outscoring every real signal combined.
+    rating = t.get("rating")
+    rating_component = (
+        (min(5.0, max(0.0, float(rating))) / 5.0) * 0.5 if rating is not None else 0.0
+    )
     deals_component = min(1.0, max(0, t["completed_deals"]) / 50.0) * 0.35
     verified_component = 0.15 if t["is_verified"] else 0.0
     return rating_component + deals_component + verified_component

@@ -75,6 +75,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   ReviewSummary? _summary;
   List<SellerReview> _reviews = [];
   bool _loadingReviews = true;
+  bool _reviewsFailed = false;
 
   /// The viewer's deals with this seller. Null until known; only a buyer
   /// with one not yet reviewed is offered "Write a review".
@@ -144,14 +145,35 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   Future<void> _loadReviews() async {
+    // First load starts already in the loading state; only a retry needs
+    // to flip it back (and setting state during didChangeDependencies,
+    // which is where the first load starts, would mark the tree dirty
+    // while it is building).
+    if (mounted && !_loadingReviews) {
+      setState(() {
+        _loadingReviews = true;
+        _reviewsFailed = false;
+      });
+    }
     final summaryCall = reviewsRepository.getSummary(_userId!);
     final reviewsCall = reviewsRepository.getSellerReviews(_userId!, limit: _reviewPage);
     final summary = await summaryCall;
     final reviews = await reviewsCall;
     if (!mounted) return;
     setState(() {
-      if (summary is Success<ReviewSummary>) _summary = summary.data;
-      if (reviews is Success<List<SellerReview>>) _reviews = reviews.data;
+      if (summary is Success<ReviewSummary>) {
+        _summary = summary.data;
+      } else {
+        _reviewsFailed = true;
+      }
+      if (reviews is Success<List<SellerReview>>) {
+        _reviews = reviews.data;
+      } else {
+        // A failed fetch is not an empty record: without this the screen
+        // told every buyer the seller had "No reviews yet" whenever the
+        // network hiccuped.
+        _reviewsFailed = true;
+      }
       _loadingReviews = false;
     });
   }
@@ -724,6 +746,22 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final Widget body;
     if (_loadingReviews) {
       body = const ShimmerBox(height: 110, radius: BorderRadius.all(Radius.circular(16)));
+    } else if (summary == null && _reviewsFailed) {
+      body = _edgedCard(
+        key: const Key('reviews-error'),
+        child: Row(children: [
+          const Icon(Icons.cloud_off_rounded, color: BrokaColors.warning, size: 22),
+          const SizedBox(width: 12),
+          const Expanded(child: Text("Couldn't load reviews. Check your connection.",
+              style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4))),
+          TextButton(
+            key: const Key('reviews-retry'),
+            onPressed: _loadReviews,
+            style: TextButton.styleFrom(foregroundColor: BrokaColors.neonBlue),
+            child: const Text('Retry'),
+          ),
+        ]),
+      );
     } else if (summary == null || summary.count == 0) {
       body = _edgedCard(
         key: const Key('reviews-empty'),
@@ -744,8 +782,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     } else {
       body = Column(children: [
         _buildReviewSummary(summary),
-        const SizedBox(height: 10),
-        for (final r in _reviews) _buildReviewCard(r),
+        if (_reviewsFailed) ...[
+          const SizedBox(height: 8),
+          Row(key: const Key('reviews-error'), children: [
+            const Icon(Icons.cloud_off_rounded, size: 16, color: BrokaColors.warning),
+            const SizedBox(width: 6),
+            const Expanded(child: Text("Couldn't load the individual reviews.",
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5))),
+            TextButton(
+              key: const Key('reviews-retry'),
+              onPressed: _loadReviews,
+              style: TextButton.styleFrom(foregroundColor: BrokaColors.neonBlue),
+              child: const Text('Retry'),
+            ),
+          ]),
+        ] else ...[
+          const SizedBox(height: 10),
+          for (final r in _reviews) _buildReviewCard(r),
+        ],
       ]);
     }
 

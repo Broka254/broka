@@ -86,11 +86,13 @@ async def confirm_delivery(
     deal.delivery_confirmed_at = now
     deal.released_at = now
 
-    # Bump seller reputation
+    # Bump seller reputation. Only the completed-deal count: a seller's
+    # star rating is what buyers wrote in `reviews`, never something a
+    # release grants. The old +0.05 here invented stars the buyer never
+    # gave, and made a just-released unreviewed seller outrank reviewed ones.
     seller = (await db.execute(select(User).where(User.id == deal.seller_id))).scalar_one_or_none()
     if seller:
         seller.completed_deals = (seller.completed_deals or 0) + 1
-        seller.rating = round(min(5.0, (seller.rating or 5.0) + 0.05), 2)
 
     await db.commit()
     logger.info("Escrow released for deal %s → seller %s", deal_id, deal.seller_id)

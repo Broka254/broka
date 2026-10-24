@@ -47,7 +47,11 @@ export function StoreDetails({
   const sellerRating =
     ownerReviews > 0 && owner?.rating != null ? owner.rating.toFixed(1) : null
   const since = yearOf(owner?.member_since)
-  const storeReviewCount = store.review_count ?? 0
+  // The reviews response is authoritative for the count: the store payload
+  // can still say zero for a moment after a review lands. Falling back to it
+  // only when the reviews request never answered keeps a transient failure
+  // from erasing a count the store already had.
+  const storeReviewCount = reviews?.summary?.count ?? store.review_count ?? 0
   const reply = replyTimeLabel(reviews?.seller_standing?.median_response_minutes)
   const summary = reviews?.summary ?? null
   const opened = monthYearOf(store.created_at)

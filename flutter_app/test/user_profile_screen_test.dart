@@ -270,6 +270,27 @@ void main() {
           "You've reviewed your deals with Grace Akinyi.");
     });
 
+    testWidgets('a failed load says so and retries, never "No reviews yet"',
+        (tester) async {
+      backend(
+        summary: const FakeResponse.error(),
+        reviews: const FakeResponse.error(),
+      );
+      await open(tester);
+      await tester.scrollUntilVisible(find.byKey(const Key('reviews-error')), 200);
+      // A network failure is not an empty record.
+      expect(find.text('No reviews yet'), findsNothing);
+      expect(find.byKey(const Key('reviews-empty')), findsNothing);
+
+      backend();
+      await tester.tap(find.byKey(const Key('reviews-retry')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+          find.text('Phone exactly as described.'), 200);
+      expect(find.byKey(const Key('reviews-error')), findsNothing);
+      expect(textIn(tester, const Key('reviews-summary')), contains('2 reviews'));
+    });
+
     testWidgets('a buyer with a completed deal goes straight to reviewing it', (tester) async {
       backend(myDeals: [_deal()]);
       final opened = await open(tester);

@@ -34,6 +34,7 @@ import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/constellation_background.dart';
 import '../../../../widgets/rating_stars.dart';
 import '../../../../widgets/seller_standing_tiles.dart' show SellerStandingTiles;
+import '../../../reviews/domain/models/review.dart' show SellerReview;
 import '../../../safe_payment/payments_shown.dart';
 import '../../../safe_payment/safe_payment.dart';
 import '../../data/repositories/stores_repository.dart';
@@ -278,7 +279,14 @@ class StoreDetailsView extends StatelessWidget {
         // different number on a different scale, and "rating" for both made
         // 6.5/10 look like a five-star score.
         _label('Store score (out of 10)'),
-        _StoreRatingCard(store: store),
+        // The reviews response is authoritative for the count. The store
+        // payload's own count can lag a just-posted review when the second
+        // half of the post-review refresh fails; this card must still say
+        // one review rather than "No reviews yet".
+        _StoreRatingCard(
+          store: store,
+          reviewCount: reviews?.summary.count ?? store.reviewCount,
+        ),
       ],
       const SizedBox(height: 22),
       _label('The seller'),
@@ -710,12 +718,13 @@ class _InfoRow extends StatelessWidget {
 /// stores/rating.py); the seller card below is about the person. A buyer
 /// deciding whether to buy from this shop cares about the shop first.
 class _StoreRatingCard extends StatelessWidget {
-  const _StoreRatingCard({required this.store});
+  const _StoreRatingCard({required this.store, required this.reviewCount});
   final Store store;
+  final int reviewCount;
 
   @override
   Widget build(BuildContext context) {
-    final reviews = store.reviewCount;
+    final reviews = reviewCount;
     final minutes = store.responseMinutes;
     final reply = minutes == null
         ? null
@@ -948,8 +957,10 @@ class _ReviewsSection extends StatelessWidget {
             SizedBox(width: 18, height: 18,
                 child: CircularProgressIndicator(strokeWidth: 2, color: _link)),
             SizedBox(width: 12),
-            Text('Loading buyer reviews...', style: TextStyle(
-                color: BrokaColors.textMid, fontSize: 13)),
+            // Expanded, not a bare Text: the label is the widest thing here
+            // and sized the row past a narrow card's edge.
+            Expanded(child: Text('Loading buyer reviews...', style: TextStyle(
+                color: BrokaColors.textMid, fontSize: 13))),
           ]),
         );
       }

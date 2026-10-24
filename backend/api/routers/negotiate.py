@@ -1106,7 +1106,20 @@ def _selling_terms(listing) -> str:
     return "\n".join(lines)
 
 
-def _context_block(listing, seller, b_name, dist_str) -> str:
+async def _context_block(db, listing, seller, b_name, dist_str) -> str:
+    # `User.rating` starts every account at 5.0, so quoting it told Zeno a
+    # never-reviewed seller was rated 5.0 by buyers - and Zeno repeated that
+    # to the other party as fact. Read the reviews themselves; no reviews
+    # has no average, and that is what the prompt says.
+    from api.domains.reviews.stats import seller_review_figures
+    review_count, review_avg = (await seller_review_figures(db, [seller.id])).get(
+        seller.id, (0, None)
+    )
+    rating_line = (
+        f"{review_avg:.1f}/5.0 from {review_count} buyer review"
+        f"{'s' if review_count != 1 else ''}"
+        if review_avg is not None else "no buyer reviews yet"
+    )
     return f"""
 
 NEGOTIATION CONTEXT:
@@ -1119,7 +1132,7 @@ NEGOTIATION CONTEXT:
 
 PARTICIPANTS:
 - Seller:            {seller.name}
-- Seller rating:     {seller.rating:.1f}/5.0
+- Seller rating:     {rating_line}
 - Seller deals done: {seller.completed_deals}
 - Buyer:             {b_name}
 {dist_str}"""
@@ -1353,11 +1366,11 @@ Respond with ONLY raw JSON, no markdown fences, no other text:
         return False
 
 
-def _system_for_relay_draft(listing, seller, b_name, dist_str, lang, sender_role: str,
-                             other_role: str, relay_summary: str,
-                             is_availability_confirmation: bool = False,
-                             is_first_contact: bool = False,
-                             buyer_location: Optional[str] = None) -> str:
+async def _system_for_relay_draft(db, listing, seller, b_name, dist_str, lang, sender_role: str,
+                                   other_role: str, relay_summary: str,
+                                   is_availability_confirmation: bool = False,
+                                   is_first_contact: bool = False,
+                                   buyer_location: Optional[str] = None) -> str:
     """Drafts the actual message sent to the OTHER party when the
     classifier above determined a relay is genuinely needed."""
     other_name = seller.name if other_role == "seller" else b_name
@@ -1402,7 +1415,7 @@ def _system_for_relay_draft(listing, seller, b_name, dist_str, lang, sender_role
                 f"not who they are."
             )
 
-    return (BROKER_BASE_PROMPT + _context_block(listing, seller, b_name, dist_str)
+    return (BROKER_BASE_PROMPT + await _context_block(db, listing, seller, b_name, dist_str)
             + f"""
 
 YOUR TASK - RELAY TO THE {other_role.upper()}:
@@ -1446,10 +1459,10 @@ async def _seller_can_be_texted(db, listing, seller) -> bool:
         return False
 
 
-def _system_for_sender_reply(listing, seller, b_name, dist_str, lang, sender_role: str,
-                              just_relayed: bool, relay_summary: str, grounding: str,
-                              sender_answered: bool = False,
-                              sms_followup: bool = False) -> str:
+async def _system_for_sender_reply(db, listing, seller, b_name, dist_str, lang, sender_role: str,
+                                    just_relayed: bool, relay_summary: str, grounding: str,
+                                    sender_answered: bool = False,
+                                    sms_followup: bool = False) -> str:
     """The private reply to whoever just sent a message - the ONLY thing
     they see. Whether a relay happened THIS turn is passed in as a fact,
     not left for the model to assume, and the full factual transcript is
@@ -1562,7 +1575,7 @@ def _system_for_sender_reply(listing, seller, b_name, dist_str, lang, sender_rol
             f"sell well, not a neutral announcer reading out updates."
         )
 
-    return (BROKER_BASE_PROMPT + _context_block(listing, seller, b_name, dist_str)
+    return (BROKER_BASE_PROMPT + await _context_block(db, listing, seller, b_name, dist_str)
             + f"""
 
 FACTUAL RECORD - everything that has actually been said or relayed so far,
@@ -1585,8 +1598,8 @@ LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 
 # ── Opening greeting (role-aware, never relays anything) ─────────────────────
 
-def _system_for_opening_greeting(
-    listing, seller, b_name, dist_str, lang, viewer_role: str, direct_chat_summary: str
+async def _system_for_opening_greeting(
+    db, listing, seller, b_name, dist_str, lang, viewer_role: str, direct_chat_summary: str
 ) -> str:
     """Zeno's opening line on a fresh visit to its own private AI screen.
     For the BUYER specifically, Zeno offers one concrete relay action: ask
@@ -1635,7 +1648,7 @@ def _system_for_opening_greeting(
 - Mention you can help with pricing advice, spotting a risky buyer, or
   relaying something to {other_party} if they don't share a language."""
 
-    return (BROKER_BASE_PROMPT + _context_block(listing, seller, b_name, dist_str)
+    return (BROKER_BASE_PROMPT + await _context_block(db, listing, seller, b_name, dist_str)
             + context_note
             + f"""
 
@@ -1655,11 +1668,11 @@ LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 """)
 
 
-def _system_for_seller_availability_check(listing, seller, b_name, dist_str, lang) -> str:
+async def _system_for_seller_availability_check(db, listing, seller, b_name, dist_str, lang) -> str:
     """Zeno's message to the seller asking if the item is still available,
     triggered when the buyer asks Zeno to check on their behalf."""
     s_first = seller.name.split()[0]
-    return (BROKER_BASE_PROMPT + _context_block(listing, seller, b_name, dist_str)
+    return (BROKER_BASE_PROMPT + await _context_block(db, listing, seller, b_name, dist_str)
             + f"""
 
 YOUR TASK - ASK THE SELLER ABOUT AVAILABILITY:
@@ -1673,7 +1686,7 @@ LANGUAGE INSTRUCTION: {_language_instruction(lang)}
 """)
 
 
-def _system_for_buyer_reassurance(listing, seller, b_name, dist_str, lang) -> str:
+async def _system_for_buyer_reassurance(db, listing, seller, b_name, dist_str, lang) -> str:
     """Zeno's reassurance to the buyer right after relaying their interest
     to the seller - confirms contact was made and sets an expectation."""
     b_first = b_name.split()[0]
@@ -1690,7 +1703,7 @@ def _system_for_buyer_reassurance(listing, seller, b_name, dist_str, lang) -> st
         "checking and let them know as soon as there's news - do not "
         "promise a text message."
     )
-    return (BROKER_BASE_PROMPT + _context_block(listing, seller, b_name, dist_str)
+    return (BROKER_BASE_PROMPT + await _context_block(db, listing, seller, b_name, dist_str)
             + f"""
 
 YOUR TASK - REASSURE THE BUYER:
@@ -2021,8 +2034,8 @@ async def send_message(
                             f"Only mention this if relevant to what they're asking - "
                             f"don't force it into every message.\n"
                         )
-        sys_prompt = _system_for_opening_greeting(
-            listing, seller, b_name, dist_str, lang, actual_role,
+        sys_prompt = await _system_for_opening_greeting(
+            db, listing, seller, b_name, dist_str, lang, actual_role,
             direct_chat_summary + delivery_context + silence_context,
         )
         reply = await _call_ai(sys_prompt, [{"role": "user", "content": "Begin."}])
@@ -2036,8 +2049,10 @@ async def send_message(
     # separate private reassurance to the buyer (confirming it was sent).
     if data.intent == "ask_seller_availability":
         import asyncio as _asyncio
-        sys_seller = _system_for_seller_availability_check(listing, seller, b_name, dist_str, lang)
-        sys_buyer  = _system_for_buyer_reassurance(listing, seller, b_name, dist_str, lang)
+        sys_seller, sys_buyer = await _asyncio.gather(
+            _system_for_seller_availability_check(db, listing, seller, b_name, dist_str, lang),
+            _system_for_buyer_reassurance(db, listing, seller, b_name, dist_str, lang),
+        )
         reply_seller, reply_buyer = await _asyncio.gather(
             _call_ai(sys_seller, [{"role": "user", "content": "Begin."}]),
             _call_ai(sys_buyer,  [{"role": "user", "content": "Begin."}]),
@@ -3083,8 +3098,8 @@ async def send_message(
         sender_role == "buyer" and classification["needs_relay"]
         and await _seller_can_be_texted(db, listing, seller)
     )
-    sys_sender = _system_for_sender_reply(
-        listing, seller, b_name, dist_str, lang, sender_role,
+    sys_sender = await _system_for_sender_reply(
+        db, listing, seller, b_name, dist_str, lang, sender_role,
         just_relayed=classification["needs_relay"],
         relay_summary=classification["relay_summary"],
         grounding=grounding,
@@ -3154,8 +3169,8 @@ async def send_message(
             )
             is_first_contact = existing.scalar_one_or_none() is None
 
-        sys_other = _system_for_relay_draft(
-            listing, seller, b_name, dist_str, lang, sender_role, other_role,
+        sys_other = await _system_for_relay_draft(
+            db, listing, seller, b_name, dist_str, lang, sender_role, other_role,
             classification["relay_summary"],
             is_availability_confirmation=classification.get("is_availability_confirmation", False),
             is_first_contact=is_first_contact,

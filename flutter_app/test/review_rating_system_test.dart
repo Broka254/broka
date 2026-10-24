@@ -141,8 +141,13 @@ void main() {
         semanticLabel: '3.25 out of 5 stars',
       )));
       expect(_fill(tester, const Key('stars')), closeTo(0.65, 1e-9));
-      final semantics = tester.widget<Semantics>(
-          find.descendant(of: find.byKey(const Key('stars')), matching: find.byType(Semantics)));
+      // Flutter's Icon wraps each star in its own (label-less) Semantics, so
+      // the row's labelled node is the one with a label - ours.
+      final semantics = tester.widget<Semantics>(find.descendant(
+        of: find.byKey(const Key('stars')),
+        matching: find.byWidgetPredicate(
+            (w) => w is Semantics && w.properties.label != null),
+      ));
       expect(semantics.properties.label, '3.25 out of 5 stars');
     });
   });
@@ -160,6 +165,13 @@ void main() {
       expect(find.descendant(of: score, matching: find.text('6.5')), findsOneWidget);
       expect(find.descendant(of: score, matching: find.text('out of 10')), findsOneWidget);
       expect(_fill(tester, const Key('store-score-stars')), closeTo(0.65, 1e-9));
+
+      // The shop card's count comes from the reviews response, which is
+      // authoritative - the store payload disagrees here (0), and the old
+      // card printed "No reviews yet" beside two listed reviews.
+      final shop = find.byKey(const Key('store-rating'));
+      expect(find.descendant(of: shop, matching: find.text('2 reviews')), findsOneWidget);
+      expect(find.descendant(of: shop, matching: find.text('No reviews yet')), findsNothing);
 
       // The buyer reviews are a different figure with a different scale.
       final reviews = find.byKey(const Key('store-reviews-summary'));
@@ -217,6 +229,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('store-rate')));
       await tester.pumpAndSettle();
+
 
       // The new review moved the shop's score and both counts, in place.
       expect(storeCalls, 1);
