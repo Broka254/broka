@@ -56,7 +56,7 @@ Where things usually are:
 274 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 45, optional 4, public 62, token 4, user 159.
+Counts: admin 45, optional 5, public 61, token 4, user 159.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -272,10 +272,10 @@ Counts: admin 45, optional 4, public 62, token 4, user 159.
 | GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:176) |
 | GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:150) |
 | GET | `/ready` | public | `ready` (backend/main.py:518) |
-| POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:30) |
-| GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:64) |
-| GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:45) |
-| GET | `/reviews/summary/{seller_id}` | public | `get_review_summary` (backend/api/domains/reviews/router.py:56) |
+| POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:48) |
+| GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:82) |
+| GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:63) |
+| GET | `/reviews/summary/{seller_id}` | public | `get_review_summary` (backend/api/domains/reviews/router.py:74) |
 | POST | `/showcase/preview` | user | `preview_showcase` (backend/api/domains/showcase/router.py:98) |
 | POST | `/sms/dlr` | public | `mobitech_dlr` (backend/api/routers/sms.py:54) |
 | GET | `/store/{slug}` | public | `store_public_page` (backend/api/domains/stores/web.py:243) |
@@ -294,26 +294,26 @@ Counts: admin 45, optional 4, public 62, token 4, user 159.
 | GET | `/stores/{store_id}/billing` | user | `get_store_billing` (backend/api/domains/stores/router.py:442) |
 | POST | `/stores/{store_id}/billing/pay` | user | `pay_store_billing` (backend/api/domains/stores/router.py:456) |
 | GET | `/stores/{store_id}/billing/payments/{payment_id}` | user | `store_billing_payment_status` (backend/api/domains/stores/router.py:480) |
-| POST | `/stores/{store_id}/campaign/{token}/event` | public | `attribute_campaign_event` (backend/api/domains/stores/router.py:644) |
+| POST | `/stores/{store_id}/campaign/{token}/event` | public | `attribute_campaign_event` (backend/api/domains/stores/router.py:649) |
 | GET | `/stores/{store_id}/categories` | public | `get_store_categories` (backend/api/domains/stores/router.py:550) |
-| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:810) |
+| GET | `/stores/{store_id}/insights` | user | `get_store_insights` (backend/api/domains/stores/router.py:815) |
 | GET | `/stores/{store_id}/listings` | public | `get_store_listings` (backend/api/domains/stores/router.py:490) |
 | GET | `/stores/{store_id}/manage/listings` | user | `get_owner_listings` (backend/api/domains/stores/router.py:514) |
 | POST | `/stores/{store_id}/manage/listings/bulk` | user | `bulk_listing_action` (backend/api/domains/stores/router.py:536) |
-| GET | `/stores/{store_id}/marketing/campaigns` | user | `list_campaigns` (backend/api/domains/stores/router.py:667) |
-| POST | `/stores/{store_id}/marketing/campaigns` | user | `create_campaign` (backend/api/domains/stores/router.py:682) |
-| GET | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `get_campaign` (backend/api/domains/stores/router.py:698) |
-| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `update_campaign` (backend/api/domains/stores/router.py:710) |
-| DELETE | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `delete_campaign` (backend/api/domains/stores/router.py:723) |
-| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}/creatives/{creative_id}` | user | `update_creative` (backend/api/domains/stores/router.py:750) |
-| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/events` | user | `record_campaign_event` (backend/api/domains/stores/router.py:767) |
-| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/regenerate` | user | `regenerate_campaign` (backend/api/domains/stores/router.py:735) |
-| POST | `/stores/{store_id}/marketing/copy` | user | `copy_suggestions` (backend/api/domains/stores/router.py:783) |
-| GET | `/stores/{store_id}/reviews` | public | `get_store_reviews` (backend/api/domains/stores/router.py:556) |
-| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:625) |
-| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:798) |
+| GET | `/stores/{store_id}/marketing/campaigns` | user | `list_campaigns` (backend/api/domains/stores/router.py:672) |
+| POST | `/stores/{store_id}/marketing/campaigns` | user | `create_campaign` (backend/api/domains/stores/router.py:687) |
+| GET | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `get_campaign` (backend/api/domains/stores/router.py:703) |
+| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `update_campaign` (backend/api/domains/stores/router.py:715) |
+| DELETE | `/stores/{store_id}/marketing/campaigns/{campaign_id}` | user | `delete_campaign` (backend/api/domains/stores/router.py:728) |
+| PATCH | `/stores/{store_id}/marketing/campaigns/{campaign_id}/creatives/{creative_id}` | user | `update_creative` (backend/api/domains/stores/router.py:755) |
+| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/events` | user | `record_campaign_event` (backend/api/domains/stores/router.py:772) |
+| POST | `/stores/{store_id}/marketing/campaigns/{campaign_id}/regenerate` | user | `regenerate_campaign` (backend/api/domains/stores/router.py:740) |
+| POST | `/stores/{store_id}/marketing/copy` | user | `copy_suggestions` (backend/api/domains/stores/router.py:788) |
+| GET | `/stores/{store_id}/reviews` | optional | `get_store_reviews` (backend/api/domains/stores/router.py:556) |
+| POST | `/stores/{store_id}/share` | optional | `record_share` (backend/api/domains/stores/router.py:630) |
+| GET | `/stores/{store_id}/stats` | user | `get_store_stats` (backend/api/domains/stores/router.py:803) |
 | POST | `/stores/{store_id}/status` | user | `set_store_status` (backend/api/domains/stores/router.py:421) |
-| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:569) |
+| POST | `/stores/{store_id}/visit` | optional | `record_visit` (backend/api/domains/stores/router.py:574) |
 | POST | `/stt/assemblyai-token` | user | `assemblyai_token` (backend/api/routers/stt.py:215) |
 | POST | `/stt/deepgram-token` | user | `deepgram_token` (backend/api/routers/stt.py:133) |
 | POST | `/stt/transcribe` | user | `transcribe` (backend/api/routers/stt.py:42) |
@@ -450,6 +450,7 @@ Counts: admin 45, optional 4, public 62, token 4, user 159.
 
 - `router.py` — Reviews Router v3.0
 - `service.py` — Reviews Service v4.0
+- `stats.py` — A seller's buyer-review figures, read from the reviews themselves.
 
 ### `backend/api/domains/service_communications/`
 
@@ -693,14 +694,14 @@ of a change.
 - **ai_broker** — domains: categories, listings, pricing; core: circuit_breaker, config, gemini, ml, rate_limit; database, security
 - **auction_ws** — core: auction_hub; security
 - **auctions** — domains: escrow; core: audit, config, event_catalog, events, money, reconciliation, timeutil; database, security
-- **auth** — domains: media, trust; core: client_ip, config, email, events, fraud, geo, legal_documents, nudge_templates, presence, push_devices, rate_limit, sms, text_search, timeutil; database, security
+- **auth** — domains: media, reviews, trust; core: client_ip, config, email, events, fraud, geo, legal_documents, nudge_templates, presence, push_devices, rate_limit, sms, text_search, timeutil; database, security
 - **buy_agent** — domains: ai_broker, categories, listings, premium; core: config, push, rate_limit; database, security
 - **categories** — database
 - **communication** — nothing outside itself
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, gemini, ledger, workers; database, security
 - **escrow** — domains: listings, pricing; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, ledger, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
-- **listings** — domains: auctions, categories, escrow, media, premium, pricing, stores, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
+- **listings** — domains: auctions, categories, escrow, media, premium, pricing, reviews, stores, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
 - **payments** — domains: premium, pricing, stores; core: audit, client_ip, config, idempotency, mpesa_stk, rate_limit, reconciliation, zetupay; database, security
@@ -710,7 +711,7 @@ of a change.
 - **service_communications** — core: audit, client_ip, config, idempotency, observability, permissions, push_devices, rate_limit, timeutil, workers; database, security
 - **showcase** — domains: media, premium; core: hf_image_client, image_processing, rate_limit; database, security
 - **stores** — domains: auth, categories, listings, media, payments, pricing, reviews, trust; core: audit, client_ip, config, gemini, geo, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
-- **traders** — domains: listings, media, trust; core: geo, text_search; database, security
+- **traders** — domains: listings, media, reviews, trust; core: geo, text_search; database, security
 - **trending** — domains: listings; database
 - **trust** — domains: listings; core: config; database
 - **users** — nothing outside itself
@@ -757,7 +758,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-127 files in `backend/tests/`.
+128 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -849,6 +850,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_redis_rate_limit.py` — The Redis sliding-window limiter - the one production actually runs.
 - `test_repo_map.py` — scripts/graphify.py - the repository map CI keeps up to date (graphify.md).
 - `test_response_time.py` — Response-time measurement (domains/trust/response_time).
+- `test_reviews_hardening.py` — Reviews and seller ratings: the contract every surface relies on.
 - `test_route_ordering.py` — POST /negotiate/chat must be served by the legacy negotiate.free_chat.
 - `test_schema_migrations.py` — Schema revisions must be reproducible and fail loudly.
 - `test_search.py` — BROKA - Search Tests (listings and traders) Run: pytest backend/tests/test_search.py -v
@@ -1212,6 +1214,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `product_card.dart` — Home-redesign brief (2026-08-16): listing card rebuilt around the product image, with a trader identity row, a single "View Deal" CTA, and…
 - `product_grid_view.dart` — Reusable 2-column paginated grid used by the home feed, category zones, search results, and Trending "See All" (Design Journal Volume 6, Ch…
 - `protection_badge.dart` — BROKA - Protection Badge (Volume 2 §2.1)
+- `rating_stars.dart` — The app's one five-star renderer.
 - `sell_step_scaffold.dart` — BROKA - Sell Wizard Step Scaffold
 - `sell_zeno_boost_card.dart` — Zeno's premium help in the sell wizard (2026-10-05): a description written from the photo, the price checked against BROKA - one card each,…
 - `seller_setup.dart` — BROKA - the seller questions, shared.
@@ -1281,6 +1284,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
 - `push_delivery_test.dart` — Calls and messages that reach a phone whose app is closed (2026-10-07).
 - `receipts_and_charts_test.dart` — The Seller Dashboard's graphs and its Payment Receipts screen.
+- `review_rating_system_test.dart` — The review-rating rules that span screens: one conversion from a store's 0-10 composite score to stars, no seller rating without reviews, a…
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
 - `safe_payment_test.dart` — Paying safely while BROKA handles no deal payments (backend: GET /pricing/safe-payment).
 - `sell_listing_with_zeno_test.dart` — Listing with Zeno, and the sell wizard's way out (2026-10-08).
@@ -1350,6 +1354,7 @@ Modules:
 - `web/src/lib/forward.ts` — Passing the storefront's visit and share counts on to the API.
 - `web/src/lib/images.ts` — Turning the API's image fields into something an <img> can load.
 - `web/src/lib/links.ts` — URLs the storefront builds: its own pages, links into the app, and link preview images.
+- `web/src/lib/ratings.ts` — The storefront's rating scales, in one place.
 - `web/src/lib/safety.ts` — What the storefront tells a buyer about paying - all of it, here, so it is one file to change when payments come back.
 - `web/src/lib/server-config.ts` — Settings only the server may read.
 - `web/src/lib/storefront.ts` — Server-side view data for the store and product pages: images resolved against the API, link previews, and structured data for search engin…
@@ -1374,6 +1379,7 @@ Modules:
 - `web/src/components/ShareButtons.tsx` — Sharing a store or product from the web: WhatsApp (how most people here share), and the system share sheet or a copied link.
 - `web/src/components/SiteFooter.tsx`
 - `web/src/components/SiteHeader.tsx` — The logo is unoptimized because /_next/image on broka.co.ke is the BROKA website's image service, which doesn't have the storefront's files.
+- `web/src/components/Stars.tsx` — The storefront's one star row: five outline stars with a fractional fill.
 - `web/src/components/StoreDetails.tsx` — "Store details": everything a visitor arriving from a shared link needs to know about a store before buying from it - which store it is, wh…
 - `web/src/components/StoreFooter.tsx` — The foot of a store's pages, as a shop's website ends: the store, its departments, help with buying, and how paying works (the store direct…
 - `web/src/components/StoreHeader.tsx` — The top of every store page, the way a shop's website starts: a thin bar with what buying here means, then the store's own header - its nam…
