@@ -11,6 +11,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'api_config.dart';
+
 class AuctionWsClient {
   final String listingId;
   final String token;
@@ -19,11 +21,9 @@ class AuctionWsClient {
   // Hardcoded here rather than taken as a constructor parameter, matching
   // DealWsClient's actual pattern - a caller passing the wrong base URL
   // (e.g. forgetting the /auction-ws prefix, as this file's first draft
-  // did) fails silently at the WebSocket layer, not at compile time.
-  static const String _baseWsUrl = String.fromEnvironment(
-    'API_WS_URL',
-    defaultValue: 'wss://api.broka.co.ke',
-  );
+  // did) fails silently at the WebSocket layer, not at compile time. The
+  // address itself is the shared one in api_config.dart.
+  static const String _baseWsUrl = ApiConfig.wsBaseUrl;
 
   static const Duration _pingInterval = Duration(seconds: 25);
   static const Duration _maxBackoff = Duration(seconds: 32);

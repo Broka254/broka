@@ -2,11 +2,11 @@
 import 'server-only'
 
 /**
- * The BROKA API: api.broka.co.ke, a custom domain on the Railway service.
+ * The BROKA API: BROKA's API service on Render (broka-a6vh.onrender.com).
  * Point elsewhere with BROKA_API_URL (a redeploy, no code change).
  */
 export const API_URL = (
-  process.env.BROKA_API_URL?.trim() || 'https://api.broka.co.ke'
+  process.env.BROKA_API_URL?.trim() || 'https://broka-a6vh.onrender.com'
 ).replace(/\/+$/, '')
 
 /**

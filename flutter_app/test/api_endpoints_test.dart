@@ -1,58 +1,64 @@
-// The app's backend address is compiled in, in two --dart-define names that
-// four files default separately: API_URL (ApiService, ApiClient) for
-// requests and API_WS_URL (DealWsClient, AuctionWsClient) for live deal and
-// auction updates. Moving the app between hosts (Render to Azure, or back)
-// means changing all of them. A build that moves only some sends requests to
-// one backend and listens for live updates on the other, where the WebSocket
-// hubs (process-local) never hear about the deal - nothing errors, updates
-// just never arrive.
-//
-// The WebSocket defaults are private constants, so this reads the source.
+// The app's backend address is compiled in, from one place now:
+// lib/core/network/api_config.dart. Four clients use it - ApiService and
+// ApiClient for requests, DealWsClient and AuctionWsClient for live deal and
+// auction updates - so moving a build between hosts means changing that one
+// file or passing BOTH --dart-define values. A build that moves only one
+// sends requests to one backend and listens for live updates on the other,
+// where the WebSocket hubs are process-local and never hear about the deal:
+// nothing errors, updates just never arrive.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:broka/core/network/api_client.dart';
+import 'package:broka/core/network/api_config.dart';
 import 'package:broka/services/api_service.dart';
 
 void main() {
-  // flutter test runs with the package root as cwd.
-  final defaults = <String, List<String>>{'API_URL': [], 'API_WS_URL': []};
-  final declaration = RegExp(
-    r"String\.fromEnvironment\(\s*'(API_URL|API_WS_URL)',\s*defaultValue:\s*'([^']*)'",
-  );
+  // The production backend: BROKA's API service on Render. If the API moves,
+  // this changes with api_config.dart - the failure is the point.
+  const productionApi = 'https://broka-a6vh.onrender.com';
+  const productionWs = 'wss://broka-a6vh.onrender.com';
 
-  setUpAll(() {
-    for (final f in Directory('lib').listSync(recursive: true)) {
-      if (f is! File || !f.path.endsWith('.dart')) continue;
-      for (final m in declaration.allMatches(f.readAsStringSync())) {
-        defaults[m.group(1)!]!.add(m.group(2)!);
-      }
-    }
-  });
-
-  test('every API_URL default names the same host, over HTTPS', () {
-    final http = defaults['API_URL']!;
-    expect(http, hasLength(greaterThanOrEqualTo(2)),
-        reason: 'ApiService and ApiClient each declare API_URL');
-    expect(http.toSet(), hasLength(1), reason: 'API_URL defaults disagree: $http');
+  test('the production API is the Render backend, over HTTPS', () {
+    expect(ApiConfig.baseUrl, productionApi);
     // Release builds refuse cleartext (usesCleartextTraffic="false", ATS).
-    expect(http.first, startsWith('https://'));
-    expect(http.first, isNot(endsWith('/')));
+    expect(ApiConfig.baseUrl, startsWith('https://'));
+    // The API mounts its routes at the root (/auth/login, /listings...), and
+    // every client appends a path that already starts with "/".
+    expect(ApiConfig.baseUrl, isNot(endsWith('/')));
   });
 
-  test('API_WS_URL is the WebSocket form of API_URL', () {
-    final ws = defaults['API_WS_URL']!;
-    expect(ws, hasLength(greaterThanOrEqualTo(2)),
-        reason: 'DealWsClient and AuctionWsClient each declare API_WS_URL');
-    expect(ws.toSet(), hasLength(1), reason: 'API_WS_URL defaults disagree: $ws');
-    expect(ws.first,
-        defaults['API_URL']!.first.replaceFirst('https://', 'wss://'));
+  test('the WebSocket URL is the same backend, over WSS', () {
+    expect(ApiConfig.wsBaseUrl, productionWs);
+    expect(
+      ApiConfig.wsBaseUrl,
+      ApiConfig.baseUrl.replaceFirst('https://', 'wss://'),
+    );
   });
 
   test('ApiService and ApiClient resolve to the same base URL', () {
     // Calls and negotiation derive their sockets from ApiService.baseUrl;
     // every feature repository goes through ApiClient.
     expect(ApiClient().baseUrl, ApiService.baseUrl);
+    expect(ApiService.baseUrl, ApiConfig.baseUrl);
+  });
+
+  test('no client declares a backend default of its own', () {
+    // The old code declared API_URL in ApiService and ApiClient and
+    // API_WS_URL in both WebSocket clients, and this test existed to catch
+    // them drifting apart. One declaration removes the drift; this catches
+    // a second one being added back.
+    final declaration = RegExp(
+      r"String\.fromEnvironment\(\s*'(API_URL|API_WS_URL)'",
+    );
+    final declarations = <String>[];
+    for (final f in Directory('lib').listSync(recursive: true)) {
+      if (f is! File || !f.path.endsWith('.dart')) continue;
+      if (declaration.hasMatch(f.readAsStringSync())) {
+        declarations.add(f.path.replaceAll(r'\', '/'));
+      }
+    }
+    expect(declarations, ['lib/core/network/api_config.dart']);
   });
 }

@@ -9,6 +9,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'api_config.dart';
+
 // ── Domain object ─────────────────────────────────────────────────────────────
 
 enum DealStatus {
@@ -82,10 +84,8 @@ class DealWsState {
 // ── Client ────────────────────────────────────────────────────────────────────
 
 class DealWsClient {
-  static const String _baseWsUrl = String.fromEnvironment(
-    'API_WS_URL',
-    defaultValue: 'wss://api.broka.co.ke',
-  );
+  // The same backend as ApiService, over WebSocket (api_config.dart).
+  static const String _baseWsUrl = ApiConfig.wsBaseUrl;
 
   static const Duration _pingInterval   = Duration(seconds: 25);
   static const Duration _maxBackoff     = Duration(seconds: 32);
