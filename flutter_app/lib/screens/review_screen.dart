@@ -29,7 +29,7 @@ import '../features/reviews/domain/models/review.dart';
 import '../main.dart';
 import '../widgets/constellation_background.dart';
 
-enum _ReviewStep { loading, pickDeal, form, submitting, success, closed }
+enum _ReviewStep { loading, loadFailed, pickDeal, form, submitting, success, closed }
 
 class ReviewScreen extends StatefulWidget {
   const ReviewScreen({super.key, this.animateBackground = true});
@@ -63,10 +63,40 @@ class _ReviewScreenState extends State<ReviewScreen> {
   /// Why this deal can't be reviewed, when it can't (step closed).
   String _closedMessage = '';
 
+  /// A 409 means another submission already wrote the review. The caller's
+  /// eligibility is stale even though this screen did not post, so its Done
+  /// button must still make the store/profile reload the review state.
+  bool _closedNeedsRefresh = false;
+
+  /// Whether leaving now must make the caller reload its review state. This
+  /// covers the header back button and Android's back gesture too: a buyer
+  /// who submitted (or discovered a duplicate) and left that way still
+  /// needs the store's Rate button and counts refreshed.
+  bool get _needsRefresh =>
+      _step == _ReviewStep.success || _closedNeedsRefresh;
+
+  /// A submit is already committed only when its response arrives. Popping
+  /// first let the caller reload before the row existed, leaving it with a
+  /// stale Rate button even though the review had just been written.
+  bool get _blocksPop => _step == _ReviewStep.submitting || _needsRefresh;
+
+  /// A back request made while the POST is in flight. It is honoured after
+  /// a successful response; a failed one stays on the form with its error
+  /// rather than discarding the comment or skipping the retry.
+  bool _exitAfterSubmit = false;
+
   _ReviewStep _step = _ReviewStep.loading;
 
   static const _labels = ['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent'];
   static const _emojis = ['', '😞', '😐', '🙂', '😊', '🤩'];
+
+  void _handleBackPressed() {
+    if (_step == _ReviewStep.submitting) {
+      if (!_exitAfterSubmit) setState(() => _exitAfterSubmit = true);
+      return;
+    }
+    Navigator.pop(context, _needsRefresh);
+  }
 
   @override
   void didChangeDependencies() {
@@ -81,14 +111,16 @@ class _ReviewScreenState extends State<ReviewScreen> {
       _sellerName  = (args['seller_name']  as String?) ?? 'Seller';
       _listingName = (args['listing_name'] as String?) ?? '';
     }
-    // If deal is already known, go straight to the form
+    // If the deal is already known, ask the backend about it before showing
+    // the form. The caller's button was rendered from an earlier read; the
+    // deal may have been reviewed, cancelled or refunded since. Submitting
+    // first and explaining the refusal afterwards is a worse experience and
+    // still cannot make an ineligible review succeed.
     if (_dealId.isNotEmpty) {
       _pickedDealId      = _dealId;
       _pickedListingName = _listingName;
-      _step = _ReviewStep.form;
-      // From a notification: only the deal id. Who and what it was come
-      // from the buyer's own reviewable deals.
-      if (_sellerName == 'Seller') _describeDeal();
+      _step = _ReviewStep.loading;
+      _describeDeal();
     } else {
       _loadDeals();
     }
@@ -98,9 +130,22 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final result = await reviewsRepository.myReviewableDeals(
         sellerId: _sellerId.isEmpty ? null : _sellerId,
         storeId: _storeId.isEmpty ? null : _storeId);
-    if (!mounted || result is! Success<List<ReviewableDeal>>) return;
+    if (!mounted) return;
+    if (result is! Success<List<ReviewableDeal>>) {
+      setState(() {
+        _errorMsg =
+            "Couldn't check this deal. Check your connection and try again.";
+        _step = _ReviewStep.loadFailed;
+      });
+      return;
+    }
     final deal = result.data.where((d) => d.dealId == _dealId).firstOrNull;
     setState(() {
+      // The caller rendered its button from an earlier read. If the backend
+      // now says this deal is reviewed or no longer eligible, leaving must
+      // make that caller reload so the button and counts stop contradicting
+      // the answer just shown here.
+      _closedNeedsRefresh = deal == null || deal.alreadyReviewed;
       if (deal == null) {
         _closedMessage = "This deal can't be reviewed - reviews come from a "
             'deal you have with this seller, and this one is cancelled, '
@@ -117,6 +162,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         _listingName = deal.listingName;
         _pickedListingName = deal.listingName;
         _pickedStatus = deal.status;
+        _step = _ReviewStep.form;
       }
     });
   }
@@ -150,10 +196,22 @@ class _ReviewScreenState extends State<ReviewScreen> {
         }
       },
       onFailure: (_, __) => setState(() {
-        _errorMsg = 'Could not load your deals. Please try again.';
-        _step = _ReviewStep.pickDeal;
+        _errorMsg = 'Could not load your deals. Please check your connection.';
+        _step = _ReviewStep.loadFailed;
       }),
     );
+  }
+
+  Future<void> _retryLoad() async {
+    setState(() {
+      _errorMsg = null;
+      _step = _ReviewStep.loading;
+    });
+    if (_pickedDealId != null) {
+      await _describeDeal();
+    } else {
+      await _loadDeals();
+    }
   }
 
   Future<void> _submit() async {
@@ -171,12 +229,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
       return;
     }
     final comment = _commentCtrl.text.trim();
-    // maxLength with MaxLengthEnforcement.none lets the counter go past the
-    // limit instead of silently deleting what was typed. The refusal is
-    // explicit, and the API refuses it too rather than truncating.
-    if (comment.length > maxReviewCommentLength) {
+    // Count code points, as Python's len() does for the API. Dart's
+    // String.length counts UTF-16 units, so 300 emoji looked like 600 here
+    // and were refused even though the API would accept them. maxLength with
+    // MaxLengthEnforcement.none still lets the counter pass the limit instead
+    // of silently deleting what was typed; the refusal is explicit.
+    final commentLength = comment.runes.length;
+    if (commentLength > maxReviewCommentLength) {
       setState(() => _errorMsg =
-          'Your comment is ${comment.length} characters. The limit is '
+          'Your comment is $commentLength characters. The limit is '
           '$maxReviewCommentLength - please shorten it.');
       return;
     }
@@ -191,20 +252,37 @@ class _ReviewScreenState extends State<ReviewScreen> {
       onSuccess: (_) {
         HapticFeedback.heavyImpact();
         setState(() => _step = _ReviewStep.success);
+        _leaveAfterSubmitIfRequested();
       },
-      onFailure: (message, statusCode) => setState(() {
+      onFailure: (message, statusCode) {
         // 409 is the duplicate-deal refusal. Retrying can never succeed, so
         // the form closes with the already-reviewed state the notification
         // path shows, instead of an error the buyer would keep resubmitting.
         if (statusCode == 409) {
-          _closedMessage = "You've already reviewed this deal. Thank you!";
-          _step = _ReviewStep.closed;
+          setState(() {
+            _closedMessage = "You've already reviewed this deal. Thank you!";
+            _closedNeedsRefresh = true;
+            _step = _ReviewStep.closed;
+          });
+          _leaveAfterSubmitIfRequested();
         } else {
-          _errorMsg = message;
-          _step = _ReviewStep.form;
+          // A generic "Request failed" does not tell the buyer whether their
+          // words were lost. Name the action, then the server or network's
+          // own safe message.
+          setState(() {
+            _exitAfterSubmit = false;
+            _errorMsg = "Couldn't submit your review. $message";
+            _step = _ReviewStep.form;
+          });
         }
-      }),
+      },
     );
+  }
+
+  void _leaveAfterSubmitIfRequested() {
+    if (!_exitAfterSubmit || !mounted) return;
+    _exitAfterSubmit = false;
+    Navigator.pop(context, true);
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -212,28 +290,34 @@ class _ReviewScreenState extends State<ReviewScreen> {
   static const _gradient = [BrokaColors.gold, BrokaColors.neonBlue];
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: BrokaColors.bg,
-    body: ConstellationBackground(
-      animate: widget.animateBackground,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.topCenter,
-            radius: 1.2,
-            colors: [BrokaColors.gold.withOpacity(0.13), Colors.transparent],
-            stops: const [0.0, 0.55],
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_blocksPop,
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop) _handleBackPressed();
+    },
+    child: Scaffold(
+      backgroundColor: BrokaColors.bg,
+      body: ConstellationBackground(
+        animate: widget.animateBackground,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.2,
+              colors: [BrokaColors.gold.withOpacity(0.13), Colors.transparent],
+              stops: const [0.0, 0.55],
+            ),
           ),
-        ),
-        child: SafeArea(
-          bottom: false,
-          child: Column(children: [
-            _buildHeader(),
-            Expanded(child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 280),
-              child: _buildBody(),
-            )),
-          ]),
+          child: SafeArea(
+            bottom: false,
+            child: Column(children: [
+              _buildHeader(),
+              Expanded(child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                child: _buildBody(),
+              )),
+            ]),
+          ),
         ),
       ),
     ),
@@ -247,7 +331,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
       child: Row(children: [
         IconButton(
           tooltip: 'Back',
-          onPressed: () => Navigator.pop(context, _step == _ReviewStep.success),
+          onPressed: _handleBackPressed,
           icon: const Icon(Icons.arrow_back_ios_new_rounded,
               color: BrokaColors.textHigh, size: 19),
         ),
@@ -309,6 +393,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   Widget _buildBody() {
     switch (_step) {
       case _ReviewStep.loading:    return _buildLoading();
+      case _ReviewStep.loadFailed: return _buildLoadFailed();
       case _ReviewStep.pickDeal:   return _buildDealPicker();
       case _ReviewStep.form:       return _buildForm();
       case _ReviewStep.submitting: return _buildSubmitting();
@@ -327,7 +412,25 @@ class _ReviewScreenState extends State<ReviewScreen> {
         Text(_closedMessage, textAlign: TextAlign.center,
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 14, height: 1.5)),
         const SizedBox(height: 24),
-        _primaryButton('Done', () => Navigator.pop(context, false)),
+        _primaryButton('Done', () => Navigator.pop(context, _closedNeedsRefresh)),
+      ]),
+    ),
+  );
+
+  Widget _buildLoadFailed() => Center(
+    key: const Key('review-load-error'),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.cloud_off_rounded, color: BrokaColors.warning, size: 40),
+        const SizedBox(height: 14),
+        Text(_errorMsg ?? 'Could not load your review information.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: BrokaColors.textMid, fontSize: 14, height: 1.5)),
+        const SizedBox(height: 22),
+        _primaryButton('Try again', _retryLoad,
+            key: const Key('review-load-retry')),
       ]),
     ),
   );
@@ -598,6 +701,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
             controller: _commentCtrl,
             maxLines: 5,
             maxLength: maxReviewCommentLength,
+            // TextField's built-in counter counts UTF-16 units, so 300 emoji
+            // showed "600/500" while the API (and _submit) counted 300 code
+            // points. Show the same number the request will be checked
+            // against, without silently cutting anything.
+            buildCounter: (context,
+                    {required currentLength,
+                    required isFocused,
+                    required maxLength}) =>
+                Text('${_commentCtrl.text.runes.length}/$maxReviewCommentLength',
+                    style: const TextStyle(
+                        color: BrokaColors.textMid, fontSize: 10)),
             // No silent truncation: past 500 the counter shows the overflow
             // and Submit explains the limit (backend enforces the same 500).
             maxLengthEnforcement: MaxLengthEnforcement.none,
@@ -633,12 +747,18 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   // ── Submitting ─────────────────────────────────────────────────────────────
 
-  Widget _buildSubmitting() => const Center(
+  Widget _buildSubmitting() => Center(
     child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      CircularProgressIndicator(color: BrokaColors.gold),
-      SizedBox(height: 20),
-      Text('Submitting your review…',
+      const CircularProgressIndicator(color: BrokaColors.gold),
+      const SizedBox(height: 20),
+      const Text('Submitting your review…',
           style: TextStyle(color: BrokaColors.textMid, fontSize: 14)),
+      if (_exitAfterSubmit) ...[
+        const SizedBox(height: 10),
+        const Text("We'll close this screen once your review is saved.",
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12),
+            textAlign: TextAlign.center),
+      ],
     ]),
   );
 

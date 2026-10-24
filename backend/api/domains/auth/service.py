@@ -686,13 +686,13 @@ class AuthService:
             # its business name and store. Answering "just a few items" again
             # must not take those away.
             if user.seller_tier == SellerTier.long_term and user.business_display_name:
-                return self._user_dict(user)
+                return await self._own_user_dict(user)
             user = await self.repo.update(
                 user,
                 account_type=AccountType.buyer_seller,
                 seller_tier=SellerTier.short_term,
             )
-            return self._user_dict(user)
+            return await self._own_user_dict(user)
 
         b_name = (business_name or "").strip()
         b_cat = (business_category or "").strip()
@@ -717,14 +717,26 @@ class AuthService:
             business_description=(business_description or "").strip() or None,
             business_display_name=generate_business_display_name(b_name, b_cat, b_loc),
         )
-        return self._user_dict(user)
+        return await self._own_user_dict(user)
 
     async def get_me(self, user_id: str) -> dict:
         user = await self.repo.get_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+        return await self._own_user_dict(user)
+
+    async def _own_user_dict(self, user) -> dict:
+        """The signed-in account's response, with figures from its reviews.
+
+        A mutation response (upgrade, profile edit) is also a user payload:
+        the app replaces its cached account with it. Falling back to
+        _user_dict's empty default there erased a real 4.0/1-review average
+        until the next /auth/me, so every own-account response loads the
+        same figures as the account read.
+        """
         from api.domains.reviews.stats import seller_review_figures
-        review = (await seller_review_figures(self.db, [user.id])).get(user.id, (0, None))
+        review = (await seller_review_figures(self.db, [user.id])).get(
+            user.id, (0, None))
         return self._user_dict(user, review)
 
     async def update_profile(
@@ -748,7 +760,7 @@ class AuthService:
             updates["profile_photo_id"] = None
         if updates:
             user = await self.repo.update(user, **updates)
-        return self._user_dict(user)
+        return await self._own_user_dict(user)
 
     async def update_location(self, user_id: str, lat: float, lng: float) -> None:
         user = await self.repo.get_by_id(user_id)

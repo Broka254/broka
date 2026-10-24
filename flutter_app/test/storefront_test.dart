@@ -36,7 +36,7 @@ Map<String, dynamic> _image(String id) =>
     {'id': id, 'thumb': _pixel, 'medium': _pixel, 'large': _pixel};
 
 Map<String, dynamic> _store({bool active = true, String? description, bool photos = false,
-    bool online = true}) => {
+    bool online = true, double? ownerRating = 4.8, int ownerReviewCount = 4}) => {
       'id': 's1',
       'name': 'Clanix Electronics',
       'slug': 'clanix',
@@ -48,7 +48,8 @@ Map<String, dynamic> _store({bool active = true, String? description, bool photo
       'location_description': 'Moi Avenue, opposite the Hilton',
       'business_email': 'sales@clanix.co.ke',
       'business_email_verified': true,
-      'owner': {'name': 'Jane Wanjiru', 'verified': true, 'rating': 4.8, 'review_count': 4,
+      'owner': {'name': 'Jane Wanjiru', 'verified': true, 'rating': ownerRating,
+          'review_count': ownerReviewCount,
           'completed_deals': 12, 'member_since': '2025-01-10T00:00:00', 'online': online,
           'last_active': online ? 'Active now' : 'Active 3h ago'},
       'is_active': active,
@@ -83,7 +84,8 @@ Map<String, dynamic> _reviews() => {
 
 class _Backend {
   _Backend({bool active = true, String? description, bool photos = false,
-      int? failListingsTimes, int? failReviewsTimes, bool online = true}) {
+      int? failListingsTimes, int? failReviewsTimes, bool online = true,
+      double? ownerRating = 4.8, int ownerReviewCount = 4}) {
     _failListings = failListingsTimes ?? 0;
     _failReviews = failReviewsTimes ?? 0;
     client = ApiClient(client: MockClient((req) async {
@@ -91,7 +93,8 @@ class _Backend {
       final path = req.url.path;
       if (path == '/stores/s1' || path == '/stores/slug/clanix') {
         return _json(_store(active: active, description: description, photos: photos,
-            online: online));
+            online: online, ownerRating: ownerRating,
+            ownerReviewCount: ownerReviewCount));
       }
       if (path == '/stores/slug/nope') return _json({'detail': 'Store not found'}, 404);
       if (path == '/stores/mine') return _json(null);
@@ -227,6 +230,18 @@ void main() {
 
       final visit = backend.requests.singleWhere((r) => r.url.path == '/stores/s1/visit');
       expect(jsonDecode(visit.body), {'via': 'whatsapp'});
+    });
+
+    testWidgets('an unreviewed owner says so instead of showing a rating',
+        (tester) async {
+      final backend = _Backend(ownerRating: null, ownerReviewCount: 0);
+      await _pumpStore(tester, backend);
+
+      final rating = find.byKey(const Key('hero-rating'));
+      expect(find.descendant(of: rating, matching: find.text('No reviews yet')),
+          findsOneWidget);
+      expect(find.descendant(of: rating, matching: find.textContaining('5.0')),
+          findsNothing);
     });
 
     testWidgets("the search box is the app's own, readable one", (tester) async {

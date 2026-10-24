@@ -90,15 +90,25 @@ class _ParticlePainter extends CustomPainter {
 
 // ─── Hex Trust Badge ──────────────────────────────────────────────────────────
 class HexTrustBadge extends StatelessWidget {
-  final double score;
+  /// The metric in its own units, or null when there is no data yet.
+  final double? score;
   final String label;
   final double size;
-  const HexTrustBadge({super.key, required this.score, required this.label, this.size = 72});
+
+  /// Shown after the number ("/5") so two scales cannot look alike.
+  final String suffix;
+
+  /// The top of the scale, used only to choose the colour band.
+  final double maxScore;
+  const HexTrustBadge({super.key, required this.score, required this.label,
+      this.size = 72, this.suffix = '', this.maxScore = 10});
 
   Color get _color {
-    if (score >= 8) return BrokaColors.neonGreen;
-    if (score >= 6) return BrokaColors.gold;
-    if (score >= 4) return BrokaColors.warning;
+    if (score == null) return BrokaColors.textMid;
+    final onTen = score! / (maxScore <= 0 ? 1 : maxScore) * 10;
+    if (onTen >= 8) return BrokaColors.neonGreen;
+    if (onTen >= 6) return BrokaColors.gold;
+    if (onTen >= 4) return BrokaColors.warning;
     return BrokaColors.danger;
   }
 
@@ -108,7 +118,7 @@ class HexTrustBadge extends StatelessWidget {
     child: Stack(alignment: Alignment.center, children: [
       CustomPaint(size: Size(size, size * 1.15), painter: _HexPainter(color: _color)),
       Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(score.toStringAsFixed(1), style: TextStyle(
+        Text(score == null ? '—' : '${score!.toStringAsFixed(1)}$suffix', style: TextStyle(
           color: _color, fontSize: size * 0.22, fontWeight: FontWeight.bold, fontFamily: 'Georgia')),
         Text(label.toUpperCase(), style: TextStyle(
           color: BrokaColors.textMid, fontSize: size * 0.09, letterSpacing: 1.2)),

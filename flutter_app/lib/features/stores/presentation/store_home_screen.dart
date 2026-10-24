@@ -832,7 +832,7 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
                           label: rating != null
                               ? '${rating.toStringAsFixed(1)}/5 · '
                                   '${reviews == 1 ? '1 review' : '$reviews reviews'}'
-                              : 'New seller',
+                              : 'No reviews yet',
                           semantics: rating != null
                               ? 'Seller rating ${rating.toStringAsFixed(1)} out of 5 '
                                   'from $reviews reviews'

@@ -115,7 +115,7 @@ export function StoreHero({ view, showcase = [] }: { view: StoreView; showcase?:
                   <span className={styles.factMuted}> ({ownerReviews})</span>
                 </span>
               ) : (
-                'New seller'
+                'No reviews yet'
               )}
             </li>
             <li className={styles.glassChip}>

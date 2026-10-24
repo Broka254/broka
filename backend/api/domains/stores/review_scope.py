@@ -22,6 +22,11 @@ THE RULE
    attribution, because picking one would be a guess, and the review
    stays on the person's profile where it already lives.
 
+   A review of a personal listing (a deal with no store) also has no
+   `store_id`, but it is not a chat review and must NOT join the owner's
+   shop: the shop did not sell that item. Only `deal_id IS NULL` earns the
+   sole-store fallback.
+
 The "sole store" test is about the OWNER, not the store: it is the same
 answer for both of that owner's rows, so the rule cannot flip per shop.
 """
@@ -62,6 +67,10 @@ def store_review_condition(store_id: str, owner_id: str, sole: bool):
     if sole:
         condition = or_(
             condition,
-            and_(Review.store_id.is_(None), Review.seller_id == owner_id),
+            and_(
+                Review.store_id.is_(None),
+                Review.deal_id.is_(None),
+                Review.seller_id == owner_id,
+            ),
         )
     return condition

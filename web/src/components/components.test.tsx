@@ -160,7 +160,7 @@ describe('StoreHero', () => {
   it('shows no tick and no rating for a new, unverified seller', () => {
     render(<StoreHero view={storeView(shop({ owner: { verified: false, rating: 5, completed_deals: 0, member_since: null } }))} />)
     expect(screen.queryByRole('img', { name: 'Verified seller' })).toBeNull()
-    expect(screen.getByText('New seller')).toBeTruthy()
+    expect(screen.getByText('No reviews yet')).toBeTruthy()
     expect(screen.queryByText('5.0')).toBeNull()
   })
 

@@ -44,7 +44,11 @@ export function replyTimeLabel(minutes: number | null | undefined): string | nul
 /** "20 Sep 2026" for a review's created_at, or null when it isn't a date. */
 export function reviewDate(iso: string | null | undefined): string | null {
   if (!iso) return null
-  const date = new Date(iso)
+  // The API writes naive UTC timestamps (`2026-09-20T10:00:00`, no Z). A
+  // bare string is parsed in the server's local zone, which can shift the
+  // date across midnight; mark it UTC before parsing instead.
+  const utc = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso) ? iso : `${iso}Z`
+  const date = new Date(utc)
   if (Number.isNaN(date.getTime())) return null
   return new Intl.DateTimeFormat('en-KE', {
     day: 'numeric',

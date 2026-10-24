@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,9 +111,34 @@ class ReviewService:
         # with two shops would otherwise have one record lift both. Looked up
         # once, here, from the deal's listing - the review never carries a
         # store chosen by the caller.
-        listing_store = (await self.db.execute(
-            select(Listing.store_id).where(Listing.id == deal.listing_id)
-        )).scalar_one_or_none() if deal.listing_id else None
+        listing = (await self.db.execute(
+            select(Listing.id, Listing.store_id, Listing.seller_id, Store.owner_id)
+            .outerjoin(Store, Store.id == Listing.store_id)
+            .where(Listing.id == deal.listing_id)
+        )).first() if deal.listing_id else None
+        listing_store = None
+        if listing is not None:
+            # Both relationships must agree with the deal: the listing has to
+            # belong to the seller, and any shop on it has to belong to that
+            # seller too. A listing can carry a stale or tampered store_id;
+            # trusting it would put the review on a stranger's shop even
+            # though the listing itself names the right seller.
+            if (listing.seller_id == deal.seller_id
+                    and (listing.store_id is None or listing.owner_id == deal.seller_id)):
+                listing_store = listing.store_id
+            else:
+                # A deal naming another seller's listing, or a listing naming
+                # another owner's shop, is corrupt or tampered data. Keep the
+                # buyer's review of the person they dealt with, but do not let
+                # it land on a shop neither side traded through. This is a
+                # data-integrity alarm, not a normal path; repair the row
+                # rather than guessing a shop.
+                logger.warning(
+                    "[reviews] deal %s listing %s seller/store owner mismatch "
+                    "(listing seller %s, store owner %s, deal seller %s)",
+                    deal.id, listing.id, listing.seller_id,
+                    listing.owner_id, deal.seller_id,
+                )
 
         return await self._save(Review(
             deal_id=deal_id,
@@ -134,7 +159,6 @@ class ReviewService:
         # flush the rating average triggers, or at commit.
         try:
             self.db.add(review)
-            await self._update_seller_rating(seller_id)
             await record_audit(
                 self.db, reviewer_id, "review_submitted", "review", "",
                 detail=f"deal_id={deal_id} seller_id={seller_id} rating={rating}",
@@ -144,6 +168,20 @@ class ReviewService:
             await self.db.rollback()
             raise HTTPException(status_code=409, detail="You have already reviewed this deal")
         await self.db.refresh(review)
+        public = self._review_dict(review)
+        review_id = review.id
+
+        # User.rating is a legacy cache. Refresh it only after the review is
+        # committed, under the user's row lock: two reviews can land at once,
+        # and computing the average from inside each writer's transaction
+        # made the slower writer store a one-review average over both rows.
+        # Public surfaces read reviews/stats.py, so a failure here must not
+        # fail the buyer's already-committed review.
+        try:
+            await self._update_seller_rating(seller_id)
+        except Exception as exc:  # noqa: BLE001 - never lose the review
+            await self.db.rollback()
+            logger.warning("[reviews] seller rating cache refresh failed: %s", exc)
 
         # The store's number moves the moment a review lands, not the next
         # time the nightly pass happens to run - a seller who just earned a
@@ -155,17 +193,18 @@ class ReviewService:
                 from api.domains.stores.rating import refresh_store_rating
                 await refresh_store_rating(self.db, store_id)
             except Exception as exc:  # noqa: BLE001 - never lose the review
+                await self.db.rollback()
                 logger.warning("[reviews] store rating refresh failed: %s", exc)
 
         await publish(ReviewSubmitted(
-            review_id=review.id,
+            review_id=review_id,
             deal_id=deal_id or "",
             seller_id=seller_id,
             reviewer_id=reviewer_id,
             rating=rating,
         ))
 
-        return self._review_dict(review)
+        return public
 
     async def _already_reviewed(self, deal_id: str, reviewer_id: str) -> bool:
         r = await self.db.execute(
@@ -264,18 +303,41 @@ class ReviewService:
         how a store page asks the same question about its own sales: a
         review of that shop has to name a product the shop sold, never
         another shop of the same owner.
+
+        A deal that has already been reviewed stays in the answer even if
+        it is later cancelled or refunded. Status decides whether a review
+        may be written; it does not erase the review that exists. Dropping
+        the row here made a buyer who had reviewed a now-refunded deal look
+        like a stranger to the seller and shop, and the UI offered them an
+        ineligible state instead of "already reviewed".
         """
+        reviewed_deal = exists(select(Review.id).where(
+            Review.deal_id == Deal.id,
+            Review.reviewer_id == buyer_id,
+        ))
         q = select(Deal.id, Deal.seller_id, Deal.listing_id, Deal.agreed_price,
                    Deal.status, Deal.created_at, Deal.released_at).where(
             Deal.buyer_id == buyer_id,
             Deal.seller_id != buyer_id,
-            Deal.status.in_(REVIEWABLE_STATUSES),
+            or_(Deal.status.in_(REVIEWABLE_STATUSES), reviewed_deal),
         )
         if seller_id:
             q = q.where(Deal.seller_id == seller_id)
         if store_id:
-            q = q.where(Deal.listing_id.in_(
-                select(Listing.id).where(Listing.store_id == store_id)))
+            # A shop page may offer only a sale genuinely made through it:
+            # the listing, the store and the deal must all name the same
+            # seller. Filtering on Listing.store_id alone offered a review of
+            # a person's sale on another owner's shop when the data was bad.
+            q = q.where(exists(
+                select(Listing.id)
+                .join(Store, Store.id == Listing.store_id)
+                .where(
+                    Listing.id == Deal.listing_id,
+                    Listing.store_id == store_id,
+                    Listing.seller_id == Deal.seller_id,
+                    Store.owner_id == Deal.seller_id,
+                )
+            ))
         deals = (await self.db.execute(q.order_by(Deal.created_at.desc()).limit(100))).all()
         if not deals:
             return []
@@ -294,23 +356,38 @@ class ReviewService:
         # "Rate this store" needs to know both, and the card shows the
         # product's name.
         lr = await self.db.execute(
-            select(Listing.id, Listing.name, Listing.store_id)
+            select(Listing.id, Listing.name, Listing.store_id, Listing.seller_id)
             .where(Listing.id.in_({d.listing_id for d in deals if d.listing_id})))
-        listings = {lid: (name, store) for lid, name, store in lr.all()}
-        shop_names = {}
-        shop_ids = {store for _, store in listings.values() if store}
+        listings = {lid: (name, store, seller) for lid, name, store, seller in lr.all()}
+        shops = {}
+        shop_ids = {store for _, store, _ in listings.values() if store}
         if shop_ids:
-            shop_names = dict((await self.db.execute(
-                select(Store.id, Store.name).where(Store.id.in_(shop_ids)))).all())
+            shops = {sid: (name, owner) for sid, name, owner in (await self.db.execute(
+                select(Store.id, Store.name, Store.owner_id)
+                .where(Store.id.in_(shop_ids)))).all()}
+
+        # Only include a shop when every link in deal -> listing -> store says
+        # the same seller. A corrupt row still appears as a reviewable sale of
+        # the person the buyer actually dealt with; it just cannot name an
+        # unrelated shop or offer itself on that shop's page.
+        metadata = {}
+        for deal in deals:
+            row = listings.get(deal.listing_id)
+            listing_name = row[0] if row else None
+            shop_id = shop_name = None
+            if row and row[2] == deal.seller_id:
+                shop = shops.get(row[1])
+                if shop and shop[1] == deal.seller_id:
+                    shop_id, shop_name = row[1], shop[0]
+            metadata[deal.id] = (listing_name, shop_id, shop_name)
 
         return [{
             "deal_id": d.id,
             "seller_id": d.seller_id,
             "seller_name": sellers.get(d.seller_id) or "Seller",
-            "listing_name": (listings.get(d.listing_id) or (None, None))[0] or "Listing",
-            "store_id": (listings.get(d.listing_id) or (None, None))[1],
-            "store_name": shop_names.get(
-                (listings.get(d.listing_id) or (None, None))[1]),
+            "listing_name": metadata[d.id][0] or "Listing",
+            "store_id": metadata[d.id][1],
+            "store_name": metadata[d.id][2],
             "agreed_price": d.agreed_price,
             "status": d.status.value if hasattr(d.status, "value") else d.status,
             "created_at": d.created_at.isoformat() if d.created_at else None,
@@ -319,18 +396,29 @@ class ReviewService:
         } for d in deals]
 
     async def _update_seller_rating(self, seller_id: str) -> None:
+        # with_for_update serialises concurrent cache refreshes on PostgreSQL;
+        # SQLite ignores the hint and serialises the writer itself. The review
+        # has already committed, so each refresh sees every committed row.
+        seller = (await self.db.execute(
+            select(User).where(User.id == seller_id).with_for_update()
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if seller is None:
+            return
         r = await self.db.execute(
             select(func.avg(Review.rating)).where(Review.seller_id == seller_id)
         )
         avg = r.scalar()
-        ur = await self.db.execute(select(User).where(User.id == seller_id))
-        seller = ur.scalar_one_or_none()
         # No reviews is no average. This column is only a cache now - every
         # public surface reads reviews/stats.py - but writing 5.0 into it
         # would recreate the "unreviewed seller looks perfect" bug for any
         # legacy reader.
-        if seller and avg is not None:
-            seller.rating = round(float(avg), 2)
+        # Also clear a stale cache when no reviews remain. There is no
+        # delete-review route today, but moderation can remove a row;
+        # leaving the old average behind would publish a score with no
+        # records under it.
+        seller.rating = round(float(avg), 2) if avg is not None else None
+        await self.db.commit()
 
     @staticmethod
     def _public_name(name: Optional[str]) -> str:

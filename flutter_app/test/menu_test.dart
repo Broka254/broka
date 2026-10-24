@@ -19,6 +19,8 @@ import 'support/fake_api.dart';
 Map<String, dynamic> _me({
   String accountType = 'buyer_seller',
   int deals = 3,
+  double? rating = 4.7,
+  int reviewCount = 12,
   bool locationVisible = true,
   String? photo,
   bool verified = true,
@@ -33,7 +35,8 @@ Map<String, dynamic> _me({
       'account_type': accountType,
       'seller_tier': 'long_term',
       'is_verified': verified,
-      'rating': 4.7,
+      'rating': rating,
+      'review_count': reviewCount,
       'completed_deals': deals,
       'location_visible': locationVisible,
       'profile_photo': photo,
@@ -163,7 +166,8 @@ void main() {
 
     testWidgets('a buyer is offered selling, and a store all the same',
         (tester) async {
-      setFakeRoute(_account(me: _me(accountType: 'buyer', deals: 0)));
+      setFakeRoute(_account(me: _me(
+          accountType: 'buyer', deals: 0, rating: null, reviewCount: 0)));
       phoneSize(tester);
       await tester.pumpWidget(app(const MenuScreen(animateBackground: false)));
       await _settle(tester);
@@ -324,7 +328,7 @@ void main() {
 
   group('Profile', () {
     testWidgets('shows real numbers, on the constellation', (tester) async {
-      setFakeRoute(_account(me: _me(deals: 0)));
+      setFakeRoute(_account(me: _me(deals: 0, rating: null, reviewCount: 0)));
       await tester.pumpWidget(app(const ProfileScreen(animateBackground: false)));
       await _settle(tester);
 

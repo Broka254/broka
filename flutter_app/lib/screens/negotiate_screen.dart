@@ -1428,7 +1428,15 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   /// space, leaving much more room for the actual chat below.
   Widget _buildInfoStrip() {
     final cName = _counterName; final cDist = _distKm;
-    final cPhoto = _sellerPhoto; final rating = (_sellerInfo?['rating'] as num?)?.toStringAsFixed(1);
+    final cPhoto = _sellerPhoto; final rating = (_sellerInfo?['rating'] as num?)?.toDouble();
+    // A buyer-review average is only a rating when reviews exist. Keep its
+    // /5 scale and count beside it; the deals figure is a separate fact and
+    // must not read as the evidence for the stars.
+    final reviewCount = (_sellerInfo?['review_count'] as num?)?.toInt() ?? 0;
+    final reviewLabel = rating != null && reviewCount > 0
+        ? '${rating.toStringAsFixed(1)}/5 · '
+            '${reviewCount == 1 ? '1 review' : '$reviewCount reviews'}'
+        : null;
     final deals = _sellerInfo?['completed_deals'] as int?;
     final escrowPct = (_sellerInfo?['escrow_success_rate_pct'] as num?)?.toStringAsFixed(0);
     final ver = _sellerInfo?['is_verified'] as bool? ?? false;
@@ -1470,14 +1478,18 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
                 Flexible(child: Text(cName, style: const TextStyle(color: BrokaColors.textHigh, fontWeight: FontWeight.w700, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis)),
                 if (ver) ...[const SizedBox(width: 4), const Icon(Icons.verified_rounded, color: BrokaColors.gold, size: 12)],
               ]),
-              Row(children: [
+              Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
                 Text(isOnline ? 'Online' : lastSeen != null ? 'Last seen $lastSeen' : 'Offline',
                     style: TextStyle(fontSize: 10, color: isOnline ? BrokaColors.neonGreen : BrokaColors.textLow, fontWeight: FontWeight.w600)),
-                if (rating != null) ...[
+                if (reviewLabel != null) ...[
                   const Text('  ·  ', style: TextStyle(fontSize: 10, color: BrokaColors.textLow)),
                   const Icon(Icons.star_rounded, size: 10, color: BrokaColors.gold),
-                  Text(' $rating · ${deals ?? 0} deals${escrowPct != null ? ' · $escrowPct% escrow success' : ''}', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+                  Text(' $reviewLabel', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
                 ],
+                if (deals != null)
+                  Text('  ·  $deals deals', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
+                if (escrowPct != null)
+                  Text('  ·  $escrowPct% escrow success', style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
               ]),
             ])),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [

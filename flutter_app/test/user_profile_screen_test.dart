@@ -67,6 +67,24 @@ Map<String, dynamic> _deal({bool reviewed = false}) => {
       'completed_at': '2026-09-03T10:00:00', 'already_reviewed': reviewed,
     };
 
+class _PostedReview extends StatefulWidget {
+  const _PostedReview();
+
+  @override
+  State<_PostedReview> createState() => _PostedReviewState();
+}
+
+class _PostedReviewState extends State<_PostedReview> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => Navigator.of(context).pop(true));
+  }
+
+  @override
+  Widget build(BuildContext context) => const Scaffold(body: Text('review posted'));
+}
+
 void main() {
   // Written for a build that shows payments. The default build hides them
   // (payments_shown.dart): see the "payments hidden" test.
@@ -303,6 +321,66 @@ void main() {
         'seller_id': 'seller-1', 'seller_name': 'Grace Akinyi',
         'deal_id': 'deal-9', 'listing_name': 'Samsung A54',
       });
+    });
+
+    testWidgets('a failed post-submit refresh never shows stale reviews or Rate',
+        (tester) async {
+      var summaries = 0;
+      var reviewLists = 0;
+      var dealLists = 0;
+      setFakeRoute((uri) {
+        final p = uri.path;
+        if (p == '/auth/user/seller-1') return _seller();
+        if (p == '/reviews/summary/seller-1') {
+          summaries++;
+          return summaries == 1 ? _summary : const FakeResponse.error();
+        }
+        if (p == '/reviews/seller/seller-1') {
+          reviewLists++;
+          return reviewLists == 1 ? _reviews : const FakeResponse.error();
+        }
+        if (p == '/reviews/my-deals') {
+          dealLists++;
+          return dealLists == 1
+              ? {'deals': [_deal()]}
+              : const FakeResponse.error();
+        }
+        if (p == '/listings/') return <Object?>[];
+        return null;
+      });
+
+      await tester.pumpWidget(MaterialApp(
+        onGenerateRoute: (s) {
+          if (s.name == '/') {
+            return MaterialPageRoute(
+              settings: const RouteSettings(
+                  name: '/user-profile', arguments: 'seller-1'),
+              builder: (_) => const UserProfileScreen(animateBackground: false),
+            );
+          }
+          if (s.name == '/review') {
+            return MaterialPageRoute<void>(builder: (_) => const _PostedReview());
+          }
+          return null;
+        },
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(find.byKey(const Key('write-review')), 200);
+      await tester.tap(find.byKey(const Key('write-review')));
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(find.byKey(const Key('reviews-error')), 200);
+      // The pre-review 4.5/2 card and its Rate offer are both stale now. A
+      // refresh failure must remove them rather than present a contradiction.
+      expect(find.byKey(const Key('reviews-summary')), findsNothing);
+      expect(find.byKey(const Key('write-review')), findsNothing);
+      expect(find.textContaining('Review posted, but the latest reviews'),
+          findsOneWidget);
+      await tester.scrollUntilVisible(
+          find.byKey(const Key('review-eligibility')), 200);
+      expect(textIn(tester, const Key('review-eligibility')),
+          contains("Couldn't check whether you can review Grace Akinyi"));
     });
   });
 

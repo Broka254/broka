@@ -87,6 +87,7 @@ void main() {
           'is_online': true,
           'last_seen_label': 'Active now',
           'rating': 4.8,
+          'review_count': 8,
           'completed_deals': 3,
         };
       }
@@ -206,6 +207,15 @@ void main() {
       await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
       await _settle(tester);
       expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('labels a buyer average as /5 with its review count',
+        (tester) async {
+      await tester.pumpWidget(screen(const NegotiateScreen(animateBackground: false)));
+      await _settle(tester);
+
+      expect(find.textContaining('4.8/5 · 8 reviews'), findsOneWidget);
+      expect(find.textContaining('3 deals'), findsOneWidget);
     });
   });
 

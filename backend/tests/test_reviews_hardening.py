@@ -11,6 +11,7 @@
   * a review survives a later refund/dispute: status decides whether one
     may be written, not whether the record of what happened is erased.
 """
+import asyncio
 import itertools
 from datetime import datetime, timedelta
 
@@ -256,7 +257,9 @@ class TestStoreScopeAndViewer:
         await _deal(seller_id, buyer_id, second_listing)
 
         anonymous = (await client.get(f"/stores/{first}/reviews")).json()
-        assert "viewer" not in anonymous
+        # The response model keeps the optional key in the contract, but an
+        # anonymous caller gets no viewer information.
+        assert anonymous["viewer"] is None
 
         body = (await client.get(f"/stores/{first}/reviews", headers=as_buyer)).json()
         viewer = body["viewer"]
@@ -279,6 +282,196 @@ class TestStoreScopeAndViewer:
         assert stranger["viewer"]["can_review"] is False
         assert stranger["viewer"]["already_reviewed"] is False
         assert stranger["viewer"]["reviewable_deals"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_reviewed_deal_stays_already_reviewed_after_a_refund(self, client):
+        seller_id, _ = await _user("Refund Eligibility Seller")
+        store_id = await _store(seller_id, "Refund Eligibility Shop")
+        buyer_id, as_buyer = await _user("Refund Eligibility Buyer")
+        deal_id = await _deal(
+            seller_id, buyer_id,
+            await _listing(seller_id, store_id=store_id, name="Refunded item"),
+        )
+        assert (await _review(client, as_buyer, deal_id, 4)).status_code == 201
+
+        async with AsyncSessionLocal() as db:
+            row = await db.get(Deal, deal_id)
+            row.status = DealStatus.refunded
+            await db.commit()
+
+        store = (await client.get(
+            f"/stores/{store_id}/reviews", headers=as_buyer)).json()
+        # The review survives the refund, so the buyer is still a reviewer.
+        # Dropping the deal made this say "can't review / never reviewed",
+        # which invited the buyer to think their review had vanished.
+        assert store["viewer"]["can_review"] is False
+        assert store["viewer"]["already_reviewed"] is True
+        assert [d["deal_id"] for d in store["viewer"]["reviewable_deals"]] == [deal_id]
+        assert store["viewer"]["reviewable_deals"][0]["already_reviewed"] is True
+
+        seller_deals = (await client.get(
+            "/reviews/my-deals", params={"seller_id": seller_id},
+            headers=as_buyer)).json()["deals"]
+        assert [d["deal_id"] for d in seller_deals] == [deal_id]
+        assert seller_deals[0]["already_reviewed"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_mismatched_listing_never_lands_on_its_unrelated_store(
+        self, client,
+    ):
+        deal_seller_id, _ = await _user("Deal Seller")
+        listing_seller_id, _ = await _user("Listing Seller")
+        buyer_id, as_buyer = await _user("Mismatch Buyer")
+        unrelated_store = await _store(listing_seller_id, "Unrelated Shop")
+        unrelated_listing = await _listing(
+            listing_seller_id, store_id=unrelated_store, name="Someone else's item")
+        deal_id = await _deal(deal_seller_id, buyer_id, unrelated_listing)
+
+        posted = await _review(client, as_buyer, deal_id, 1, "Bad experience")
+        assert posted.status_code == 201, posted.text
+
+        async with AsyncSessionLocal() as db:
+            review = (await db.execute(
+                select(Review).where(Review.deal_id == deal_id))).scalar_one()
+            assert review.seller_id == deal_seller_id
+            # The buyer's review belongs to the person they dealt with. The
+            # unrelated shop is not punished for a deal it was never part of.
+            assert review.store_id is None
+
+        # The startup backfill applies the same ownership check: a rerun
+        # must not quietly attach the corrupt deal to the other shop.
+        from api.domains.stores.rating import backfill_review_store_ids
+        await backfill_review_store_ids()
+        async with AsyncSessionLocal() as db:
+            review = (await db.execute(
+                select(Review).where(Review.deal_id == deal_id))).scalar_one()
+            assert review.store_id is None
+
+        assert (await client.get(
+            f"/reviews/summary/{deal_seller_id}")).json()["count"] == 1
+        assert (await client.get(
+            f"/stores/{unrelated_store}/reviews")).json()["summary"]["count"] == 0
+
+        # The shop page must not offer the corrupt deal back as one of its
+        # sales, even after it has been reviewed. The store filter alone used
+        # to trust the listing's store_id, so this buyer saw the unrelated
+        # shop's page claim a sale it never made.
+        unrelated_view = (await client.get(
+            f"/stores/{unrelated_store}/reviews", headers=as_buyer)).json()["viewer"]
+        assert unrelated_view["reviewable_deals"] == []
+        assert unrelated_view["can_review"] is False
+        assert unrelated_view["already_reviewed"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_listing_cannot_attribute_a_review_to_another_owners_store(
+        self, client,
+    ):
+        deal_seller_id, _ = await _user("Mismatched Shop Seller")
+        shop_owner_id, _ = await _user("Mismatched Shop Owner")
+        buyer_id, as_buyer = await _user("Mismatched Shop Buyer")
+        other_shop = await _store(shop_owner_id, "Someone Else's Shop")
+        # The listing is the deal seller's, but its store_id points at a shop
+        # owned by somebody else. Matching the listing's seller alone was not
+        # enough to prove who owns the shop.
+        deal_id = await _deal(
+            deal_seller_id, buyer_id,
+            await _listing(deal_seller_id, store_id=other_shop, name="Corrupt item"),
+        )
+
+        assert (await _review(client, as_buyer, deal_id, 4)).status_code == 201
+        async with AsyncSessionLocal() as db:
+            review = (await db.execute(
+                select(Review).where(Review.deal_id == deal_id))).scalar_one()
+            assert review.store_id is None
+
+        from api.domains.stores.rating import backfill_review_store_ids
+        await backfill_review_store_ids()
+        async with AsyncSessionLocal() as db:
+            review = (await db.execute(
+                select(Review).where(Review.deal_id == deal_id))).scalar_one()
+            assert review.store_id is None
+
+        assert (await client.get(
+            f"/stores/{other_shop}/reviews")).json()["summary"]["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_personal_listing_review_does_not_join_the_only_shop(
+        self, client,
+    ):
+        seller_id, _ = await _user("Personal Listing Seller")
+        store_id = await _store(seller_id, "Personal Listing Shop")
+        buyer_id, as_buyer = await _user("Personal Listing Buyer")
+        # A deal on this seller's personal listing: it has no store, but it
+        # is not the legacy chat-only case. The shop did not sell this item.
+        deal_id = await _deal(
+            seller_id, buyer_id, await _listing(seller_id, name="Personal item"))
+        assert (await _review(client, as_buyer, deal_id, 1)).status_code == 201
+
+        store = (await client.get(f"/stores/{store_id}/reviews")).json()
+        assert store["summary"]["count"] == 0
+        assert store["reviews"] == []
+        payload = (await client.get(f"/stores/{store_id}")).json()
+        assert payload["review_count"] == 0
+
+        # It still belongs to the person the buyer dealt with.
+        seller = (await client.get(f"/reviews/summary/{seller_id}")).json()
+        assert seller["count"] == 1
+        assert seller["avg"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_two_simultaneous_submissions_create_one_review(self, client):
+        seller_id, _ = await _user("Concurrent Seller")
+        buyer_id, as_buyer = await _user("Concurrent Buyer")
+        deal_id = await _deal(seller_id, buyer_id, await _listing(seller_id))
+
+        first, second = await asyncio.gather(
+            _review(client, as_buyer, deal_id, 5, "First"),
+            _review(client, as_buyer, deal_id, 1, "Second"),
+        )
+        assert sorted([first.status_code, second.status_code]) == [201, 409]
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(Review).where(Review.deal_id == deal_id))).scalars().all()
+        assert len(rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_reviews_leave_the_legacy_cache_at_the_real_average(
+        self, client, monkeypatch,
+    ):
+        """The cache is refreshed only after both review transactions commit.
+
+        The gate holds both requests after their reviews are written but
+        before either commits - the window in which the old code computed a
+        one-review average and then overwrote the other writer's value.
+        """
+        import api.domains.reviews.service as review_service_module
+
+        seller_id, _ = await _user("Concurrent Cache Seller")
+        first_buyer, as_first = await _user("Concurrent Cache Buyer One")
+        second_buyer, as_second = await _user("Concurrent Cache Buyer Two")
+        listing = await _listing(seller_id)
+        first_deal = await _deal(seller_id, first_buyer, listing)
+        second_deal = await _deal(seller_id, second_buyer, listing)
+
+        barrier = asyncio.Barrier(2)
+        real_record_audit = review_service_module.record_audit
+
+        async def gated_record_audit(*args, **kwargs):
+            await barrier.wait()
+            return await real_record_audit(*args, **kwargs)
+
+        monkeypatch.setattr(review_service_module, "record_audit", gated_record_audit)
+
+        first, second = await asyncio.gather(
+            _review(client, as_first, first_deal, 5),
+            _review(client, as_second, second_deal, 1),
+        )
+        assert [first.status_code, second.status_code] == [201, 201], (
+            first.text, second.text)
+
+        async with AsyncSessionLocal() as db:
+            seller = await db.get(User, seller_id)
+        assert seller.rating == 3.0
 
 
 # ── No reviews means no average, on every surface ───────────────────────────
@@ -360,6 +553,31 @@ class TestNoReviewsNoAverage:
             "avg": 4.0, "count": 1,
             "distribution": {"1": 0, "2": 0, "3": 0, "4": 1, "5": 0},
         }
+
+    @pytest.mark.asyncio
+    async def test_account_mutations_keep_the_actual_review_figures(self, client):
+        seller_id, as_seller = await _user("Mutating Seller")
+        buyer_id, as_buyer = await _user("Mutating Buyer")
+        deal = await _deal(seller_id, buyer_id, await _listing(seller_id))
+        assert (await _review(client, as_buyer, deal, 3)).status_code == 201
+
+        # Both responses are full account payloads that the app caches. The
+        # default _user_dict arguments used to turn this real 3.0/1 into a
+        # null average and zero reviews until the next /auth/me.
+        upgraded = await client.post(
+            "/auth/upgrade-to-seller", headers=as_seller,
+            json={"seller_tier": "short_term"},
+        )
+        assert upgraded.status_code == 200, upgraded.text
+        assert upgraded.json()["rating"] == 3.0
+        assert upgraded.json()["review_count"] == 1
+
+        edited = await client.patch(
+            "/auth/profile", headers=as_seller, json={"nickname": "Mutated"},
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["rating"] == 3.0
+        assert edited.json()["review_count"] == 1
 
 
 # ── A later refund does not erase the review ────────────────────────────────
@@ -508,6 +726,37 @@ class TestStoreCompositeRefresh:
 
 class TestLegacyDefaultDoesNotLeak:
     @pytest.mark.asyncio
+    async def test_trust_score_does_not_treat_no_reviews_as_perfect(self):
+        """The peer-rating component must come from review rows.
+
+        User.rating starts at 5.0. Before this guard, an account nobody had
+        reviewed received the same 15 peer-rating points as one with a real
+        five-star review, so the default silently inflated trust.
+        """
+        from api.core.fraud import compute_trust_score
+
+        unreviewed_id, _ = await _user("Unreviewed Trust Seller")
+        reviewed_id, _ = await _user("Reviewed Trust Seller")
+        reviewer_id, _ = await _user("Trust Review Buyer")
+        async with AsyncSessionLocal() as db:
+            db.add(Review(
+                reviewer_id=reviewer_id, seller_id=reviewed_id,
+                rating=5, comment="Real five-star review",
+            ))
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            unreviewed = await compute_trust_score(unreviewed_id, db)
+        async with AsyncSessionLocal() as db:
+            reviewed = await compute_trust_score(reviewed_id, db)
+
+        # New accounts otherwise score: 10 (no deals → neutral dispute
+        # component) + 10 (no rapid transactions) = 20. Only the reviewed
+        # seller earns the 15-point peer-rating component.
+        assert unreviewed == 20
+        assert reviewed == 35
+
+    @pytest.mark.asyncio
     async def test_traders_with_real_reviews_rank_above_unreviewed_ones(self, client):
         reviewed_id, _ = await _user("Ranked Reviewed", completed_deals=3)
         unreviewed_id, _ = await _user("Ranked Unreviewed", completed_deals=3)
@@ -588,4 +837,3 @@ class TestLegacyDefaultDoesNotLeak:
             seller = await db.get(User, seller_id)
         assert seller.completed_deals == 5
         assert seller.rating == 4.0
-

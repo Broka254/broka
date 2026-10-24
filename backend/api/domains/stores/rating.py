@@ -226,7 +226,10 @@ async def review_totals(
 
     Two buckets in three queries, never one per store:
       * reviews attached to the store by the deal's listing;
-      * chat-only reviews, for an owner who has exactly ONE live store.
+      * chat-only reviews (`deal_id IS NULL`), for an owner who has exactly
+        ONE live store. A review of a personal listing also has no store_id,
+        but it is not a chat review and the shop did not sell that item, so
+        it never joins the shop's count.
     A seller with two shops keeps those reviews on their profile: splitting
     them between the shops would be a guess, and giving both shops all of
     them would let one shop's record lift the other.
@@ -265,6 +268,7 @@ async def review_totals(
                        func.coalesce(func.sum(Review.rating), 0))
                 .where(
                     Review.store_id.is_(None),
+                    Review.deal_id.is_(None),
                     Review.seller_id.in_(sole_owner_ids),
                 )
                 .group_by(Review.seller_id)
@@ -345,7 +349,14 @@ async def refresh_store_rating(db: AsyncSession, store_id: str) -> Optional[Stor
     Called when a review lands (the one signal that changes on a user
     action) and by the daily pass. Returns None when the store is gone.
     """
-    store = await db.get(Store, store_id)
+    # Two reviews can land together. Each refresh must read every review the
+    # other has committed before writing the shop's stored score, or the
+    # slower writer can put a count from before the other review back. Lock
+    # the store row for the read-and-write; SQLite serialises writers itself.
+    store = (await db.execute(
+        select(Store).where(Store.id == store_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
     if store is None or store.deleted_at is not None:
         return None
     ratings = await compute_ratings(db, [store])
@@ -409,7 +420,10 @@ async def backfill_review_store_ids() -> int:
 
     Run once on startup; safe to repeat (it only touches rows still NULL).
     A chat-only review (no deal) has no listing to name and stays seller-
-    level: attributing it to a shop would be a guess.
+    level: attributing it to a shop would be a guess. A deal whose listing
+    names a different seller is corrupt data, so it stays unattributed
+    rather than landing on a shop neither side traded through (the same
+    guard reviews/service.py applies at write time).
     """
     from api.database import AsyncSessionLocal
 
@@ -418,7 +432,10 @@ async def backfill_review_store_ids() -> int:
             "UPDATE reviews SET store_id = ("
             "  SELECT listings.store_id FROM deals"
             "  JOIN listings ON listings.id = deals.listing_id"
+            "  JOIN stores ON stores.id = listings.store_id"
             "  WHERE deals.id = reviews.deal_id"
+            "  AND listings.seller_id = deals.seller_id"
+            "  AND stores.owner_id = deals.seller_id"
             ") WHERE reviews.store_id IS NULL AND reviews.deal_id IS NOT NULL"
         ))
         changed = int(result.rowcount or 0)

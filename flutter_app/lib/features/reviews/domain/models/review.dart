@@ -72,7 +72,8 @@ class SellerReview {
 
 /// A deal of the signed-in buyer's, which they may review - agreed, paid,
 /// delivered, or still being sorted out. Cancelled and refunded deals are
-/// not offered; the backend refuses those too.
+/// offered only when their review already exists, so the buyer can see the
+/// record rather than being told they never reviewed it.
 class ReviewableDeal {
   const ReviewableDeal({
     required this.dealId,

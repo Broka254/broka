@@ -76,10 +76,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   List<SellerReview> _reviews = [];
   bool _loadingReviews = true;
   bool _reviewsFailed = false;
+  String _reviewsErrorText = "Couldn't load reviews. Check your connection.";
 
   /// The viewer's deals with this seller. Null until known; only a buyer
   /// with one not yet reviewed is offered "Write a review".
   List<ReviewableDeal>? _reviewable;
+  bool _eligibilityFailed = false;
 
   static const _listingLimit = 40;
   static const _reviewPage = 10;
@@ -144,7 +146,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     }
   }
 
-  Future<void> _loadReviews() async {
+  Future<void> _loadReviews({bool afterPost = false}) async {
     // First load starts already in the loading state; only a retry needs
     // to flip it back (and setting state during didChangeDependencies,
     // which is where the first load starts, would mark the tree dirty
@@ -153,6 +155,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       setState(() {
         _loadingReviews = true;
         _reviewsFailed = false;
+        _reviewsErrorText = "Couldn't load reviews. Check your connection.";
       });
     }
     final summaryCall = reviewsRepository.getSummary(_userId!);
@@ -164,6 +167,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       if (summary is Success<ReviewSummary>) {
         _summary = summary.data;
       } else {
+        // Keep no stale average when the authoritative summary read fails.
+        // The old card could otherwise sit beside a newly posted review or
+        // an eligibility answer that had already moved on.
+        _summary = null;
         _reviewsFailed = true;
       }
       if (reviews is Success<List<SellerReview>>) {
@@ -172,18 +179,43 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         // A failed fetch is not an empty record: without this the screen
         // told every buyer the seller had "No reviews yet" whenever the
         // network hiccuped.
+        _reviews = [];
         _reviewsFailed = true;
+      }
+      if (_reviewsFailed) {
+        _reviewsErrorText = afterPost
+            ? 'Review posted, but the latest reviews could not be loaded. Please retry.'
+            : "Couldn't load reviews. Check your connection.";
       }
       _loadingReviews = false;
     });
   }
 
+  Future<void> _retryReviews() => Future.wait([_loadReviews(), _loadEligibility()]);
+
   Future<void> _loadEligibility() async {
-    if (_isSelf || ApiService.currentUserId == null) return;
+    if (_isSelf || ApiService.currentUserId == null) {
+      if (mounted && _eligibilityFailed) setState(() => _eligibilityFailed = false);
+      return;
+    }
+    // Withdraw an answer from before a just-posted review while the new one
+    // is loading; leaving it on screen briefly offers a duplicate.
+    if (mounted && _reviewable != null) setState(() => _reviewable = null);
     final result = await reviewsRepository.myReviewableDeals(sellerId: _userId);
     if (!mounted) return;
     if (result is Success<List<ReviewableDeal>>) {
-      setState(() => _reviewable = result.data);
+      setState(() {
+        _reviewable = result.data;
+        _eligibilityFailed = false;
+      });
+    } else {
+      // A stale pre-review deal list would keep offering "Write a review"
+      // for a review that was just accepted. Withdraw it until the server
+      // answers again; the backend still refuses duplicates either way.
+      setState(() {
+        _reviewable = null;
+        _eligibilityFailed = true;
+      });
     }
   }
 
@@ -716,7 +748,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       if (pending.length == 1) 'listing_name': pending.first.listingName,
     });
     if (wrote == true && mounted) {
-      await Future.wait([_loadReviews(), _loadEligibility(), _loadProfile()]);
+      await Future.wait([
+        _loadReviews(afterPost: true),
+        _loadEligibility(),
+        _loadProfile(),
+      ]);
     }
   }
 
@@ -752,11 +788,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         child: Row(children: [
           const Icon(Icons.cloud_off_rounded, color: BrokaColors.warning, size: 22),
           const SizedBox(width: 12),
-          const Expanded(child: Text("Couldn't load reviews. Check your connection.",
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4))),
+          Expanded(child: Text(_reviewsErrorText,
+              style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4))),
           TextButton(
             key: const Key('reviews-retry'),
-            onPressed: _loadReviews,
+            onPressed: _retryReviews,
             style: TextButton.styleFrom(foregroundColor: BrokaColors.neonBlue),
             child: const Text('Retry'),
           ),
@@ -787,11 +823,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           Row(key: const Key('reviews-error'), children: [
             const Icon(Icons.cloud_off_rounded, size: 16, color: BrokaColors.warning),
             const SizedBox(width: 6),
-            const Expanded(child: Text("Couldn't load the individual reviews.",
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 11.5))),
+            Expanded(child: Text(_reviewsErrorText,
+                style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5))),
             TextButton(
               key: const Key('reviews-retry'),
-              onPressed: _loadReviews,
+              onPressed: _retryReviews,
               style: TextButton.styleFrom(foregroundColor: BrokaColors.neonBlue),
               child: const Text('Retry'),
             ),
@@ -821,6 +857,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   /// one. Nothing on your own profile, or before the answer is in.
   String? _eligibilityNote() {
     final deals = _reviewable;
+    if (_eligibilityFailed) {
+      return "Couldn't check whether you can review $_displayName. Try again in a moment.";
+    }
     if (_isSelf || deals == null || _toReview.isNotEmpty) return null;
     if (deals.isNotEmpty) return "You've reviewed your deals with $_displayName.";
     return 'Only buyers who had a deal with $_displayName can review them.';

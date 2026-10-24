@@ -60,7 +60,11 @@ class ReviewsRepository {
     try {
       return Success(await call());
     } on ApiException catch (e) {
-      return Failure(sanitizeErrorText(e.message), statusCode: e.statusCode);
+      // A 5xx body is the server's own error text ("Internal Server Error"),
+      // not something written for a buyer. userFacingError keeps a 4xx
+      // sentence the API wrote for people and replaces a 5xx with the
+      // generic retry message every other repository shows.
+      return Failure(userFacingError(e), statusCode: e.statusCode);
     } catch (e) {
       return Failure(userFacingError(e));
     }

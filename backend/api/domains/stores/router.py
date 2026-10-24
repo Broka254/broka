@@ -24,6 +24,7 @@ from api.core.rate_limit import (
     otp_verify_limiter, store_counter_limiter, store_name_check_limiter, stk_limiter,
 )
 from api.database import OtpPurpose, get_db
+from api.domains.reviews.router import PublicReviewOut, ReviewSummaryOut
 from api.security import get_current_user, get_current_user_optional
 from . import billing as store_billing
 from . import stats as store_stats
@@ -34,6 +35,61 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MAX_PAGE_SIZE = 100
+
+
+class ReviewableDealOut(BaseModel):
+    """One of the caller's own deals, returned only to that caller.
+
+    It carries the ids the review form needs to submit the chosen deal.
+    Keeping an explicit model means a future change to the service cannot
+    accidentally publish the rest of a Deal row through this route.
+    """
+    deal_id: str
+    seller_id: str
+    seller_name: str
+    listing_name: str
+    store_id: Optional[str] = None
+    store_name: Optional[str] = None
+    agreed_price: Optional[float] = None
+    status: str
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    already_reviewed: bool
+
+
+class StoreReviewsViewerOut(BaseModel):
+    """The signed-in buyer's own eligibility for this shop."""
+    can_review: bool
+    already_reviewed: bool
+    reviewable_deals: List[ReviewableDealOut]
+
+
+class SellerStandingOut(BaseModel):
+    """The public figures from the owner's latest seller snapshot.
+
+    This is the person's 0-10 standing, not the shop's buyer-review average.
+    An explicit model keeps any future internal field added to the snapshot
+    from being published by this storefront route.
+    """
+    overall_rating: Optional[float] = None
+    dcr: Optional[float] = None
+    dcr_provisional: bool
+    median_response_minutes: Optional[float] = None
+    completed_deals: int
+    as_of: str
+
+
+class StoreReviewsOut(BaseModel):
+    """The public storefront review payload.
+
+    Reviews are public cards. The only identifiers allowed are the review's
+    own id and the reviewer's display name; deal, reviewer and seller ids
+    stay inside authorized endpoints such as `reviewable_deals`.
+    """
+    summary: ReviewSummaryOut
+    reviews: List[PublicReviewOut]
+    seller_standing: Optional[SellerStandingOut] = None
+    viewer: Optional[StoreReviewsViewerOut] = None
 
 
 class StoreIn(BaseModel):
@@ -552,7 +608,7 @@ async def get_store_categories(store_id: str, db: AsyncSession = Depends(get_db)
     return await StoreService(db).list_categories(store_id)
 
 
-@router.get("/{store_id}/reviews")
+@router.get("/{store_id}/reviews", response_model=StoreReviewsOut)
 async def get_store_reviews(
     store_id: str,
     limit: int = Query(20, ge=1, le=100),

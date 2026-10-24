@@ -154,6 +154,48 @@ void main() {
     expect(beside('Avg Deal Time').data, '1.5d');
   });
 
+  testWidgets('shows a buyer rating only on its own scale, and a dash without reviews',
+      (tester) async {
+    Map<String, dynamic>? account;
+    setFakeRoute((uri) {
+      final p = uri.path;
+      if (p == '/auth/user/seller-1') {
+        return {'id': 'seller-1', 'name': 'Grace Akinyi', ...?account};
+      }
+      if (p == '/stores/mine') return const FakeResponse(null);
+      if (p.endsWith('/metrics')) {
+        return {'history': [], 'advice': <String, dynamic>{}};
+      }
+      if (p == '/listings/') return <Object?>[];
+      return null;
+    });
+
+    Future<void> open() async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(const MaterialApp(
+          home: SellerDashboardScreen(animateBackground: false)));
+      await _settle(tester);
+      await tester.ensureVisible(
+          find.byKey(const Key('standing-buyer-rating')));
+      // The dashboard's ambient glow is continuous, so settle would wait
+      // forever; pump enough frames for the scroll instead.
+      await _settle(tester);
+    }
+
+    account = {'rating': null, 'review_count': 0, 'completed_deals': 3};
+    await open();
+    final badge = find.byKey(const Key('standing-buyer-rating'));
+    expect(find.descendant(of: badge, matching: find.text('—')), findsOneWidget);
+    expect(find.descendant(of: badge, matching: find.text('0.0')), findsNothing);
+    expect(find.descendant(of: badge, matching: find.text('BUYER RATING')),
+        findsOneWidget);
+
+    account = {'rating': 4.7, 'review_count': 3, 'completed_deals': 3};
+    await open();
+    expect(find.descendant(of: badge, matching: find.text('4.7/5')),
+        findsOneWidget);
+  });
+
   group('deleting a product', () {
     Map<String, dynamic> listing(String id, String name) => {
           'id': id, 'name': name, 'category': 'Electronics', 'price': 32000,

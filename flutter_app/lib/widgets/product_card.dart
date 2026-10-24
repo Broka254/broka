@@ -829,38 +829,54 @@ class ProductCard extends StatelessWidget {
   // the store where the seller's name would be, beside the seller's own face
   // and record. As a second row it made a store listing's photo shorter than
   // the one next to it, so the photos in a grid row stopped lining up.
-  Widget _identityRow(bool hasStore) => Row(children: [
-        _traderAvatar(),
-        const SizedBox(width: 6),
-        Expanded(
-          child: hasStore
-              ? _storeLink()
-              : Text(_sellerName!, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrokaColors.textMid, fontSize: 11,
-                      height: 1.1, fontWeight: FontWeight.w600)),
-        ),
-        if (_showVerifiedBadge) ...[
-          const SizedBox(width: 3),
-          const Icon(Icons.verified, size: 11, color: Color(0xFF4DD6A5)),
-        ],
-        if (_sellerRating > 0 && _sellerReviewCount > 0) ...[
-          const SizedBox(width: 3),
-          const Icon(Icons.star_rounded, size: 11, color: BrokaColors.gold),
-          Text('${_sellerRating.toStringAsFixed(1)} ($_sellerReviewCount)',
-              style: const TextStyle(color: _priceTint, fontSize: 10, fontWeight: FontWeight.w700)),
-        ] else if (_sellerCompletedDeals == 0 && !hasStore) ...[
-          // Not on a store's row: beside the store's name it cut the name to
-          // "Kicks K…", and the name is what a buyer can act on. Store
-          // details show the owner's record (0 deals, rating "New").
-          const SizedBox(width: 4),
-          // Polish pass (2026-09-18, brief §6): secondary, not invisible.
-          // BrokaColors.textLow on the card was ~1.4:1, past "de-emphasised"
-          // and into "cannot be read at all".
-          Text('New seller', style: TextStyle(
-              color: Colors.white.withOpacity(0.40), fontSize: 9.5,
-              height: 1.1, fontStyle: FontStyle.italic)),
-        ],
-      ]);
+  Widget _identityRow(bool hasStore) => LayoutBuilder(
+        builder: (context, constraints) {
+          // A 320dp phone gives this row about 116px beside the avatar. At
+          // that width the review count pushed the star average past the
+          // card edge (10px at 1.35x text). Keep the rating - it is the
+          // buyer-facing fact - and drop the count it is evidence for.
+          final showReviewCount = constraints.maxWidth >= 135 &&
+              MediaQuery.textScalerOf(context).scale(10) <= 12;
+          return Row(children: [
+            _traderAvatar(),
+            const SizedBox(width: 6),
+            Expanded(
+              child: hasStore
+                  ? _storeLink()
+                  : Text(_sellerName!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11,
+                          height: 1.1, fontWeight: FontWeight.w600)),
+            ),
+            if (_showVerifiedBadge) ...[
+              const SizedBox(width: 3),
+              const Icon(Icons.verified, size: 11, color: Color(0xFF4DD6A5)),
+            ],
+            if (_sellerRating > 0 && _sellerReviewCount > 0) ...[
+              const SizedBox(width: 3),
+              const Icon(Icons.star_rounded, size: 11, color: BrokaColors.gold),
+              Text(
+                  showReviewCount
+                      ? '${_sellerRating.toStringAsFixed(1)} ($_sellerReviewCount)'
+                      : _sellerRating.toStringAsFixed(1),
+                  maxLines: 1,
+                  softWrap: false,
+                  style: const TextStyle(
+                      color: _priceTint, fontSize: 10, fontWeight: FontWeight.w700)),
+            ] else if (_sellerCompletedDeals == 0 && !hasStore) ...[
+              // Not on a store's row: beside the store's name it cut the name to
+              // "Kicks K…", and the name is what a buyer can act on. Store
+              // details show the owner's record (0 deals, rating "New").
+              const SizedBox(width: 4),
+              // Polish pass (2026-09-18, brief §6): secondary, not invisible.
+              // BrokaColors.textLow on the card was ~1.4:1, past "de-emphasised"
+              // and into "cannot be read at all".
+              Text('New seller', style: TextStyle(
+                  color: Colors.white.withOpacity(0.40), fontSize: 9.5,
+                  height: 1.1, fontStyle: FontStyle.italic)),
+            ],
+          ]);
+        },
+      );
 
   // Store feature (spec §13): a tap target only when the caller can open
   // the store.

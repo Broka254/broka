@@ -136,17 +136,33 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
     if (!mounted) return;
     setState(() {
       _loading = false;
+      String? refreshError;
       switch (reviews) {
         case Success(:final data):
           _reviews = data;
         case Failure(:final message):
-          _error = message;
+          refreshError =
+              'Review posted, but the latest reviews could not be loaded. $message';
+      }
+      if (store case Failure(:final message)) {
+        // The buyer-review summary can be fresh while the shop's composite
+        // score is still the one this screen opened with. Say so rather than
+        // leaving two apparently current figures with no explanation.
+        refreshError ??=
+            'Review posted, but the store score could not be refreshed. $message';
       }
       if (store case Success(:final data)) _store = data;
+      _error = refreshError;
     });
   }
 
   void _retry() {
+    // A retry after a post needs both reads: reviews alone update the buyer
+    // count but leave the shop's composite score behind.
+    if (_reviews != null && widget.repository != null) {
+      _refreshAfterReview();
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -191,7 +207,12 @@ class _StoreDetailsScreenState extends State<StoreDetailsScreen> {
               reviewsError: _error,
               onRetryReviews: _retry,
               reviewableDeals: _reviews?.viewer?.unreviewedCount ?? 0,
-              onRateStore: (_reviews?.viewer?.unreviewedCount ?? 0) == 0
+              // A refresh warning means the reviews payload under this button
+              // may predate the review just posted. Hide the stale invitation
+              // until the retry succeeds; the server's uniqueness guard is the
+              // backstop, not something the UI should make a buyer rely on.
+              onRateStore: _error != null ||
+                      (_reviews?.viewer?.unreviewedCount ?? 0) == 0
                   ? null
                   : _rateStore,
             ),
@@ -970,36 +991,69 @@ class _ReviewsSection extends StatelessWidget {
     final summary = data.summary;
     final reply = responseTimeLabel(data.sellerStanding?.responseMinutes);
     final band = data.sellerStanding?.responseBand ?? StandingBand.unknown;
+    final refreshError = error;
+    final refreshWarning = refreshError == null
+        ? null
+        : _card(
+            key: const Key('store-reviews-refresh-error'),
+            child: Row(children: [
+              const Icon(Icons.cloud_off_rounded,
+                  color: BrokaColors.warning, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(refreshError,
+                    style: const TextStyle(
+                        color: BrokaColors.textMid, fontSize: 13, height: 1.4)),
+              ),
+              if (onRetry != null)
+                TextButton(
+                  key: const Key('store-reviews-refresh-retry'),
+                  onPressed: onRetry,
+                  style: TextButton.styleFrom(foregroundColor: _link),
+                  child: const Text('Retry'),
+                ),
+            ]),
+          );
     if (summary.count == 0) {
-      return _card(
-        key: const Key('store-reviews-empty'),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(children: [
-            Icon(Icons.rate_review_outlined, color: BrokaColors.textMid, size: 22),
-            SizedBox(width: 12),
-            Expanded(child: Text('No reviews yet', style: TextStyle(
-                color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w700))),
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (refreshWarning != null) ...[
+          refreshWarning,
+          const SizedBox(height: 8),
+        ],
+        _card(
+          key: const Key('store-reviews-empty'),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [
+              Icon(Icons.rate_review_outlined, color: BrokaColors.textMid, size: 22),
+              SizedBox(width: 12),
+              Expanded(child: Text('No reviews yet', style: TextStyle(
+                  color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w700))),
+            ]),
+            const SizedBox(height: 6),
+            const Text('Reviews come from buyers who had a deal with this store. '
+                'Once you have one, yours will help the next buyer.',
+                style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4)),
+            if (reply != null) ...[
+              const SizedBox(height: 10),
+              _replyLine(reply, band),
+            ],
+            if (_canRate) ...[
+              const SizedBox(height: 12),
+              _rateButton(),
+            ] else if (_viewerNote() != null) ...[
+              const SizedBox(height: 12),
+              _viewerNote()!,
+            ],
           ]),
-          const SizedBox(height: 6),
-          const Text('Reviews come from buyers who had a deal with this store. '
-              'Once you have one, yours will help the next buyer.',
-              style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4)),
-          if (reply != null) ...[
-            const SizedBox(height: 10),
-            _replyLine(reply, band),
-          ],
-          if (_canRate) ...[
-            const SizedBox(height: 12),
-            _rateButton(),
-          ] else if (_viewerNote() != null) ...[
-            const SizedBox(height: 12),
-            _viewerNote()!,
-          ],
-        ]),
-      );
+        ),
+      ]);
     }
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (refreshWarning != null) ...[
+        refreshWarning,
+        const SizedBox(height: 8),
+      ],
       _card(
         key: const Key('store-reviews-summary'),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

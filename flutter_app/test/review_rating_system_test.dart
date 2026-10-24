@@ -15,6 +15,7 @@ import 'package:http/testing.dart';
 
 import 'package:broka/core/network/api_client.dart';
 import 'package:broka/features/account/domain/models/my_account.dart';
+import 'package:broka/features/auth/domain/models/user.dart';
 import 'package:broka/features/listings/domain/models/listing.dart';
 import 'package:broka/features/stores/data/repositories/stores_repository.dart';
 import 'package:broka/features/stores/domain/models/store.dart';
@@ -242,6 +243,105 @@ void main() {
       expect(find.byKey(const Key('store-rate')), findsNothing);
       expect(find.byKey(const Key('store-reviews-already-reviewed')), findsOneWidget);
     });
+
+    testWidgets('a failed store refresh after posting is visible and retryable',
+        (tester) async {
+      tester.view.physicalSize = const Size(1080, 3000);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+
+      var reviewCalls = 0;
+      var storeFails = true;
+      final client = ApiClient(client: MockClient((request) async {
+        final path = request.url.path;
+        if (path == '/stores/s1') {
+          return storeFails
+              ? _json({'detail': 'temporarily unavailable'}, 503)
+              : _json(_storeJson(rating: 6.9, reviewCount: 2));
+        }
+        if (path == '/stores/s1/reviews') {
+          reviewCalls++;
+          return _json(reviewCalls == 1
+              ? _reviewsJson()
+              : _reviewsJson(avg: 4.8, count: 2, alreadyReviewed: true));
+        }
+        return _json({'detail': 'no route'}, 404);
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: StoreDetailsScreen(
+          store: Store.fromJson(_storeJson(rating: 6.5, reviewCount: 1)),
+          repository: StoresRepository(client: client),
+          animateBackground: false,
+        ),
+        onGenerateRoute: (_) =>
+            MaterialPageRoute<void>(builder: (_) => const _WroteReview()),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('store-rate')));
+      await tester.pumpAndSettle();
+
+      // The reviews did refresh, but the composite score did not. The buyer
+      // is told which part is stale instead of being shown an unexplained
+      // mix of old and new figures.
+      expect(find.byKey(const Key('store-reviews-refresh-error')), findsOneWidget);
+      expect(find.textContaining('store score could not be refreshed'), findsOneWidget);
+      expect(find.text('2 reviews'), findsWidgets);
+
+      storeFails = false;
+      await tester.ensureVisible(
+          find.byKey(const Key('store-reviews-refresh-retry')));
+      await tester.tap(find.byKey(const Key('store-reviews-refresh-retry')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('store-reviews-refresh-error')), findsNothing);
+      expect(find.text('6.9'), findsOneWidget);
+    });
+
+    testWidgets('a failed reviews refresh after posting hides the stale rate button',
+        (tester) async {
+      tester.view.physicalSize = const Size(1080, 3000);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+
+      var reviewCalls = 0;
+      final client = ApiClient(client: MockClient((request) async {
+        final path = request.url.path;
+        if (path == '/stores/s1') {
+          return _json(_storeJson(rating: 6.9, reviewCount: 2));
+        }
+        if (path == '/stores/s1/reviews') {
+          reviewCalls++;
+          return reviewCalls == 1
+              ? _json(_reviewsJson())
+              : _json({'detail': 'temporarily unavailable'}, 503);
+        }
+        return _json({'detail': 'no route'}, 404);
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: StoreDetailsScreen(
+          store: Store.fromJson(_storeJson(rating: 6.5, reviewCount: 1)),
+          repository: StoresRepository(client: client),
+          animateBackground: false,
+        ),
+        onGenerateRoute: (_) =>
+            MaterialPageRoute<void>(builder: (_) => const _WroteReview()),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('store-rate')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('store-rate')));
+      await tester.pumpAndSettle();
+
+      // The review was posted, but the eligibility payload is still the one
+      // from before it. Offering Rate again would invite a duplicate that the
+      // backend can only refuse.
+      expect(find.byKey(const Key('store-reviews-refresh-error')), findsOneWidget);
+      expect(find.textContaining('latest reviews could not be loaded'), findsOneWidget);
+      expect(find.byKey(const Key('store-rate')), findsNothing);
+    });
   });
 
   group('a seller rating needs reviews', () {
@@ -282,6 +382,15 @@ void main() {
       const reviewed = MyAccount(id: 'u1', name: 'Jane', rating: 4.6,
           reviewCount: 4, completedDeals: 20);
       expect(reviewed.ratingLabel, '4.6');
+    });
+
+    test('the auth DTO cannot turn a missing review into 5.0', () {
+      final unreviewed = BrokaUser.fromJson({
+        'id': 'u1', 'name': 'Jane', 'email': 'jane@example.com',
+        'rating': null, 'review_count': 0,
+      });
+      expect(unreviewed.rating, isNull);
+      expect(unreviewed.reviewCount, 0);
     });
   });
 

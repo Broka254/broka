@@ -1131,9 +1131,10 @@ class StoreService:
         reviews shown - and counted - on the other.
 
         Chat-only reviews - legacy rows from before reviews became
-        deal-only (2026-10-22) - have no listing to name and stay on the
-        seller; they appear on the seller's profile, not on any shop. A
-        paused or unpaid store still reports its reviews: the shop's
+        deal-only (2026-10-22) - have no listing to name. They stay on the
+        seller's profile; the shop shows them only when its owner has exactly
+        one live store, where attribution is unambiguous (review_scope.py).
+        A paused or unpaid store still reports its reviews: the shop's
         visibility governs the shop, not what buyers already said about it.
 
         A signed-in viewer also gets `viewer`: whether they have a sale on

@@ -296,7 +296,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   //
   // Each field is now converted from its own known scale, and absent data
   // returns null instead of a flattering default.
-  static const _ratingMax = 5.0;    // User.rating       (DB default 5.0)
+  static const _ratingMax = 5.0;    // buyer reviews       (1-5)
   static const _trustMax  = 100.0;  // User.trust_score  (DB default 100)
 
   double? _scaled(num? v, double sourceMax) {
@@ -311,7 +311,21 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   /// credibility replaced it on the triangle. Kept as a getter because the
   /// underlying score still drives ranking server-side.
   double? get _trustScore => _scaled(_profile?['trust_score'], _trustMax);
-  double? get _avgRating  => _scaled(_profile?['rating'], _ratingMax);
+  /// The buyer-review average in its own units. Null when nobody has
+  /// reviewed this seller, even if the legacy cache holds a number.
+  double? get _buyerRating {
+    final count = (_profile?['review_count'] as num?)?.toInt() ?? 0;
+    if (count == 0) return null;
+    return (_profile?['rating'] as num?)?.toDouble().clamp(0, _ratingMax).toDouble();
+  }
+
+  /// The same figure normalised for the radar's shared 0-10 geometry. The
+  /// printed figures below still use the original /5 scale.
+  double? get _avgRating =>
+      _buyerRating == null ? null : _scaled(_buyerRating, _ratingMax);
+
+  String _scoreLabel(double? value, int max) =>
+      value == null ? '—' : '${value.toStringAsFixed(1)}/$max';
 
   /// Deal completion rate, 0-10. Present only once the seller has completed
   /// a deal - see auth/service.py, which only attaches dcr_score then.
@@ -370,14 +384,16 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
 
     final charts = <Widget>[
       FactorTrendChart(
-        label: 'Overall rating',
+        // The seller's standing is a 0-10 performance score, not the 1-5
+        // buyer-review average shown in the triangle below.
+        label: 'Seller standing',
         points: _series('overall_rating'),
         currentValue: _live('overall_rating'),
         // Shared with the listing screen's seller standing, which shows
         // buyers these three figures in the same colours.
         goodThreshold: SellerStanding.ratingGood, poorThreshold: SellerStanding.ratingPoor,
         format: (v) => '${v.toStringAsFixed(1)}/10',
-        yTitle: 'Rating out of 10',
+        yTitle: 'Standing out of 10',
         lineColor: BrokaColors.gold,
       ),
       FactorTrendChart(
@@ -1734,8 +1750,12 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                         (_avgRating ?? 0) / 10,
                         (credibility ?? 0) / 10,
                       ],
-                      labels: const ['Completion', 'Rating', 'Credibility'],
-                      scores: [_reliability ?? 0, _avgRating ?? 0, credibility ?? 0],
+                      labels: const ['Completion', 'Buyer rating', 'Credibility'],
+                      scores: [
+                        _scoreLabel(_reliability, 10),
+                        _scoreLabel(_buyerRating, 5),
+                        _scoreLabel(credibility, 10),
+                      ],
                       progress: t,
                       pulse: _glow.value,
                     ),
@@ -1746,9 +1766,22 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             ),
             const SizedBox(height: 18),
             Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-              HexTrustBadge(score: _reliability ?? 0, label: 'Completion'),
-              HexTrustBadge(score: _avgRating ?? 0,   label: 'Rating'),
-              HexTrustBadge(score: credibility ?? 0,  label: 'Credibility'),
+              HexTrustBadge(
+                  key: const Key('standing-completion'),
+                  score: _reliability,
+                  suffix: '/10',
+                  label: 'Completion'),
+              HexTrustBadge(
+                  key: const Key('standing-buyer-rating'),
+                  score: _buyerRating,
+                  suffix: '/5',
+                  maxScore: _ratingMax,
+                  label: 'Buyer rating'),
+              HexTrustBadge(
+                  key: const Key('standing-credibility'),
+                  score: credibility,
+                  suffix: '/10',
+                  label: 'Credibility'),
             ]),
           ]),
         ),
@@ -3226,7 +3259,7 @@ class _AutoScrollRailState extends State<_AutoScrollRail>
 class _TrustTrianglePainter extends CustomPainter {
   final List<double> values;   // 0..1
   final List<String> labels;
-  final List<double> scores;   // 0..10, for the printed figure
+  final List<String> scores;   // the figure with its scale, for the label
   final double progress;       // 0..1 draw-in
   final double pulse;          // 0..1 ambient breath
 
@@ -3307,7 +3340,7 @@ class _TrustTrianglePainter extends CustomPainter {
           TextSpan(text: '${labels[i]}\n', style: const TextStyle(
               color: BrokaColors.textMid, fontSize: 10.5,
               fontWeight: FontWeight.w700)),
-          TextSpan(text: scores[i].toStringAsFixed(1), style: const TextStyle(
+          TextSpan(text: scores[i], style: const TextStyle(
               color: BrokaColors.textHigh, fontSize: 13,
               fontWeight: FontWeight.w900)),
         ]),
@@ -3322,4 +3355,3 @@ class _TrustTrianglePainter extends CustomPainter {
   bool shouldRepaint(_TrustTrianglePainter o) =>
       o.progress != progress || o.pulse != pulse || o.values != values;
 }
-

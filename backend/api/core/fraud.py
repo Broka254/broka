@@ -43,7 +43,9 @@ async def compute_trust_score(user_id: str, db: AsyncSession) -> int:
     Recompute trust score for a user and persist it.
     Returns the new score (0-100).
     """
-    from api.database import User, Deal, Dispute, DealStatus, DisputeStatus, MpesaTransaction
+    from api.database import (
+        User, Deal, Dispute, DealStatus, DisputeStatus, MpesaTransaction, Review,
+    )
 
     # Load user
     result = await db.execute(select(User).where(User.id == user_id))
@@ -102,13 +104,21 @@ async def compute_trust_score(user_id: str, db: AsyncSession) -> int:
             score += int(W_VERIFIED * 0.7)
 
     # 5. Peer rating (max 15 pts)
-    rating = user.rating or 5.0
-    if rating >= 4.8:    score += W_RATING
-    elif rating >= 4.5:  score += int(W_RATING * 0.8)
-    elif rating >= 4.0:  score += int(W_RATING * 0.6)
-    elif rating >= 3.5:  score += int(W_RATING * 0.4)
-    elif rating >= 3.0:  score += int(W_RATING * 0.2)
-    # <3.0 → 0 pts
+    # Read the reviews, not User.rating: that column starts every account
+    # at 5.0 and is only a cache. Treating the starting value as evidence
+    # gave an unreviewed account the same peer-rating points as a
+    # five-star seller. No reviews means no rating evidence, so 0 pts.
+    rating_r = await db.execute(
+        select(func.avg(Review.rating)).where(Review.seller_id == user_id)
+    )
+    rating = rating_r.scalar()
+    if rating is not None:
+        if rating >= 4.8:    score += W_RATING
+        elif rating >= 4.5:  score += int(W_RATING * 0.8)
+        elif rating >= 4.0:  score += int(W_RATING * 0.6)
+        elif rating >= 3.5:  score += int(W_RATING * 0.4)
+        elif rating >= 3.0:  score += int(W_RATING * 0.2)
+        # <3.0 → 0 pts
 
     # 6. Rapid transaction pattern (max 10 pts — subtract for rapid)
     window_start = datetime.utcnow() - timedelta(hours=24)

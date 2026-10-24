@@ -559,13 +559,31 @@ class TestStorePayload:
             user = await db.get(User, user_id)
             user.is_verified = True
             user.completed_deals = 7
-            user.rating = 4.46
+            await db.commit()
+        # The published average comes from real reviews, not User.rating's
+        # account default: two 5s and a 4 are 4.67, shown to one decimal as
+        # 4.7. The cache column is deliberately given a different value so a
+        # reader that falls back to it fails this test.
+        async with AsyncSessionLocal() as db:
+            buyers = [
+                User(name=f"Review Buyer {rating}", phone=f"0746{next(_n):06d}",
+                     password_hash="x", phone_verified=True)
+                for rating in (5, 5, 4)
+            ]
+            db.add_all(buyers)
+            await db.flush()
+            for buyer, rating in zip(buyers, (5, 5, 4)):
+                db.add(Review(deal_id=None, reviewer_id=buyer.id,
+                              seller_id=user_id, rating=rating, comment=""))
+            seller = await db.get(User, user_id)
+            seller.rating = 1.0
             await db.commit()
         store = await _store(client, headers)
         owner = store["owner"]
         assert owner["verified"] is True
         assert owner["completed_deals"] == 7
-        assert owner["rating"] == 4.5
+        assert owner["rating"] == 4.7
+        assert owner["review_count"] == 3
         assert owner["member_since"]
         assert "id" not in owner and "phone" not in owner
 

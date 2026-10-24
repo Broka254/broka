@@ -40,6 +40,18 @@ describe('rating scales', () => {
     expect(reviewDate('2026-09-20T10:00:00')).toBe('20 Sept 2026')
     expect(reviewDate('nonsense')).toBeNull()
     expect(reviewDate(null)).toBeNull()
+
+    // The API's timestamps have no zone. Parsed as Nairobi local time this
+    // would be the previous UTC day; it must stay the day the review was
+    // written in UTC.
+    const previousZone = process.env.TZ
+    process.env.TZ = 'Africa/Nairobi'
+    try {
+      expect(reviewDate('2026-09-21T01:30:00')).toBe('21 Sept 2026')
+    } finally {
+      if (previousZone === undefined) delete process.env.TZ
+      else process.env.TZ = previousZone
+    }
   })
 
   it('says a reply time only when one was measured', () => {

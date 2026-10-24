@@ -7,7 +7,13 @@ class BrokaUser {
   final String? phone;
   final double? lat;
   final double? lng;
-  final double rating;
+  /// The account's buyer-review average (1-5), or null when nobody has
+  /// reviewed them. Never default this to 5.0: that is the legacy column's
+  /// starting value, not a score a buyer gave.
+  final double? rating;
+
+  /// How many buyer reviews [rating] is over. Zero means "no rating yet".
+  final int reviewCount;
   final int completedDeals;
   final bool isVerified;
   final String? verifyTier;
@@ -31,7 +37,8 @@ class BrokaUser {
     this.phone,
     this.lat,
     this.lng,
-    this.rating = 5.0,
+    this.rating,
+    this.reviewCount = 0,
     this.completedDeals = 0,
     this.isVerified = false,
     this.verifyTier,
@@ -57,7 +64,8 @@ class BrokaUser {
       phone: json['phone'] as String?,
       lat: (json['lat'] as num?)?.toDouble(),
       lng: (json['lng'] as num?)?.toDouble(),
-      rating: (json['rating'] as num?)?.toDouble() ?? 5.0,
+      rating: (json['rating'] as num?)?.toDouble(),
+      reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
       completedDeals: json['completed_deals'] as int? ?? 0,
       isVerified: json['is_verified'] as bool? ?? false,
       verifyTier: json['verify_tier'] as String?,
