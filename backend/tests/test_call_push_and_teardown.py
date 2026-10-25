@@ -21,8 +21,10 @@ _send_fcm is exercised through a stubbed firebase_admin.messaging rather
 than a live Firebase project: what is under test is the message we build,
 which is exactly where the bugs were.
 """
+import asyncio
 import sys
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -95,7 +97,7 @@ def captured(monkeypatch):
         APNSPayload=_FakeAPNSPayload,
         Aps=_FakeAps,
         ApsAlert=_FakeApsAlert,
-        send=lambda msg: sent.append(msg),
+        send=lambda msg: sent.append(msg) or "projects/test/messages/1",
     )
     fake_pkg = types.ModuleType("firebase_admin")
     fake_pkg.messaging = messaging
@@ -185,6 +187,154 @@ class TestCallPushShaping:
         """FCM rejects non-string data values outright."""
         await calls_module._send_fcm("tok", "t", "b", {"n": 42, "b": True})
         assert captured[0].data == {"n": "42", "b": "True"}
+
+
+class UnregisteredError(Exception):
+    pass
+
+
+class SenderIdMismatchError(Exception):
+    pass
+
+
+class UnavailableError(Exception):
+    pass
+
+
+class TestFcmErrorClassification:
+    """FCM's exception types say different things, and conflating them
+    deleted tokens that were perfectly valid.
+
+    Only UnregisteredError means "this token is dead". SenderIdMismatchError
+    means this server's Firebase project and the one that issued the token
+    differ - a configuration fault that must be fixed, not worked around by
+    deleting every phone it cannot reach."""
+
+    def _raise(self, monkeypatch, error):
+        messaging = sys.modules["firebase_admin.messaging"]
+
+        def failing(msg):
+            raise error
+
+        monkeypatch.setattr(messaging, "send", failing)
+
+    @pytest.mark.asyncio
+    async def test_a_dead_token_is_the_only_thing_marked_for_deletion(
+            self, captured, monkeypatch):
+        self._raise(monkeypatch, UnregisteredError("gone"))
+        result = await calls_module._send_fcm(
+            "tok", "t", "b", {"type": "incoming_call", "roomId": "r1"},
+        )
+        assert result.sent is False
+        assert result.unregistered is True
+        assert result.failure_category == "invalid_token"
+
+    @pytest.mark.asyncio
+    async def test_a_project_mismatch_keeps_the_token(
+            self, captured, monkeypatch, caplog):
+        self._raise(monkeypatch, SenderIdMismatchError("different project"))
+        raw_token = "FCM_SENDER_MISMATCH_SECRET_321"
+        with caplog.at_level("WARNING", logger="api.routers.calls"):
+            result = await calls_module._send_fcm(
+                raw_token, "t", "b",
+                {"type": "incoming_call", "roomId": "r1"},
+            )
+        assert result.sent is False
+        assert result.unregistered is False, "the token may be valid elsewhere"
+        assert result.failure_category == "sender_mismatch"
+        assert result.retryable is False
+        assert "category=sender_mismatch" in caplog.text
+        assert raw_token not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_transient_failure_keeps_the_token(self, captured, monkeypatch):
+        self._raise(monkeypatch, UnavailableError("try later"))
+        result = await calls_module._send_fcm("tok", "t", "b", {})
+        assert result.sent is False
+        assert result.unregistered is False
+        assert result.failure_category == "provider_transient"
+        assert result.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_acceptance_is_logged_with_the_provider_message_id(
+            self, captured, caplog):
+        raw_token = "FCM_ACCEPTED_SECRET_654"
+        with caplog.at_level("INFO", logger="api.routers.calls"):
+            result = await calls_module._send_fcm(
+                raw_token, "t", "b", {"type": "incoming_call", "roomId": "r1"},
+            )
+        assert result.sent is True
+        assert result.message_id == "projects/test/messages/1"
+        assert "CALL_PUSH_ACCEPTED room=r1" in caplog.text
+        assert raw_token not in caplog.text, "only a fingerprint may be logged"
+
+    @pytest.mark.asyncio
+    async def test_a_send_that_returns_no_message_id_is_not_a_success(
+            self, captured, monkeypatch):
+        """Firebase's return value is the acceptance signal - not merely
+        the absence of an exception."""
+        messaging = sys.modules["firebase_admin.messaging"]
+        monkeypatch.setattr(messaging, "send", lambda msg: None)
+        result = await calls_module._send_fcm("tok", "t", "b", {})
+        assert result.sent is False
+        assert result.unregistered is False
+        assert result.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_server_logs_why_it_skipped(self, monkeypatch, caplog):
+        monkeypatch.setattr(calls_module, "_get_fcm", lambda: None)
+        with caplog.at_level("WARNING", logger="api.routers.calls"):
+            result = await calls_module._send_fcm(
+                "tok", "t", "b", {"type": "incoming_call", "roomId": "r1"},
+            )
+        assert result.sent is False
+        assert result.failure_category == "push_not_configured"
+        assert "reason=push_not_configured" in caplog.text
+
+
+class TestLegacyPushChannel:
+    def test_the_legacy_sender_uses_a_channel_the_app_creates(
+            self, monkeypatch):
+        """push.py used "broka_deals", which NotificationService never
+        creates, so Android put those deal notifications on its fallback
+        channel. The app's updates channel is "broka_updates"."""
+        import httpx
+
+        from api.core import push
+
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, json=None, headers=None):
+                captured["body"] = json
+                return FakeResponse()
+
+        monkeypatch.setattr(push.push_service, "_ready", True)
+        monkeypatch.setattr(push.push_service, "_project_id", "test-project")
+        monkeypatch.setattr(
+            push.push_service, "_get_access_token",
+            AsyncMock(return_value="token"),
+        )
+        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+        sent = asyncio.run(push.push_service.send(
+            "tok", "Deal update", "Your funds were released",
+        ))
+        assert sent is True
+        notification = captured["body"]["message"]["android"]["notification"]
+        assert notification["channel_id"] == "broka_updates"
 
 
 class TestRoomRegistryTeardown:

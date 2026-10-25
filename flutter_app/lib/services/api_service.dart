@@ -2,7 +2,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, debugPrint, TargetPlatform;
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -66,6 +67,9 @@ class ApiService {
     if (lng != null) currentUserLng = lng;
     currentUserLanguage = prefs.getString('user_language') ?? 'english';
     _refreshToken = prefs.getString('refresh_token');
+    // Restored so a sign-out after the process was killed can still take
+    // this phone off the account: the token is per install, not per session.
+    registeredPushToken = prefs.getString(_registeredPushTokenKey);
     // Builds before 2026-09 kept the account password here, in plain text,
     // to log back in with - where Android's auto-backup copied it into the
     // user's Google Drive. It is never written any more; remove any copy
@@ -147,6 +151,12 @@ class ApiService {
     await prefs.remove('user_photo');
     await prefs.remove('refresh_token');
     _refreshToken = null;
+    // signOut() has already tried to unregister this phone. Keeping the
+    // token past a cleared session would only let a later account's
+    // sign-out name a token it does not own (harmless server-side, but
+    // misleading in the logs).
+    registeredPushToken = null;
+    await prefs.remove(_registeredPushTokenKey);
     await LastScreenTracker.clear();
     // A stale sell draft left behind after logout would otherwise route
     // whoever's logged into this device next (possibly a different
@@ -1596,13 +1606,17 @@ class ApiService {
   // ── FCM / Push Notifications ───────────────────────────────────────────────
 
   /// This phone's FCM token as last registered, so signing out can take it
-  /// off the account.
+  /// off the account. Persisted (see [_registeredPushTokenKey]): it belongs
+  /// to the install, not the session, and a process restart between login
+  /// and sign-out used to lose it - leaving a shared phone signed out of
+  /// the app but still registered to the previous account for calls.
   static String? registeredPushToken;
+  static const String _registeredPushTokenKey = 'registered_push_token';
 
   /// Register this device's FCM token with the backend so we can receive
   /// calls, messages and alerts on it with the app closed.
-  static Future<bool?> registerFcmToken(String token) =>
-      registerPushToken(token, tokenType: 'fcm');
+  static Future<bool?> registerFcmToken(String token, {String? previousToken}) =>
+      registerPushToken(token, tokenType: 'fcm', previousToken: previousToken);
 
   /// Registers a push token for this phone. Returns whether the server can
   /// push at all (`push_enabled`), or null when registering failed.
@@ -1612,20 +1626,44 @@ class ApiService {
   /// different transports and must be stored separately - iOS needs a VoIP
   /// push, not a normal alert, to wake a terminated app for a call.
   ///
+  /// [previousToken] is the token this phone had before an FCM refresh; the
+  /// server drops it only while this account still owns it.
+  ///
   /// Through [apiClient], which renews an expired session and retries: the
   /// raw request this used to be sent the access token as it was - often
   /// expired by the time a restored session got here - and ignored the 401.
+  ///
+  /// A null return is a failed registration the caller can retry. It used
+  /// to be swallowed here, so the only retry was the next login or token
+  /// refresh - a phone could go days unable to receive a call.
   static Future<bool?> registerPushToken(String token,
-      {String tokenType = 'fcm'}) async {
+      {String tokenType = 'fcm', String? previousToken}) async {
     try {
+      final sendPrevious =
+          tokenType == 'fcm' && previousToken != null &&
+          previousToken.isNotEmpty && previousToken != token;
       final res = await apiClient.post('/calls/register-token', {
         'fcm_token': token,
         'token_type': tokenType,
         'platform': _platformName,
+        if (sendPrevious) 'previous_token': previousToken,
       }, timeout: const Duration(seconds: 15));
-      if (tokenType == 'fcm') registeredPushToken = token;
-      return res is Map ? res['push_enabled'] == true : false;
-    } catch (_) {
+      if (tokenType == 'fcm') {
+        registeredPushToken = token;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_registeredPushTokenKey, token);
+      }
+      final enabled = res is Map && res['push_enabled'] == true;
+      debugPrint('[Push] register $tokenType accepted '
+          '(push_enabled=$enabled, replaced_previous=$sendPrevious)');
+      return enabled;
+    } on ApiException catch (e) {
+      // Operation, result and status only - never the token itself.
+      debugPrint('[Push] register $tokenType failed: '
+          'HTTP ${e.statusCode}${e.code == null ? '' : ' ${e.code}'}');
+      return null;
+    } catch (e) {
+      debugPrint('[Push] register $tokenType failed: ${e.runtimeType}');
       return null;
     }
   }
@@ -1637,7 +1675,13 @@ class ApiService {
     try {
       await apiClient.post('/calls/unregister-token', {'fcm_token': token},
           timeout: const Duration(seconds: 6));
-    } catch (_) {}
+      debugPrint('[Push] unregister accepted');
+    } on ApiException catch (e) {
+      debugPrint('[Push] unregister rejected: '
+          'HTTP ${e.statusCode}${e.code == null ? '' : ' ${e.code}'}');
+    } catch (e) {
+      debugPrint('[Push] unregister failed: ${e.runtimeType}');
+    }
   }
 
   static String get _platformName {
@@ -1673,7 +1717,12 @@ class ApiService {
       if (res.statusCode == 404 || res.statusCode == 410) {
         return CallAlertResult.over;
       }
-    } catch (_) {}
+      debugPrint('[Push] call-alert rejected: HTTP ${res.statusCode}');
+    } catch (e) {
+      // Distinguishes an unreachable server (retry next sweep) from an
+      // answer; the caller of this treats both as "unconfirmed".
+      debugPrint('[Push] call-alert failed: ${e.runtimeType}');
+    }
     return CallAlertResult.unknown;
   }
 

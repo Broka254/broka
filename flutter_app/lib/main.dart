@@ -210,7 +210,10 @@ void main() async {
     // login/session-restore case; this covers the token changing under an
     // already-running session.
     FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-      ApiService.registerFcmToken(newToken);
+      // Through the poller so a failed registration is retried and the
+      // server drops the previous token; listening to the Future directly
+      // discarded both.
+      GlobalPollerService.instance.handleFcmTokenRefresh(newToken);
     });
   } catch (e) {
     debugPrint('[FCM] Firebase not configured yet, skipping: $e');

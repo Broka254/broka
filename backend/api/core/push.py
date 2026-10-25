@@ -169,7 +169,12 @@ class PushService:
                 "android": {
                     "priority": "high",
                     "notification": {
-                        "channel_id": "broka_deals",
+                        # Must name a channel the app creates. The app has
+                        # never had a "broka_deals" channel, so Android
+                        # dropped these notifications into its fallback
+                        # channel (or showed nothing). Deal updates use
+                        # "broka_updates" (NotificationService._updatesChannel).
+                        "channel_id": "broka_updates",
                         "sound":      "default",
                         "click_action": "FLUTTER_NOTIFICATION_CLICK",
                     },

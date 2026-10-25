@@ -43,6 +43,12 @@ import 'active_call.dart';
 import 'notification_service.dart';
 import 'callkit_service.dart';
 
+typedef FcmTokenProvider = Future<String?> Function();
+// The sweep only registers FCM tokens; a registrar with an extra optional
+// `tokenType` (ApiService.registerPushToken) is assignable to this.
+typedef PushTokenRegistrar = Future<bool?> Function(
+    String token, {String? previousToken});
+
 class GlobalPollerService {
   GlobalPollerService._() {
     NotificationService.instance.isThreadOnScreen =
@@ -70,6 +76,34 @@ class GlobalPollerService {
   // Whether GET /calls/incoming exists on the server; until it answers 404
   // the per-thread /calls/pending fallback is not used.
   bool _incomingEndpoint = true;
+
+  // Registration state. The token itself is kept by ApiService (and
+  // persisted); these remember what was last accepted for WHICH account, so
+  // a sweep on an already-registered session does not re-post on every
+  // resume - while a different account on the same shared phone does.
+  String? _registeredPushToken;
+  String? _registeredPushUserId;
+  Future<bool>? _pushRegistration;
+  Timer? _pushRetryTimer;
+  int _pushRetryAttempt = 0;
+
+  /// A failed registration is retried without waiting for the next login or
+  /// FCM token refresh - the old code had no retry at all, so one network
+  /// blip at sign-in left the phone unable to receive calls until the app
+  /// was restarted.
+  @visibleForTesting
+  List<Duration> pushRetryDelays = const [
+    Duration(seconds: 15),
+    Duration(minutes: 1),
+    Duration(minutes: 5),
+    Duration(minutes: 15),
+  ];
+
+  /// Test seams for the two things that need Firebase / the network.
+  @visibleForTesting
+  FcmTokenProvider? fcmTokenProvider;
+  @visibleForTesting
+  PushTokenRegistrar? pushTokenRegistrar;
 
   // Threads currently "owned" by an open negotiation/direct-chat screen -
   // that screen already polls live, so notifying about them here would be
@@ -158,7 +192,8 @@ class GlobalPollerService {
     _startTimer();
     // Run once immediately rather than waiting for the first tick.
     _checkAll();
-    _registerFcmTokenIfAvailable();
+    unawaited(ensurePushRegistration());
+    unawaited(_registerVoipTokenIfAvailable());
   }
 
   /// Sweep everything that happened while we weren't looking.
@@ -182,29 +217,145 @@ class GlobalPollerService {
     try {
       await (await SharedPreferences.getInstance()).reload();
     } catch (_) {}
+    // Also a token-registration retry point: the app may have come back
+    // after a failed registration, on a different network or after the
+    // token rotated while no isolate was listening.
+    unawaited(ensurePushRegistration());
     await _checkAll();
   }
 
-  /// Best-effort - throws if Firebase isn't initialized (no real project
-  /// configured yet, see FCM_SETUP_REMAINING.md), which main.dart's own
-  /// guard around Firebase.initializeApp() already anticipates. Silently
-  /// does nothing in that case, exactly like the rest of the app today.
-  Future<void> _registerFcmTokenIfAvailable() async {
+  /// Make sure this phone's current FCM token is registered to the account
+  /// signed in now.
+  ///
+  /// Returns true when the server accepted it (whether or not it can push
+  /// yet). Concurrent callers share one request, and a token already
+  /// accepted for this same account is not sent again. A failure schedules
+  /// a retry; the older code swallowed it and had no retry.
+  Future<bool> ensurePushRegistration({
+    bool force = false,
+    String? tokenOverride,
+  }) {
+    if (!_running || ApiService.currentUserId == null) {
+      return Future.value(false);
+    }
+    if (!firebaseReady) {
+      // An APK built without google-services.json has no Firebase and no
+      // token to register. Settings says so; retrying cannot change it.
+      return Future.value(false);
+    }
+    final inFlight = _pushRegistration;
+    if (inFlight != null) {
+      // A rotated token must not be dropped just because the previous
+      // registration was still in flight: run it after that one finishes.
+      if (!force) return inFlight;
+      return inFlight.then(
+          (_) => ensurePushRegistration(force: true, tokenOverride: tokenOverride));
+    }
+    final future =
+        _ensurePushRegistration(force: force, tokenOverride: tokenOverride);
+    _pushRegistration = future;
+    unawaited(future.whenComplete(() {
+      if (identical(_pushRegistration, future)) _pushRegistration = null;
+    }));
+    return future;
+  }
+
+  Future<bool> _ensurePushRegistration({
+    required bool force,
+    String? tokenOverride,
+  }) async {
+    String? token;
     try {
-      final token = await FirebaseMessaging.instance.getToken();
-      if (token != null) {
-        pushReady = await ApiService.registerFcmToken(token) ?? false;
-        if (pushReady) {
-          unawaited(NotificationService.instance.maybeAskForBackgroundDelivery());
-        }
+      final provider =
+          fcmTokenProvider ?? (() => FirebaseMessaging.instance.getToken());
+      token = tokenOverride ?? await provider();
+    } catch (e) {
+      debugPrint('[Push] could not read the FCM token: ${e.runtimeType}');
+      _schedulePushRegistrationRetry();
+      return false;
+    }
+    if (token == null || token.isEmpty) {
+      debugPrint('[Push] no FCM token available yet');
+      _schedulePushRegistrationRetry();
+      return false;
+    }
+    final userId = ApiService.currentUserId;
+    if (!force &&
+        token == _registeredPushToken &&
+        userId == _registeredPushUserId) {
+      return pushReady;
+    }
+    final previous = ApiService.registeredPushToken;
+    final sendPrevious =
+        previous != null && previous.isNotEmpty && previous != token;
+    try {
+      final registrar = pushTokenRegistrar ?? ApiService.registerPushToken;
+      final enabled = await registrar(
+        token,
+        previousToken: sendPrevious ? previous : null,
+      );
+      // Signed out, or a different account signed in, while the request was
+      // in flight: this answer is about someone else's registration now.
+      if (!_running || ApiService.currentUserId != userId) return false;
+      if (enabled == null) {
+        debugPrint('[Push] token registration was not accepted - retrying');
+        _schedulePushRegistrationRetry();
+        return false;
       }
-    } catch (_) {}
-    // iOS additionally needs its PushKit VoIP token registered - a
-    // different token over a different transport (see CallKitService).
-    // No-op on Android.
+      _registeredPushToken = token;
+      _registeredPushUserId = userId;
+      pushReady = enabled;
+      _pushRetryAttempt = 0;
+      _pushRetryTimer?.cancel();
+      _pushRetryTimer = null;
+      if (enabled) {
+        unawaited(
+            NotificationService.instance.maybeAskForBackgroundDelivery());
+      } else {
+        debugPrint('[Push] token stored, but this server cannot send pushes');
+      }
+      return true;
+    } catch (e) {
+      debugPrint('[Push] token registration failed: ${e.runtimeType}');
+      _schedulePushRegistrationRetry();
+      return false;
+    }
+  }
+
+  /// FCM rotated this phone's token under an already-running session.
+  /// Register the new one (the server drops the old, still-owned token) and
+  /// retry if it fails.
+  void handleFcmTokenRefresh(String token) {
+    if (!_running || ApiService.currentUserId == null) {
+      debugPrint('[Push] token refresh before sign-in - deferred to start()');
+      return;
+    }
+    unawaited(ensurePushRegistration(force: true, tokenOverride: token));
+  }
+
+  void _schedulePushRegistrationRetry() {
+    if (!_running || _pushRetryTimer != null) return;
+    if (_pushRetryAttempt >= pushRetryDelays.length) {
+      debugPrint('[Push] registration retries exhausted for this session');
+      return;
+    }
+    final delay = pushRetryDelays[_pushRetryAttempt++];
+    debugPrint('[Push] registration retry in ${delay.inSeconds}s');
+    _pushRetryTimer = Timer(delay, () {
+      _pushRetryTimer = null;
+      unawaited(ensurePushRegistration(force: true));
+    });
+  }
+
+  /// iOS additionally needs its PushKit VoIP token registered - a different
+  /// token over a different transport (see CallKitService). No-op on
+  /// Android.
+  Future<void> _registerVoipTokenIfAvailable() async {
     try {
       await CallKitService.instance.registerVoipToken();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Push] VoIP token registration skipped: ${e.runtimeType}');
+    }
   }
 
   void stop() {
@@ -214,6 +365,12 @@ class GlobalPollerService {
     pushReady = false;
     _timer?.cancel();
     _timer = null;
+    _pushRetryTimer?.cancel();
+    _pushRetryTimer = null;
+    _pushRetryAttempt = 0;
+    _pushRegistration = null;
+    _registeredPushToken = null;
+    _registeredPushUserId = null;
     _activelyViewedThreads.clear();
     _shownCallNotifications.clear();
     _acknowledgedRooms.clear();
@@ -662,9 +819,11 @@ class GlobalPollerService {
       // On a call, or done with this one: no ring, no "Ringing" for the
       // caller (see ActiveCall.shouldRing).
       if (!ActiveCall.instance.shouldRing(roomId)) return;
-      _shownCallNotifications[listingId] = roomId;
-      _acknowledge(roomId, callInfo['call_token'] as String?);
-      await NotificationService.instance.showIncomingCall(
+      // Tell the caller their phone is ringing only once this phone really
+      // is - showIncomingCall returns false if the ringtone, call screen
+      // and notification all failed, and the server must not be told a call
+      // rang on a phone that never made a sound.
+      final started = await NotificationService.instance.showIncomingCall(
         roomId: roomId,
         callerName: callerName,
         listingName: thread['listing_name'] as String? ?? 'your listing',
@@ -674,7 +833,17 @@ class GlobalPollerService {
             roomId: roomId, listingId: listingId, buyerId: buyerId,
             listingName: thread['listing_name'] as String?),
       );
-    } catch (_) {}
+      if (!started) return;
+      _shownCallNotifications[listingId] = roomId;
+      // A network round trip must not hold up the sweep; the room stays
+      // marked in flight so the next tick does not post it twice.
+      unawaited(_acknowledge(roomId, callInfo['call_token'] as String?));
+    } catch (e) {
+      // A malformed answer or a failed ring is retried next sweep; the type
+      // is enough to tell one from the other in a device log.
+      debugPrint('[Push] incoming-call sweep failed for $listingId: '
+          '${e.runtimeType}');
+    }
   }
 
   /// The one call ringing for me, on any listing (GET /calls/incoming).
@@ -724,9 +893,7 @@ class GlobalPollerService {
         }
       }
     }
-    _shownCallNotifications[listingId] = roomId;
-    _acknowledge(roomId, call['call_token'] as String?);
-    await NotificationService.instance.showIncomingCall(
+    final started = await NotificationService.instance.showIncomingCall(
       roomId: roomId,
       callerName: call['caller_name'] as String? ?? 'Someone',
       listingName: (listingName == null || listingName.isEmpty) ? 'your listing' : listingName,
@@ -736,6 +903,9 @@ class GlobalPollerService {
           roomId: roomId, listingId: listingId, buyerId: buyerId,
           listingName: listingName),
     );
+    if (!started) return true;
+    _shownCallNotifications[listingId] = roomId;
+    unawaited(_acknowledge(roomId, call['call_token'] as String?));
     return true;
   }
 
@@ -764,9 +934,17 @@ class GlobalPollerService {
       };
 
   /// Tell the server this phone is ringing (the caller's "Ringing"), once
-  /// per call.
-  void _acknowledge(String roomId, String? callToken) {
-    if (callToken == null || !_acknowledgedRooms.add(roomId)) return;
-    unawaited(NotificationService.instance.acknowledgeIncomingCall(roomId, callToken));
+  /// per call - but only forget the room once the server confirmed it.
+  /// A failed acknowledgement used to be marked done forever, leaving the
+  /// caller on "Calling..." for a phone that was ringing.
+  Future<void> _acknowledge(String roomId, String? callToken) async {
+    if (callToken == null || callToken.isEmpty) return;
+    if (!_acknowledgedRooms.add(roomId)) return;
+    final result = await NotificationService.instance
+        .acknowledgeIncomingCall(roomId, callToken);
+    if (result == CallAlertResult.unknown) {
+      _acknowledgedRooms.remove(roomId);
+      debugPrint('[Push] ring acknowledgement for $roomId unconfirmed - will retry');
+    }
   }
 }

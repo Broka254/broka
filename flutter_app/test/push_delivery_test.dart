@@ -35,10 +35,13 @@ void main() {
   final shown = <Map<String, dynamic>>[];
   final cancelled = <Object?>[];
   final requests = <http.Request>[];
+  final events = <String>[];
+  var failShows = false;
 
   late http.Response Function(http.Request) route;
   final client = MockClient((req) async {
     requests.add(req);
+    events.add('http ${req.url.path}');
     return route(req);
   });
 
@@ -51,7 +54,13 @@ void main() {
     messenger.setMockMethodCallHandler(
         const MethodChannel('dexterous.com/flutter/local_notifications'), (call) async {
       if (call.method == 'initialize') return true;
-      if (call.method == 'show') shown.add(Map<String, dynamic>.from(call.arguments as Map));
+      if (call.method == 'show') {
+        if (failShows) {
+          throw PlatformException(code: 'no-notification', message: 'post failed');
+        }
+        shown.add(Map<String, dynamic>.from(call.arguments as Map));
+        events.add('shown');
+      }
       if (call.method == 'cancel') cancelled.add(call.arguments);
       return null;
     });
@@ -63,6 +72,8 @@ void main() {
     shown.clear();
     cancelled.clear();
     requests.clear();
+    events.clear();
+    failShows = false;
     SharedPreferences.setMockInitialValues({'global_poll_primed_v1': true});
     ApiService.currentUserId = 'seller-1';
     route = (_) => _json({'status': 'ok'});
@@ -214,7 +225,9 @@ void main() {
         return _json({'status': 'ok'});
       };
       await withClient(() => GlobalPollerService.instance.catchUp());
-      await Future<void>.delayed(Duration.zero);
+      // The acknowledgement now follows the notification (it used to race
+      // ahead of it), so give the notification/ringing path its turn.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       expect(requests.where((r) => r.url.path.startsWith('/calls/pending/')), isEmpty);
       expect(requests.where((r) => r.url.path == '/calls/incoming'), hasLength(1));
@@ -228,6 +241,65 @@ void main() {
       expect(payload['listingId'], 'listing-new');
       final ack = requests.singleWhere((r) => r.url.path == '/calls/room-9/alerted');
       expect(jsonDecode(ack.body), {'call_token': 'tok-9'});
+      // The caller is told "Ringing" only after this phone is actually
+      // ringing - not before the notification/ring exists.
+      final shownAt = events.indexOf('shown');
+      final ackAt = events.indexOf('http /calls/room-9/alerted');
+      expect(shownAt, isNonNegative);
+      expect(ackAt, greaterThan(shownAt));
+      GlobalPollerService.instance.stop();
+    });
+
+    test('does not claim the phone is ringing when nothing could be shown', () async {
+      failShows = true;
+      route = (req) {
+        if (req.url.path.startsWith('/negotiate/inbox/')) return _json(const []);
+        if (req.url.path == '/calls/incoming') {
+          return _json({
+            'has_call': true, 'room_id': 'room-9', 'listing_id': 'listing-new',
+            'listing_name': 'Fridge', 'buyer_id': 'buyer-new', 'caller_id': 'buyer-new',
+            'caller_name': 'Kev', 'call_type': 'video', 'call_token': 'tok-9',
+          });
+        }
+        return _json({'status': 'ok'});
+      };
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(shown, isEmpty);
+      expect(requests.where((r) => r.url.path == '/calls/room-9/alerted'), isEmpty,
+          reason: 'a call that never rang must not be acknowledged');
+      GlobalPollerService.instance.stop();
+    });
+
+    test('retries a ringing acknowledgement the server did not confirm', () async {
+      var alertCalls = 0;
+      route = (req) {
+        if (req.url.path.startsWith('/negotiate/inbox/')) return _json(const []);
+        if (req.url.path == '/calls/incoming') {
+          return _json({
+            'has_call': true, 'room_id': 'room-9', 'listing_id': 'listing-new',
+            'listing_name': 'Fridge', 'buyer_id': 'buyer-new', 'caller_id': 'buyer-new',
+            'caller_name': 'Kev', 'call_type': 'video', 'call_token': 'tok-9',
+          });
+        }
+        if (req.url.path == '/calls/room-9/alerted') {
+          alertCalls++;
+          return alertCalls == 1
+              ? _json({'detail': 'temporarily unavailable'}, 500)
+              : _json({'status': 'ringing'});
+        }
+        return _json({'status': 'ok'});
+      };
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(alertCalls, 1);
+
+      // The next sweep tries again: a failed ack used to be marked done
+      // forever, leaving the caller on "Calling...".
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(alertCalls, 2);
       GlobalPollerService.instance.stop();
     });
 

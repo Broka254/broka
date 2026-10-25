@@ -171,7 +171,9 @@ class FcmResult:
     one failure the CALLER can act on: FCM is telling us this device token
     is permanently dead (app uninstalled, data cleared, token rotated), so
     it should be cleared from the DB rather than retried on every future
-    call. Any other failure is transient and the token stays.
+    call. A sender/project mismatch is NOT that - the token may be perfectly
+    valid for a different Firebase project - and a transient failure says
+    nothing about the token. Both keep it.
     """
     __slots__ = ("sent", "unregistered", "message_id", "failure_category", "retryable", "configured")
 
@@ -251,8 +253,13 @@ async def _send_fcm(
     (see NotificationService.missedCallTag in the app). apns_thread_id is
     iOS's equivalent grouping: a conversation's alerts stack together.
     """
+    route = str(data.get("type") or "generic")
+    room = str(data.get("roomId") or "-")
     if not _get_fcm():
-        logger.info("[calls] FCM not configured - skipping push")
+        # Answer "why did nobody's phone ring?" without a DB query: this is
+        # a deployment configuration gap, not a bad recipient.
+        logger.warning("[calls] PUSH_SKIPPED reason=push_not_configured route=%s room=%s",
+                       route, room)
         return FcmResult(
             False, failure_category="push_not_configured", retryable=False,
             configured=False,
@@ -308,28 +315,54 @@ async def _send_fcm(
             ),
         )
         message_id = await asyncio.to_thread(messaging.send, msg)
+        # The message id is Firebase's acknowledgement that it ACCEPTED the
+        # message (not that it was delivered). A call to send() that returns
+        # nothing was not accepted, however quietly it returned.
+        if not message_id:
+            logger.warning(
+                "[calls] FCM send returned no message id route=%s room=%s token=%s",
+                route, room, push_devices.token_fingerprint(token),
+            )
+            return FcmResult(
+                False, failure_category="provider_error", retryable=True,
+                configured=True,
+            )
+        if route == "incoming_call":
+            logger.info(
+                "[calls] CALL_PUSH_ACCEPTED room=%s token=%s message_id=%s",
+                room, push_devices.token_fingerprint(token), message_id,
+            )
+        else:
+            logger.debug("[calls] FCM_ACCEPTED route=%s token=%s message_id=%s",
+                         route, push_devices.token_fingerprint(token), message_id)
         return FcmResult(True, message_id=message_id, configured=True)
     except Exception as e:
         error_name = type(e).__name__
-        unregistered = error_name in (
-            "UnregisteredError", "SenderIdMismatchError",
-        )
-        transient = error_name in (
+        # A SenderIdMismatchError means the token belongs to a different
+        # Firebase project than this service account - a server/build
+        # configuration fault. Deleting the token makes the fault worse:
+        # when the projects are aligned again the phone would have to
+        # re-register, and until then the account looks like it has no
+        # device at all. Only UnregisteredError is FCM saying the token is
+        # dead.
+        if error_name == "UnregisteredError":
+            category, retryable, unregistered = "invalid_token", False, True
+        elif error_name == "SenderIdMismatchError":
+            category, retryable, unregistered = "sender_mismatch", False, False
+        elif error_name in (
             "QuotaExceededError", "UnavailableError", "InternalError",
             "DeadlineExceededError", "ResourceExhaustedError", "AbortedError",
-        )
-        if unregistered:
-            category, retryable = "invalid_token", False
-        elif transient:
-            category, retryable = "provider_transient", True
+        ):
+            category, retryable, unregistered = "provider_transient", True, False
         elif error_name in ("InvalidArgumentError", "ThirdPartyAuthError"):
-            category, retryable = "invalid_message", False
+            category, retryable, unregistered = "invalid_message", False, False
         else:
-            category, retryable = "provider_error", True
+            category, retryable, unregistered = "provider_error", True, False
         # Provider exception strings can echo the registration token and the
-        # notification content. Keep the type/category and nothing else.
+        # notification content. Keep the type/category and a fingerprint.
         logger.warning(
-            "[calls] FCM send failed type=%s category=%s", error_name, category,
+            "[calls] FCM send failed type=%s category=%s route=%s room=%s token=%s",
+            error_name, category, route, room, push_devices.token_fingerprint(token),
         )
         return FcmResult(
             False, unregistered=unregistered, failure_category=category,
@@ -414,6 +447,10 @@ class RegisterTokenRequest(BaseModel):
     # keeps working unchanged.
     token_type: str = "fcm"
     platform: Optional[str] = Field(default=None, max_length=16)
+    # After a Firebase token refresh, the token this phone had before. The
+    # server drops it only while this account owns it, so a refreshed phone
+    # does not keep a dead registration around until FCM reports it.
+    previous_token: Optional[str] = Field(default=None, max_length=4096)
 
 
 class UnregisterTokenRequest(BaseModel):
@@ -551,11 +588,22 @@ async def register_token(
     knows whether it can stop polling while in the background.
     """
     if payload.token_type not in push_devices.KINDS:
+        logger.warning("[calls] PUSH_TOKEN_REJECTED user=%s type=%s reason=unknown_token_type",
+                       current["id"], payload.token_type)
         raise HTTPException(status_code=400, detail="Unknown token_type")
-    await push_devices.register(
+    if not payload.fcm_token.strip():
+        # A whitespace token would be dropped by register() while the app
+        # was told "ok", leaving it to believe push was set up.
+        logger.warning("[calls] PUSH_TOKEN_REJECTED user=%s type=%s reason=empty_token",
+                       current["id"], payload.token_type)
+        raise HTTPException(status_code=400, detail="fcm_token is empty")
+    registered = await push_devices.register(
         db, current["id"], payload.fcm_token,
         kind=payload.token_type, platform=payload.platform,
+        previous_token=payload.previous_token,
     )
+    if not registered:
+        raise HTTPException(status_code=400, detail="Unknown token_type")
     try:
         await db.commit()
     except IntegrityError:
@@ -565,10 +613,12 @@ async def register_token(
         await push_devices.register(
             db, current["id"], payload.fcm_token,
             kind=payload.token_type, platform=payload.platform,
+            previous_token=payload.previous_token,
         )
         await db.commit()
-    logger.info("[calls] PUSH_TOKEN_REGISTERED user=%s type=%s",
-                current["id"], payload.token_type)
+    logger.info("[calls] PUSH_TOKEN_REGISTERED user=%s type=%s token=%s",
+                current["id"], payload.token_type,
+                push_devices.token_fingerprint(payload.fcm_token))
     return {
         "status": "ok",
         "token_type": payload.token_type,
@@ -585,9 +635,14 @@ async def unregister_token(
     """Sign-out on one phone: it stops getting this user's calls, messages
     and alerts. Without it a signed-out phone went on ringing for the
     account that had left it."""
+    if not payload.fcm_token.strip():
+        logger.warning("[calls] PUSH_TOKEN_UNREGISTER_REJECTED user=%s reason=empty_token",
+                       current["id"])
+        raise HTTPException(status_code=400, detail="fcm_token is empty")
     await push_devices.unregister(db, current["id"], payload.fcm_token)
     await db.commit()
-    logger.info("[calls] PUSH_TOKEN_UNREGISTERED user=%s", current["id"])
+    logger.info("[calls] PUSH_TOKEN_UNREGISTERED user=%s token=%s",
+                current["id"], push_devices.token_fingerprint(payload.fcm_token))
     return {"status": "ok"}
 
 
@@ -704,11 +759,16 @@ async def initiate_call(
 
     fcm_tokens = await push_devices.tokens_for(db, callee.id, "fcm")
     voip_tokens = await push_devices.tokens_for(db, callee.id, "apns_voip")
+    logger.info(
+        "[calls] CALL_PUSH_ROUTE room=%s callee=%s fcm_tokens=%d voip_tokens=%d",
+        room_id, callee.id, len(fcm_tokens), len(voip_tokens),
+    )
     if not fcm_tokens and not voip_tokens:
         # Callee has no push route on any transport. The call still goes
         # ahead - the foreground poller can still find it if their app is
         # open - and if nobody answers, the missed call waits in the chat.
-        logger.info("[calls] CALL_NO_PUSH_ROUTE room=%s callee=%s", room_id, callee.id)
+        logger.info("[calls] CALL_NO_PUSH_ROUTE room=%s callee=%s reason=no_registered_token",
+                    room_id, callee.id)
         return {"status": "no_token", "message": "Callee has no push token yet",
                 "room_id": room_id, "call_token": call_token}
 
@@ -742,6 +802,10 @@ async def initiate_call(
         await _send_voip_push(token=voip_token, data=call_data)
 
     if not fcm_tokens:
+        logger.info(
+            "[calls] CALL_PUSH_SKIPPED room=%s reason=no_fcm_token voip_tokens=%d",
+            room_id, len(voip_tokens),
+        )
         return {"status": "sent_voip", "room_id": room_id, "call_token": call_token}
 
     is_video = payload.call_type == "video"
@@ -760,8 +824,18 @@ async def initiate_call(
         ttl_seconds=CALL_PUSH_TTL_SECONDS,
     )
 
-    return {"status": "sent" if pushed else "fcm_disabled",
-            "room_id": room_id, "call_token": call_token}
+    configured = _get_fcm() is not None
+    logger.info(
+        "[calls] CALL_PUSH_RESULT room=%s caller=%s callee=%s "
+        "fcm_tokens=%d voip_tokens=%d accepted=%d configured=%s",
+        room_id, current["id"], callee.id, len(fcm_tokens),
+        len(voip_tokens), pushed, configured,
+    )
+    # "fcm_disabled" used to cover both "this server has no Firebase
+    # credentials" and "Firebase refused every send" - indistinguishable in
+    # a support report, and false in the second case.
+    status = "sent" if pushed else ("fcm_disabled" if not configured else "push_failed")
+    return {"status": status, "room_id": room_id, "call_token": call_token}
 
 
 @router.get("/{room_id}/token")

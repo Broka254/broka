@@ -479,7 +479,7 @@ class NotificationService {
       }
     }
 
-    await showIncomingCall(
+    final ringing = await showIncomingCall(
       roomId: roomId,
       callerName: data['callerName'] as String? ?? 'Someone',
       listingName: data['listingName'] as String? ?? 'your listing',
@@ -487,7 +487,14 @@ class NotificationService {
       payload: data,
       callerPhoto: _nonEmpty(data['callerPhoto']),
     );
-    await acknowledgeIncomingCall(roomId, data['callToken'] as String?);
+    if (!ringing) {
+      debugPrint('[Notifications] incoming call $roomId was not shown - not acknowledging');
+      return;
+    }
+    final alert = await acknowledgeIncomingCall(roomId, data['callToken'] as String?);
+    if (alert == CallAlertResult.unknown) {
+      debugPrint('[Notifications] ring acknowledgement for $roomId unconfirmed');
+    }
   }
 
   /// The caller dialled again while their first call was still ringing:
@@ -504,13 +511,15 @@ class NotificationService {
   /// Tell the server this phone is ringing (the caller's "Ringing"), and
   /// stop at once if it answers that the call is already over - a push
   /// that arrived late, or a call answered on another phone.
-  Future<void> acknowledgeIncomingCall(String roomId, String? callToken) async {
-    if (callToken == null || callToken.isEmpty) return;
+  Future<CallAlertResult> acknowledgeIncomingCall(
+      String roomId, String? callToken) async {
+    if (callToken == null || callToken.isEmpty) return CallAlertResult.unknown;
     final result = await ApiService.reportCallAlerted(roomId, callToken);
     if (result == CallAlertResult.over) {
       debugPrint('[Notifications] call $roomId is over - not ringing');
       await callEnded(roomId);
     }
+    return result;
   }
 
   /// Every push that reaches the FCM background isolate - the app is in the
@@ -551,7 +560,7 @@ class NotificationService {
         if (!await ActiveCall.savedAllowsRinging(roomId)) return;
         // Ring first: the acknowledgement is a network round trip, and a
         // call must never wait on one to start ringing.
-        await svc.showIncomingCall(
+        final ringing = await svc.showIncomingCall(
           roomId: roomId,
           callerName: data['callerName'] as String? ?? 'Someone',
           listingName: data['listingName'] as String? ?? 'your listing',
@@ -562,7 +571,19 @@ class NotificationService {
           ringInApp: false,
           callerPhoto: _nonEmpty(data['callerPhoto']),
         );
-        await svc.acknowledgeIncomingCall(roomId, data['callToken'] as String?);
+        // "Ringing" is a claim about this phone. If nothing was posted
+        // (notification service not ready, another call already active),
+        // telling the caller it rang would be false.
+        if (!ringing) {
+          debugPrint('[Notifications] incoming call $roomId not shown in background - not acknowledging');
+          return;
+        }
+        final alert = await svc.acknowledgeIncomingCall(
+            roomId, data['callToken'] as String?);
+        if (alert == CallAlertResult.unknown) {
+          debugPrint('[Notifications] background ring acknowledgement for '
+              '$roomId unconfirmed');
+        }
         return;
       case 'new_message':
         // Android drew it from the push already. Record it as announced,
@@ -1180,7 +1201,9 @@ class NotificationService {
   /// isolate where the ringtone platform channel does not exist. When the
   /// in-app ring did start, the notification is posted silent so the two
   /// cannot double up.
-  Future<void> showIncomingCall({
+  /// Returns true when this phone is now actually handling the alert (see
+  /// the body); callers only acknowledge the call to the server on true.
+  Future<bool> showIncomingCall({
     required String roomId,
     required String callerName,
     required String listingName,
@@ -1198,10 +1221,15 @@ class NotificationService {
     // on the notification.
     String? callerPhoto,
   }) async {
-    if (!_ready) return;
+    // True only when this phone is now actually handling the alert: the
+    // ringtone started, the call screen opened, or a notification was
+    // posted. Callers acknowledge the call to the server only on true, so
+    // "Ringing" on the caller's screen cannot be claimed for a phone that
+    // never made a sound.
+    if (!_ready) return false;
     // On a call, or done with this one (see ActiveCall.shouldRing). Every
     // path that rings comes through here.
-    if (!ActiveCall.instance.shouldRing(roomId)) return;
+    if (!ActiveCall.instance.shouldRing(roomId)) return false;
 
     bool ringing = false;
     if (ringInApp) {
@@ -1223,7 +1251,7 @@ class NotificationService {
             if (payload?['callerPhoto'] == null && callerPhoto != null) 'callerPhoto': callerPhoto,
           })) {
         unawaited(ring);
-        return;
+        return true;
       }
       ringing = await ring;
     }
@@ -1242,7 +1270,7 @@ class NotificationService {
       if (ActiveCall.instance.roomId != roomId) {
         await RingtoneService.instance.stopFor(roomId);
       }
-      return;
+      return false;
     }
 
     // Everything Decline needs travels in the payload, because Decline can
@@ -1273,8 +1301,13 @@ class NotificationService {
         details,
         payload: jsonEncode(fullPayload),
       );
+      return true;
     } catch (e) {
       debugPrint('[Notifications] showIncomingCall failed: $e');
+      // Nothing is showing this call, so nothing could stop a ring started
+      // above - and the caller is about to be told the phone never rang.
+      if (ringing) await RingtoneService.instance.stopFor(roomId);
+      return false;
     }
   }
 

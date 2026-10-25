@@ -605,3 +605,99 @@ def test_who_a_message_is_for_follows_the_history_rules():
     # the side that should see them is unknowable (they show in /history
     # only, so an old thread still reads whole - but they announce nothing).
     assert r("broker", None, True, "text") == set()
+
+
+# ── Registration lifecycle: idempotence, rotation, and what may delete a token ─
+
+@pytest.mark.asyncio
+async def test_registering_the_same_phone_again_keeps_one_row(client, caplog):
+    import logging
+    _, seller, _ = await _people()
+    raw = "FCM_REPEAT_SECRET_111"
+    with caplog.at_level(logging.INFO):
+        await _register(client, seller, raw)
+        await _register(client, seller, raw)
+    async with AsyncSessionLocal() as db:
+        assert await push_devices.tokens_for(db, seller) == [raw]
+        rows = (await db.execute(select(PushDevice).where(PushDevice.token == raw))).all()
+        assert len(rows) == 1
+    assert raw not in caplog.text, "an FCM token is a credential"
+    assert push_devices.token_fingerprint(raw) in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_refreshed_token_replaces_the_previous_one(client):
+    _, seller, _ = await _people()
+    await _register(client, seller, "old-phone-token")
+    r = await client.post("/calls/register-token", headers=_auth(seller), json={
+        "fcm_token": "new-phone-token", "token_type": "fcm",
+        "platform": "android", "previous_token": "old-phone-token",
+    })
+    assert r.status_code == 200, r.text
+    async with AsyncSessionLocal() as db:
+        assert await push_devices.tokens_for(db, seller) == ["new-phone-token"]
+        assert (await db.get(PushDevice, "old-phone-token")) is None
+
+
+@pytest.mark.asyncio
+async def test_a_previous_token_belonging_to_someone_else_is_not_removed(client):
+    """The request names the old token, so it is attacker-controlled: it may
+    only ever delete a registration the caller already owns."""
+    _, seller, [buyer] = await _people()
+    await _register(client, buyer, "buyers-phone")
+    r = await client.post("/calls/register-token", headers=_auth(seller), json={
+        "fcm_token": "sellers-new-phone", "token_type": "fcm",
+        "previous_token": "buyers-phone",
+    })
+    assert r.status_code == 200, r.text
+    async with AsyncSessionLocal() as db:
+        assert await push_devices.tokens_for(db, buyer) == ["buyers-phone"]
+
+
+@pytest.mark.asyncio
+async def test_a_project_mismatch_never_deletes_a_registered_phone(client):
+    """SenderIdMismatchError is a server/build configuration fault. The
+    token can still be valid for the project the app was built against, so
+    the account must not lose its only route."""
+    _, seller, _ = await _people()
+    await _register(client, seller, "valid-phone-other-project")
+
+    async def _mismatch(**kwargs):
+        return calls.FcmResult(
+            False, unregistered=False, failure_category="sender_mismatch",
+            retryable=False,
+        )
+
+    with patch.object(calls, "_send_fcm", new=_mismatch):
+        sent = await push_devices.push_user(
+            seller, title="t", body="b", data={"type": "incoming_call"})
+    assert sent == 0
+    async with AsyncSessionLocal() as db:
+        assert await push_devices.tokens_for(db, seller) == ["valid-phone-other-project"]
+
+
+@pytest.mark.asyncio
+async def test_a_call_with_no_route_says_so_in_the_log(client, caplog):
+    import logging
+    listing_id, _, [buyer] = await _people()
+    with caplog.at_level(logging.INFO, logger="api.routers.calls"):
+        out = await _initiate(client, buyer, listing_id)
+    assert out["status"] == "no_token"
+    assert "CALL_NO_PUSH_ROUTE" in caplog.text
+    assert "reason=no_registered_token" in caplog.text
+    await client.post("/calls/log-result", headers=_auth(buyer),
+                      json={"room_id": out["room_id"], "outcome": "cancelled"})
+
+
+@pytest.mark.asyncio
+async def test_the_server_records_the_call_push_result(client, fcm, caplog):
+    import logging
+    listing_id, seller, [buyer] = await _people()
+    await _register(client, seller, "result-phone")
+    with caplog.at_level(logging.INFO, logger="api.routers.calls"):
+        out = await _initiate(client, buyer, listing_id)
+    assert out["status"] == "sent"
+    assert "CALL_PUSH_ROUTE" in caplog.text and "fcm_tokens=1" in caplog.text
+    assert "CALL_PUSH_RESULT" in caplog.text
+    assert "accepted=1" in caplog.text and "configured=True" in caplog.text
+    assert "result-phone" not in caplog.text
