@@ -126,11 +126,16 @@ def _offer(action: dict, language: str) -> str:
 
 
 def _offline(language: str) -> str:
+    """The whole of what Zeno says when no model answers: that it failed.
+
+    It used to advertise what still worked ("open my inbox"), which read
+    like an answer and left the failure unsaid - the user had asked a
+    question and got suggestions for other ones. Say it plainly, and ask
+    them to try again.
+    """
     if _sw(language):
-        return ("Siwezi kufikiri vizuri sasa hivi - lakini bado naweza kufungua skrini, "
-                "kutafuta, au kumpigia mtu unayeongea naye. Jaribu \"fungua ujumbe\".")
-    return ("I can't think straight right now - but I can still open screens, search, or call "
-            "someone you're talking to. Try \"open my inbox\" or \"search for a laptop\".")
+        return "Samahani, hilo halikufanikiwa. Tafadhali jaribu tena."
+    return "Sorry, that wasn't successful. Please try again."
 
 
 async def _first_name(db: AsyncSession, user_id: str) -> str:
@@ -251,8 +256,8 @@ async def assistant_turn(
             if action["type"] == "NEED_INFO":
                 action = {"type": "NONE"}
     except Exception as exc:
-        # Every provider down must not take the assistant with it: say so,
-        # and say what still works (the fast path above).
+        # Every provider down must not take the assistant with it: say that
+        # this turn failed (the fast path above still runs).
         logger.warning("[zeno_assistant] model unavailable: %s", exc)
         return {"reply": _offline(language), "action": None, "source": "fallback"}
 

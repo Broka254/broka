@@ -1,3 +1,37 @@
+# Zeno says when it failed, starts silent, and speaks in a brighter voice (2026-10-25)
+
+Asked from a phone, in one message: a question Zeno could not answer came
+back as "I can't think straight right now - but I can still open screens,
+search, or call someone you're talking to", the voice should be off until
+wanted, and AssemblyAI's voice did not match the soft, vibrant, confident
+voice Zeno should have.
+
+**A failed answer says so.** The fallback advertised what still worked,
+which read like an answer to a question that never got one - and the user
+had asked something else. It now says, plainly, "Sorry, that wasn't
+successful. Please try again." (Swahili: "Samahani, hilo halikufanikiwa.
+Tafadhali jaribu tena."). The commands on the fast path still work; the
+reply just no longer pretends to be one.
+
+**Silent until asked.** The Zeno tab, the negotiation room and voice mode
+all start with Zeno's voice off (`_ttsEnabled` in `zeno_screen.dart` and
+`negotiate_screen.dart`, `ZenoSession._muted`). The speaker in the header
+(or voice mode's own) turns it on. Starting audible meant every reply was
+read aloud to someone who may only have wanted to read them.
+
+**A voice that matches.** AssemblyAI's `eve` read older and flatter than
+the ask. `anna` is the catalogue's brightest, most upbeat women's voice -
+clear, polished, warm and friendly rather than breathy or matronly - and
+one of its British voices, which sits closer to Kenyan English than the
+American ones. It is still read from `ASSEMBLYAI_VOICE` (and set in
+`render.yaml`), and must stay in AssemblyAI's current catalogue.
+
+Tests: `backend/tests/test_zeno_assistant.py` (a failed turn says it
+failed, and no longer advertises other commands) and
+`flutter_app/test/zeno_assistant_test.dart` (the header starts on "Read
+Zeno's replies aloud", and tapping it mutes). The existing voice tests no
+longer tap "Mute Zeno" first - silence is now the default.
+
 # Read messages stop buzzing, chats show sent/delivered/read, messages can be edited or unsent, and Zeno chases like a person (2026-10-22)
 
 Reported from phones, in one conversation: notifications for messages

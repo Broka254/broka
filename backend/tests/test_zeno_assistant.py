@@ -310,7 +310,10 @@ class TestTheModelProposesThisModuleDecides:
         out = await _turn(client, me, "what's a fair price for a used iPhone 12?")
         assert out["action"] is None
         assert out["source"] == "fallback"
-        assert "open my inbox" in out["reply"]
+        assert out["reply"] == "Sorry, that wasn't successful. Please try again."
+        # A failed turn says so; it used to advertise other commands instead,
+        # which read like an answer to a question that never got one.
+        assert "open my inbox" not in out["reply"]
         # ...and the plain commands still work while it is down.
         out = await _turn(client, me, "open settings")
         assert out["action"] == {"type": "NAVIGATE", "destination": "settings"}

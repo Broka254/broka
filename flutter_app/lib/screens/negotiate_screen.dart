@@ -71,9 +71,10 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   int    _dealProbability = 50;
   Timer? _heartbeatTimer;
 
-  // TTS
+  // TTS - off by default (2026-10-25), as on the Zeno tab: the speaker in
+  // the header turns Zeno's voice on.
   final _tts = BrokaTts.instance;
-  bool _ttsEnabled = true;
+  bool _ttsEnabled = false;
   bool _speaking   = false;
 
   // STT

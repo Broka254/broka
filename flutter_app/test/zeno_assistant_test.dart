@@ -361,6 +361,21 @@ void main() {
     });
   });
 
+  group('the voice switch', () {
+    testWidgets('starts off: nothing is read aloud until the speaker is tapped', (tester) async {
+      await tester.pumpWidget(app());
+      await run(tester, const Duration(milliseconds: 400));
+      expect(session.muted, isTrue,
+          reason: 'a reply the user asked to read must not be spoken at them');
+      expect(find.byTooltip("Read Zeno's replies aloud"), findsOneWidget);
+      expect(find.byTooltip('Mute Zeno'), findsNothing);
+
+      await tester.tap(find.byTooltip("Read Zeno's replies aloud"));
+      await run(tester, const Duration(milliseconds: 200));
+      expect(find.byTooltip('Mute Zeno'), findsOneWidget);
+    });
+  });
+
   group('voice mode', () {
     late FakeSocket socket;
     late FakeRecorder mic;
@@ -532,7 +547,6 @@ void main() {
       // and in a test isolate it carries over from earlier tests. What is
       // under test is the loop; the microphone during Zeno's voice has its
       // own test below.
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
 
@@ -597,7 +611,6 @@ void main() {
       ]);
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
 
@@ -645,7 +658,6 @@ void main() {
       ]);
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
       await say(tester, 'open my inbox', then: const Duration(seconds: 3));
@@ -674,7 +686,6 @@ void main() {
       answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
       await say(tester, 'open my inbox', then: const Duration(seconds: 3));
@@ -706,7 +717,6 @@ void main() {
           : null);
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
       await say(tester, 'open my inbox');
@@ -725,7 +735,6 @@ void main() {
       answer('Opening your inbox.', {'type': 'NAVIGATE', 'destination': 'inbox'});
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
       await say(tester, 'open my inbox', then: const Duration(seconds: 3));
@@ -810,7 +819,6 @@ void main() {
       });
       await tester.pumpWidget(app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
       await say(tester, 'how do I open a store', then: const Duration(seconds: 3));
@@ -847,7 +855,6 @@ void main() {
         child: app(home: ZenoScreen(animateBackground: false, voiceService: fakeVoice())),
       ));
       await run(tester, const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 600));
       await say(tester, 'open my inbox', then: const Duration(seconds: 3));

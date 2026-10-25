@@ -379,7 +379,10 @@ class _ZenoScreenState extends State<ZenoScreen>
   String get _langKey => ApiService.currentUserLanguage;
 
   final _tts = BrokaTts.instance;
-  bool _ttsEnabled = true;
+  // Off by default (2026-10-25): Zeno answers in words, and the header's
+  // speaker turns its voice on. Starting audible meant every reply was read
+  // aloud to someone who may only have wanted to read them.
+  bool _ttsEnabled = false;
 
   // Voice input (Deepgram voice-card pass, 2026-09-18).
   //

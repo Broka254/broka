@@ -555,7 +555,6 @@ void main() {
       );
       await tester.pumpWidget(agent(voice: voice));
       await run(tester, const Duration(milliseconds: 500));
-      await tester.tap(find.byTooltip('Mute Zeno'));
       await tester.tap(find.byIcon(Icons.mic_none_rounded));
       await run(tester, const Duration(milliseconds: 900));
 

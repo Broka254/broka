@@ -680,7 +680,6 @@ void main() {
       await ZenoTourStore.markNewAccount('new-4');
       await tester.pumpWidget(app());
       await run(tester, const Duration(milliseconds: 300));
-      session.toggleMute();
       await run(tester, const Duration(seconds: 3));
       session.tour.chooseLanguage('english');
       await run(tester, const Duration(milliseconds: 300));
@@ -763,7 +762,6 @@ void main() {
       ApiService.currentUserId = 'u-tour';
       await tester.pumpWidget(app());
       await run(tester, const Duration(milliseconds: 300));
-      session.toggleMute();
       session.startTour();
       await run(tester, const Duration(seconds: 1));
       expect(find.text('ZENO TOUR · 1 OF 6'), findsOneWidget);
@@ -822,7 +820,6 @@ void main() {
       await run(tester, const Duration(milliseconds: 600));
       expect(orb, findsOneWidget);
 
-      session.toggleMute();
       await tester.tap(orb);
       await run(tester, const Duration(milliseconds: 900));
       expect(session.isActive, isTrue);

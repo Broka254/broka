@@ -205,7 +205,9 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
   ZenoAction? _action;
   ZenoActionPhase? _phase;
   int _burst = 0;
-  bool _muted = false;
+  // Silent until asked (2026-10-25): voice mode still listens and writes
+  // Zeno's words, but nothing is read aloud until the speaker is tapped.
+  bool _muted = true;
   bool _typing = false;
 
   /// Voice mode's Pause: the microphone is off and Zeno is quiet, and the
