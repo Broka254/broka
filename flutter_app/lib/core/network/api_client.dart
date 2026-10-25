@@ -8,8 +8,6 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'api_config.dart';
-
 class ApiException implements Exception {
   final int statusCode;
   final String message;
@@ -29,9 +27,10 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  // The one backend address for this build, from api_config.dart - the same
-  // value ApiService and the WebSocket clients use.
-  static const String _baseUrl = ApiConfig.baseUrl;
+  static const String _baseUrl = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'https://api.broka.co.ke',
+  );
 
   String? _token;
   final http.Client _http;
