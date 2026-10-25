@@ -140,19 +140,19 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:297) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1372) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1815) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:595) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1119) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1900) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:528) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:468) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:580) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1471) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:791) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:841) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:768) |
-| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:506) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1446) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1889) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:650) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1193) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1974) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:565) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:505) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:630) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1545) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:865) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:915) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:842) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:543) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -1283,6 +1283,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `product_card_test.dart` — ProductCard after the visual upgrade (2026-09-29): the FEATURED badge a boost buys, the store folded into the seller's row, the price as on…
 - `product_screen_test.dart` — The listing screen on Home's visual system (2026-09-29): the constellation and Home's header, the deal's terms where a buyer looks first, t…
 - `push_delivery_test.dart` — Calls and messages that reach a phone whose app is closed (2026-10-07).
+- `push_registration_test.dart` — Device-token registration lifecycle (2026-10-25).
 - `receipts_and_charts_test.dart` — The Seller Dashboard's graphs and its Payment Receipts screen.
 - `review_rating_system_test.dart` — The review-rating rules that span screens: one conversion from a store's 0-10 composite score to stars, no seller rating without reviews, a…
 - `review_screen_test.dart` — Leaving a review (2026-09-30).
