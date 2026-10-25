@@ -311,3 +311,35 @@ while the app's own ringer is ringing, it goes on `broka_calls_in_app_v1`,
 a channel with no sound: Android 8+ plays a channel's sound whatever the
 notification asks, and the call channel's ringtone played over the app's
 ring and on after Accept. CALLING.md has the rest.
+
+
+## Honest "Ringing", and a second try at the receipt (2026-10-25)
+
+Two gaps remained in the call path.
+
+* **A silent phone could be reported as ringing.** From a closed app the
+  local notification is the ring; with Android 13+'s notification
+  permission denied (or the app's notifications switched off), `show()`
+  still reports success while drawing nothing, so the phone acknowledged
+  the call and the caller read "Ringing…" for a phone that never made a
+  sound. `NotificationService.showIncomingCall` now asks
+  `areNotificationsEnabled()` whenever neither the call screen nor the
+  in-app ringer is making the call audible, and answers `false` - no
+  `/alerted` - when the answer is a definite "off". An unknown answer (no
+  Android implementation, a plugin error) still rings: a swallowed call is
+  worse than a rare false ring. A per-channel block (Android 8+ lets the
+  user silence just "Incoming Calls") is not visible through the plugin's
+  API and is not detected.
+
+* **One transient failure left the caller on "Calling…".** The app's
+  poller retried an unconfirmed `/alerted` on its next sweep, but a closed
+  app has no poller. `acknowledgeIncomingCall` now retries once,
+  immediately; the endpoint is idempotent (a repeated alert for a room
+  that is still ringing is a no-op).
+
+Diagnostics now carry the room through every hop: `PUSH_NO_DEVICES` and
+`PUSH_RESULT` in `push_devices.py` name it, and the app logs
+`CALL_PUSH_RECEIVED` (foreground/background), `CALL_RING_SHOWN`,
+`CALL_ALERT_RESULT` and `CALL_RING_CLEARED` with the room id. No token,
+title, body or call token is logged. This pass, like the earlier ones, is
+code and unit-test evidence only - it has not been run on a phone.

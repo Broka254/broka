@@ -333,8 +333,8 @@ async def _send_fcm(
                 room, push_devices.token_fingerprint(token), message_id,
             )
         else:
-            logger.debug("[calls] FCM_ACCEPTED route=%s token=%s message_id=%s",
-                         route, push_devices.token_fingerprint(token), message_id)
+            logger.debug("[calls] FCM_ACCEPTED route=%s room=%s token=%s message_id=%s",
+                         route, room, push_devices.token_fingerprint(token), message_id)
         return FcmResult(True, message_id=message_id, configured=True)
     except Exception as e:
         error_name = type(e).__name__

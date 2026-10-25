@@ -216,6 +216,15 @@ async def test_a_call_rings_every_phone_of_the_callee(client, fcm):
     assert {p["token"] for p in pushes} == {"s-phone-1", "s-phone-2"}
     data = pushes[0]["data"]
     assert data["roomId"] == out["room_id"]
+    # The exact fields the app reads, all as strings (FCM data values are).
+    # A null here would arrive as the string "null" on the phone.
+    assert data["listingId"] == listing_id
+    assert data["buyerId"] == buyer
+    assert data["callerName"] == "Bea"
+    assert data["callType"] == "audio"
+    assert data["replacesRoomId"] == ""
+    assert data["callerPhoto"] == ""
+    assert all(isinstance(v, str) for v in data.values())
     assert pushes[0]["data_only"] is True
     # The callee's own call token, so a closed app can acknowledge the ring.
     from api.security import decode_call_token

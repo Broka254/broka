@@ -252,9 +252,11 @@ async def push_user(
         logger.warning("[push] could not load devices for user=%s: %s",
                        user_id, type(exc).__name__)
         return 0
+    route = str(data.get("type") or "generic")
+    room = str(data.get("roomId") or "-")
     if not tokens:
-        logger.info("[push] PUSH_NO_DEVICES user=%s route=%s",
-                    user_id, data.get("type") or "generic")
+        logger.info("[push] PUSH_NO_DEVICES user=%s route=%s room=%s",
+                    user_id, route, room)
         return 0
 
     sender = send or _default_sender()
@@ -276,8 +278,7 @@ async def push_user(
             # alone, or a misconfigured deployment would quietly delete
             # every phone it cannot push to.
             await forget(token, reason="fcm_unregistered")
-    route = str(data.get("type") or "generic")
     log = logger.info if route in ("incoming_call", "missed_call") else logger.debug
-    log("[push] PUSH_RESULT user=%s route=%s tokens=%d accepted=%d",
-        user_id, route, len(tokens), sent)
+    log("[push] PUSH_RESULT user=%s route=%s room=%s tokens=%d accepted=%d",
+        user_id, route, room, len(tokens), sent)
     return sent

@@ -273,7 +273,9 @@ class NotificationService {
     // Activity, the plugin throws asking for the permission, and _ready
     // stayed false, so the incoming-call notification for an app that was
     // closed was never posted. Posting without the permission is harmless
-    // (Android just doesn't show it), so nothing else depends on the answer.
+    // (Android just doesn't show it), so nothing in setup depends on the
+    // answer - but showIncomingCall checks it before letting a closed app's
+    // call count as ringing.
     if (!requestPermission) return;
     try {
       await android?.requestNotificationsPermission();
@@ -422,6 +424,7 @@ class NotificationService {
   /// code path, so behavior is identical no matter which mechanism
   /// detected the call.
   Future<void> handleForegroundFcmMessage(Map<String, dynamic> data) async {
+    _logCallPush(data, 'foreground');
     if (data['type'] == 'missed_call') {
       // A notification push, which the phone draws by itself only while
       // the app is NOT in front - in front, it arrives here instead.
@@ -514,12 +517,31 @@ class NotificationService {
   Future<CallAlertResult> acknowledgeIncomingCall(
       String roomId, String? callToken) async {
     if (callToken == null || callToken.isEmpty) return CallAlertResult.unknown;
-    final result = await ApiService.reportCallAlerted(roomId, callToken);
+    var result = await ApiService.reportCallAlerted(roomId, callToken);
+    if (result == CallAlertResult.unknown) {
+      // A closed app has no poller to try again, and the caller stays on
+      // "Calling..." until some phone confirms the ring. One immediate
+      // retry rides out a transient failure; the server treats a repeated
+      // alert for the same room as a no-op.
+      debugPrint('[Notifications] CALL_ALERT_RETRY room=$roomId');
+      result = await ApiService.reportCallAlerted(roomId, callToken);
+    }
+    debugPrint('[Notifications] CALL_ALERT_RESULT room=$roomId result=${result.name}');
     if (result == CallAlertResult.over) {
       debugPrint('[Notifications] call $roomId is over - not ringing');
       await callEnded(roomId);
     }
     return result;
+  }
+
+  /// One line per call push, whichever isolate received it, keyed on the
+  /// room so a call can be followed from FCM receipt to ring to teardown.
+  static void _logCallPush(Map<String, dynamic> data, String transport) {
+    final type = data['type'] as String?;
+    if (type != 'incoming_call' && type != 'call_over' && type != 'missed_call') return;
+    final roomId = data['roomId'] as String?;
+    debugPrint('[Notifications] CALL_PUSH_RECEIVED room=${roomId?.isNotEmpty == true ? roomId : '-'}'
+        ' type=$type transport=$transport');
   }
 
   /// Every push that reaches the FCM background isolate - the app is in the
@@ -529,6 +551,7 @@ class NotificationService {
   /// server.
   static Future<void> handleBackgroundMessage(Map<String, dynamic> data) async {
     final type = data['type'] as String?;
+    _logCallPush(data, 'background');
     final svc = NotificationService.instance;
     switch (type) {
       case 'missed_call':
@@ -1251,9 +1274,35 @@ class NotificationService {
             if (payload?['callerPhoto'] == null && callerPhoto != null) 'callerPhoto': callerPhoto,
           })) {
         unawaited(ring);
+        debugPrint('[Notifications] CALL_RING_SHOWN room=$roomId via=screen');
         return true;
       }
       ringing = await ring;
+    }
+
+    // Nothing else is making this call audible, so the notification is the
+    // ring (always, when the app is closed and ringInApp is false). With
+    // Android 13+'s notification permission denied - or the app's
+    // notifications switched off - _plugin.show() reports success while
+    // drawing nothing, so the caller was told "Ringing" for a phone that
+    // never made a sound. Only a definite "off" suppresses the
+    // acknowledgement; an unknown answer (no Android implementation, a
+    // plugin error) must not swallow a real call.
+    if (!ringing) {
+      bool? enabled;
+      try {
+        enabled = await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.areNotificationsEnabled();
+      } catch (e) {
+        debugPrint('[Notifications] notification permission check failed: $e');
+      }
+      if (enabled == false) {
+        debugPrint('[Notifications] CALL_RING_BLOCKED room=$roomId '
+            'reason=notifications_disabled');
+        return false;
+      }
     }
 
     // Their face, within a short wait: a cached photo is immediate, and a
@@ -1301,6 +1350,8 @@ class NotificationService {
         details,
         payload: jsonEncode(fullPayload),
       );
+      debugPrint('[Notifications] CALL_RING_SHOWN room=$roomId '
+          'via=notification in_app=$ringing');
       return true;
     } catch (e) {
       debugPrint('[Notifications] showIncomingCall failed: $e');
@@ -1469,6 +1520,7 @@ class NotificationService {
   /// phone, and a call screen still ringing for it closes (see [ringEnded]).
   Future<void> callEnded(String roomId) async {
     if (roomId.isEmpty) return;
+    debugPrint('[Notifications] CALL_RING_CLEARED room=$roomId');
     ActiveCall.instance.settle(roomId);
     await cancelIncomingCall(roomId);
     _ringEnded.add(roomId);

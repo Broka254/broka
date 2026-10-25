@@ -14,6 +14,7 @@
 //  * The sweep asks for an incoming call once, not once per conversation.
 import 'dart:convert';
 
+import 'package:broka/services/active_call.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/global_poller_service.dart';
 import 'package:broka/services/notification_service.dart';
@@ -37,6 +38,7 @@ void main() {
   final requests = <http.Request>[];
   final events = <String>[];
   var failShows = false;
+  var notificationsEnabled = true;
 
   late http.Response Function(http.Request) route;
   final client = MockClient((req) async {
@@ -62,6 +64,7 @@ void main() {
         events.add('shown');
       }
       if (call.method == 'cancel') cancelled.add(call.arguments);
+      if (call.method == 'areNotificationsEnabled') return notificationsEnabled;
       return null;
     });
   });
@@ -74,7 +77,11 @@ void main() {
     requests.clear();
     events.clear();
     failShows = false;
+    notificationsEnabled = true;
     SharedPreferences.setMockInitialValues({'global_poll_primed_v1': true});
+    // The service is a process-wide singleton: a room settled by one test
+    // (an ended call) must not stop the next test's call from ringing.
+    ActiveCall.instance.reset();
     ApiService.currentUserId = 'seller-1';
     route = (_) => _json({'status': 'ok'});
     GlobalPollerService.instance.appInForeground = true;
@@ -122,6 +129,63 @@ void main() {
       await NotificationService.handleBackgroundMessage(
           {'type': 'call_over', 'roomId': 'room-1'});
       expect(cancelled, isNotEmpty);
+    });
+
+    test('with notifications off: nothing rings, and nothing is claimed', () async {
+      // Android 13+ accepts a notification without drawing or sounding it,
+      // so show() alone cannot tell a silent phone from a ringing one.
+      notificationsEnabled = false;
+      await withClient(() => NotificationService.handleBackgroundMessage(callPush()));
+      expect(shown, isEmpty);
+      expect(requests.where((r) => r.url.path.endsWith('/alerted')), isEmpty,
+          reason: "the caller must not be told a silent phone is ringing");
+      expect(cancelled, isEmpty);
+    });
+
+    test('an unconfirmed acknowledgement is retried at once', () async {
+      var alertCalls = 0;
+      route = (req) {
+        if (req.url.path == '/calls/room-1/alerted') {
+          alertCalls++;
+          return alertCalls == 1
+              ? _json({'detail': 'temporarily unavailable'}, 503)
+              : _json({'status': 'ringing'});
+        }
+        return _json({'status': 'ok'});
+      };
+      await withClient(() => NotificationService.handleBackgroundMessage(callPush()));
+      // A closed app has no poller to try again later; without this the
+      // caller stayed on "Calling..." for a phone that was ringing.
+      expect(alertCalls, 2);
+      expect(shown, hasLength(1));
+      expect(cancelled, isEmpty);
+    });
+
+    test('an incomplete payload rings nothing and claims nothing', () async {
+      await withClient(() => NotificationService.handleBackgroundMessage(
+          {'type': 'incoming_call', 'callerName': 'Ann'}));
+      expect(shown, isEmpty);
+      expect(requests, isEmpty);
+    });
+
+    test('the same call pushed twice stays one notification', () async {
+      await withClient(() async {
+        await NotificationService.handleBackgroundMessage(callPush());
+        await NotificationService.handleBackgroundMessage(callPush());
+      });
+      // Two show() calls, one slot: Android replaces a notification with
+      // the same id, so a duplicated push cannot stack two rings.
+      expect(shown, hasLength(2));
+      expect(shown[0]['id'], shown[1]['id']);
+    });
+
+    test('without a call token it still rings, but cannot acknowledge', () async {
+      final push = callPush()..remove('callToken');
+      await withClient(() => NotificationService.handleBackgroundMessage(push));
+      // Nothing about the phone's own ringing depends on the token; only
+      // the caller's "Ringing" does.
+      expect(shown, hasLength(1));
+      expect(requests, isEmpty);
     });
   });
 
@@ -285,7 +349,7 @@ void main() {
         }
         if (req.url.path == '/calls/room-9/alerted') {
           alertCalls++;
-          return alertCalls == 1
+          return alertCalls <= 2
               ? _json({'detail': 'temporarily unavailable'}, 500)
               : _json({'status': 'ringing'});
         }
@@ -293,13 +357,18 @@ void main() {
       };
       await withClient(() => GlobalPollerService.instance.catchUp());
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(alertCalls, 1);
+      expect(alertCalls, 2, reason: 'the first attempt and its immediate retry');
 
       // The next sweep tries again: a failed ack used to be marked done
       // forever, leaving the caller on "Calling...".
       await withClient(() => GlobalPollerService.instance.catchUp());
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(alertCalls, 2);
+      expect(alertCalls, 3);
+
+      // Confirmed once, never repeated by later sweeps.
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(alertCalls, 3);
       GlobalPollerService.instance.stop();
     });
 
