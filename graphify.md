@@ -321,8 +321,8 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | POST | `/traders/me/cover` | user | `set_trader_cover` (backend/api/domains/traders/router.py:40) |
 | GET | `/traders/{trader_id}` | public | `get_trader` (backend/api/domains/traders/router.py:50) |
 | GET | `/trending` | public | `get_trending` (backend/api/domains/trending/router.py:15) |
-| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:143) |
-| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:328) |
+| POST | `/tts/speak` | user | `speak` (backend/api/routers/tts.py:149) |
+| GET | `/tts/voices` | user | `list_voices` (backend/api/routers/tts.py:334) |
 | POST | `/verify/callback` | public | `verification_callback` (backend/api/routers/verify.py:427) |
 | POST | `/verify/callback/{secret}` | public | `verification_callback_secured` (backend/api/routers/verify.py:450) |
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:156) |
@@ -1407,7 +1407,7 @@ Modules:
 - `AZURE_MIGRATION_AUDIT.md` — Azure Container Apps migration audit
 - `BUSINESS_MODEL_REVIEW.md` — BROKA's business model without the commission
 - `CALLING.md` — BROKA Calling — Architecture & Status
-- `CHANGES.md` — Read messages stop buzzing, chats show sent/delivered/read, messages can be edited or unsent, and Zeno chases like a person (2026-10-22)
+- `CHANGES.md` — Zeno says when it failed, starts silent, and speaks in a brighter voice (2026-10-25)
 - `CLAUDE.md` — BROKA
 - `COMMUNICATIONS_AUDIT.md` — Communications audit — 1:1 chat, receipts, notifications, leak filter (2026-09-14)
 - `DISPUTE_AUDIT.md` — Dispute engine audit (2026-09-14)
