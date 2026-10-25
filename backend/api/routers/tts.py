@@ -74,15 +74,13 @@ ASSEMBLYAI_AGENT_URL = "wss://agents.assemblyai.com/v1/ws"
 # vera and a few native-accent voices), so an unknown name was refused with a
 # session.error that this code did not read - see _assemblyai_audio.
 #
-# "anna" (2026-10-25): the owner asked for a soft, vibrant, confident feminine
-# voice, and eve did not match. Its acoustic profile on VoiceRankings reads
-# bright, clear, polished and upbeat - friendly rather than breathy or
-# matronly - and it is one of the catalogue's British voices, which sits
-# closer to Kenyan English than the American ones. AssemblyAI publishes
-# accent, not gender or personality, so ASSEMBLYAI_VOICE still picks another
-# from the catalogue without a code change (alba, jane, jean, mary and vera
-# are the other women's names).
-ASSEMBLYAI_VOICE = "anna"
+# "jane" (2026-10-25): the owner asked for Jane (US), an American woman's
+# voice, replacing "eve" (older, flatter than the ask) and "anna" (British,
+# picked earlier the same day). AssemblyAI publishes accent, not gender or
+# personality, so ASSEMBLYAI_VOICE still picks another from the catalogue
+# without a code change (alba, eve, jean, mary and vera are the other
+# women's names).
+ASSEMBLYAI_VOICE = "jane"
 # The Voice Agent sends its speech as raw 16-bit mono PCM; wrapped in a WAV
 # header here so the app plays it like any other reply.
 ASSEMBLYAI_SAMPLE_RATE = 24000

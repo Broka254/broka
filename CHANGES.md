@@ -1,3 +1,15 @@
+# Zeno's AssemblyAI voice is Jane (US) (2026-10-25)
+
+The owner asked for AssemblyAI's `jane`, a US women's voice, in place of
+`anna` (British), picked earlier the same day. The default in
+`routers/tts.py`, `render.yaml` and `.env.example` now says `jane`; it is
+still read at call time from `ASSEMBLYAI_VOICE`, so another catalogue voice
+can be tried without a code change.
+
+Tests: `backend/tests/test_tts_voices.py` (the voice is in AssemblyAI's
+catalogue and can be changed from the environment) - unchanged, and both
+pass with `jane`.
+
 # Zeno says when it failed, starts silent, and speaks in a brighter voice (2026-10-25)
 
 Asked from a phone, in one message: a question Zeno could not answer came

@@ -68,10 +68,10 @@ services:
                              # and the phone only ever receives the short-lived token minted
                              # from it by /stt/assemblyai-token.
       - key: ASSEMBLYAI_VOICE
-        value: anna          # Zeno's English voice (AssemblyAI Voice Agent, tts.py). Must be in
+        value: jane          # Zeno's English voice (AssemblyAI Voice Agent, tts.py). Must be in
                              # AssemblyAI's current catalogue: alba, eve, george, jane, jean, mary,
-                             # michael, anna, charles, paul, vera. anna: the brightest, most upbeat
-                             # of the women's voices. Change it here to try another.
+                             # michael, anna, charles, paul, vera. jane: a US women's voice.
+                             # Change it here to try another.
       - key: RESEND_API_KEY
         sync: false          # Resend — email verification codes. Unset is safe:
                              # email is optional at signup; verification requests
