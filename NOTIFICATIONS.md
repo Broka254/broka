@@ -343,3 +343,50 @@ Diagnostics now carry the room through every hop: `PUSH_NO_DEVICES` and
 `CALL_ALERT_RESULT` and `CALL_RING_CLEARED` with the room id. No token,
 title, body or call token is logged. This pass, like the earlier ones, is
 code and unit-test evidence only - it has not been run on a phone.
+
+
+## Offline recovery, and the Inbox telling the truth (2026-10-27)
+
+Reported: a message sent while the recipient was offline was never
+displayed when they came back online; the Inbox said "You're offline"
+on a working connection; a missed call sat in the Inbox as a
+notification-style "Missed call received" line; listing groups showed
+generic category icons instead of the listing's photo; and the bare
+phone icon that opens call history did not say so.
+
+* **A push that reached no phone was recorded as pushed.**
+  `message_push.push_thread` wrote `_last_pushed` before sending, so a
+  message whose push accepted zero phones (offline, token not yet
+  registered, transient FCM failure) could never be announced again for
+  that thread. It is recorded only after a phone accepts it.
+* **Registering a phone now announces what is already waiting.** A
+  phone this account has never pushed to gets one re-push of every
+  unread thread (`push_unread_for_user`, scheduled from
+  `POST /calls/register-token`); read threads stay silent because the
+  notification is built from the unread state, and the same phone
+  registering again (every app start) is not re-buzzed.
+* **The sweep's first pass is no longer silent.** Priming records each
+  thread's baseline without firing one notification per thread; it now
+  also posts one catch-up summary ("N unread messages", tag
+  `broka_catchup`, tap opens the Inbox) for what it recorded, so an
+  offline stretch ends with one summary - never a storm, never silence.
+* **The Inbox banner only claims "offline" for a network failure.**
+  Painting the on-device cache no longer declares the user offline, a
+  server error reads "Couldn't refresh", and a stale inbox retries
+  every 15s in the foreground and on resume until a fetch lands.
+  Overlapping loads are sequenced so a slow older answer cannot
+  overwrite a fresher one.
+* **A missed call in the Inbox is a conversation row, not a
+  notification.** It shows a call icon and "Missed call", bold with the
+  unread badge while unseen and plain once seen, with sent / delivered
+  / read ticks for the user's own calls - exactly the states a message
+  row carries. (The system missed-call notification and the Calls
+  screen are unchanged.)
+* **Listing groups show the listing's photo.** `GET /negotiate/inbox`
+  carries `listing_image` (showcase/first-photo thumb URL, else the
+  first legacy inline photo, resolved in one batched media lookup);
+  the app draws it in the same 46dp circle, with the category emoji
+  only as the no-photo fallback.
+* **Call history says so.** The Inbox header's bare phone icon is a
+  labelled "Call history" pill (shortened to "Calls" under 360dp,
+  full name kept for tooltip and screen readers).

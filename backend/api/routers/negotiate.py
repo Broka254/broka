@@ -4224,6 +4224,33 @@ async def get_read_status(
     return out
 
 
+def _listing_image_for(listing, assets: dict) -> Optional[str]:
+    """The one small picture that stands for a listing in the inbox: its
+    showcase or first photo as a stored-asset thumb URL, else the first
+    legacy inline photo. None when the listing has no usable photo - the
+    app falls back to its category visual only then. The inbox used to
+    send no image at all, so every conversation group showed a generic
+    category icon even for a listing with real photos."""
+    from api.domains.media.service import (
+        asset_urls, legacy_image_or_none, parse_id_list, split_legacy_photos,
+    )
+    photo_assets = [assets[i] for i in parse_id_list(listing.photo_ids) if i in assets]
+    showcase_asset = assets.get(listing.showcase_id) if listing.showcase_id else None
+    cover = showcase_asset or (photo_assets[0] if photo_assets else None)
+    urls = asset_urls(cover) if cover is not None else None
+    if urls:
+        return urls.get("thumb") or urls.get("medium") or urls.get("large")
+    legacy = legacy_image_or_none(getattr(listing, "showcase_image_url", None))
+    if legacy:
+        return legacy
+    if getattr(listing, "verified_photos", None):
+        kept = [p for p in split_legacy_photos(listing.verified_photos)
+                if legacy_image_or_none(p)]
+        if kept:
+            return kept[0]
+    return None
+
+
 @router.get("/inbox/{user_id}")
 async def get_inbox(
     user_id: str,
@@ -4285,6 +4312,25 @@ async def get_inbox(
         for listing, seller in buyer_listings_r.all():
             buyer_listings_by_id[listing.id] = (listing, seller)
 
+    # The seller's own listings, fetched here so every listing this inbox
+    # touches has its photo resolved in one batched media lookup below
+    # (the seller loop further down used to query them again).
+    seller_listings = list((await db.execute(
+        select(Listing).where(Listing.seller_id == user_id)
+    )).scalars().all())
+    listing_image_by_id: dict = {}
+    try:
+        from api.domains.listings.service import load_listing_media
+        _all_listings = [row[0] for row in buyer_listings_by_id.values()] + seller_listings
+        _assets = await load_listing_media(db, _all_listings)
+        listing_image_by_id = {
+            listing.id: _listing_image_for(listing, _assets)
+            for listing in _all_listings
+        }
+    except Exception as exc:
+        # A photo must never take the inbox down with it.
+        logger.debug("[negotiate] inbox listing images unavailable: %s", exc)
+
     for lid in buyer_listing_ids:
         row = buyer_listings_by_id.get(lid)
         if not row:
@@ -4339,6 +4385,7 @@ async def get_inbox(
             "listing_id":        listing.id,
             "listing_name":      listing.name,
             "listing_category":  listing.category,
+            "listing_image":     listing_image_by_id.get(listing.id),
             "listing_price":     listing.price,
             "location_name":     listing.location_name,
             "listing_type":      listing.listing_type,
@@ -4402,10 +4449,8 @@ async def get_inbox(
         })
 
     # ── Seller view: one thread per (listing, buyer_id) pair ─────────────────
-    seller_lid_result = await db.execute(
-        select(Listing).where(Listing.seller_id == user_id)
-    )
-    seller_listings = list(seller_lid_result.scalars().all())
+    # seller_listings was fetched above, with the buyer view's listings,
+    # so their photos could be resolved in one batched media lookup.
 
     for listing in seller_listings:
         lid = listing.id
@@ -4493,6 +4538,7 @@ async def get_inbox(
                 "listing_id":        listing.id,
                 "listing_name":      listing.name,
                 "listing_category":  listing.category,
+                "listing_image":     listing_image_by_id.get(listing.id),
                 "listing_price":     listing.price,
                 "location_name":     listing.location_name,
                 "listing_type":      listing.listing_type,

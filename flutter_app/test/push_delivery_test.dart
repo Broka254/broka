@@ -264,6 +264,25 @@ void main() {
       expect(shown, hasLength(1));
       expect(tagOf(shown.single), 'thread_listing-1_buyer-1');
     });
+
+    test('the first sweep after an offline stretch is not silent', () async {
+      // A fresh install / re-login primes on its first sweep so old
+      // history does not fire one notification per thread. That used to
+      // record every waiting message as handled and announce none of
+      // them: exactly the message sent while the user was offline.
+      SharedPreferences.setMockInitialValues({});
+      route = (req) => req.url.path.startsWith('/negotiate/inbox/')
+          ? _json([thread('m-offline')])
+          : _json({'has_call': false});
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      expect(shown, hasLength(1),
+          reason: 'one catch-up summary, not silence and not a storm');
+      expect(tagOf(shown.single), 'broka_catchup');
+
+      // And it is not repeated by the next sweep.
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      expect(shown, hasLength(1));
+    });
   });
 
   group('the sweep', () {

@@ -674,6 +674,18 @@ async def register_token(
         logger.warning("[calls] PUSH_TOKEN_REJECTED user=%s type=%s reason=empty_token",
                        current["id"], payload.token_type)
         raise HTTPException(status_code=400, detail="fcm_token is empty")
+    # A phone this account has never pushed to: whatever is already
+    # unread for the user is announced to it once registration lands
+    # (below). The same phone registering again - every ordinary app
+    # start - must not be buzzed about old news all over again.
+    from api.models.push_device import PushDevice
+    already_known = (await db.execute(
+        select(PushDevice.token).where(
+            PushDevice.token == payload.fcm_token.strip(),
+            PushDevice.user_id == current["id"],
+            PushDevice.kind == payload.token_type,
+        )
+    )).scalar_one_or_none() is not None
     registered = await push_devices.register(
         db, current["id"], payload.fcm_token,
         kind=payload.token_type, platform=payload.platform,
@@ -696,6 +708,18 @@ async def register_token(
     logger.info("[calls] PUSH_TOKEN_REGISTERED user=%s type=%s token=%s",
                 current["id"], payload.token_type,
                 push_devices.token_fingerprint(payload.fcm_token))
+    if not already_known and payload.token_type == "fcm":
+        # WhatsApp behaviour: coming back online (or onto a new phone)
+        # surfaces what arrived while you were away, without waiting for
+        # the next new message. Read threads stay silent - the re-push
+        # builds each thread's notification from its unread state.
+        try:
+            from api.core import message_push
+            message_push.schedule_unread_for_user(
+                asyncio.get_running_loop(), current["id"])
+        except Exception as exc:
+            logger.warning("[calls] unread re-push not scheduled user=%s: %s",
+                           current["id"], type(exc).__name__)
     return {
         "status": "ok",
         "token_type": payload.token_type,

@@ -18,6 +18,7 @@ import '../widgets/delivery_nudge.dart';
 import '../widgets/gradient_button.dart';
 import '../models/listing.dart';
 import '../services/api_service.dart';
+import '../widgets/broka_image.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/local_chat_store.dart';
@@ -33,15 +34,27 @@ class InboxScreen extends StatefulWidget {
   State<InboxScreen> createState() => _InboxScreenState();
 }
 
-class _InboxScreenState extends State<InboxScreen> {
+class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   // Map of listing_id -> list of threads for that listing
   Map<String, List<Map<String, dynamic>>> _grouped = {};
   List<Map<String, dynamic>> _threads = [];
   bool    _loading = true;
   String? _error;
-  // True once a network fetch has failed and what's on screen is (or might
-  // be) stale on-device cache rather than a fresh server response.
+  // True only when a fetch has actually failed with a network error and
+  // what's on screen is (or might be) stale on-device cache. Showing the
+  // cache on open is NOT being offline - that painted "You're offline"
+  // over a working connection whenever the first fetch was slow or the
+  // server answered an error, and nothing cleared it again.
   bool    _isOffline = false;
+  // The last refresh failed for a non-network reason (a server error,
+  // say): stale, but not "offline", and the banner must not claim it is.
+  bool    _refreshFailed = false;
+  Timer?  _retryTimer;
+
+  /// How often a stale inbox quietly tries again, so coming back online
+  /// (or the server recovering) clears the banner by itself instead of
+  /// waiting for a pull-to-refresh the user may never think of.
+  static const _retryEvery = Duration(seconds: 15);
 
   // Currently expanded listing group (null = all collapsed)
   String? _expanded;
@@ -56,8 +69,43 @@ class _InboxScreenState extends State<InboxScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     LastScreenTracker.save('/inbox');
     _loadInbox();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back in front after time away (or off the network): what is on
+    // screen may be stale, so fetch again rather than trusting it.
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_loadInbox());
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      // No quiet retries while the app is away - the poller and pushes
+      // own the background, and a 15s timer there only costs battery.
+      _retryTimer?.cancel();
+      _retryTimer = null;
+    }
+  }
+
+  bool _isNetworkError(Object e) {
+    final s = e.toString();
+    return s.contains('SocketException') || s.contains('Failed host lookup') ||
+        s.contains('Connection refused') || s.contains('Connection failed') ||
+        s.contains('Network is unreachable') || s.contains('TimeoutException');
+  }
+
+  void _armRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = Timer.periodic(_retryEvery, (_) => unawaited(_loadInbox()));
   }
 
   void _applyThreads(List<Map<String, dynamic>> data) {
@@ -80,42 +128,59 @@ class _InboxScreenState extends State<InboxScreen> {
   Future<void> _loadCachedInbox() async {
     final cached = await LocalChatStore.load(_inboxScope);
     if (cached.isEmpty || !mounted || _threads.isNotEmpty) return;
+    // First paint only. Whether we are offline is a question only the
+    // fetch that follows can answer - this used to declare the user
+    // offline the moment saved messages were shown, online or not.
     setState(() {
       _applyThreads(cached);
       _loading = false;
-      _isOffline = true;
     });
   }
 
+  // Overlapping loads (the retry timer, a resume, a pull-to-refresh)
+  // must not let a slow older answer overwrite a fresher one.
+  int _loadSeq = 0;
+
   Future<void> _loadInbox() async {
+    final seq = ++_loadSeq;
     if (_threads.isEmpty) {
       await _loadCachedInbox();
     }
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
     setState(() { _loading = _threads.isEmpty; _error = null; });
     try {
       final data = await ApiService.getInbox();
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
+      _retryTimer?.cancel();
+      _retryTimer = null;
       setState(() {
         _applyThreads(data);
         _loading = false;
         _isOffline = false;
+        _refreshFailed = false;
       });
       unawaited(LocalChatStore.save(
           _inboxScope, data.length > 300 ? data.sublist(0, 300) : data));
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       if (_threads.isNotEmpty) {
         // Already showing something (fresh or cached) - stay on it rather
-        // than replacing a working inbox with an error page. Just flag
-        // that it might be stale.
-        setState(() { _loading = false; _isOffline = true; });
+        // than replacing a working inbox with an error page. Say what
+        // actually happened: offline only for a network failure, and
+        // keep trying in the background either way.
+        setState(() {
+          _loading = false;
+          _isOffline = _isNetworkError(e);
+          _refreshFailed = !_isOffline;
+        });
+        _armRetry();
         return;
       }
       // Nothing cached either - genuinely nothing to show.
       setState(() {
         _loading = false;
-        _isOffline = true;
+        _isOffline = _isNetworkError(e);
+        _refreshFailed = !_isOffline;
         _error = _friendlyError(e);
       });
     }
@@ -200,10 +265,8 @@ class _InboxScreenState extends State<InboxScreen> {
                         _UnreadPill(unread),
                         const SizedBox(width: 8),
                       ],
-                      BrokaHeaderButton(
+                      _CallHistoryButton(
                         key: const Key('inbox-calls'),
-                        icon: Icons.call_rounded,
-                        tooltip: 'Calls',
                         onTap: () => Navigator.pushNamed(context, '/call-history'),
                       ),
                     ]),
@@ -285,7 +348,8 @@ class _InboxScreenState extends State<InboxScreen> {
 
     final listingIds = _grouped.keys.toList();
     return [
-      if (_isOffline) SliverToBoxAdapter(child: _buildOfflineBanner()),
+      if (_isOffline || _refreshFailed)
+        SliverToBoxAdapter(child: _buildOfflineBanner()),
       SliverPadding(
         padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + media.padding.bottom),
         sliver: SliverList(
@@ -300,6 +364,7 @@ class _InboxScreenState extends State<InboxScreen> {
               return _ListingGroup(
                 listingId:   lid,
                 listingName: first['listing_name'] as String,
+                listingImage: first['listing_image'] as String?,
                 category:    first['listing_category'] as String,
                 price:       (first['listing_price'] as num).toDouble(),
                 unreadCount: unread,
@@ -319,23 +384,80 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   /// A card over the constellation, like Home's notices - not a flat strip.
-  Widget _buildOfflineBanner() => Container(
-    margin: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-    decoration: BoxDecoration(
-      color: BrokaColors.bgCard.withOpacity(0.92),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: BrokaColors.warning.withOpacity(0.45)),
+  /// "Offline" is claimed only for a network failure; a server error says
+  /// so instead. Either way it retries on its own (see _armRetry) and can
+  /// be tapped to retry now.
+  Widget _buildOfflineBanner() => GestureDetector(
+    onTap: () => unawaited(_loadInbox()),
+    child: Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: BrokaColors.bgCard.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.warning.withOpacity(0.45)),
+      ),
+      child: Row(children: [
+        Icon(_isOffline ? Icons.cloud_off_rounded : Icons.cloud_sync_rounded,
+            size: 16, color: BrokaColors.warning),
+        const SizedBox(width: 10),
+        Expanded(child: Text(
+          _isOffline
+              ? "You're offline - showing your last saved messages"
+              : "Couldn't refresh - showing your last saved messages",
+          style: const TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w600),
+        )),
+        const SizedBox(width: 8),
+        const Text('Retry', style: TextStyle(
+            color: BrokaColors.warning, fontSize: 12.5, fontWeight: FontWeight.w700)),
+      ]),
     ),
-    child: const Row(children: [
-      Icon(Icons.cloud_off_rounded, size: 16, color: BrokaColors.warning),
-      SizedBox(width: 10),
-      Expanded(child: Text(
-        "You're offline - showing your last saved messages",
-        style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, fontWeight: FontWeight.w600),
-      )),
-    ]),
   );
+}
+
+/// Opens the call history. A labelled pill, not a bare phone icon: the
+/// icon alone did not say where it went, and "Calls" alone did not say
+/// it was the history - so it carries both, with the full name for
+/// tooltips and screen readers.
+class _CallHistoryButton extends StatelessWidget {
+  const _CallHistoryButton({super.key, required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    // The full words wherever they fit; on a narrow phone the pill
+    // shortens to "Calls" (tooltip and semantics keep the full name) so
+    // the header cannot overflow next to the unread pill.
+    final narrow = MediaQuery.sizeOf(context).width < 360;
+    return Semantics(
+      button: true,
+      label: 'Call history',
+      excludeSemantics: true,
+      child: Tooltip(
+        message: 'Call history',
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            height: CollapsingScreenHeader.control,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: BrokaColors.bgCard.withOpacity(0.86),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: BrokaColors.border),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.call_rounded, size: 16, color: BrokaColors.textMid),
+              const SizedBox(width: 6),
+              Text(narrow ? 'Calls' : 'Call history', style: const TextStyle(
+                  color: BrokaColors.textMid, fontSize: 12.5,
+                  fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// "3 new" in the header - the brand gradient, like the header's other
@@ -368,6 +490,7 @@ class _UnreadPill extends StatelessWidget {
 class _ListingGroup extends StatelessWidget {
   final String  listingId;
   final String  listingName;
+  final String? listingImage;
   final String  category;
   final double  price;
   final int     unreadCount;
@@ -379,6 +502,7 @@ class _ListingGroup extends StatelessWidget {
 
   const _ListingGroup({
     required this.listingId, required this.listingName,
+    this.listingImage,
     required this.category,  required this.price,
     required this.unreadCount, required this.threadCount,
     required this.isExpanded,  required this.onToggle,
@@ -421,7 +545,10 @@ class _ListingGroup extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             child: Row(children: [
-              // Listing icon
+              // The listing's own photo, in the same 46dp circle the
+              // category icon used to fill - same size, same shape. The
+              // category emoji is only the fallback for a listing with
+              // no photo (or one that will not load).
               Container(
                 width: 46, height: 46,
                 decoration: BoxDecoration(
@@ -435,8 +562,13 @@ class _ListingGroup extends StatelessWidget {
                         ? BrokaColors.neonBlue.withOpacity(0.7)
                         : BrokaColors.border),
                 ),
-                child: Center(child: Text(_emoji(category),
-                    style: const TextStyle(fontSize: 22))),
+                child: ClipOval(child: BrokaImage(
+                  listingImage,
+                  fit: BoxFit.cover,
+                  width: 46, height: 46,
+                  placeholder: Center(child: Text(_emoji(category),
+                      style: const TextStyle(fontSize: 22))),
+                )),
               ),
               const SizedBox(width: 12),
               Expanded(child: Column(
@@ -536,6 +668,32 @@ class _ThreadRow extends StatelessWidget {
         ? BrokaColors.gold
         : lastRole == 'buyer' ? BrokaColors.neonBlue : BrokaColors.neonGreen;
 
+    // A call row is a conversation entry like any other, not a
+    // notification pasted into the list: its content is the raw outcome
+    // verb the backend stored ("missed"), which used to surface here as
+    // a "Missed call received" alert line. It now reads as a plain call
+    // label and carries its state the way messages do - bold with the
+    // unread badge while unseen, plain once seen, and the sent /
+    // delivered / read ticks when the call was mine.
+    final isCall = thread['last_msg_type'] == 'call';
+    final outcome = lastMsg.trim().toLowerCase();
+    final isMissed = isCall && (outcome == 'missed' || outcome == 'cancelled');
+    final previewText = !isCall
+        ? lastMsg
+        : switch (outcome) {
+            'missed' || 'cancelled' => 'Missed call',
+            'declined' => 'Call declined',
+            'completed' => 'Call',
+            _ => 'Call',
+          };
+    final previewIcon = !isCall
+        ? null
+        : isMissed
+            ? Icons.call_missed_rounded
+            : (lastRole == myRole
+                ? Icons.call_made_rounded
+                : Icons.call_received_rounded);
+
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -599,10 +757,18 @@ class _ThreadRow extends StatelessWidget {
             ]),
             const SizedBox(height: 3),
             Row(children: [
-              Container(width: 5, height: 5, decoration: BoxDecoration(
-                  shape: BoxShape.circle, color: roleColor)),
-              const SizedBox(width: 5),
-              Expanded(child: Text(lastMsg, style: TextStyle(
+              if (previewIcon != null) ...[
+                Icon(previewIcon, size: 13,
+                    color: isMissed && unread > 0
+                        ? BrokaColors.danger
+                        : BrokaColors.textMid),
+                const SizedBox(width: 5),
+              ] else ...[
+                Container(width: 5, height: 5, decoration: BoxDecoration(
+                    shape: BoxShape.circle, color: roleColor)),
+                const SizedBox(width: 5),
+              ],
+              Expanded(child: Text(previewText, style: TextStyle(
                   color: unread > 0 ? BrokaColors.textHigh : BrokaColors.textMid,
                   fontSize: 12,
                   fontWeight: unread > 0 ? FontWeight.w500 : FontWeight.normal),

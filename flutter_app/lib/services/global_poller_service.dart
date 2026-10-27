@@ -427,6 +427,33 @@ class GlobalPollerService {
       // missed call it announced before a later message would otherwise
       // be announced again, days late, on the first launch after updating.
       final hiddenPrimed = _primed(prefs, _hiddenPrimedKeyFor, _hiddenPrimedKey);
+      // What the priming sweep is about to record without announcing, so
+      // it can still be surfaced once, as one summary, below. Priming
+      // exists to stop a first sweep firing one notification per thread;
+      // it used to also silence the one message that arrived while the
+      // user was offline - recorded as handled, never displayed.
+      var primeThreads = 0;
+      var primeMessages = 0;
+      String? primePreview;
+      if (!announce) {
+        for (final t in threads) {
+          if (t['listing_id'] is! String || _isOnScreen(t)) continue;
+          final last = t['last_message'] as String? ?? '';
+          final role = t['last_role'] as String? ?? '';
+          if (last.isEmpty || role == (t['my_role'] as String? ?? 'buyer')) {
+            continue;
+          }
+          final news = role == 'broker'
+              ? ((t['zeno_unread'] as int?) ?? 0)
+              : ((t['unread_count'] as int?) ?? (t['unread'] as int?) ?? 0);
+          if (news <= 0) continue;
+          primeThreads++;
+          primeMessages += news;
+          primePreview ??=
+              '${role == 'broker' ? 'Zeno' : (t['counterpart_name'] as String? ?? 'Someone')}: '
+              '${_previewFor(t['last_msg_type'] as String? ?? 'text', last)}';
+        }
+      }
       for (final thread in threads) {
         final listingId = thread['listing_id'] as String?;
         if (listingId == null) continue;
@@ -481,6 +508,13 @@ class GlobalPollerService {
       }
       if (!announce) await prefs.setBool(_primedKeyFor, true);
       if (!hiddenPrimed) await prefs.setBool(_hiddenPrimedKeyFor, true);
+      if (!announce && primeThreads > 0) {
+        unawaited(NotificationService.instance.showCatchUpSummary(
+          threadCount: primeThreads,
+          messageCount: primeMessages,
+          preview: primePreview ?? '',
+        ));
+      }
     } catch (_) {
       // Network hiccup or not logged in - just try again next tick.
     } finally {
@@ -781,6 +815,9 @@ class GlobalPollerService {
       case 'image': return '\u{1F4F7} Photo';
       case 'voice': return '\u{1F3A4} Voice message';
       case 'video': return '\u{1F3AC} Video';
+      // A call row's content is the raw outcome verb ("missed"), which
+      // is not a sentence anyone should be notified with.
+      case 'call':  return 'Missed call';
       default:      return raw;
     }
   }

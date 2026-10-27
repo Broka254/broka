@@ -297,7 +297,7 @@ async def build_notification(db, listing_id: str, buyer_id: str, role: str) -> O
 
 async def push_thread(
     listing_id: str, buyer_id: str, role: str,
-    generation: Optional[int] = None,
+    generation: Optional[int] = None, force: bool = False,
 ) -> int:
     """Send `role` this thread's notification if there is news for them.
     Returns how many phones accepted it.
@@ -307,7 +307,12 @@ async def push_thread(
     being built, the run stands down without sending: its note is stale,
     and the re-arm's own task sends the fresh state. That keeps a slow
     first send from landing after - and overwriting, by tag - the fresh
-    notification."""
+    notification.
+
+    `force` skips the already-pushed check: a phone that has just
+    registered has not seen this thread's news even when another phone
+    of the same account was pushed to earlier (see push_unread_for_user).
+    """
     from api.core import push_devices
 
     async with AsyncSessionLocal() as db:
@@ -317,12 +322,8 @@ async def push_thread(
     if generation is not None and _generations.get((listing_id, buyer_id), 0) != generation:
         return 0
     dedupe_key = (listing_id, buyer_id, role)
-    if _last_pushed.get(dedupe_key) == note["message_id"]:
+    if not force and _last_pushed.get(dedupe_key) == note["message_id"]:
         return 0
-    _last_pushed[dedupe_key] = note["message_id"]
-    _last_pushed.move_to_end(dedupe_key)
-    while len(_last_pushed) > _LAST_PUSHED_MAX:
-        _last_pushed.popitem(last=False)
 
     tag = thread_tag(listing_id, buyer_id)
     sent = await push_devices.push_user(
@@ -330,6 +331,65 @@ async def push_thread(
         android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
         apns_thread_id=tag,
     )
+    if sent > 0:
+        # Only a push a phone actually accepted counts as announced. This
+        # used to be recorded before the send, so a message that reached
+        # no phone at all - recipient offline, token not registered yet,
+        # a transient FCM failure - was marked pushed and could never be
+        # announced again for that thread, however long it stayed unread.
+        _last_pushed[dedupe_key] = note["message_id"]
+        _last_pushed.move_to_end(dedupe_key)
+        while len(_last_pushed) > _LAST_PUSHED_MAX:
+            _last_pushed.popitem(last=False)
     logger.info("[message_push] MESSAGE_PUSHED thread=%s:%s role=%s phones=%d",
                 listing_id, buyer_id, role, sent)
     return sent
+
+
+async def push_unread_for_user(user_id: str) -> int:
+    """Announce everything already unread for `user_id`, thread by thread.
+
+    Called when a phone registers (see routers/calls.py): a message sent
+    while that phone was offline, uninstalled or simply not registered
+    yet produced a push to no phone, and nothing re-announced it when
+    the phone became reachable - it waited for a *newer* message in the
+    same thread. `build_notification` returns None for threads with
+    nothing unread for the user, so read history stays silent. Returns
+    how many phones accepted a push.
+    """
+    pairs: set = set()
+    async with AsyncSessionLocal() as db:
+        # visibility-ok: thread ids only, no content - the notification is
+        # built per role by build_notification under the audience clause.
+        buyer_rows = (await db.execute(
+            select(NegotiationMessage.listing_id, NegotiationMessage.buyer_id)
+            .where(NegotiationMessage.buyer_id == user_id)
+            .distinct()
+        )).all()
+        pairs.update((lid, bid, "buyer") for lid, bid in buyer_rows)
+        # visibility-ok: selects thread ids only, no message content - see above
+        seller_rows = (await db.execute(
+            select(NegotiationMessage.listing_id, NegotiationMessage.buyer_id)
+            .join(Listing, Listing.id == NegotiationMessage.listing_id)
+            .where(Listing.seller_id == user_id,
+                   NegotiationMessage.buyer_id.isnot(None))
+            .distinct()
+        )).all()
+        pairs.update((lid, bid, "seller") for lid, bid in seller_rows)
+    sent = 0
+    for listing_id, buyer_id, role in sorted(pairs):
+        try:
+            sent += await push_thread(listing_id, buyer_id, role, force=True)
+        except Exception as exc:
+            logger.warning("[message_push] unread re-push thread %s:%s role=%s failed: %s",
+                           listing_id, buyer_id, role, exc)
+    return sent
+
+
+def schedule_unread_for_user(loop, user_id: str) -> None:
+    """Fire `push_unread_for_user` off the request's task group, the same
+    way `schedule` keeps a message push alive past its response."""
+    task = loop.create_task(push_unread_for_user(user_id),
+                            context=contextvars.Context())
+    _inflight.add(task)
+    task.add_done_callback(_inflight.discard)

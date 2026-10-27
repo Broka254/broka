@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/screens/inbox_screen.dart';
 import 'package:broka/services/api_service.dart';
+import 'package:broka/services/local_chat_store.dart';
+import 'package:broka/widgets/broka_image.dart';
 import 'package:broka/widgets/collapsing_screen_header.dart';
 import 'package:broka/widgets/constellation_background.dart';
 
@@ -21,6 +23,9 @@ Map<String, dynamic> _thread({
   required String buyer,
   int unread = 0,
   String last = 'Is it still available?',
+  String? listingImage,
+  String lastMsgType = 'text',
+  String lastRole = 'buyer',
 }) =>
     {
       'listing_id': listingId,
@@ -35,7 +40,9 @@ Map<String, dynamic> _thread({
       'buyer_name': buyer,
       'my_role': 'seller',
       'last_message': last,
-      'last_role': 'buyer',
+      'last_role': lastRole,
+      'last_msg_type': lastMsgType,
+      if (listingImage != null) 'listing_image': listingImage,
       'unread': unread,
       'last_message_seen': false,
       'time_ago': '5m',
@@ -129,6 +136,79 @@ void main() {
     await _settle(tester);
     expect(find.text("Couldn't load your inbox"), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+  });
+
+  testWidgets('the calls button says where it goes and opens call history',
+      (tester) async {
+    pushed.clear();
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    expect(find.text('Call history'), findsOneWidget,
+        reason: 'a bare phone icon does not say it opens call history');
+    await tester.tap(find.byKey(const Key('inbox-calls')));
+    await _settle(tester);
+    expect(pushed.last.name, '/call-history');
+  });
+
+  testWidgets('a listing group shows the listing photo, not a category icon',
+      (tester) async {
+    const png = 'data:image/png;base64,'
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    setFakeRoute((uri) => uri.path == '/negotiate/inbox/u1'
+        ? [
+            _thread(
+                listingId: 'l9', listing: 'Airtel 5G router', buyer: 'Arnold',
+                listingImage: png),
+          ]
+        : null);
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    expect(find.byType(BrokaImage), findsOneWidget);
+    expect(find.text('Airtel 5G router'), findsOneWidget);
+  });
+
+  testWidgets('a missed call is a conversation row with unread state, '
+      'not a notification', (tester) async {
+    setFakeRoute((uri) => uri.path == '/negotiate/inbox/u1'
+        ? [
+            _thread(
+                listingId: 'l9', listing: 'Airtel 5G router', buyer: 'Arno',
+                last: 'missed', lastMsgType: 'call', unread: 1),
+          ]
+        : null);
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    // The single listing auto-expands, so the thread row is visible.
+    expect(find.text('Missed call'), findsOneWidget);
+    expect(find.text('Missed call received'), findsNothing);
+    expect(find.text('missed'), findsNothing);
+    expect(find.byIcon(Icons.call_missed_rounded), findsOneWidget);
+  });
+
+  testWidgets('a server error with saved messages is not called offline, '
+      'and recovers by itself', (tester) async {
+    await LocalChatStore.save(LocalChatStore.inboxListScopeFor('u1'), [
+      _thread(listingId: 'l1', listing: 'HP EliteBook 840 G5', buyer: 'Amina Wanjiru'),
+    ]);
+    setFakeRoute((uri) =>
+        uri.path == '/negotiate/inbox/u1' ? const FakeResponse.error() : null);
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    expect(find.textContaining("You're offline"), findsNothing,
+        reason: 'a 500 from the server is not being offline');
+    expect(find.textContaining('saved messages'), findsOneWidget);
+
+    // Back online: the screen retries on its own instead of pinning the
+    // stale banner until a manual pull-to-refresh.
+    setFakeRoute((uri) => uri.path == '/negotiate/inbox/u1'
+        ? [
+            _thread(listingId: 'l1', listing: 'HP EliteBook 840 G5', buyer: 'Amina Wanjiru'),
+          ]
+        : null);
+    await tester.pump(const Duration(seconds: 16));
+    await _settle(tester);
+    expect(find.textContaining('saved messages'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('nothing overflows on a 320dp phone at a large text size',

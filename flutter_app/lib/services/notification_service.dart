@@ -851,6 +851,12 @@ class NotificationService {
       nav.pushNamed('/review', arguments: {'deal_id': dealId});
       return;
     }
+    if (type == 'inbox_summary') {
+      // The catch-up summary for an offline stretch: the Inbox is where
+      // everything it counts is read.
+      if (topRouteName(nav) != '/inbox') nav.pushNamed('/inbox');
+      return;
+    }
     if (type == 'new_message' || type == 'missed_call') {
       final role = data['myRole'] as String? ?? 'buyer';
       // A message from Zeno is read in Zeno's room; everything else - the
@@ -1106,6 +1112,54 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint('[Notifications] showNewMessage failed: $e');
+    }
+  }
+
+  /// The tag of the one catch-up summary posted after an offline stretch.
+  static const String catchUpTag = 'broka_catchup';
+
+  /// One summary for everything that waited through an offline stretch,
+  /// posted by the sweep's priming pass (GlobalPollerService): the first
+  /// sweep of an install or account records each thread's current last
+  /// message as its baseline instead of firing one notification per
+  /// thread, and that used to mean the message sent while the user was
+  /// away was never announced at all. One summary - never a storm, never
+  /// silence. Tapping it opens the Inbox.
+  Future<void> showCatchUpSummary({
+    required int threadCount,
+    required int messageCount,
+    required String preview,
+  }) async {
+    if (!_ready) return;
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _messageChannel.id,
+        _messageChannel.name,
+        channelDescription: _messageChannel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.message,
+        tag: catchUpTag,
+        icon: smallIcon,
+        color: _accent,
+        styleInformation: BigTextStyleInformation(preview),
+      ),
+      iOS: const DarwinNotificationDetails(threadIdentifier: catchUpTag),
+    );
+    try {
+      await _plugin.show(
+        _idFor(catchUpTag),
+        messageCount == 1
+            ? '1 unread message'
+            : '$messageCount unread messages',
+        threadCount == 1
+            ? preview
+            : '$threadCount conversations · $preview',
+        details,
+        payload: jsonEncode({'type': 'inbox_summary'}),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showCatchUpSummary failed: $e');
     }
   }
 
