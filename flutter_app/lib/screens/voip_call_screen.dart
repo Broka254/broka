@@ -104,6 +104,16 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   bool   _isCaller    = true;
   bool   _argsLoaded  = false;
   String _callType    = 'audio'; // 'audio' | 'video'
+  // Outgoing call opened before the server answered (2026-10-27): the
+  // chat used to await POST /calls/initiate before navigating, so the
+  // call screen appeared 3-5s after the tap and looked broken. Callers
+  // now navigate at once with `callSetup` - the already-running initiate
+  // future - and this screen shows "Calling…" while it completes, then
+  // starts the real call. No WebRtcService exists until then.
+  bool _awaitingSetup = false;
+  bool _setupCancelled = false;
+  bool _svcReady = false;
+  String _userId = '';
 
   CallState _callState = CallState.connecting;
   Duration  _duration  = Duration.zero;
@@ -180,7 +190,82 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _callType    = args['callType']    as String? ?? 'audio';
     final autoAccept = args['autoAccept'] as bool? ?? false;
     _callToken = callToken;
+    _userId = userId;
     unawaited(_resolvePeer());
+    // Instant outgoing call: opened before POST /calls/initiate answered.
+    // Show the call screen now; start WebRTC when the setup lands.
+    final setup = args['callSetup'];
+    if (roomId.isEmpty && setup is Future<Map<String, dynamic>?>) {
+      _awaitingSetup = true;
+      unawaited(_finishSetup(setup));
+      return;
+    }
+    _beginCall(roomId: roomId, userId: userId, callToken: callToken, autoAccept: autoAccept);
+  }
+
+  /// The server answered the instant-open setup: start the real call, or
+  /// say plainly why it could not be placed.
+  Future<void> _finishSetup(Future<Map<String, dynamic>?> setup) async {
+    Map<String, dynamic>? info;
+    try {
+      info = await setup;
+    } catch (_) {
+      info = null;
+    }
+    if (_setupCancelled) {
+      // The user already hung up on the "Calling…" screen. If a room was
+      // created, record it as cancelled so the other side is not left
+      // with a phantom ringing call; the no-answer watchdog is the
+      // backstop if even this fails.
+      final room = info?['room_id'] as String?;
+      if (room != null && room.isNotEmpty && _listingId.isNotEmpty && _buyerId.isNotEmpty) {
+        unawaited(ApiService.logCallResult(
+          roomId: room, listingId: _listingId, buyerId: _buyerId,
+          outcome: 'cancelled', callerRole: _callerRole, callType: _callType,
+        ));
+      }
+      return;
+    }
+    if (!mounted) return;
+    final refused = info?['refused'];
+    if (refused is Map<String, dynamic>) {
+      if (refused['code'] == 'CALL_CROSSED') {
+        // Both sides called at once: answer theirs instead (the old
+        // chat-side path did this before navigating anywhere).
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        unawaited(NotificationService.instance
+            .handleCallRefused(messenger, refused)
+            .then((_) { if (mounted) _closeOwnScreen(); }));
+        return;
+      }
+      setState(() {
+        _awaitingSetup = false;
+        _callState = CallState.failed;
+        _errorMsg = refused['message'] as String? ?? "Couldn't start the call right now.";
+      });
+      return;
+    }
+    final roomId = info?['room_id'] as String? ?? '';
+    final token = info?['call_token'] as String? ?? '';
+    if (info == null || roomId.isEmpty) {
+      setState(() {
+        _awaitingSetup = false;
+        _callState = CallState.failed;
+        _errorMsg = 'Could not start the call - please check your connection and try again.';
+      });
+      return;
+    }
+    setState(() => _awaitingSetup = false);
+    _callToken = token;
+    _beginCall(roomId: roomId, userId: _userId, callToken: token, autoAccept: false);
+  }
+
+  void _beginCall({
+    required String roomId,
+    required String userId,
+    required String callToken,
+    required bool autoAccept,
+  }) {
     // This phone is on this call now: nothing else rings over it, and a
     // second screen for it never opens (ActiveCall).
     ActiveCall.instance.begin(roomId, answered: _isCaller || autoAccept);
@@ -205,6 +290,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       roomId: roomId, isCaller: _isCaller, userId: userId,
       callToken: callToken, callType: _callType,
     );
+    _svcReady = true;
     VoipCallScreen.debugOnService?.call(_svc);
 
     _svc.onStateChange = (s) {
@@ -456,6 +542,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// "missed" (I'm the callee and the ring simply ran out with no action
   /// from me).
   void _logCallResultOnce() {
+    if (!_svcReady) return; // instant-open screen closed before setup: nothing placed yet
     if (_resultLogged) return;
     if (_listingId.isEmpty || _buyerId.isEmpty) return;
     _resultLogged = true;
@@ -564,7 +651,8 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _noAnswerTimer?.cancel();
     _ringEndedSub?.cancel();
     _answerSub?.cancel();
-    final roomId = _svc.roomId;
+    if (_awaitingSetup) _setupCancelled = true;
+    final roomId = _svcReady ? _svc.roomId : '';
     RingtoneService.instance.stopFor(roomId);
     // A ringing notification put up when the app went behind another.
     NotificationService.instance.takeDownCallNotification(roomId);
@@ -573,8 +661,10 @@ class _VoipCallScreenState extends State<VoipCallScreen>
       CallKitService.instance.onEndedByNative = null;
       CallKitService.instance.onMuteChanged = null;
     }
-    CallKitService.instance.endCall(roomId);
-    ActiveCall.instance.end(roomId);
+    if (roomId.isNotEmpty) {
+      CallKitService.instance.endCall(roomId);
+      ActiveCall.instance.end(roomId);
+    }
     // Back behind the lock screen - unless another call's screen is still
     // open (a redial's, on top of the call it replaced).
     if (!ActiveCall.instance.onCall) {
@@ -584,7 +674,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     _ringCtrl.dispose();
     _fadeCtrl.dispose();
     _connectedCtrl.dispose();
-    unawaited(_svc.dispose());
+    if (_svcReady) unawaited(_svc.dispose());
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
   }
@@ -596,6 +686,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// (one a redial replaced, under the redial's screen) must not take them
   /// from the call that is.
   bool get _ownsCall {
+    if (!_svcReady) return true;
     final active = ActiveCall.instance.roomId;
     return active == null || active == _svc.roomId;
   }
@@ -728,6 +819,7 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   /// and _stateColor moves with them: gold while we're still working,
   /// blue once the other end is actually alerted.
   String get _stateLabel {
+    if (_awaitingSetup) return 'Calling…';
     if (_callState == CallState.connected) return _durationLabel;
     // Whatever else went wrong on the way, the call was over before this
     // phone answered it - that is the news.
@@ -1213,6 +1305,14 @@ class _VoipCallScreenState extends State<VoipCallScreen>
     if (_endingCall) return;
     _endingCall = true;
     _stopRingback();
+    if (!_svcReady) {
+      // Still waiting on POST /calls/initiate: cancel the setup and
+      // leave; _finishSetup records the call as cancelled if a room was
+      // created in the meantime.
+      _setupCancelled = true;
+      _closeOwnScreen();
+      return;
+    }
     _svc.hangup();
   }
 
@@ -1310,6 +1410,11 @@ class _VoipCallScreenState extends State<VoipCallScreen>
   );
 
   Widget _buildControls(bool narrow) {
+    if (_awaitingSetup) {
+      // No call exists yet: the one honest control is End, which cancels
+      // the setup. Mute/speaker would act on a service that isn't there.
+      return _dock(Center(child: _endButton()));
+    }
     if (_isOver) {
       return _dock(Center(
         child: _CallBtn(

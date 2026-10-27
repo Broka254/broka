@@ -40,6 +40,7 @@ import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
 import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
+import '../utils/backend_time.dart';
 
 // ── Message model extensions ──────────────────────────────────────────────────
 // Extends the existing Message model with media fields.
@@ -103,8 +104,10 @@ class ChatMessage {
         ? DateTime.tryParse(j['edited_at'] as String)
         : null,
     deleted:      (j['deleted'] as bool?) ?? (j['msg_type'] == 'deleted'),
+    // Backend timestamps are naive UTC: parseBackendUtc, not tryParse,
+    // or every shown time is shifted by the device's UTC offset.
     createdAt:    (j['created_at'] is String && (j['created_at'] as String).isNotEmpty)
-        ? DateTime.tryParse(j['created_at'] as String)
+        ? parseBackendUtc(j['created_at'] as String)
         : null,
   );
 
@@ -1475,33 +1478,24 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       // call under the seller's own ID as if they were the buyer,
       // corrupting the inbox (their own name would appear as a counterpart).
       final buyerId = _role == 'buyer' ? (ApiService.currentUserId ?? 'anon') : (_buyerId ?? '');
-      // room_id + call_token are now server-issued (POST /calls/initiate) -
-      // no longer constructed client-side, so this has to be awaited
-      // before navigating rather than fired-and-forgotten. calleeId is
-      // required when the seller is calling (see calls.py's initiate_call
-      // - a listing can have multiple buyer threads, so the backend can't
-      // infer which buyer to ring the way it can infer the seller).
-      final initResult = await ApiService.initiateCall(
+      // room_id + call_token are server-issued (POST /calls/initiate).
+      // This used to be awaited before navigating: on a slow network the
+      // call screen took 3-5s to appear and looked broken. Now the
+      // request starts here and the call screen opens at once with it
+      // (`callSetup`); VoipCallScreen shows "Calling…" while it lands,
+      // then starts WebRTC - or says why the call could not be placed.
+      // calleeId is required when the seller is calling (see calls.py's
+      // initiate_call - a listing can have multiple buyer threads, so the
+      // backend can't infer which buyer to ring the way it can infer
+      // the seller).
+      final setup = ApiService.initiateCall(
         listingId: listing.id, listingName: listing.name, callType: callType,
         calleeId: _role == 'seller' ? _buyerId : null);
-      if (initResult == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not start the call - please try again.')),
-          );
-        }
-        return;
-      }
       if (!mounted) return;
-      final refused = initResult['refused'];
-      if (refused is Map<String, dynamic>) {
-        await NotificationService.instance
-            .handleCallRefused(ScaffoldMessenger.maybeOf(context), refused);
-        return;
-      }
       Navigator.pushNamed(context, '/voip-call', arguments: {
-        'roomId': initResult['room_id'], 'userId': ApiService.currentUserId ?? 'anon',
-        'callToken': initResult['call_token'],
+        'roomId': '', 'userId': ApiService.currentUserId ?? 'anon',
+        'callToken': '',
+        'callSetup': setup,
         'peerName': _counterpartyName,
         // Lets the call screen fetch the name itself when the profile
         // hadn't loaded by the time the call was placed.
@@ -2244,6 +2238,16 @@ class _ChatBubble extends StatelessWidget {
                 children: [
                   Text(roleLabel(), style: TextStyle(color: roleColor(),
                       fontSize: 10, fontWeight: FontWeight.w600)),
+                  // When it was sent (2026-10-27): no bubble carried a
+                  // time at all. Their messages get the time; mine get
+                  // time + the receipt word, so sent / delivered / seen /
+                  // not-sent can be told apart without reading ticks.
+                  if (formatMessageTime(message.createdAt).isNotEmpty) ...[
+                    const SizedBox(width: 5),
+                    const Text('·', style: TextStyle(color: BrokaColors.textLow, fontSize: 10)),
+                    const SizedBox(width: 5),
+                    MessageTimeLabel(sentAt: message.createdAt),
+                  ],
                   if (message.editedAt != null) ...[
                     const SizedBox(width: 4),
                     const Text('edited', style: TextStyle(color: BrokaColors.textLow,

@@ -1,6 +1,7 @@
 // BROKA - Domain Models (MatchResult, Message, Bid)
 // NOTE: Listing model lives in listing.dart
 import 'listing.dart';
+import '../utils/backend_time.dart';
 
 // ── MatchResult ───────────────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ class Message {
         : null,
     deleted:         (j['deleted'] as bool?) ?? j['msg_type'] == 'deleted',
     createdAt:       j['created_at'] != null
-        ? DateTime.tryParse(j['created_at'] as String)
+        ? parseBackendUtc(j['created_at'] as String)
         : null,
   );
 

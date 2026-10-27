@@ -18,7 +18,6 @@ import 'package:flutter/material.dart';
 import '../../screens/listing_search_screen.dart';
 import '../../screens/zeno_screen.dart';
 import '../../services/api_service.dart';
-import '../../services/notification_service.dart';
 import '../safe_payment/payments_shown.dart';
 import 'domain/zeno_action.dart';
 
@@ -179,8 +178,10 @@ class ZenoActionRunner {
 
   /// [call], on [nav].
   static Future<bool> callOn(NavigatorState nav, ZenoContact c, {required bool video}) async {
-    final messenger = ScaffoldMessenger.maybeOf(nav.context);
-    final info = await ApiService.initiateCall(
+    // Open the call screen at once (see negotiation_screen): awaiting
+    // POST /calls/initiate first made the tap look dead for seconds.
+    // The running request travels with the route as `callSetup`.
+    final setup = ApiService.initiateCall(
       listingId: c.listingId,
       listingName: c.listingName,
       callType: video ? 'video' : 'audio',
@@ -189,19 +190,11 @@ class ZenoActionRunner {
       calleeId: c.role == 'seller' ? c.buyerId : null,
     );
     if (!nav.mounted) return false;
-    if (info == null) {
-      messenger?.showSnackBar(const SnackBar(content: Text("Couldn't start the call right now.")));
-      return false;
-    }
-    final refused = info['refused'];
-    if (refused is Map<String, dynamic>) {
-      await NotificationService.instance.handleCallRefused(messenger, refused);
-      return false;
-    }
     unawaited(nav.pushNamed('/voip-call', arguments: {
-      'roomId': info['room_id'],
+      'roomId': '',
       'userId': ApiService.currentUserId ?? '',
-      'callToken': info['call_token'],
+      'callToken': '',
+      'callSetup': setup,
       'isCaller': true,
       'peerName': c.peerName,
       'peerId': c.peerId,

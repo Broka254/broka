@@ -99,13 +99,21 @@ class MessageReceiptIcon extends StatelessWidget {
         );
 
       case MessageReceipt.sent:
-        return const _Tick(
+        // A word beside every tick (2026-10-27): sent vs delivered was one
+        // tick vs two in the same grey - indistinguishable at a glance on
+        // a phone, which is exactly what people reported. The tick stays
+        // for the familiar grammar; the word makes it unmissable.
+        return const _Labelled(
           icon: Icons.check_rounded, color: _muted, size: _iconPx,
-          semantics: 'Sent',
+          label: 'Sent', semantics: 'Sent',
         );
 
       case MessageReceipt.delivered:
-        return const _DoubleTick(color: _muted, semantics: 'Delivered');
+        return const _Labelled(
+          custom: _DoubleTick(color: _muted, semantics: 'Delivered'),
+          color: _muted,
+          label: 'Delivered', semantics: 'Delivered',
+        );
 
       case MessageReceipt.read:
         // BROKA's violet rather than WhatsApp's blue - same grammar, so it
@@ -113,8 +121,12 @@ class MessageReceiptIcon extends StatelessWidget {
         // belongs to this app's palette. Slightly heavier than the muted
         // ticks so "seen" is the state that catches the eye, which is the
         // one people scan a thread looking for.
-        return const _DoubleTick(
-            color: BrokaColors.gold, semantics: 'Seen', emphasised: true);
+        return const _Labelled(
+          custom: _DoubleTick(
+              color: BrokaColors.gold, semantics: 'Seen', emphasised: true),
+          color: BrokaColors.gold,
+          label: 'Seen', semantics: 'Seen', bold: true,
+        );
 
       case MessageReceipt.relayed:
         return const _Labelled(
@@ -128,26 +140,27 @@ class MessageReceiptIcon extends StatelessWidget {
   }
 }
 
-/// Icon plus a short word. Used for the states that are transient or
-/// actionable, where a glyph alone makes the user learn a vocabulary to
-/// find out something urgent.
+/// Icon plus a short word. Used for every state now: a glyph alone makes
+/// the user learn a vocabulary, and one tick vs two in the same colour
+/// was not learnable at a glance anyway.
 class _Labelled extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final Widget? custom;
   final Color color;
   final double size;
   final String label;
   final String semantics;
   final bool bold;
   const _Labelled({
-    required this.icon, required this.color, required this.size,
+    this.icon, this.custom, required this.color, this.size = 15,
     required this.label, required this.semantics, this.bold = false,
-  });
+  }) : assert(icon != null || custom != null);
 
   @override
   Widget build(BuildContext context) => Semantics(
         label: semantics,
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: size, color: color),
+          custom ?? Icon(icon, size: size, color: color),
           const SizedBox(width: 3),
           Text(label,
               style: TextStyle(
@@ -159,17 +172,48 @@ class _Labelled extends StatelessWidget {
       );
 }
 
-class _Tick extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final double size;
-  final String semantics;
-  const _Tick({required this.icon, required this.color,
-      this.size = 15, required this.semantics});
+/// When a message was sent, as shown under its bubble (2026-10-27):
+/// bubbles carried no time at all, so "when did I send that?" had no
+/// answer anywhere in the thread. Today is just the clock time; older
+/// messages name the day so a time alone can't be mistaken for today's.
+///
+/// [dt] is expected already converted to local time by the caller (the
+/// chat parses server timestamps with parseBackendUtc, then toLocal).
+String formatMessageTime(DateTime? dt, {DateTime? now}) {
+  if (dt == null) return '';
+  final local = dt.toLocal();
+  final clock = '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}';
+  final ref = (now ?? DateTime.now()).toLocal();
+  final today = DateTime(ref.year, ref.month, ref.day);
+  final day = DateTime(local.year, local.month, local.day);
+  final days = today.difference(day).inDays;
+  if (days <= 0) return clock;
+  if (days == 1) return 'Yesterday $clock';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final date = '${local.day} ${months[local.month - 1]}';
+  return local.year == ref.year ? '$date $clock' : '$date ${local.year} $clock';
+}
+
+/// The time a message was sent, in the muted small print under a bubble.
+/// Empty when the message has no time (a local bubble in its first
+/// instant), so callers can drop it in unconditionally.
+class MessageTimeLabel extends StatelessWidget {
+  const MessageTimeLabel({super.key, required this.sentAt, this.now});
+
+  final DateTime? sentAt;
+  final DateTime? now;
 
   @override
-  Widget build(BuildContext context) =>
-      Semantics(label: semantics, child: Icon(icon, size: size, color: color));
+  Widget build(BuildContext context) {
+    final label = formatMessageTime(sentAt, now: now);
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Text(label,
+        key: const Key('message-time'),
+        style: const TextStyle(
+            color: BrokaColors.textMid, fontSize: 10, fontWeight: FontWeight.w500));
+  }
 }
 
 /// Two checks, overlapping enough to read as one glyph but not so much that

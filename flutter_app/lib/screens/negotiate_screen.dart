@@ -17,7 +17,6 @@ import '../widgets/constellation_background.dart';
 import '../services/api_service.dart';
 import '../services/chat_screen_memory.dart';
 import '../services/global_poller_service.dart';
-import '../services/notification_service.dart';
 import '../services/photo_capture.dart';
 import '../models/models.dart';
 import '../services/last_screen_tracker.dart';
@@ -25,6 +24,7 @@ import '../services/local_chat_store.dart';
 import '../models/listing.dart';
 import '../widgets/zeno_avatar.dart';
 import '../widgets/zeno_streaming_text.dart';
+import '../widgets/message_receipt.dart' show MessageTimeLabel, formatMessageTime;
 import '../widgets/protection_badge.dart';
 import '../widgets/units_stepper.dart';
 import '../features/reviews/presentation/review_prompt.dart';
@@ -1609,28 +1609,21 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
     final listing = _listing;
     if (listing == null) return;
     final isSeller = _role == 'seller';
-    final info = await ApiService.initiateCall(
+    // Open the call screen at once (see negotiation_screen): awaiting
+    // POST /calls/initiate first made the tap look dead for seconds.
+    // The running request travels with the route as `callSetup`.
+    final setup = ApiService.initiateCall(
       listingId: listing.id,
       listingName: listing.name,
       callType: callType,
       calleeId: isSeller ? _buyerId : null,
     );
     if (!mounted) return;
-    if (info == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Couldn't start the call right now.")));
-      return;
-    }
-    final refused = info['refused'];
-    if (refused is Map<String, dynamic>) {
-      await NotificationService.instance
-          .handleCallRefused(ScaffoldMessenger.maybeOf(context), refused);
-      return;
-    }
     Navigator.pushNamed(context, '/voip-call', arguments: {
-      'roomId': info['room_id'],
+      'roomId': '',
       'userId': ApiService.currentUserId ?? '',
-      'callToken': info['call_token'],
+      'callToken': '',
+      'callSetup': setup,
       'isCaller': true,
       'peerName': _counterName,
       'peerId': _role == 'seller' ? _buyerId : _listing?.sellerId,
@@ -1874,6 +1867,12 @@ class _Bubble extends StatelessWidget {
                 decoration: isMe ? myBubbleDecoration() : theirBubbleDecoration(),
                 child: Text(msg.content, style: TextStyle(
                     color: isMe ? Colors.white : BrokaColors.textHigh, fontSize: 14, height: 1.45))),
+              // When it was sent - bubbles carried no time at all.
+              if (formatMessageTime(msg.createdAt).isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.only(top: 3, left: isMe ? 0 : 4, right: isMe ? 4 : 0),
+                  child: MessageTimeLabel(sentAt: msg.createdAt),
+                ),
             ],
           )),
           if (isMe) ...[ const SizedBox(width: 8), _avatar(photo, initials, color) ],
@@ -1929,6 +1928,11 @@ class _Bubble extends StatelessWidget {
             onDone: onStreamed,
             onGrow: onGrow,
           )),
+        if (formatMessageTime(msg.createdAt).isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 4, top: 3),
+            child: MessageTimeLabel(sentAt: msg.createdAt),
+          ),
       ])),
     ]),
   );

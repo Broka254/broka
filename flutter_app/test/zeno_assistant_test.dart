@@ -204,7 +204,10 @@ void main() {
       // A buyer's call goes to the listing's seller: no callee to name.
       expect(call.containsKey('callee_id'), isFalse);
       expect(find.textContaining('route /voip-call'), findsOneWidget);
-      expect(find.textContaining('roomId: room-1'), findsOneWidget);
+      // Instant open (2026-10-27): the call screen opens before the
+      // server answers, carrying the running setup as `callSetup` - the
+      // room_id only exists once VoipCallScreen finishes it there.
+      expect(find.textContaining('callSetup'), findsOneWidget);
     });
 
     testWidgets('"Not now" means no call', (tester) async {

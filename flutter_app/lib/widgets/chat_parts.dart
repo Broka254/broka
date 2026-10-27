@@ -208,11 +208,20 @@ BoxDecoration theirBubbleDecoration() => BoxDecoration(
   border: Border.all(color: BrokaColors.border),
 );
 
-/// The two rooms of one conversation, side by side under the header: the
-/// direct chat with the person and Zeno's negotiation room. The only way
-/// between them used to be a lone sparkle (or speech-bubble) icon among the
-/// call buttons, and people did not find it - so both rooms show this
-/// labelled switch, with the room they are in lit.
+/// The two rooms of one conversation, under the header: the direct chat
+/// with the person and Zeno's negotiation room. The only way between them
+/// used to be a lone sparkle (or speech-bubble) icon among the call
+/// buttons, and people did not find it - so both rooms show this labelled
+/// switch, with the room they are in lit.
+///
+/// Compact by design (2026-10-27): it used to stretch the full width of
+/// the screen at 40dp tall - a whole row of the chat given to two words,
+/// and on the direct chat the Zeno orb floated over its right edge and
+/// clipped "Zeno negotiates". Now it hugs its labels and floats centred:
+/// same two labelled rooms, always on screen under the header, in about
+/// two-thirds of the width and 34dp of height. The room you are in is the
+/// gradient pill; the other stays readable (never icon-only), so nobody
+/// has to guess what the sparkle means.
 class ChatModeSwitch extends StatelessWidget {
   const ChatModeSwitch({
     super.key,
@@ -230,31 +239,40 @@ class ChatModeSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
-    child: Container(
-      height: 40,
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: BrokaColors.bgCard.withOpacity(0.85),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+    padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+    child: Align(
+      alignment: Alignment.center,
+      child: Container(
+        key: const Key('chat-mode-switch'),
+        height: 34,
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.88),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: BrokaColors.border.withOpacity(0.8)),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 10, offset: const Offset(0, 3)),
+          ],
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          _segment(
+            key: const Key('chat-mode-direct'),
+            active: !zenoActive,
+            icon: Icons.chat_bubble_outline_rounded,
+            label: 'Direct',
+            fullLabel: 'Direct chat',
+            badge: zenoActive ? unread : 0,
+          ),
+          _segment(
+            key: const Key('chat-mode-zeno'),
+            active: zenoActive,
+            icon: Icons.auto_awesome_rounded,
+            label: 'Zeno',
+            fullLabel: 'Zeno negotiates',
+            badge: zenoActive ? 0 : unread,
+          ),
+        ]),
       ),
-      child: Row(children: [
-        _segment(
-          key: const Key('chat-mode-direct'),
-          active: !zenoActive,
-          icon: Icons.chat_bubble_outline_rounded,
-          label: 'Direct chat',
-          badge: zenoActive ? unread : 0,
-        ),
-        _segment(
-          key: const Key('chat-mode-zeno'),
-          active: zenoActive,
-          icon: Icons.auto_awesome_rounded,
-          label: 'Zeno negotiates',
-          badge: zenoActive ? 0 : unread,
-        ),
-      ]),
     ),
   );
 
@@ -263,47 +281,57 @@ class ChatModeSwitch extends StatelessWidget {
     required bool active,
     required IconData icon,
     required String label,
+    required String fullLabel,
     required int badge,
-  }) => Expanded(
-    child: Semantics(
-      button: !active,
-      selected: active,
-      label: active ? '$label, open' : 'Switch to $label',
-      child: GestureDetector(
-        key: key,
-        behavior: HitTestBehavior.opaque,
-        onTap: active ? null : onSwitch,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(19),
-            gradient: active ? const LinearGradient(colors: kChatGradient) : null,
-            boxShadow: active
-                ? [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.35), blurRadius: 12)]
-                : null,
-          ),
-          alignment: Alignment.center,
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 15, color: active ? Colors.white : BrokaColors.textMid),
-            const SizedBox(width: 6),
-            Flexible(child: Text(label,
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    color: active ? Colors.white : BrokaColors.textMid,
-                    fontSize: 12.5, fontWeight: active ? FontWeight.w800 : FontWeight.w600))),
-            if (badge > 0) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                    color: BrokaColors.danger, borderRadius: BorderRadius.circular(8)),
-                child: Text('$badge', style: const TextStyle(
-                    color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w800)),
-              ),
-            ],
-          ]),
+  }) => Semantics(
+    button: !active,
+    selected: active,
+    label: active ? '$fullLabel, open' : 'Switch to $fullLabel',
+    child: GestureDetector(
+      key: key,
+      behavior: HitTestBehavior.opaque,
+      onTap: active ? null : onSwitch,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 13),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(17),
+          gradient: active ? const LinearGradient(colors: kChatGradient) : null,
+          boxShadow: active
+              ? [BoxShadow(color: BrokaColors.neonPurple.withOpacity(0.35), blurRadius: 10)]
+              : null,
         ),
+        alignment: Alignment.center,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: active ? Colors.white : BrokaColors.textMid),
+          const SizedBox(width: 5),
+          Text(label,
+              maxLines: 1,
+              style: TextStyle(
+                  color: active ? Colors.white : BrokaColors.textMid,
+                  fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w600)),
+          // The full room name stays one tap of context away, and screen
+          // readers always get it (see Semantics above).
+          if (active) ...[
+            const SizedBox(width: 5),
+            Text(fullLabel == 'Direct chat' ? 'chat' : 'negotiates',
+                maxLines: 1,
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.85),
+                    fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+          if (badge > 0) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                  color: BrokaColors.danger, borderRadius: BorderRadius.circular(8)),
+              child: Text('$badge', style: const TextStyle(
+                  color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w800)),
+            ),
+          ],
+        ]),
       ),
     ),
   );
