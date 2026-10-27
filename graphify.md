@@ -140,19 +140,19 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | GET | `/buy-agent-requests/me` | user | `get_my_buy_agent_request` (backend/api/domains/buy_agent/router.py:297) |
 | POST | `/buy-agent-requests/parse` | user | `parse_buy_request` (backend/api/domains/buy_agent/router.py:66) |
 | POST | `/buy-agent-requests/parse-intent` | user | `parse_search_intent` (backend/api/domains/buy_agent/router.py:97) |
-| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1446) |
-| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:1889) |
-| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:650) |
-| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1193) |
-| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:1974) |
-| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:565) |
-| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:505) |
-| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:630) |
-| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1545) |
-| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:865) |
-| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:915) |
-| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:842) |
-| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:543) |
+| GET | `/calls/history` | user | `get_call_history` (backend/api/routers/calls.py:1511) |
+| GET | `/calls/incoming` | user | `get_incoming_call` (backend/api/routers/calls.py:2015) |
+| POST | `/calls/initiate` | user | `initiate_call` (backend/api/routers/calls.py:727) |
+| POST | `/calls/log-result` | user | `log_call_result` (backend/api/routers/calls.py:1265) |
+| GET | `/calls/pending/{listing_id}` | user | `get_pending_call` (backend/api/routers/calls.py:2100) |
+| POST | `/calls/register-token` | user | `register_token` (backend/api/routers/calls.py:642) |
+| GET | `/calls/turn-credentials` | user | `get_turn_credentials` (backend/api/routers/calls.py:582) |
+| POST | `/calls/unregister-token` | user | `unregister_token` (backend/api/routers/calls.py:707) |
+| WS | `/calls/ws/{room_id}` | token | `call_signaling` (backend/api/routers/calls.py:1610) |
+| POST | `/calls/{room_id}/alerted` | public | `call_alerted` (backend/api/routers/calls.py:942) |
+| POST | `/calls/{room_id}/answer` | public | `call_answered` (backend/api/routers/calls.py:992) |
+| GET | `/calls/{room_id}/token` | user | `get_call_token` (backend/api/routers/calls.py:919) |
+| POST | `/calls/{room_id}/turn-credentials` | public | `get_call_turn_credentials` (backend/api/routers/calls.py:620) |
 | GET | `/categories` | public | `list_categories` (backend/api/domains/categories/router.py:14) |
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
@@ -523,6 +523,7 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 - `audit.py` — BROKA - Audit Log Records who did what, when, on which resource.
 - `body_limit.py` — A ceiling on how big a request body may be.
 - `buy_agent_subscribers.py` — Matches new listings against open Buy-Agent requests the instant they are created (Ch.8 — refines Volume 5 Ch.10's originally-proposed peri…
+- `call_signaling.py` — Distributed call signaling: Redis Pub/Sub relay + presence + buffering.
 - `call_state.py` — BROKA - Call Session State
 - `circuit_breaker.py` — BROKA v4.0 - Circuit Breaker
 - `client_ip.py` — The address a request really came from.
@@ -758,7 +759,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-128 files in `backend/tests/`.
+129 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -779,6 +780,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_buy_agent_conversation.py` — BROKA - Conversational Buying Agent tests Run: pytest backend/tests/test_buy_agent_conversation.py -v
 - `test_buyer_protection.py` — Partial payments, buyer release, the delivery claim's automatic release, and refund requests (ESCROW_AUDIT.md, "Partial payments" and "Rele…
 - `test_call_answer_and_faces.py` — Answering from a closed app, and faces on notifications (2026-10-08).
+- `test_call_distributed_signaling.py` — Cross-replica signaling regression tests (Railway 2-replica fix).
 - `test_call_history.py` — Call history (2026-10-02): GET /calls/history, the app's list of calls.
 - `test_call_push_and_teardown.py` — BROKA - call push shaping + WS room teardown regressions (calling audit, 2026-09-18)
 - `test_call_reconnect.py` — Regression tests for the calling audit (2026-09-14).
