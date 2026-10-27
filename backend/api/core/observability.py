@@ -27,6 +27,19 @@ from fastapi.routing import APIRoute
 logger = logging.getLogger(__name__)
 
 _CALLBACK_SECRET_PATH = re.compile(r"^(?P<prefix>.*/callback)/[^/]+$")
+_TOKEN_QUERY = re.compile(r"([?&]token=)[^&\s\"]+")
+
+
+class _RedactTokenFilter(logging.Filter):
+    """Strip WS call tokens from uvicorn access logs (token in query string)."""
+    def filter(self, record):
+        try:
+            record.msg = _TOKEN_QUERY.sub(r"\1{redacted}", str(record.msg))
+            if record.args:
+                record.args = tuple(_TOKEN_QUERY.sub(r"\1{redacted}", a) if isinstance(a, str) else a for a in (record.args if isinstance(record.args, tuple) else (record.args,)))
+        except Exception:
+            pass
+        return True
 
 
 def safe_log_path(path: str) -> str:
@@ -75,6 +88,8 @@ def configure_logging(json_logs: bool = False) -> None:
     # Quiet noisy third-party loggers
     for noisy in ("httpx", "sqlalchemy.engine", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").addFilter(_RedactTokenFilter())
+    logging.getLogger("uvicorn").addFilter(_RedactTokenFilter())
 
 
 # ── Request ID middleware ─────────────────────────────────────────────────────

@@ -45,6 +45,7 @@ from api.domains.media.service import avatar_url
 from api.core.timeutil import parse_iso_to_naive_utc
 from api.core.config import settings
 from api.core import cloudflare_turn_client, call_state, push_devices
+from api.core.call_signaling import hub as signaling_hub, INSTANCE_ID
 from api.core.cloudflare_turn_client import CloudflareTurnError
 from api.core.call_state import CallState
 from api.core.rate_limit import (
@@ -113,6 +114,82 @@ WS_RELAYABLE_TYPES = frozenset({"offer", "answer", "ice", "hangup", "video_state
 # that can't tell a genuine second participant from the same user's old,
 # not-yet-detected-as-dead connection.
 _rooms: Dict[str, Dict[str, WebSocket]] = {}
+_connection_ids: Dict[int, str] = {}
+
+
+async def _deliver_remote(envelope: dict) -> None:
+    """Deliver a signal/control received from another replica. Never republishes."""
+    room_id = envelope.get("room_id") or ""
+    # channel carries room via envelope insertion below; fallback parse
+    room = _rooms.get(room_id)
+    if not room:
+        return
+    kind = envelope.get("kind")
+    target = envelope.get("target")
+    sender = envelope.get("sender")
+    if kind == "signal":
+        raw = envelope.get("raw") or ""
+        delivered = 0
+        for peer_uid, peer in list(room.items()):
+            if peer_uid == sender:
+                continue
+            if target and peer_uid != target:
+                continue
+            try:
+                await peer.send_text(raw)
+                delivered += 1
+            except Exception:
+                pass
+        logger.info("[calls] SIGNAL_RECEIVED instance=%s room=%s sender=%s event=%s delivered=%d", INSTANCE_ID, room_id, sender, envelope.get("msg_type"), delivered)
+    else:
+        message = dict(envelope.get("message") or {})
+        message.pop("_room", None)
+        delivered = 0
+        for peer_uid, peer in list(room.items()):
+            if target and peer_uid != target:
+                continue
+            if peer_uid == sender:
+                continue
+            try:
+                await peer.send_json(message)
+                delivered += 1
+            except Exception:
+                pass
+        logger.info("[calls] CONTROL_RECEIVED instance=%s room=%s event=%s delivered=%d", INSTANCE_ID, room_id, message.get("type"), delivered)
+
+
+signaling_hub.set_handler(_deliver_remote)
+
+
+async def _send_to_user(room_id: str, user_id: str, message: dict) -> int:
+    """Local-first server-authored delivery, cross-replica via Pub/Sub."""
+    room = _rooms.get(room_id)
+    ws = room.get(user_id) if room else None
+    if ws is not None:
+        try:
+            await ws.send_json(message)
+            logger.info("[calls] CONTROL_DELIVERED instance=%s room=%s user=%s event=%s local=1", INSTANCE_ID, room_id, user_id, message.get("type"))
+            return 1
+        except Exception:
+            pass
+    await signaling_hub.publish_control(room_id, user_id, {**message, "_room": room_id})
+    return 0
+
+
+async def _broadcast_room(room_id: str, message: dict, exclude_user: Optional[str] = None) -> None:
+    room = _rooms.get(room_id) or {}
+    for peer_uid, peer in list(room.items()):
+        if peer_uid == exclude_user:
+            continue
+        try:
+            await peer.send_json(message)
+        except Exception:
+            pass
+    await signaling_hub.publish_control(room_id, None, {**message, "_room": room_id}, sender_id=exclude_user or "server")
+
+
+def _peer_recipient(session, uid: str) -> str:
+    return session.callee_id if uid == session.caller_id else session.caller_id
 
 def _owns_room(room_id: str, room: Dict[str, WebSocket]) -> bool:
     """True when `room` is still the dict registered under `room_id`.
@@ -752,8 +829,8 @@ async def initiate_call(
         await _finish_replaced(db, old, me=current["id"], new_callee_id=callee.id)
 
     logger.info(
-        "[calls] CALL_INITIATED room=%s caller=%s callee=%s type=%s",
-        room_id, current["id"], callee.id, payload.call_type,
+        "[calls] CALL_INITIATED instance=%s room=%s caller=%s callee=%s type=%s",
+        INSTANCE_ID, room_id, current["id"], callee.id, payload.call_type,
     )
     logger.info("[calls] CALL_RINGING room=%s", room_id)
 
@@ -934,7 +1011,7 @@ async def call_answered(room_id: str, payload: CallAlertedRequest):
         # Remembered as answered, and the callee gets the whole join window
         # from now (call_state._answer).
         await call_state.mark_answered(room_id)
-        logger.info("[calls] CALL_ANSWERED room=%s", room_id)
+        logger.info("[calls] CALL_ANSWERED instance=%s room=%s", INSTANCE_ID, room_id)
         # The caller stops waiting for an answer now. Their screen hung up
         # after 45 seconds unless the callee's socket had joined - and a
         # callee answering from a closed app needs that long and more to
@@ -996,29 +1073,37 @@ async def _call_in_progress(user_id: str):
                 return session
     for session in (await call_state.latest_incoming(user_id),
                     await call_state.latest_outgoing(user_id)):
-        if session is not None and not session.is_expired and session.state in (
-            CallState.initiating, CallState.ringing, CallState.accepted,
-        ):
+        if session is None or session.is_expired:
+            continue
+        if session.state in (CallState.initiating, CallState.ringing, CallState.accepted):
+            return session
+        # Distributed presence: a socket on another replica still counts.
+        try:
+            peers = await signaling_hub.distributed_peers(session.room_id)
+        except Exception:
+            peers = {}
+        if user_id in peers and not call_state.is_terminal(session.state):
             return session
     return None
 
 
-def _left(session, user_id: str) -> bool:
+async def _left(session, user_id: str) -> bool:
     """A call `user_id` is no longer on: past ringing, not over, and no
-    socket of theirs in its room. (A ringing call has its own rules in
-    _admit_call: a redial replaces it, a crossed call is answered.)"""
-    return (session.state not in _UNANSWERED_STATES
-            and not call_state.is_terminal(session.state)
-            and user_id not in (_rooms.get(session.room_id) or {}))
+    socket of theirs in its room on ANY replica."""
+    if session.state in _UNANSWERED_STATES or call_state.is_terminal(session.state):
+        return False
+    if user_id in (_rooms.get(session.room_id) or {}):
+        return False
+    try:
+        peers = await signaling_hub.distributed_peers(session.room_id)
+    except Exception:
+        peers = {}
+    return user_id not in peers
 
 
 async def _hang_up_room(room_id: str, *, reason: str) -> None:
-    """Tell whoever is still in a call's room that it is over."""
-    for peer in list((_rooms.get(room_id) or {}).values()):
-        try:
-            await peer.send_json({"type": "hangup", "reason": reason})
-        except Exception:
-            pass
+    """Tell whoever is still in a call's room that it is over (any replica)."""
+    await _broadcast_room(room_id, {"type": "hangup", "reason": reason})
 
 
 def _busy(code: str, message: str, **extra) -> HTTPException:
@@ -1049,11 +1134,11 @@ async def _admit_call(db: AsyncSession, *, me: str, callee) -> list:
     # app failed to connect, and calling the person back was refused with
     # "You're already on a call" while the dead call still read `accepted`.
     abandoned = {}
-    if mine is not None and _left(mine, me):
+    if mine is not None and await _left(mine, me):
         abandoned[mine.room_id] = mine
         mine = None
     if theirs is not None and (theirs.room_id in abandoned
-                               or (theirs.is_participant(me) and _left(theirs, me))):
+                               or (theirs.is_participant(me) and await _left(theirs, me))):
         abandoned[theirs.room_id] = theirs
         theirs = None
     for old in abandoned.values():
@@ -1092,13 +1177,7 @@ async def _finish_replaced(db: AsyncSession, old, *, me: str, new_callee_id: str
     see ring again. Calling someone else instead: the first person missed
     a call, and gets the card and notification any unanswered call leaves.
     """
-    room = _rooms.get(old.room_id) or {}
-    caller_ws = room.get(old.caller_id)
-    if caller_ws is not None:
-        try:
-            await caller_ws.send_json({"type": "hangup", "reason": "superseded"})
-        except Exception:
-            pass
+    await _send_to_user(old.room_id, old.caller_id, {"type": "hangup", "reason": "superseded"})
     owned = await call_state.mark_result_logged(old.room_id)
     logger.info("[calls] CALL_SUPERSEDED room=%s by=%s", old.room_id, me)
     if old.callee_id == new_callee_id or not owned:
@@ -1179,14 +1258,7 @@ async def _tell_caller_ringing(room_id: str, caller_id: str) -> None:
 
 async def _tell_caller(room_id: str, caller_id: str, message: dict) -> None:
     """Server-authored, never relayed: a participant cannot forge it."""
-    room = _rooms.get(room_id)
-    ws = room.get(caller_id) if room else None
-    if ws is None:
-        return
-    try:
-        await ws.send_json(message)
-    except Exception:
-        pass
+    await _send_to_user(room_id, caller_id, message)
 
 
 @router.post("/log-result")
@@ -1310,14 +1382,7 @@ async def _record_outcome(
         # until their own ~45s ring timer gives up client-side. Notify
         # directly if we can reach them, reusing the existing 'hangup'
         # message type the client already handles - no new protocol needed.
-        room = _rooms.get(session.room_id)
-        if room:
-            caller_ws = room.get(session.caller_id)
-            if caller_ws is not None:
-                try:
-                    await caller_ws.send_json({"type": "hangup", "reason": hangup_reason})
-                except Exception:
-                    pass
+        await _send_to_user(session.room_id, session.caller_id, {"type": "hangup", "reason": hangup_reason})
 
     # Taxonomy alignment (Section 33) - "missed" is what a client-side ring
     # timeout (VoipCallScreen's 45s timer / WebRtcService's own 30s
@@ -1566,8 +1631,10 @@ async def call_signaling(
         await websocket.close(code=4008, reason="Too many connection attempts")
         return
 
+    connection_id = secrets.token_hex(8)
     payload = decode_call_token(token)
     if not payload or payload.get("room_id") != room_id:
+        logger.warning("[calls] WS_AUTH_FAILED instance=%s room=%s conn=%s", INSTANCE_ID, room_id, connection_id)
         await websocket.close(code=4001, reason="Unauthorized")
         return
     uid = payload["sub"]
@@ -1583,6 +1650,7 @@ async def call_signaling(
         await websocket.close(code=4004, reason="Call no longer exists")
         return
     if not session.is_participant(uid):
+        logger.warning("[calls] WS_AUTHZ_FAILED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
         await websocket.close(code=4003, reason="Not a party to this call")
         return
     if call_state.is_terminal(session.state):
@@ -1606,7 +1674,15 @@ async def call_signaling(
             pass
         logger.info("[calls] GHOST_SOCKET_REPLACED room=%s user=%s", room_id, uid)
     elif len(room) >= 2:
-        # Room already has two DIFFERENT participants - genuinely full.
+        await websocket.send_json({"type": "busy", "message": "Room is full"})
+        await websocket.close()
+        return
+    # Distributed full check (other replica may hold both slots)
+    try:
+        _pre_peers = await signaling_hub.distributed_peers(room_id)
+    except Exception:
+        _pre_peers = {}
+    if stale is None and len([u for u in _pre_peers if u in (session.caller_id, session.callee_id)]) >= 2 and uid not in _pre_peers:
         await websocket.send_json({"type": "busy", "message": "Room is full"})
         await websocket.close()
         return
@@ -1617,14 +1693,35 @@ async def call_signaling(
     rejoining_live_call = len(room) == 1 and stale is None
 
     room[uid] = websocket
+    _connection_ids[id(websocket)] = connection_id
+    # Register distributed presence BEFORE any ready decision, and only
+    # after the signaling subscription is live (ensure_subscribed inside).
+    await signaling_hub.register(room_id, uid, connection_id)
     await call_state.set_participant_connected(room_id, uid, True)
+    # Replay signals buffered while this participant was absent.
+    for _env in await signaling_hub.drain_buffer(room_id, uid):
+        try:
+            await websocket.send_text(_env.get("raw") or "")
+            logger.info("[calls] SIGNAL_REPLAYED instance=%s room=%s user=%s event=%s", INSTANCE_ID, room_id, uid, _env.get("msg_type"))
+        except Exception:
+            pass
     if uid == session.callee_id:
-        # Only the callee's join means "accepted" - the caller's own join
-        # (they're always first) just means they're waiting.
-        await call_state.mark_answered(room_id)
-        await call_state.update_state(room_id, CallState.accepted)
-        logger.info("[calls] CALL_ACCEPTED room=%s user=%s", room_id, uid)
-    logger.info("[calls] user=%s joined room=%s peers=%d", uid, room_id, len(room))
+        _cur = await call_state.get_session(room_id)
+        # Never regress connected->accepted/connecting on a ghost/rejoin.
+        if _cur is not None and _cur.state == CallState.connected:
+            logger.info("[calls] CALL_ACCEPTED room=%s user=%s conn=%s (already connected, no regression)", room_id, uid, connection_id)
+        else:
+            await call_state.mark_answered(room_id)
+            await call_state.update_state(room_id, CallState.accepted)
+            logger.info("[calls] CALL_ACCEPTED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
+    try:
+        _dist_peers = await signaling_hub.distributed_peers(room_id)
+    except Exception:
+        _dist_peers = {}
+    _distinct = {u for u in _dist_peers if u in (session.caller_id, session.callee_id)}
+    if len(_distinct) == 2 and len(room) < 2:
+        rejoining_live_call = True
+    logger.info("[calls] WS_CONNECTED instance=%s room=%s user=%s conn=%s local_peers=%d distributed_peers=%d", INSTANCE_ID, room_id, uid, connection_id, len(room), len(_distinct))
     if uid == session.caller_id:
         # The callee's phone may have acknowledged the ring before the
         # caller's socket existed (the push often beats the caller's own
@@ -1649,29 +1746,24 @@ async def call_signaling(
         # join path - the call must not wait on FCM.
         _spawn(_push_ring_over(session))
 
-    # Notify both peers when room is ready for SDP exchange
-    if len(room) == 2:
-        await call_state.update_state(room_id, CallState.connecting)
-        logger.info("[calls] WEBRTC_CONNECTING room=%s", room_id)
+    # Ready only when BOTH distinct participants are present across replicas.
+    _ready_peers = _distinct if '_distinct' in dir() else set()
+    try:
+        _ready_peers = {u for u in await signaling_hub.distributed_peers(room_id) if u in (session.caller_id, session.callee_id)}
+    except Exception:
+        _ready_peers = set(room.keys())
+    if len(_ready_peers) == 2:
+        _cur2 = await call_state.get_session(room_id)
+        if _cur2 is not None and _cur2.state == CallState.connected:
+            logger.info("[calls] ROOM_READY instance=%s room=%s user=%s conn=%s local=%d distributed=%d (already connected)", INSTANCE_ID, room_id, uid, connection_id, len(room), len(_ready_peers))
+        else:
+            await call_state.update_state(room_id, CallState.connecting)
+            logger.info("[calls] WEBRTC_CONNECTING instance=%s room=%s user=%s conn=%s local=%d distributed=%d", INSTANCE_ID, room_id, uid, connection_id, len(room), len(_ready_peers))
         if rejoining_live_call:
-            # Tell the peer who stayed up that their partner is back, so it
-            # can leave its own recovery hold immediately instead of waiting
-            # out a timeout. Paired with the "peer_state disconnected"
-            # message sent from the finally-block below - see its comment
-            # for why a transient drop must not be reported as a hangup.
-            for peer_uid, peer in list(room.items()):
-                if peer_uid == uid:
-                    continue
-                try:
-                    await peer.send_json({"type": "peer_state", "state": "reconnected"})
-                except Exception:
-                    pass
-            logger.info("[calls] PEER_REJOINED room=%s user=%s", room_id, uid)
-        for peer in list(room.values()):
-            try:
-                await peer.send_json({"type": "ready", "room_id": room_id})
-            except Exception:
-                pass
+            await _broadcast_room(room_id, {"type": "peer_state", "state": "reconnected"}, exclude_user=uid)
+            # also deliver locally-excluded handling: broadcast excludes sender remotely, local loop in helper sends to all; ensure joiner not spammed is fine
+            logger.info("[calls] PEER_REJOINED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
+        await _broadcast_room(room_id, {"type": "ready", "room_id": room_id})
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
     # ROBUSTNESS FIX (calling audit, 2026-09-14): this used to wrap every
@@ -1713,6 +1805,10 @@ async def call_signaling(
             # See call_state.renew_session()'s doc comment.
             try:
                 await call_state.renew_session(room_id)
+            except Exception:
+                pass
+            try:
+                await signaling_hub.renew(room_id, uid, connection_id)
             except Exception:
                 pass
 
@@ -1769,13 +1865,22 @@ async def call_signaling(
                 # - see WS_RELAYABLE_TYPES.
                 continue
 
+            _recipient = session.callee_id if uid == session.caller_id else session.caller_id
+            _local_delivered = 0
             for peer_uid, peer in list(room.items()):
                 if peer_uid == uid:
                     continue
                 try:
                     await peer.send_text(raw)
+                    _local_delivered += 1
                 except Exception:
                     pass
+            logger.info("[calls] SIGNAL_LOCAL instance=%s room=%s user=%s conn=%s event=%s local_recipients=%d", INSTANCE_ID, room_id, uid, connection_id, msg_type, _local_delivered)
+            if _local_delivered == 0:
+                try:
+                    await signaling_hub.publish_signal(room_id, uid, connection_id, raw, str(msg_type), _recipient)
+                except Exception as exc:
+                    logger.warning("[calls] SIGNAL_PUBLISH_FAILED instance=%s room=%s event=%s err=%s", INSTANCE_ID, room_id, msg_type, type(exc).__name__)
 
             if msg_type == "hangup":
                 # An explicit hangup is final. Mark the session terminal
@@ -1811,9 +1916,18 @@ async def call_signaling(
         # NEWER connection may have already taken over room[uid]. Blindly
         # popping by key would delete the newer socket out from under the
         # call that's actually still active.
-        if room.get(uid) is websocket:
+        _was_owner = room.get(uid) is websocket
+        _presence_removed = False
+        if _was_owner:
             del room[uid]
             await call_state.set_participant_connected(room_id, uid, False)
+            try:
+                _presence_removed = await signaling_hub.unregister(room_id, uid, connection_id)
+            except Exception:
+                _presence_removed = True
+            logger.info("[calls] WS_DISCONNECTED instance=%s room=%s user=%s conn=%s presence_removed=%s", INSTANCE_ID, room_id, uid, connection_id, _presence_removed)
+        else:
+            logger.info("[calls] GHOST_DISCONNECT_IGNORED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
         # RACE FIX (calling audit, 2026-09-18): `room` is this handler's
         # captured reference to the dict that WAS registered under room_id.
         # Between the removal above (which awaits) and this check, a peer
@@ -1826,7 +1940,13 @@ async def call_signaling(
         # gets told the call ended. The identity check makes both the pop
         # and the terminal transition apply only to the room this handler
         # is actually tearing down.
+        _dist_empty = False
         if not room and _owns_room(room_id, room):
+            try:
+                _dist_empty = len(await signaling_hub.distributed_peers(room_id)) == 0
+            except Exception:
+                _dist_empty = True
+        if not room and _owns_room(room_id, room) and _dist_empty:
             _rooms.pop(room_id, None)
             current_session = await call_state.get_session(room_id)
             if (current_session and current_session.state in _UNANSWERED_STATES
@@ -1869,20 +1989,26 @@ async def call_signaling(
             # recovery state instead, until either the peer rejoins (the
             # "reconnected" message sent at join above) or its own bounded
             # timer gives up.
-            if (room.get(uid) is None or room.get(uid) is websocket) \
-                    and _owns_room(room_id, room):
+            if _presence_removed and _owns_room(room_id, room):
+                # Distributed emptiness decides call end; local emptiness alone
+                # must not end a call whose peer lives on another replica.
+                try:
+                    _remaining = await signaling_hub.distributed_peers(room_id)
+                except Exception:
+                    _remaining = {}
                 current_session = await call_state.get_session(room_id)
-                if current_session and not call_state.is_terminal(current_session.state):
+                if not _remaining:
+                    if (current_session and current_session.state in _UNANSWERED_STATES
+                            and uid == current_session.caller_id):
+                        await _settle_unanswered(current_session, by=uid)
+                    elif current_session and not call_state.is_terminal(current_session.state):
+                        await call_state.update_state(room_id, CallState.ended)
+                    logger.info("[calls] CALL_ENDED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
+                elif current_session and not call_state.is_terminal(current_session.state):
+                    # Don't regress connected on a ghost replacement (not owner -> not here)
                     await call_state.update_state(room_id, CallState.disconnected)
-                    logger.info("[calls] WEBRTC_DISCONNECTED room=%s user=%s", room_id, uid)
-                for peer in list(room.values()):
-                    try:
-                        await peer.send_json({
-                            "type": "peer_state",
-                            "state": "disconnected",
-                        })
-                    except Exception:
-                        pass
+                    logger.info("[calls] WEBRTC_DISCONNECTED instance=%s room=%s user=%s conn=%s", INSTANCE_ID, room_id, uid, connection_id)
+                    await _broadcast_room(room_id, {"type": "peer_state", "state": "disconnected"}, exclude_user=uid)
 
 
 @router.get("/incoming")
