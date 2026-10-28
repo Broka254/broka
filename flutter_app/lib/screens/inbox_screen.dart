@@ -774,21 +774,21 @@ class _ThreadRow extends StatelessWidget {
                   fontWeight: unread > 0 ? FontWeight.w500 : FontWeight.normal),
                   maxLines: 1, overflow: TextOverflow.ellipsis)),
               if (lastRole == myRole)
-                // The inbox used to show one grey tick until the other
-                // person READ the message, which made "their phone has it"
-                // and "the server still has it" look identical. Three
-                // states now, matching the chat: single = sent, muted
-                // double = delivered, accent double = read.
+                // The same tick grammar as the chat (message_receipt.dart):
+                // single dull tick = sent, dull double = received but
+                // unread, purple double = received and read. This row used
+                // to draw the read tick blue while the chat drew it purple,
+                // so one state wore two colours depending on the screen;
+                // the sent tick was also textLow, the near-invisible shade
+                // the chat already retired for these ticks.
                 Icon(
                   (lastSeen || lastDelivered)
                       ? Icons.done_all_rounded
                       : Icons.done_rounded,
                   size: 13,
                   color: lastSeen
-                      ? BrokaColors.neonBlue
-                      : (lastDelivered
-                          ? BrokaColors.textMid
-                          : BrokaColors.textLow),
+                      ? BrokaColors.neonPurple
+                      : BrokaColors.textMid,
                 ),
             ]),
           ])),

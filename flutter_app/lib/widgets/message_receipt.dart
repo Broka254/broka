@@ -116,15 +116,18 @@ class MessageReceiptIcon extends StatelessWidget {
         );
 
       case MessageReceipt.read:
-        // BROKA's violet rather than WhatsApp's blue - same grammar, so it
-        // reads instantly to anyone who has used a messenger, but it
-        // belongs to this app's palette. Slightly heavier than the muted
-        // ticks so "seen" is the state that catches the eye, which is the
-        // one people scan a thread looking for.
+        // The purple double tick: sent, received and read. BROKA's violet
+        // rather than WhatsApp's blue - same grammar, so it reads instantly
+        // to anyone who has used a messenger, but it belongs to this app's
+        // palette. Slightly heavier than the muted ticks so "seen" is the
+        // state that catches the eye, which is the one people scan a thread
+        // looking for. Named neonPurple rather than the gold alias (today
+        // the same value) so the read tick stays purple whatever happens
+        // to the accent palette.
         return const _Labelled(
           custom: _DoubleTick(
-              color: BrokaColors.gold, semantics: 'Seen', emphasised: true),
-          color: BrokaColors.gold,
+              color: BrokaColors.neonPurple, semantics: 'Seen', emphasised: true),
+          color: BrokaColors.neonPurple,
           label: 'Seen', semantics: 'Seen', bold: true,
         );
 

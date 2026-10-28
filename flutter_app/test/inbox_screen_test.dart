@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/main.dart' show BrokaColors;
 import 'package:broka/screens/inbox_screen.dart';
 import 'package:broka/services/api_service.dart';
 import 'package:broka/services/local_chat_store.dart';
@@ -26,6 +27,8 @@ Map<String, dynamic> _thread({
   String? listingImage,
   String lastMsgType = 'text',
   String lastRole = 'buyer',
+  bool seen = false,
+  bool delivered = false,
 }) =>
     {
       'listing_id': listingId,
@@ -44,7 +47,8 @@ Map<String, dynamic> _thread({
       'last_msg_type': lastMsgType,
       if (listingImage != null) 'listing_image': listingImage,
       'unread': unread,
-      'last_message_seen': false,
+      'last_message_seen': seen,
+      'last_message_delivered': delivered,
       'time_ago': '5m',
       'is_online': true,
     };
@@ -118,6 +122,56 @@ void main() {
     // new: the thread opens where they are (chat_screen_memory_test.dart).
     expect(pushed.last.name, '/direct-chat');
     expect((pushed.last.arguments as Map)['buyer_id'], 'buyer-Amina Wanjiru');
+  });
+
+  testWidgets('my last message ticks: single dull sent, dull double received, '
+      'purple double read', (tester) async {
+    // _thread's my_role is 'seller', so lastRole 'seller' makes the last
+    // message mine - the only rows that carry a tick.
+    setFakeRoute((uri) => uri.path == '/negotiate/inbox/u1'
+        ? [
+            _thread(listingId: 'l1', listing: 'HP EliteBook 840 G5',
+                buyer: 'Sent Sam', lastRole: 'seller', last: 'One tick'),
+            _thread(listingId: 'l1', listing: 'HP EliteBook 840 G5',
+                buyer: 'Gotit Gail', lastRole: 'seller', delivered: true,
+                last: 'Two dull ticks'),
+            _thread(listingId: 'l1', listing: 'HP EliteBook 840 G5',
+                buyer: 'Read Ruth', lastRole: 'seller', seen: true,
+                delivered: true, last: 'Two purple ticks'),
+          ]
+        : null);
+    await tester.pumpWidget(app());
+    await _settle(tester);
+    // One listing auto-expands; a group among several needs the tap.
+    if (find.text('Sent Sam').evaluate().isEmpty) {
+      await tester.tap(find.text('HP EliteBook 840 G5'));
+      await _settle(tester);
+    }
+
+    Icon tickFor(String buyer) {
+      final row = find.ancestor(of: find.text(buyer), matching: find.byType(InkWell));
+      final ticks = tester.widgetList<Icon>(find.descendant(
+          of: row,
+          matching: find.byWidgetPredicate((w) =>
+              w is Icon &&
+              (w.icon == Icons.done_rounded || w.icon == Icons.done_all_rounded))));
+      return ticks.single;
+    }
+
+    final sent = tickFor('Sent Sam');
+    expect(sent.icon, Icons.done_rounded, reason: 'sent is a single tick');
+    expect(sent.color, BrokaColors.textMid, reason: 'the single tick is dull');
+
+    final delivered = tickFor('Gotit Gail');
+    expect(delivered.icon, Icons.done_all_rounded,
+        reason: 'received is a double tick');
+    expect(delivered.color, BrokaColors.textMid,
+        reason: 'received but unread stays dull');
+
+    final read = tickFor('Read Ruth');
+    expect(read.icon, Icons.done_all_rounded, reason: 'read is a double tick');
+    expect(read.color, BrokaColors.neonPurple,
+        reason: 'read is the purple double tick, not blue');
   });
 
   testWidgets('no conversations: says so and offers a way to start one',

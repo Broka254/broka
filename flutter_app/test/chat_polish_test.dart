@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:broka/main.dart' show BrokaColors;
 import 'package:broka/models/listing.dart';
 import 'package:broka/screens/negotiate_screen.dart';
 import 'package:broka/screens/negotiation_screen.dart';
@@ -126,6 +127,33 @@ void main() {
         expect(find.text(word), findsOneWidget);
       });
     }
+
+    // The tick grammar itself: one tick = sent, dull double = received
+    // but unread, purple double = received and read. The words beside
+    // the ticks don't prove the glyphs say the same thing.
+    testWidgets('one dull tick sent, dull double delivered, purple double read',
+        (tester) async {
+      Future<List<Icon>> ticksFor(MessageReceipt receipt) async {
+        await tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: MessageReceiptIcon(receipt: receipt)),
+        ));
+        return tester.widgetList<Icon>(find.byIcon(Icons.check_rounded)).toList();
+      }
+
+      final sent = await ticksFor(MessageReceipt.sent);
+      expect(sent, hasLength(1), reason: 'sent is a single tick');
+      expect(sent.single.color, BrokaColors.textMid, reason: 'the single tick is dull');
+
+      final delivered = await ticksFor(MessageReceipt.delivered);
+      expect(delivered, hasLength(2), reason: 'received is a double tick');
+      expect(delivered.map((i) => i.color).toSet(), {BrokaColors.textMid},
+          reason: 'received but unread stays dull');
+
+      final read = await ticksFor(MessageReceipt.read);
+      expect(read, hasLength(2), reason: 'read is a double tick');
+      expect(read.map((i) => i.color).toSet(), {BrokaColors.neonPurple},
+          reason: 'read is the purple double tick');
+    });
 
     test('receiptFor still climbs the ladder', () {
       final sent = DateTime(2026, 10, 27, 10, 0);
