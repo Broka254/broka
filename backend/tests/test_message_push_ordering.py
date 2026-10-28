@@ -67,13 +67,36 @@ async def test_a_stale_send_stands_down_once_the_fresh_push_is_out(client):
     real_build = message_push.build_notification
     built_first = asyncio.Event()
     release_first = asyncio.Event()
-    builds = 0
+    # The listing/buyer ids are known only after the rows below are stored;
+    # the gate reads them through this cell, set before any gated build for
+    # this thread can run.
+    thread: dict = {}
+    gated_builds = 0
 
     async def _gated_build(db, *args, **kwargs):
-        nonlocal builds
-        builds += 1
+        nonlocal gated_builds
+        # Only the test thread's own builds take part in the gate. The
+        # re-push that /calls/register-token schedules runs on its own task
+        # and builds through this same patched function; counting it as
+        # "the first build" held the wrong task (or, when the two builds
+        # overlapped inside real_build and a shared counter was read after
+        # the await, held NEITHER - built_first was never set and the test
+        # timed out). That overlap is why the Backend Tests (PostgreSQL 16)
+        # job failed this test three runs straight with TimeoutError while
+        # the SQLite job - where the queries are fast enough that the builds
+        # never overlap - stayed green. The claim happens BEFORE the await:
+        # two of this thread's builds can also overlap, and the number must
+        # be fixed while this task still owns it.
+        listing_arg = args[0] if args else kwargs.get("listing_id")
+        buyer_arg = args[1] if len(args) > 1 else kwargs.get("buyer_id")
+        mine = bool(thread) and listing_arg == thread.get("listing_id") \
+            and buyer_arg == thread.get("buyer_id")
+        my_build = 0
+        if mine:
+            gated_builds += 1
+            my_build = gated_builds
         note = await real_build(db, *args, **kwargs)
-        if builds == 1:
+        if my_build == 1:
             # The first task built its note from the pre-second-message
             # snapshot; hold its send until the fresh push has landed.
             built_first.set()
@@ -90,10 +113,19 @@ async def test_a_stale_send_stands_down_once_the_fresh_push_is_out(client):
         db.add(listing)
         await db.commit()
         listing_id, seller_id, buyer_id = listing.id, seller.id, buyer.id
+    thread["listing_id"] = listing_id
+    thread["buyer_id"] = buyer_id
 
     r = await client.post("/calls/register-token", headers=_auth(seller_id),
                           json={"fcm_token": f"tok-{uuid.uuid4().hex}", "token_type": "fcm"})
     assert r.status_code == 200, r.text
+    # The registration above schedules an unread re-push on its own task.
+    # Let it finish BEFORE the gate is installed: otherwise its build runs
+    # through _gated_build, and under load it can still be in flight when
+    # the first message's build starts - which is exactly the overlap the
+    # per-thread claim above has to defend against. Draining here removes
+    # the overlap at its source instead of only surviving it.
+    await message_push.drain()
 
     with patch.object(calls, "_get_fcm", lambda: object()), \
          patch.object(calls, "_send_fcm", new=_send), \
