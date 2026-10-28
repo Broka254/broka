@@ -10,8 +10,8 @@ Every insert below is skip-if-exists, keyed on name (top-level) or
 (parent, name) (subcategories/filters), so re-running is always safe:
 - Existing rows are never duplicated.
 - Existing rows are never modified or deleted, except where a table below
-  says so (RENAMED_*, MOVED_SUBCATEGORIES, RETIRED_SUBCATEGORY_FILTERS, and
-  the brand suggestions in BRAND_SUGGESTIONS).
+  says so (RENAMED_*, MOVED_SUBCATEGORIES, RETIRED_SUBCATEGORY_FILTERS,
+  RETIRED_SUBCATEGORIES, and the brand suggestions in BRAND_SUGGESTIONS).
 - Existing category IDs/relationships are preserved.
 
 migrate_categories_from_freetext.py imports CANONICAL_CATEGORIES /
@@ -1046,7 +1046,10 @@ async def seed_categories() -> dict:
     Safe to call on every app startup and against a database that already
     has categories: every insert is skip-if-exists (by name for top-level
     categories, by (parent, name) for subcategories, by (category, field)
-    for filters). Never deletes a category, never touches User data.
+    for filters). The one deletion is Pass 2b: a subcategory named in
+    RETIRED_SUBCATEGORIES is removed along with every row that points at
+    it, so the delete cannot fail on a foreign key (Postgres enforces
+    them; SQLite in tests does not). Never touches User data otherwise.
     Returns counts of what was newly created or changed (all zeros on a
     re-run against an already-seeded database).
 
@@ -1168,17 +1171,41 @@ async def seed_categories() -> dict:
             row = await _child(db, parent.id, sub_name)
             if row is None:
                 continue
-            # Nothing may still point at the row when it goes: its filter
-            # fields belong to it, and a listing filed under it keeps its
-            # category and simply loses the type (subcategory_id is
-            # nullable) - it must not vanish from the feed because the type
-            # it was filed under was retired.
-            from api.database import Listing
+            # Leaf types only (see RETIRED_SUBCATEGORIES): a row that has
+            # children of its own is left alone rather than orphaning them
+            # under a parent that vanished.
+            has_children = (await db.execute(
+                select(Category.id).where(Category.parent_id == row.id).limit(1)
+            )).first()
+            if has_children is not None:
+                continue
+            # Nothing may still point at the row when it goes, or Postgres
+            # (which enforces foreign keys, unlike the SQLite test double)
+            # rejects the delete - every table that references
+            # categories.id is handled here:
+            #   category_filters.category_id   - its form fields, deleted
+            #   listings.subcategory_id        - listing keeps its category,
+            #     loses only the type (nullable), never vanishes from feed
+            #   buy_agent_requests.subcategory_id - same, cleared (nullable)
+            #   user_specializations.category_id - NOT NULL, so the derived
+            #     row goes too; it is rebuilt from live listings by
+            #     trader_specialization_subscribers if still earned
+            #   categories.parent_id           - guarded above (leaf only)
+            from api.database import BuyAgentRequest, Listing, UserSpecialization
             await db.execute(
                 delete(CategoryFilter).where(CategoryFilter.category_id == row.id)
             )
             await db.execute(
+                delete(UserSpecialization).where(
+                    UserSpecialization.category_id == row.id)
+            )
+            await db.execute(
                 update(Listing).where(Listing.subcategory_id == row.id)
+                .values(subcategory_id=None)
+            )
+            await db.execute(
+                update(BuyAgentRequest).where(
+                    BuyAgentRequest.subcategory_id == row.id)
                 .values(subcategory_id=None)
             )
             await db.execute(delete(Category).where(Category.id == row.id))

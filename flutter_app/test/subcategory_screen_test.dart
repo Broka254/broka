@@ -259,7 +259,7 @@ void main() {
           findsOneWidget);
     });
 
-    testWidgets('Home\'s categories are pictures; its destinations are not', (tester) async {
+    testWidgets('Home\'s categories and pictured destinations are pictures', (tester) async {
       await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
       await _settle(tester);
       final first = find.byKey(Key('home-rail-card-${fakeTopLevelCategories.first}'));
@@ -268,14 +268,25 @@ void main() {
       expect(((image.image as ResizeImage).imageProvider as AssetImage).assetName,
           'assets/category_art/automobiles.webp');
 
-      // The destinations sit at the far end of the same row.
+      // The destinations sit at the far end of the same row. Trending,
+      // Traders and Stores carry the photos supplied for them (2026-10-28:
+      // image 3 for Trending, 1 for Traders, 2 for Stores); each card must
+      // show its own picture, not a gradient.
       final rail = find.descendant(
           of: find.byKey(const Key('home-category-rail')), matching: find.byType(Scrollable));
-      await tester.scrollUntilVisible(find.byKey(const Key('home-rail-card-Stores')), 300,
-          scrollable: rail);
-      final stores = find.byKey(const Key('home-rail-card-Stores'));
-      expect(tester.widget<CategoryArtCard>(stores).assetPath, isNull);
-      expect(find.descendant(of: stores, matching: find.byType(Image)), findsNothing);
+      for (final (label, asset) in const [
+        ('Trending', 'assets/category_art/trending.webp'),
+        ('Traders', 'assets/category_art/traders.webp'),
+        ('Stores', 'assets/category_art/stores.webp'),
+      ]) {
+        await tester.scrollUntilVisible(find.byKey(Key('home-rail-card-$label')), 300,
+            scrollable: rail);
+        final card = find.byKey(Key('home-rail-card-$label'));
+        expect(tester.widget<CategoryArtCard>(card).assetPath, asset, reason: label);
+        final pic = tester.widget<Image>(find.descendant(of: card, matching: find.byType(Image)));
+        expect(((pic.image as ResizeImage).imageProvider as AssetImage).assetName, asset,
+            reason: label);
+      }
     });
   });
 }

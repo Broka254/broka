@@ -81,7 +81,10 @@ describe('categories', () => {
   it('use the same emoji as the app', () => {
     const dart = readFileSync(repo('flutter_app/lib/features/categories/domain/category_visual.dart'), 'utf8')
     for (const c of CATEGORIES) {
-      const entry = new RegExp(`categoryName: '${c.name.replace(/[&]/g, '&')}',\\s*emoji: '([^']+)'`).exec(dart)
+      // Fields may sit between the name and the emoji (zoneTitle joined
+      // them in 2026-10-28) - match the first emoji after this entry's
+      // name, which is always its own, never the next entry's.
+      const entry = new RegExp(`categoryName: '${c.name.replace(/[&]/g, '&')}',[\\s\\S]*?emoji: '([^']+)'`).exec(dart)
       expect(entry?.[1], c.name).toBe(c.emoji)
     }
   })

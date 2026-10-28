@@ -6,6 +6,8 @@
 // being made. A loop that opens each one and checks the same five structural
 // things is what would catch the fifth destination being added without the
 // shared header, or one of these four drifting back to its own look.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +35,33 @@ final _destinations = <DestinationVisual, Widget Function()>{
 };
 
 void main() {
+  group('destination artwork', () {
+    test('Trending, Traders and Stores carry their supplied photos', () {
+      // Supplied 2026-10-28: image 1 for Traders, 2 for Stores, 3 for
+      // Trending. Each file must exist and sit under a folder pubspec.yaml
+      // bundles, or the rail card silently falls back to its gradient.
+      expect(DestinationVisuals.traders.assetPath,
+          'assets/category_art/traders.webp');
+      expect(DestinationVisuals.stores.assetPath,
+          'assets/category_art/stores.webp');
+      expect(DestinationVisuals.trending.assetPath,
+          'assets/category_art/trending.webp');
+      final declared = RegExp(r'^\s*-\s*(assets/\S*/)\s*$', multiLine: true)
+          .allMatches(File('pubspec.yaml').readAsStringSync())
+          .map((m) => m.group(1)!)
+          .toSet();
+      for (final visual in DestinationVisuals.all) {
+        if (visual.assetPath == null) continue;
+        expect(File('./${visual.assetPath!}').existsSync(), isTrue,
+            reason: '${visual.label} points at a missing asset');
+        final dir =
+            visual.assetPath!.substring(0, visual.assetPath!.lastIndexOf('/') + 1);
+        expect(declared, contains(dir),
+            reason: '${visual.assetPath} is not under a bundled folder');
+      }
+    });
+  });
+
   setUpAll(installFakeApi);
 
   setUp(() {

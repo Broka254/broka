@@ -33,6 +33,11 @@ class DestinationVisual {
   final IconData icon;
   final List<Color> gradient;
 
+  /// The rail card's picture (a bundled asset), or null to draw the card
+  /// from [gradient] and [emoji]. Trending, Traders and Stores carry the
+  /// photos supplied for them (2026-10-28); Auctions has none.
+  final String? assetPath;
+
   /// Shown in the screen's empty state, under the visual. Written to say what
   /// the screen would contain, never to imply activity that isn't there.
   final String emptyHeadline;
@@ -46,6 +51,7 @@ class DestinationVisual {
     required this.gradient,
     required this.emptyHeadline,
     required this.emptyBody,
+    this.assetPath,
   });
 }
 
@@ -58,6 +64,7 @@ class DestinationVisuals {
     emoji: '🔥',
     icon: Icons.local_fire_department_rounded,
     gradient: [BrokaColors.neonPink, Color(0xFFFF6B9D)],
+    assetPath: 'assets/category_art/trending.webp',
     emptyHeadline: 'Nothing trending yet',
     // Trending ranks on view/interest count with time decay (see
     // trending/service.py), so this says the literal reason the list is
@@ -81,6 +88,7 @@ class DestinationVisuals {
     emoji: '👤',
     icon: Icons.person_rounded,
     gradient: [BrokaColors.neonBlue, Color(0xFF60A5FA)],
+    assetPath: 'assets/category_art/traders.webp',
     emptyHeadline: 'No traders yet',
     emptyBody: 'Verified sellers will appear here as they join',
   );
@@ -91,6 +99,7 @@ class DestinationVisuals {
     emoji: '🏬',
     icon: Icons.storefront_rounded,
     gradient: [BrokaColors.gold, BrokaColors.neonPurple],
+    assetPath: 'assets/category_art/stores.webp',
     emptyHeadline: 'No stores yet',
     emptyBody: 'Sellers who open a storefront will show up here',
   );

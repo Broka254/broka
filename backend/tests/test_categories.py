@@ -215,7 +215,9 @@ class TestSeedCategories:
         assert created.status_code == 201, created.text
         listing_id = created.json()["id"]
 
-        from api.database import CategoryFilter, Listing
+        from api.database import (
+            BuyAgentRequest, CategoryFilter, Listing, UserSpecialization,
+        )
         from api.domains.categories.seed import seed_categories
         from sqlalchemy import func as _func, select
 
@@ -232,6 +234,21 @@ class TestSeedCategories:
             listing = (await db.execute(
                 select(Listing).where(Listing.id == listing_id))).scalar_one()
             listing.subcategory_id = "cat-food-beverages"
+            seller_id = listing.seller_id
+            await db.commit()
+            # Every other table that can point at a category, the way real
+            # data does - Postgres enforces these foreign keys, so retiring
+            # must clear or remove each one or the delete is rejected there
+            # while passing unnoticed on SQLite.
+            db.add(BuyAgentRequest(
+                id="buy-beverages", buyer_id=seller_id,
+                category="Food & Beverages",
+                subcategory_id="cat-food-beverages", max_price=500,
+            ))
+            db.add(UserSpecialization(
+                id="spec-beverages", user_id=seller_id,
+                category_id="cat-food-beverages", listing_count=1,
+            ))
             await db.commit()
 
         result = await seed_categories()
@@ -252,6 +269,39 @@ class TestSeedCategories:
                 select(Listing).where(Listing.id == listing_id))).scalar_one()
             assert listing.subcategory_id is None
             assert listing.category == "Food & Beverages"
+            buy = (await db.execute(
+                select(BuyAgentRequest).where(BuyAgentRequest.id == "buy-beverages")
+            )).scalar_one()
+            assert buy.subcategory_id is None
+            assert (await db.execute(select(_func.count()).select_from(
+                UserSpecialization).where(
+                UserSpecialization.id == "spec-beverages"))).scalar_one() == 0
+
+    @pytest.mark.asyncio
+    async def test_retired_subcategory_with_children_is_left_alone(
+            self, client):
+        # RETIRED_SUBCATEGORIES is leaf types only: if a retired name ever
+        # gains children, deleting it would orphan them under a parent
+        # that vanished (and Postgres would reject it), so the seed must
+        # skip it instead.
+        from api.domains.categories.seed import seed_categories
+        from sqlalchemy import select
+
+        top = {c["name"]: c["id"] for c in (await client.get("/categories")).json()}
+        food_id = top["Food & Beverages"]
+        async with AsyncSessionLocal() as db:
+            db.add(Category(id="cat-food-beverages-parent", name="Beverages",
+                            icon=None, parent_id=food_id))
+            db.add(Category(id="cat-food-beverages-child", name="Soft Drinks",
+                            icon=None, parent_id="cat-food-beverages-parent"))
+            await db.commit()
+
+        result = await seed_categories()
+        assert result["subcategories_retired"] == 0
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(select(Category).where(
+                Category.id == "cat-food-beverages-parent"))).scalar_one()
+            assert row.name == "Beverages"
 
 
 @pytest_asyncio.fixture(scope="module")
