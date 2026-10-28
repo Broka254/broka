@@ -219,6 +219,25 @@ async def test_a_receipt_is_sent_to_the_thread_but_not_back_to_its_owner():
     }]
 
 
+@pytest.mark.asyncio
+async def test_delivering_a_thread_tells_the_other_side_received_not_read(client):
+    """Delivered is announced on its own, with no read time: the sender's
+    open chat must show the dull double tick (received, unread), never
+    jump straight from one tick to "seen"."""
+    listing_id, seller, [buyer] = await _people()
+    await _direct(client, seller, "seller", listing_id, "hello", buyer_id=buyer)
+    with patch("api.routers.media.broadcast_receipt", new=AsyncMock()) as announce:
+        r = await client.post(f"/negotiate/{listing_id}/mark-delivered",
+                              json={}, headers=_auth(buyer))
+    assert r.status_code == 200, r.text
+    announce.assert_awaited_once()
+    args, kwargs = announce.call_args
+    assert args == (listing_id, buyer, "buyer")
+    assert kwargs["exclude_uid"] == buyer
+    assert kwargs["delivered_at"] is not None
+    assert kwargs["read_at"] is None
+
+
 # ── The chat socket stays open ────────────────────────────────────────────────
 
 class _FakeSocket:

@@ -121,6 +121,12 @@ class GlobalPollerService {
   // silence every other buyer's messages while one thread is open.
   final Set<String> _activelyViewedThreads = {};
 
+  // Thread key -> signature of the newest message this sweep has already
+  // recorded as delivered (see _checkAll). In-memory only: an app restart
+  // re-posts once per unread thread, which the forward-only watermark
+  // absorbs.
+  final Map<String, String> _deliveredMarks = {};
+
   static String threadKeyFor(String listingId, String? buyerId) =>
       '$listingId::${buyerId ?? ''}';
 
@@ -372,6 +378,7 @@ class GlobalPollerService {
     _registeredPushToken = null;
     _registeredPushUserId = null;
     _activelyViewedThreads.clear();
+    _deliveredMarks.clear();
     _shownCallNotifications.clear();
     _acknowledgedRooms.clear();
     unreadTotal.value = 0;
@@ -483,10 +490,27 @@ class GlobalPollerService {
         final unread = (thread['unread_count'] as int?) ??
                        (thread['unread'] as int?) ?? 0;
         if (unread > 0) {
-          unawaited(ApiService.markThreadDelivered(
-            listingId,
-            buyerId: thread['buyer_id'] as String?,
-          ));
+          // Once per new message, not once per sweep: this used to post
+          // on every 7-second pass for as long as the thread stayed
+          // unread - a database commit and a receipt broadcast to the
+          // sender's open chat each time, for a watermark that can only
+          // move forward anyway. A failed post un-marks, so the next
+          // sweep retries it instead of losing the receipt.
+          final buyerId = thread['buyer_id'] as String?;
+          final key = threadKeyFor(listingId, buyerId);
+          final signature =
+              '${thread['last_message_id'] ?? ''}|${thread['last_message_at'] ?? ''}';
+          if (_deliveredMarks[key] != signature) {
+            _deliveredMarks[key] = signature;
+            unawaited(ApiService.markThreadDelivered(
+              listingId,
+              buyerId: buyerId,
+            ).then((ok) {
+              if (!ok && _deliveredMarks[key] == signature) {
+                _deliveredMarks.remove(key);
+              }
+            }));
+          }
         }
 
         await _checkThreadForNewMessage(thread, prefs, announce: announce);

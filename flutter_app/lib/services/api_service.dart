@@ -1170,14 +1170,21 @@ class ApiService {
     }
   }
 
-  static Future<void> markThreadDelivered(String listingId, {String? buyerId}) async {
+  /// True when the server recorded the delivery. Callers that retry on
+  /// their own schedule (the inbox sweep) need to know a post failed, or
+  /// one dropped request would silence the receipt for good; the rest
+  /// ignore the result - a later sweep or screen visit posts it again.
+  static Future<bool> markThreadDelivered(String listingId, {String? buyerId}) async {
     try {
-      await _sendAuthed(() => http.post(
+      final response = await _sendAuthed(() => http.post(
         Uri.parse('$baseUrl/negotiate/$listingId/mark-delivered'),
         headers: _headers,
         body: jsonEncode({if (buyerId != null) 'buyer_id': buyerId}),
       ).timeout(const Duration(seconds: 10)));
-    } catch (_) {}
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> markThreadRead(String listingId, {String? buyerId}) async {

@@ -437,6 +437,12 @@ class NotificationService {
       return;
     }
     if (data['type'] == 'new_message') {
+      // This phone has the message now - that is "delivered", whether or
+      // not anyone has opened the chat. Without this the sender's tick
+      // sat on a single check until the chat was opened, then jumped
+      // straight to "seen": the dull double tick for received-but-unread
+      // never appeared for a message that arrived by push.
+      await markDeliveredFromPush(data);
       await showMessageFromPush(data);
       return;
     }
@@ -613,6 +619,14 @@ class NotificationService {
         // so the app's own sweep doesn't announce it a second time when
         // the app next runs.
         await recordMessageAnnounced(data);
+        // The phone received the message even though the app never came
+        // to the front: tell the server, so the sender sees the dull
+        // double tick (received, unread) instead of one tick until the
+        // chat is opened and it jumps to "seen". This isolate has no
+        // session in memory, so restore the saved one first - the same
+        // pattern notificationActionBackgroundHandler uses. Best effort:
+        // the next foreground sweep posts it again if this fails.
+        await markDeliveredFromPush(data, restoreSession: true);
         await svc.initialize(
             navKey: GlobalKey<NavigatorState>(), requestPermission: false);
         await svc.addFaceToPushed(data);
@@ -761,6 +775,62 @@ class NotificationService {
       await prefs.reload();
       await markAnnounced(
           prefs, listingId, data['buyerId'] as String?, messageId);
+    } catch (_) {}
+  }
+
+  /// A message push reached this phone: record the thread as delivered
+  /// (received, not read) so the sender's tick can show it.
+  ///
+  /// Only direct-chat pushes move the watermark. A push for Zeno's room
+  /// (screen: 'zeno') says nothing about the direct thread, and advancing
+  /// its delivered watermark would credit the other side's direct
+  /// messages with a delivery that hasn't been shown to have happened.
+  /// Reading still belongs to the chat screen alone (markThreadRead) -
+  /// this must never move the purple "seen" tick.
+  ///
+  /// Best effort and silent: [restoreSession] reloads the saved sign-in
+  /// for the FCM background isolate, which starts with no session in
+  /// memory (the pattern notificationActionBackgroundHandler uses). A
+  /// failure here is recovered by the foreground sweep's own delivered
+  /// posts when the app next runs.
+  static Future<void> markDeliveredFromPush(
+    Map<String, dynamic> data, {
+    bool restoreSession = false,
+  }) async {
+    if (data['type'] != 'new_message') return;
+    if (data['screen'] == 'zeno') return;
+    final listingId = data['listingId'] as String?;
+    if (listingId == null || listingId.isEmpty) return;
+    try {
+      if (restoreSession) {
+        // SharedPreferences caches per isolate, and the app may have
+        // rotated the token since this isolate last read it.
+        try {
+          await (await SharedPreferences.getInstance()).reload();
+        } catch (_) {}
+        // Remember whose session this isolate already holds: loading the
+        // saved one must not wipe it (in the app's main isolate - and in
+        // tests driving this handler there - that would sign the sweep
+        // out from under itself). The background isolate holds nothing,
+        // so it simply keeps what it loaded.
+        final previousUserId = ApiService.currentUserId;
+        await ApiService.loadSavedSession();
+        try {
+          if (!ApiService.isLoggedIn) return;
+          await ApiService.markThreadDelivered(
+            listingId,
+            buyerId: data['buyerId'] as String?,
+          );
+        } finally {
+          if (previousUserId != null) ApiService.currentUserId = previousUserId;
+        }
+        return;
+      }
+      if (!ApiService.isLoggedIn) return;
+      await ApiService.markThreadDelivered(
+        listingId,
+        buyerId: data['buyerId'] as String?,
+      );
     } catch (_) {}
   }
 

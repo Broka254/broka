@@ -154,6 +154,34 @@ void main() {
     expect(receipts(tester), [MessageReceipt.read]);
   });
 
+  testWidgets('a message received but not yet read shows the dull double tick',
+      (tester) async {
+    final sentAt = DateTime.now().subtract(const Duration(minutes: 10));
+    setFakeRoute((uri) {
+      final p = uri.path;
+      if (p == '/negotiate/listing-1/history') {
+        return [
+          {'role': 'buyer', 'content': 'Bado iko?', 'id': 'm1', 'created_at': _iso(sentAt)},
+        ];
+      }
+      if (p.endsWith('/read-status')) {
+        // Their phone has it (delivered after it was sent); they have not
+        // opened the chat (no read watermark). The middle state of the
+        // ladder: sent -> delivered -> seen.
+        return {
+          'seller_last_delivered': _iso(sentAt.add(const Duration(minutes: 1))),
+        };
+      }
+      return null;
+    });
+
+    await tester.pumpWidget(chat());
+    await _settle(tester);
+    expect(receipts(tester), [MessageReceipt.delivered]);
+    expect(find.text('Delivered'), findsOneWidget);
+    expect(find.text('Seen'), findsNothing);
+  });
+
   testWidgets('a message that could not be sent says so and goes again with the same id',
       (tester) async {
     var serverDown = true;

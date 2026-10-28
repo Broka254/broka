@@ -246,6 +246,76 @@ void main() {
       expect(cancelled, anyElement(equals({'id': 0, 'tag': 'thread_listing-1_buyer-1'})));
     });
 
+    List<http.Request> deliveredPosts() => requests
+        .where((r) => r.url.path == '/negotiate/listing-1/mark-delivered')
+        .toList();
+
+    test('a message push that reaches the phone marks the thread delivered',
+        () async {
+      // The phone has the message - Android drew it, or the foreground
+      // handler shows it - but the user has not opened the chat. That is
+      // exactly "received, not yet read": the sender's tick must move from
+      // a single tick to the dull double tick, not sit on "sent" until the
+      // chat is opened and jump straight to "seen".
+      SharedPreferences.setMockInitialValues(
+          {'auth_token': 'test-token', 'user_id': 'seller-1'});
+      await ApiService.loadSavedSession();
+      try {
+        await withClient(() =>
+            NotificationService.instance.handleForegroundFcmMessage(messagePush()));
+        expect(deliveredPosts(), hasLength(1));
+        expect(jsonDecode(deliveredPosts().single.body), {'buyer_id': 'buyer-1'});
+
+        requests.clear();
+        await withClient(() =>
+            NotificationService.handleBackgroundMessage(messagePush(id: 'm-2')));
+        expect(deliveredPosts(), hasLength(1),
+            reason: 'a backgrounded phone has still received the message');
+        final headers = deliveredPosts().single.headers;
+        expect(headers['authorization'] ?? headers['Authorization'],
+            'Bearer test-token',
+            reason: 'the background isolate loaded the saved session');
+      } finally {
+        // Leave no signed-in session behind for this file's other tests.
+        SharedPreferences.setMockInitialValues({});
+        await ApiService.loadSavedSession();
+        ApiService.currentUserId = 'seller-1';
+      }
+    });
+
+    test("a push for Zeno's room does not claim the direct chat was delivered",
+        () async {
+      // Zeno's messages are read in Zeno's room; the direct chat's
+      // delivered watermark (and the other side's ticks on their direct
+      // messages) must not move for one.
+      final zeno = messagePush()..['screen'] = 'zeno';
+      await withClient(
+          () => NotificationService.instance.handleForegroundFcmMessage(zeno));
+      expect(deliveredPosts(), isEmpty);
+    });
+
+    test('the sweep marks a thread delivered once per new message, not per sweep',
+        () async {
+      route = (req) => req.url.path.startsWith('/negotiate/inbox/')
+          ? _json([thread('d-1')])
+          : _json({'has_call': false});
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(deliveredPosts(), hasLength(1),
+          reason: 'seven-second sweeps must not re-post the same receipt');
+
+      route = (req) => req.url.path.startsWith('/negotiate/inbox/')
+          ? _json([thread('d-2')])
+          : _json({'has_call': false});
+      await withClient(() => GlobalPollerService.instance.catchUp());
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(deliveredPosts(), hasLength(2),
+          reason: 'a newer message is a newer delivery to record');
+      GlobalPollerService.instance.stop();
+    });
+
     test('a message a push announced is not announced again by the sweep', () async {
       // Android drew the push; the background isolate recorded it.
       await NotificationService.handleBackgroundMessage(messagePush(id: 'm-7'));
