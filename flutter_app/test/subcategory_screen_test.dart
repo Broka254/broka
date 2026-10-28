@@ -17,6 +17,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:broka/features/categories/domain/category_visual.dart';
 import 'package:broka/features/categories/domain/models/category.dart';
 import 'package:broka/features/categories/presentation/category_directory_screen.dart';
 import 'package:broka/features/categories/presentation/category_zone_screen.dart';
@@ -253,7 +254,9 @@ void main() {
       expect(find.byKey(Key('directory-card-${fakeTopLevelCategories.first}')), findsOneWidget);
       await tester.tap(find.byKey(const Key('directory-card-Property')));
       await _settleRoute(tester);
-      expect(find.text('PROPERTY ZONE'), findsOneWidget);
+      expect(
+          find.text(CategoryVisuals.zoneTitleFor('Property').toUpperCase()),
+          findsOneWidget);
     });
 
     testWidgets('Home\'s categories are pictures; its destinations are not', (tester) async {

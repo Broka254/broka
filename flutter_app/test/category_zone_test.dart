@@ -54,7 +54,8 @@ void main() {
 
         expect(tester.takeException(), isNull, reason: name);
         // Correct name, in the Zone title.
-        expect(find.text('$name ZONE'.toUpperCase()), findsOneWidget,
+        expect(find.text(CategoryVisuals.zoneTitleFor(name).toUpperCase()),
+            findsOneWidget,
             reason: '$name title');
         // Correct visual, from the shared resolver - header badge and
         // nothing else, since this fake backend returns listings.
@@ -94,6 +95,26 @@ void main() {
     });
   });
 
+  group('titles', () {
+    testWidgets('the header is the category label, the name above it is the '
+        'eyebrow', (tester) async {
+      await tester.pumpWidget(zone('Land'));
+      await _settle(tester);
+
+      // "The Plot", not "Land Zone" - and the category's own name kept above
+      // it, so the label is personality and the taxonomy is still readable.
+      expect(find.text('THE PLOT'), findsOneWidget);
+      expect(find.text('LAND'), findsOneWidget);
+      expect(find.text('LAND ZONE'), findsNothing);
+
+      // Per category, not a formula applied to the name.
+      await tester.pumpWidget(zone('Automobiles'));
+      await _settle(tester);
+      expect(find.text('MOTOR ROW'), findsOneWidget);
+      expect(find.text('AUTOMOBILES ZONE'), findsNothing);
+    });
+  });
+
   group('responsive', () {
     testWidgets('long names survive 320-430dp, at rest and scrolled',
         (tester) async {
@@ -106,7 +127,8 @@ void main() {
           await _settle(tester);
           expect(tester.takeException(), isNull,
               reason: '$name at ${width}dp, at rest');
-          expect(find.text('$name ZONE'.toUpperCase()), findsOneWidget,
+          expect(find.text(CategoryVisuals.zoneTitleFor(name).toUpperCase()),
+              findsOneWidget,
               reason: '$name at ${width}dp lost its title');
 
           await _scroll(tester, -700);
@@ -279,7 +301,9 @@ void main() {
       expect(requested.last.queryParameters['subcategory_id'], 'sub-Sub One');
       await tester.tap(find.byIcon(Icons.arrow_back_ios_new_rounded));
       await _settleRoute(tester);
-      expect(find.text('ELECTRONICS ZONE'), findsOneWidget);
+      expect(
+          find.text(CategoryVisuals.zoneTitleFor('Electronics').toUpperCase()),
+          findsOneWidget);
 
       // Sort.
       await tester.tap(find.byIcon(Icons.expand_more_rounded));

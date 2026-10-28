@@ -144,7 +144,6 @@ class SubcategoryVisuals {
     },
     'food & beverages': {
       'packaged foods & groceries': 'assets/category_art/food-and-beverages/packaged-foods-groceries.webp',
-      'beverages': 'assets/category_art/food-and-beverages/beverages.webp',
       'bakery & snacks': 'assets/category_art/food-and-beverages/bakery-snacks.webp',
       'meat & fish': 'assets/category_art/food-and-beverages/meat-fish.webp',
       'spices, oils & condiments': 'assets/category_art/food-and-beverages/spices-oils-condiments.webp',

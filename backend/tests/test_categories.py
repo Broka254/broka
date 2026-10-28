@@ -184,6 +184,7 @@ class TestSeedCategories:
         assert result == {
             "categories_created": 0,
             "subcategories_created": 0,
+            "subcategories_retired": 0,
             "filters_created": 0,
             "subcategory_filters_created": 0,
             "categories_renamed": 0,
@@ -192,6 +193,65 @@ class TestSeedCategories:
             "suggestions_updated": 0,
         }
         assert before == after
+
+    @pytest.mark.asyncio
+    async def test_retired_beverages_subcategory_goes_and_its_listings_stay(
+            self, client, seller_token):
+        # A database seeded before "Beverages" was retired still holds the
+        # row, and the seed only ever adds - so without Pass 2b it would keep
+        # being returned under Food & Beverages forever. Retiring it must
+        # delete the row and its filter fields, and leave a listing filed
+        # under it in the category (with no type) rather than losing the
+        # listing along with the type.
+        top = {c["name"]: c["id"] for c in (await client.get("/categories")).json()}
+        food_id = top["Food & Beverages"]
+
+        created = await client.post("/listings/", json={
+            "description": "Fresh stock delivered weekly, sold by the crate.",
+            "name": "Maize flour, 2kg",
+            "category": "Food & Beverages", "price": 220,
+            "lat": -1.286, "lng": 36.817,
+        }, headers={"Authorization": f"Bearer {seller_token}"})
+        assert created.status_code == 201, created.text
+        listing_id = created.json()["id"]
+
+        from api.database import CategoryFilter, Listing
+        from api.domains.categories.seed import seed_categories
+        from sqlalchemy import func as _func, select
+
+        async with AsyncSessionLocal() as db:
+            # Exactly the row an earlier start of this deployment created.
+            db.add(Category(id="cat-food-beverages", name="Beverages",
+                            icon=None, parent_id=food_id))
+            db.add(CategoryFilter(
+                id="filt-beverages", category_id="cat-food-beverages",
+                field_name="type", field_type="select",
+                options='["Soft Drinks", "Juice"]',
+            ))
+            await db.commit()
+            listing = (await db.execute(
+                select(Listing).where(Listing.id == listing_id))).scalar_one()
+            listing.subcategory_id = "cat-food-beverages"
+            await db.commit()
+
+        result = await seed_categories()
+        assert result["subcategories_retired"] == 1
+
+        subs = {c["name"]: c["id"] for c in
+                (await client.get(f"/categories/{food_id}/subcategories")).json()}
+        assert "Beverages" not in subs
+        assert "Packaged Foods & Groceries" in subs
+
+        async with AsyncSessionLocal() as db:
+            assert (await db.execute(select(_func.count()).select_from(Category).where(
+                Category.name == "Beverages",
+                Category.parent_id == food_id))).scalar_one() == 0
+            assert (await db.execute(select(_func.count()).select_from(CategoryFilter).where(
+                CategoryFilter.category_id == "cat-food-beverages"))).scalar_one() == 0
+            listing = (await db.execute(
+                select(Listing).where(Listing.id == listing_id))).scalar_one()
+            assert listing.subcategory_id is None
+            assert listing.category == "Food & Beverages"
 
 
 @pytest_asyncio.fixture(scope="module")

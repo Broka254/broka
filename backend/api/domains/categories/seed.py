@@ -80,6 +80,22 @@ RETIRED_SUBCATEGORY_FILTERS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Land", "Residential Plots"): ("acreage",),
 }
 
+# Subcategories retired from the taxonomy for good, keyed by (parent name,
+# subcategory name). Taking a name out of SUBCATEGORIES stops a FRESH
+# database creating it; every database seeded before that keeps the row and
+# the API would go on returning a type no seller should pick. Retiring
+# deletes the row, its filter fields, and clears the type on listings filed
+# under it (the listing keeps its category) - see seed_categories Pass 2b.
+# Leaf types only: a row with children is left alone rather than orphaning
+# them under a parent that vanished.
+#
+# "Beverages" (2026-10-28): Food & Beverages lists food and foodstuffs
+# only. A drinks aisle is a business of its own, and offering it here put a
+# type in the category that its own name no longer describes.
+RETIRED_SUBCATEGORIES: set[tuple[str, str]] = {
+    ("Food & Beverages", "Beverages"),
+}
+
 # Subcategories per top-level category (spec §3), in display order - the
 # most common first (service.py returns them in this order). "Other" is
 # deliberately left with zero subcategories - a real catch-all, not padded
@@ -127,7 +143,7 @@ SUBCATEGORIES: dict[str, list[str]] = {
         "Storage & Organization",
     ],
     "Food & Beverages": [
-        "Packaged Foods & Groceries", "Beverages", "Bakery & Snacks",
+        "Packaged Foods & Groceries", "Bakery & Snacks",
         "Meat & Fish", "Spices, Oils & Condiments", "Ready Meals & Catering",
     ],
     "Construction": [
@@ -762,10 +778,6 @@ SUBCATEGORY_FILTERS: dict[tuple[str, str], list[tuple[str, str, list[str] | None
     ("Home & Furniture", "Lighting"): [("type", "text", None)],
 
     ("Food & Beverages", "Packaged Foods & Groceries"): [("brand", "text", None)],
-    ("Food & Beverages", "Beverages"): [
-        ("type", "select", ["Soft Drinks", "Juice", "Water", "Tea & Coffee", "Other"]),
-        ("brand", "text", None),
-    ],
     ("Food & Beverages", "Meat & Fish"): [
         ("type", "select", ["Beef", "Goat", "Chicken", "Pork", "Fish", "Other"]),
     ],
@@ -1049,6 +1061,7 @@ async def seed_categories() -> dict:
     counts = {
         "categories_created": 0,
         "subcategories_created": 0,
+        "subcategories_retired": 0,
         "filters_created": 0,
         "subcategory_filters_created": 0,
         "categories_renamed": 0,
@@ -1142,6 +1155,34 @@ async def seed_categories() -> dict:
                     continue
                 db.add(Category(id=str(uuid.uuid4()), name=sub_name, icon=None, parent_id=parent.id))
                 counts["subcategories_created"] += 1
+        await db.commit()
+
+        # ── Pass 2b: subcategories retired from the taxonomy ─────────────
+        # Runs after Pass 2 so a name that moved (old spelling retired, new
+        # spelling added) is added first, and before Pass 4, whose bulk map
+        # must not hand a filter to a row this pass deleted.
+        for top_name, sub_name in RETIRED_SUBCATEGORIES:
+            parent = by_name.get(top_name)
+            if parent is None:
+                continue
+            row = await _child(db, parent.id, sub_name)
+            if row is None:
+                continue
+            # Nothing may still point at the row when it goes: its filter
+            # fields belong to it, and a listing filed under it keeps its
+            # category and simply loses the type (subcategory_id is
+            # nullable) - it must not vanish from the feed because the type
+            # it was filed under was retired.
+            from api.database import Listing
+            await db.execute(
+                delete(CategoryFilter).where(CategoryFilter.category_id == row.id)
+            )
+            await db.execute(
+                update(Listing).where(Listing.subcategory_id == row.id)
+                .values(subcategory_id=None)
+            )
+            await db.execute(delete(Category).where(Category.id == row.id))
+            counts["subcategories_retired"] += 1
         await db.commit()
 
         # ── Pass 3: top-level "More Filters" fields ─────────────────────

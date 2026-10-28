@@ -128,7 +128,28 @@ void main() {
         expect(CategoryVisuals.emojiFor(v.categoryName), v.emoji);
         expect(CategoryVisuals.iconFor(v.categoryName), v.icon);
         expect(CategoryVisuals.gradientFor(v.categoryName), v.gradient);
+        expect(CategoryVisuals.zoneTitleFor(v.categoryName), v.zoneTitle);
       }
+    });
+
+    test('every category has a label of its own for its screen', () {
+      // The brief's complaint was twenty-one screens all called "<name>
+      // Zone". A shared suffix, a blank label or two categories opening the
+      // same place would all be the same failure wearing a different hat.
+      final titles =
+          CategoryVisuals.canonical.map((v) => v.zoneTitle).toList();
+      expect(titles.toSet(), hasLength(titles.length),
+          reason: 'two categories would open the same-named screen');
+      for (final v in CategoryVisuals.canonical) {
+        expect(v.zoneTitle.trim(), isNotEmpty,
+            reason: '${v.categoryName} has no label');
+        expect(v.zoneTitle.toLowerCase().endsWith('zone'), isFalse,
+            reason: '${v.categoryName} still ends in "Zone"');
+      }
+      // Spot-checks from the taxonomy's two extremes, so a table that
+      // silently reverted to "<name> Zone" cannot pass on uniqueness alone.
+      expect(CategoryVisuals.zoneTitleFor('Land'), 'The Plot');
+      expect(CategoryVisuals.zoneTitleFor('Automobiles'), 'Motor Row');
     });
 
     test('"Other" is the catch-all and carries plain brand identity', () {

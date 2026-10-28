@@ -220,7 +220,17 @@ class _CategoryZoneScreenState extends State<CategoryZoneScreen> {
                   SliverPersistentHeader(
                     pinned: true,
                     delegate: ArtworkHeroHeader(
-                      title: '${widget.categoryName ?? 'Category'} Zone',
+                      // The category's own label ("Motor Row", "The Plot")
+                      // rather than "<Category> Zone": twenty-one screens all
+                      // ending in the same word read as one template, and the
+                      // brief asked for a name with some imagination. The
+                      // category's real name stays above it as the eyebrow,
+                      // so the label is flavour, never the only clue to where
+                      // you are.
+                      title: widget.categoryName == null
+                          ? CategoryVisuals.fallback.zoneTitle
+                          : visual.zoneTitle,
+                      eyebrow: widget.categoryName,
                       emoji: visual.emoji,
                       gradient: zoneColors,
                       assetPath: visual.assetPath,

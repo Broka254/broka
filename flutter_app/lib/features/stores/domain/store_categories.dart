@@ -89,6 +89,10 @@ class StoreCategories {
   /// not a category the backend seeds.
   static const CategoryVisual wholesaleVisual = CategoryVisual(
     categoryName: wholesale,
+    // The facet has no Zone screen of its own (its card opens the Wholesale
+    // catalog, not a category feed), but every visual carries a label so a
+    // caller can never be handed a blank title.
+    zoneTitle: 'The Wholesale Floor',
     emoji: '🏬',
     icon: Icons.storefront_rounded,
     gradient: [BrokaColors.neonPurple, BrokaColors.neonCyan],

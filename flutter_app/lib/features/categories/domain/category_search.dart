@@ -119,7 +119,6 @@ class CategorySearch {
     'Office Furniture': ['office chair', 'office desk'],
     // Food & Beverages
     'Packaged Foods & Groceries': ['flour', 'unga', 'sugar', 'groceries'],
-    'Beverages': ['soda', 'juice', 'drinking water', 'drinks'],
     'Bakery & Snacks': ['cake', 'bread', 'snacks', 'crisps', 'cookies'],
     'Meat & Fish': ['meat', 'nyama', 'samaki', 'beef'],
     'Spices, Oils & Condiments': ['spices', 'salt', 'cooking oil', 'masala'],

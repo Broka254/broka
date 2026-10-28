@@ -42,6 +42,13 @@ class CategoryVisual {
   /// Canonical display name, spelled exactly as the backend seeds it.
   final String categoryName;
 
+  /// What the category's own screen is called, in place of "<Category>
+  /// Zone": "Motor Row" for Automobiles, "The Plot" for Land. The real
+  /// category name still sits above it as the header's eyebrow, so the label
+  /// is personality rather than a puzzle. Deliberately not one formula for
+  /// all twenty-one - a table of "X Zone" it is not.
+  final String zoneTitle;
+
   /// Shown beside the name: the header badge, a card's corner, the
   /// fallback when there is no [assetPath].
   final String emoji;
@@ -62,6 +69,7 @@ class CategoryVisual {
 
   const CategoryVisual({
     required this.categoryName,
+    required this.zoneTitle,
     required this.emoji,
     required this.icon,
     required this.gradient,
@@ -85,6 +93,7 @@ class CategoryVisuals {
     // Was "Vehicles" until the 2026-09-25 listing overhaul (see _aliases).
     CategoryVisual(
       categoryName: 'Automobiles',
+      zoneTitle: 'Motor Row',
       emoji: '🚗',
       icon: Icons.directions_car_rounded,
       gradient: [BrokaColors.zoneOrange, BrokaColors.neonPurple],
@@ -92,6 +101,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Property',
+      zoneTitle: 'The Address',
       emoji: '🏠',
       icon: Icons.home_work_rounded,
       gradient: [BrokaColors.neonBlue, BrokaColors.neonGreen],
@@ -99,6 +109,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Land',
+      zoneTitle: 'The Plot',
       emoji: '🏞️',
       icon: Icons.landscape_rounded,
       gradient: [BrokaColors.zoneAmber, BrokaColors.neonGreen],
@@ -106,6 +117,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Electronics',
+      zoneTitle: 'The Circuit',
       emoji: '📱',
       icon: Icons.smartphone_rounded,
       gradient: [BrokaColors.neonCyan, BrokaColors.neonBlue],
@@ -113,6 +125,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Fashion',
+      zoneTitle: 'The Fitting Room',
       emoji: '👗',
       icon: Icons.checkroom_rounded,
       gradient: [BrokaColors.neonPink, BrokaColors.gold],
@@ -120,6 +133,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Agriculture',
+      zoneTitle: 'The Harvest',
       emoji: '🌾',
       icon: Icons.agriculture_rounded,
       gradient: [BrokaColors.neonGreen, BrokaColors.zoneAmber],
@@ -127,6 +141,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Home & Furniture',
+      zoneTitle: 'The Hearth',
       emoji: '🛋️',
       icon: Icons.chair_rounded,
       gradient: [BrokaColors.zoneAmber, BrokaColors.gold],
@@ -134,6 +149,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Food & Beverages',
+      zoneTitle: 'The Pantry',
       emoji: '🍽️',
       icon: Icons.restaurant_rounded,
       gradient: [BrokaColors.zoneOrange, BrokaColors.zoneAmber],
@@ -141,6 +157,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Construction',
+      zoneTitle: 'Groundwork',
       emoji: '🏗️',
       icon: Icons.construction_rounded,
       gradient: [BrokaColors.zoneOrange, BrokaColors.warning],
@@ -148,6 +165,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Beauty & Personal Care',
+      zoneTitle: 'The Glow Bar',
       emoji: '💄',
       icon: Icons.spa_rounded,
       gradient: [BrokaColors.neonPink, BrokaColors.zoneAmber],
@@ -155,6 +173,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Health & Medical',
+      zoneTitle: 'Vital Signs',
       emoji: '🏥',
       icon: Icons.medical_services_rounded,
       gradient: [BrokaColors.neonCyan, BrokaColors.neonGreen],
@@ -162,6 +181,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Baby & Kids',
+      zoneTitle: 'The Nursery',
       emoji: '🧸',
       icon: Icons.child_friendly_rounded,
       gradient: [BrokaColors.neonPink, BrokaColors.neonCyan],
@@ -173,6 +193,7 @@ class CategoryVisuals {
     // identified by its own id and parent_id everywhere it is used.
     CategoryVisual(
       categoryName: 'Gaming',
+      zoneTitle: 'The Arcade',
       emoji: '🎮',
       icon: Icons.sports_esports_rounded,
       gradient: [BrokaColors.neonPurple, BrokaColors.neonPink],
@@ -180,6 +201,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Sports & Fitness',
+      zoneTitle: 'The Arena',
       emoji: '⚽',
       icon: Icons.fitness_center_rounded,
       gradient: [BrokaColors.neonGreen, BrokaColors.neonBlue],
@@ -187,6 +209,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Books & Education',
+      zoneTitle: 'The Study',
       emoji: '📚',
       icon: Icons.menu_book_rounded,
       gradient: [BrokaColors.gold, BrokaColors.neonBlue],
@@ -194,6 +217,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Music & Instruments',
+      zoneTitle: 'The Stage',
       emoji: '🎸',
       icon: Icons.music_note_rounded,
       gradient: [BrokaColors.neonPink, BrokaColors.neonPurple],
@@ -201,6 +225,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Arts & Crafts',
+      zoneTitle: 'The Studio',
       emoji: '🎨',
       icon: Icons.palette_rounded,
       gradient: [BrokaColors.neonPurple, BrokaColors.zoneAmber],
@@ -208,6 +233,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Business & Industrial',
+      zoneTitle: 'The Trade Floor',
       emoji: '🏭',
       icon: Icons.factory_rounded,
       gradient: [BrokaColors.neonBlue, BrokaColors.warning],
@@ -215,6 +241,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Pets & Animals',
+      zoneTitle: 'Paws & Claws',
       emoji: '🐾',
       icon: Icons.pets_rounded,
       gradient: [BrokaColors.neonGreen, BrokaColors.neonPink],
@@ -222,6 +249,7 @@ class CategoryVisuals {
     ),
     CategoryVisual(
       categoryName: 'Services',
+      zoneTitle: 'The Help Desk',
       emoji: '🛠️',
       icon: Icons.handyman_rounded,
       gradient: [BrokaColors.neonCyan, BrokaColors.gold],
@@ -233,6 +261,7 @@ class CategoryVisuals {
     // one. It is also what an unrecognised name resolves to.
     CategoryVisual(
       categoryName: 'Other',
+      zoneTitle: 'The Market',
       emoji: '🛍️',
       icon: Icons.shopping_bag_rounded,
       gradient: BrokaColors.brandGradient,
@@ -298,6 +327,11 @@ class CategoryVisuals {
   /// Convenience accessors, so a call site that wants one field does not have
   /// to spell out the resolve.
   static String emojiFor(String? categoryName) => resolve(categoryName).emoji;
+
+  /// The label the category's screen is titled with (see
+  /// [CategoryVisual.zoneTitle]).
+  static String zoneTitleFor(String? categoryName) =>
+      resolve(categoryName).zoneTitle;
 
   static IconData iconFor(String? categoryName) => resolve(categoryName).icon;
 
