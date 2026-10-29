@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-284 endpoints served by `backend/main.py`. **Auth** is read from each
+285 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 55, optional 5, public 61, token 4, user 159.
+Counts: admin 55, optional 5, public 61, token 4, user 160.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -69,19 +69,19 @@ Counts: admin 55, optional 5, public 61, token 4, user 159.
 | POST | `/admin/alerts/{alert_id}/resolve` | admin | `resolve_alert` (backend/api/domains/admin/alerts_revenue.py:167) |
 | GET | `/admin/analytics/timeseries` | admin | `admin_timeseries` (backend/api/domains/admin/alerts_revenue.py:279) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:1943) |
-| GET | `/admin/communications` | admin | `list_communications` (backend/api/domains/service_communications/router.py:570) |
-| POST | `/admin/communications` | admin | `create_communication` (backend/api/domains/service_communications/router.py:613) |
-| GET | `/admin/communications/diagnostics/worker` | admin | `worker_diagnostics` (backend/api/domains/service_communications/router.py:1012) |
-| POST | `/admin/communications/preview` | admin | `preview_audience` (backend/api/domains/service_communications/router.py:552) |
-| GET | `/admin/communications/{communication_id}` | admin | `get_communication` (backend/api/domains/service_communications/router.py:657) |
-| PATCH | `/admin/communications/{communication_id}` | admin | `update_communication` (backend/api/domains/service_communications/router.py:670) |
-| POST | `/admin/communications/{communication_id}/cancel` | admin | `cancel_communication` (backend/api/domains/service_communications/router.py:849) |
-| POST | `/admin/communications/{communication_id}/complete` | admin | `complete_communication` (backend/api/domains/service_communications/router.py:873) |
-| POST | `/admin/communications/{communication_id}/publish` | admin | `publish_communication` (backend/api/domains/service_communications/router.py:748) |
-| GET | `/admin/communications/{communication_id}/recipients` | admin | `list_recipients` (backend/api/domains/service_communications/router.py:955) |
-| POST | `/admin/communications/{communication_id}/recipients/retry` | admin | `retry_recipients` (backend/api/domains/service_communications/router.py:922) |
-| POST | `/admin/communications/{communication_id}/schedule` | admin | `schedule_communication` (backend/api/domains/service_communications/router.py:725) |
-| GET | `/admin/communications/{communication_id}/stats` | admin | `communication_stats` (backend/api/domains/service_communications/router.py:996) |
+| GET | `/admin/communications` | admin | `list_communications` (backend/api/domains/service_communications/router.py:574) |
+| POST | `/admin/communications` | admin | `create_communication` (backend/api/domains/service_communications/router.py:617) |
+| GET | `/admin/communications/diagnostics/worker` | admin | `worker_diagnostics` (backend/api/domains/service_communications/router.py:1016) |
+| POST | `/admin/communications/preview` | admin | `preview_audience` (backend/api/domains/service_communications/router.py:556) |
+| GET | `/admin/communications/{communication_id}` | admin | `get_communication` (backend/api/domains/service_communications/router.py:661) |
+| PATCH | `/admin/communications/{communication_id}` | admin | `update_communication` (backend/api/domains/service_communications/router.py:674) |
+| POST | `/admin/communications/{communication_id}/cancel` | admin | `cancel_communication` (backend/api/domains/service_communications/router.py:853) |
+| POST | `/admin/communications/{communication_id}/complete` | admin | `complete_communication` (backend/api/domains/service_communications/router.py:877) |
+| POST | `/admin/communications/{communication_id}/publish` | admin | `publish_communication` (backend/api/domains/service_communications/router.py:752) |
+| GET | `/admin/communications/{communication_id}/recipients` | admin | `list_recipients` (backend/api/domains/service_communications/router.py:959) |
+| POST | `/admin/communications/{communication_id}/recipients/retry` | admin | `retry_recipients` (backend/api/domains/service_communications/router.py:926) |
+| POST | `/admin/communications/{communication_id}/schedule` | admin | `schedule_communication` (backend/api/domains/service_communications/router.py:729) |
+| GET | `/admin/communications/{communication_id}/stats` | admin | `communication_stats` (backend/api/domains/service_communications/router.py:1000) |
 | GET | `/admin/deals` | admin | `admin_deals` (backend/api/domains/admin/router.py:908) |
 | GET | `/admin/deals/{deal_id}` | admin | `admin_deal_detail` (backend/api/domains/admin/router.py:946) |
 | POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:1923) |
@@ -167,8 +167,9 @@ Counts: admin 55, optional 5, public 61, token 4, user 159.
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
 | GET | `/categories/{category_id}/subcategories` | public | `list_subcategories` (backend/api/domains/categories/router.py:26) |
-| GET | `/communications` | user | `list_my_announcements` (backend/api/domains/service_communications/router.py:1031) |
-| POST | `/communications/{communication_id}/read` | user | `mark_announcement_read` (backend/api/domains/service_communications/router.py:1069) |
+| GET | `/communications` | user | `list_my_announcements` (backend/api/domains/service_communications/router.py:1035) |
+| GET | `/communications/unread-count` | user | `unread_announcement_count` (backend/api/domains/service_communications/router.py:1107) |
+| POST | `/communications/{communication_id}/read` | user | `mark_announcement_read` (backend/api/domains/service_communications/router.py:1073) |
 | WS | `/deal-ws/ws/{deal_id}` | token | `deal_status_ws` (backend/api/domains/deal_ws/router.py:67) |
 | GET | `/deal/` | user | `get_my_deals` (backend/api/domains/escrow/router.py:349) |
 | POST | `/deal/finalize` | user | `finalize_deal` (backend/api/domains/escrow/router.py:88) |
@@ -924,6 +925,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 | Route | Widget |
 |---|---|
+| `/announcements` | `AnnouncementsScreen` |
 | `/assistant` | `AiAssistantScreen` |
 | `/auction` | `AuctionScreen` |
 | `/auth` | `AuthScreen` |
@@ -1017,6 +1019,14 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/subcategory_screen.dart` — lib/features/categories/presentation/subcategory_screen.dart
 - `presentation/widgets/category_art_card.dart` — lib/features/categories/presentation/widgets/category_art_card.dart
 - `presentation/widgets/feed_sort_row.dart` — lib/features/categories/presentation/widgets/feed_sort_row.dart
+
+### `flutter_app/lib/features/communications/`
+
+- `data/repositories/communications_repository.dart` — The customer's announcements feed: GET /communications, POST /communications/{id}/read and GET /communications/unread-count (backend/api/do…
+- `domain/models/announcement.dart` — One admin-published announcement, as GET /communications returns it (backend/api/domains/service_communications/router.py, CustomerAnnounce…
+- `presentation/announcement_detail_screen.dart` — One announcement, opened from the announcements centre or from a push.
+- `presentation/announcements_screen.dart` — BROKA - Announcements centre.
+- `presentation/announcements_state.dart` — The announcements centre's shared state: the feed, the server-backed unread count behind the badge, and read acknowledgement.
 
 ### `flutter_app/lib/features/discovery/`
 
@@ -1270,6 +1280,10 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### Tests (`flutter_app/test/`)
 
+- `announcements_notification_test.dart` — Announcement push routing: the service_communication payload the backend sends (service._push_data) - recognition, foreground presentation,…
+- `announcements_repository_test.dart` — The communications repository: GET /communications, POST .../read and GET /communications/unread-count (backend/api/domains/service_communi…
+- `announcements_screen_test.dart` — The announcements centre as the user sees it: loading, empty, populated and error states, title/body display, read/unread visuals, pull-to-…
+- `announcements_state_test.dart` — AnnouncementsState: feed loading, pagination, optimistic read acknowledgement with server reconciliation, unread-count handling, and per-ac…
 - `answer_from_notification_test.dart` — Answering a call from its notification (2026-10-08).
 - `api_endpoints_test.dart` — The app's backend address is compiled in, in two --dart-define names that four files default separately: API_URL (ApiService, ApiClient) fo…
 - `auth_gate_test.dart` — The "Create a free account" sheet (2026-10-14).
