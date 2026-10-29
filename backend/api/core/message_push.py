@@ -68,6 +68,13 @@ _LAST_PUSHED_MAX = 20000
 # instead of delivering stale text after the fresh push (the re-arm's own
 # task sends the fresh state).
 _generations: dict = {}
+# (listing_id, buyer_id, role) -> asyncio.Lock serialising the guard-and-send
+# for one thread's notification. Without it two tasks (a debounce run and a
+# register-time re-push, or two re-pushes) both pass the _last_pushed guard
+# and both send: the await on the FCM send yields between the check and the
+# record. Locks are never removed; the key space is bounded by active
+# threads and one small lock per thread is cheaper than a janitor.
+_send_locks: dict = {}
 
 
 def thread_tag(listing_id: str, buyer_id: str) -> str:
@@ -312,6 +319,12 @@ async def push_thread(
     `force` skips the already-pushed check: a phone that has just
     registered has not seen this thread's news even when another phone
     of the same account was pushed to earlier (see push_unread_for_user).
+
+    The guard-and-send below runs under a per-thread lock: checking
+    _last_pushed, sending, and recording are one atomic step, so two
+    tasks racing on the same thread cannot both send. The notification
+    itself is built before the lock (pure read, no shared state), so the
+    lock is held only across the cheap guard and the FCM send.
     """
     from api.core import push_devices
 
@@ -319,31 +332,33 @@ async def push_thread(
         note = await build_notification(db, listing_id, buyer_id, role)
     if note is None:
         return 0
-    if generation is not None and _generations.get((listing_id, buyer_id), 0) != generation:
-        return 0
     dedupe_key = (listing_id, buyer_id, role)
-    if not force and _last_pushed.get(dedupe_key) == note["message_id"]:
-        return 0
+    lock = _send_locks.setdefault(dedupe_key, asyncio.Lock())
+    async with lock:
+        if generation is not None and _generations.get((listing_id, buyer_id), 0) != generation:
+            return 0
+        if not force and _last_pushed.get(dedupe_key) == note["message_id"]:
+            return 0
 
-    tag = thread_tag(listing_id, buyer_id)
-    sent = await push_devices.push_user(
-        note["user_id"], title=note["title"], body=note["body"], data=note["data"],
-        android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
-        apns_thread_id=tag,
-    )
-    if sent > 0:
-        # Only a push a phone actually accepted counts as announced. This
-        # used to be recorded before the send, so a message that reached
-        # no phone at all - recipient offline, token not registered yet,
-        # a transient FCM failure - was marked pushed and could never be
-        # announced again for that thread, however long it stayed unread.
-        _last_pushed[dedupe_key] = note["message_id"]
-        _last_pushed.move_to_end(dedupe_key)
-        while len(_last_pushed) > _LAST_PUSHED_MAX:
-            _last_pushed.popitem(last=False)
-    logger.info("[message_push] MESSAGE_PUSHED thread=%s:%s role=%s phones=%d",
-                listing_id, buyer_id, role, sent)
-    return sent
+        tag = thread_tag(listing_id, buyer_id)
+        sent = await push_devices.push_user(
+            note["user_id"], title=note["title"], body=note["body"], data=note["data"],
+            android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
+            apns_thread_id=tag,
+        )
+        if sent > 0:
+            # Only a push a phone actually accepted counts as announced. This
+            # used to be recorded before the send, so a message that reached
+            # no phone at all - recipient offline, token not registered yet,
+            # a transient FCM failure - was marked pushed and could never be
+            # announced again for that thread, however long it stayed unread.
+            _last_pushed[dedupe_key] = note["message_id"]
+            _last_pushed.move_to_end(dedupe_key)
+            while len(_last_pushed) > _LAST_PUSHED_MAX:
+                _last_pushed.popitem(last=False)
+        logger.info("[message_push] MESSAGE_PUSHED thread=%s:%s role=%s phones=%d",
+                    listing_id, buyer_id, role, sent)
+        return sent
 
 
 async def push_unread_for_user(user_id: str) -> int:

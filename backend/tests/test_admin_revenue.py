@@ -70,11 +70,37 @@ async def seed():
     headers, user_id = await _admin()
     now = datetime.utcnow().replace(microsecond=0)
     async with AsyncSessionLocal() as db:
+        # Postgres enforces FKs (SQLite does not): payments need a real
+        # seller and real listings. One listing per payment row.
+        from api.database import Listing
+
+        seller = User(
+            name="Seller",
+            phone=f"+2548{uuid.uuid4().hex[:10]}",
+            email=f"{uuid.uuid4().hex[:10]}@revenue.test",
+            password_hash="x",
+        )
+        db.add(seller)
+        await db.flush()
+        listing_ids: list[str] = []
+        for i in range(3):
+            listing = Listing(
+                seller_id=seller.id,
+                name=f"Seed item {i}",
+                description="seed",
+                category="Electronics",
+                price=20000.0,
+                lat=0.0,
+                lng=0.0,
+            )
+            db.add(listing)
+            await db.flush()
+            listing_ids.append(listing.id)
         # Succeeded Daraja listing payment: KES 200 → 20000 minor.
         db.add(
             ListingPayment(
-                user_id=user_id,
-                listing_id=f"listing-{uuid.uuid4().hex[:8]}",
+                user_id=seller.id,
+                listing_id=listing_ids[0],
                 months=2,
                 monthly_fee=100,
                 listing_amount=200,
@@ -88,8 +114,8 @@ async def seed():
         # Failed payment: must not count.
         db.add(
             ListingPayment(
-                user_id=user_id,
-                listing_id=f"listing-{uuid.uuid4().hex[:8]}",
+                user_id=seller.id,
+                listing_id=listing_ids[1],
                 months=2,
                 monthly_fee=100,
                 listing_amount=200,
@@ -103,7 +129,7 @@ async def seed():
         # Succeeded Daraja subscription: KES 599.
         db.add(
             SubscriptionPayment(
-                user_id=user_id,
+                user_id=seller.id,
                 plan_id="pro",
                 months=1,
                 amount=599,
@@ -117,8 +143,8 @@ async def seed():
         # provider='zetupay' (the same payment — must count exactly once).
         ref = _ref()
         domain = ListingPayment(
-            user_id=user_id,
-            listing_id=f"listing-{uuid.uuid4().hex[:8]}",
+            user_id=seller.id,
+            listing_id=listing_ids[2],
             months=2,
             monthly_fee=100,
             listing_amount=200,
@@ -133,7 +159,7 @@ async def seed():
         db.add(
             ZetuPayPayment(
                 reference=ref,
-                user_id=user_id,
+                user_id=seller.id,
                 purpose=Purpose.LISTING_FEE,
                 amount=200,
                 phone="+254700000004",

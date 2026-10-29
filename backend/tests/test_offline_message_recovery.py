@@ -11,6 +11,11 @@ Three holes are pinned here:
     unread threads stayed silent until some *new* message arrived.
   * The inbox carried no listing photo, so the app could only draw a
     generic category icon for the conversation group.
+
+  A fourth, later: two push tasks for the same thread (a debounce run
+  racing a register-time re-push) both passed the _last_pushed guard and
+  both sent, because the FCM await yielded between the check and the
+  record. push_thread now holds a per-thread lock across guard-and-send.
 """
 import asyncio
 import uuid
@@ -91,6 +96,30 @@ async def test_a_push_that_reached_no_phone_is_not_recorded_as_pushed():
         sent = await message_push.push_thread(listing_id, buyer_id, "seller")
     assert sent == 1
     assert send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_racing_pushes_send_only_once():
+    listing_id, seller_id, buyer_id = await _thread()
+    key = (listing_id, buyer_id, "seller")
+    message_push._last_pushed.pop(key, None)
+    entered = 0
+
+    async def _send(*args, **kwargs):
+        nonlocal entered
+        entered += 1
+        # Yield mid-send: without the per-thread lock, the second task
+        # passes the guard while the first is parked here, and both send.
+        await asyncio.sleep(0.05)
+        return 1
+
+    with patch("api.core.push_devices.push_user", new=_send):
+        sent_a, sent_b = await asyncio.gather(
+            message_push.push_thread(listing_id, buyer_id, "seller"),
+            message_push.push_thread(listing_id, buyer_id, "seller"),
+        )
+    assert entered == 1, "two racing tasks must not both send"
+    assert sorted((sent_a, sent_b)) == [0, 1]
 
 
 @pytest.mark.asyncio

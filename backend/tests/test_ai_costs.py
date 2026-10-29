@@ -278,11 +278,34 @@ async def test_revenue_derives_fees_without_stored_rows(client):
     tag = uuid.uuid4().hex[:10]
     now = datetime.utcnow()
     async with AsyncSessionLocal() as db:
+        # Postgres enforces FKs (SQLite does not): the payment needs a
+        # real user and a real listing.
+        from api.database import Listing, User
+
+        seller = User(
+            name="Fee Seller",
+            phone=f"+2548{tag}",
+            email=f"{tag}@aicosts.test",
+            password_hash="x",
+        )
+        db.add(seller)
+        await db.flush()
+        listing = Listing(
+            seller_id=seller.id,
+            name="Fee seed item",
+            description="seed",
+            category="Electronics",
+            price=20000.0,
+            lat=0.0,
+            lng=0.0,
+        )
+        db.add(listing)
+        await db.flush()
         # Succeeded Daraja listing payment of KES 200 → M-Pesa band KES 3.
         db.add(
             ListingPayment(
-                user_id=tag,
-                listing_id=f"listing-{tag}",
+                user_id=seller.id,
+                listing_id=listing.id,
                 months=2,
                 monthly_fee=100,
                 listing_amount=200,
