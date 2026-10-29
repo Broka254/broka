@@ -30,7 +30,9 @@ import 'package:flutter/material.dart';
 
 import '../../../../main.dart';
 import '../../../../core/utils/result.dart';
+import '../../../../models/seller_standing.dart';
 import '../../../../widgets/axis_line_chart.dart';
+import '../../../../widgets/factor_trend_chart.dart';
 import '../../data/repositories/stores_repository.dart';
 import '../../domain/models/store_insights.dart';
 
@@ -70,7 +72,6 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
   String? _error;
   bool _loading = true;
   int _days = 7;
-  StoreMetric _metric = StoreMetric.visits;
   bool _changingPeriod = false;
   Timer? _timer;
 
@@ -286,64 +287,129 @@ class _StorePerformanceSectionState extends State<StorePerformanceSection> {
 
   // ── Trend ─────────────────────────────────────────────────────────────────
 
+  /// Distinct graphs, one per metric — the seller dashboard's pattern
+  /// (its six factor charts), not one chart behind a metric switch.
+  /// Visits, product views and reviews are counts; rating and response
+  /// time are banded factor charts in the seller dashboard's bands, so
+  /// green means the same thing on both dashboards.
   Widget _trendCard(StoreInsights d) {
-    final series = d.seriesFor(_metric);
-    return _card(
-      key: const Key('store-trend-card'),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(
-            child: Text('Performance',
-                style: TextStyle(color: BrokaColors.textHigh, fontSize: 15,
-                    fontWeight: FontWeight.w800)),
-          ),
-          if (_changingPeriod)
-            const SizedBox(width: 14, height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.gold)),
-        ]),
-        const SizedBox(height: 10),
-        // Metric switch.
-        Wrap(spacing: 6, runSpacing: 6, children: [
-          for (final metric in StoreMetric.values)
-            _ChoiceChip(
-              key: Key('metric-${metric.name}'),
-              label: metric.label,
-              selected: _metric == metric,
-              onTap: () => setState(() => _metric = metric),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _card(
+        key: const Key('store-trend-card'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Expanded(
+              child: Text('Performance',
+                  style: TextStyle(color: BrokaColors.textHigh, fontSize: 15,
+                      fontWeight: FontWeight.w800)),
             ),
+            if (_changingPeriod)
+              const SizedBox(width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: BrokaColors.gold)),
+          ]),
+          const SizedBox(height: 10),
+          // One period for every graph below. Wrap keeps all three
+          // reachable at large text sizes instead of clipping the last.
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final days in const [7, 30, 90])
+              _ChoiceChip(
+                key: Key('period-$days'),
+                label: '$days days',
+                selected: _days == days,
+                onTap: () => _setPeriod(days),
+              ),
+          ]),
         ]),
+      ),
+      const SizedBox(height: 14),
+      _countChart(
+        key: const Key('store-chart-visits'),
+        label: 'Visits',
+        axisTitle: 'Visitors',
+        series: d.visitSeries,
+        color: BrokaColors.neonBlue,
+      ),
+      const SizedBox(height: 14),
+      _countChart(
+        key: const Key('store-chart-views'),
+        label: 'Product views',
+        axisTitle: 'Views',
+        series: d.viewSeries,
+        color: BrokaColors.neonCyan,
+      ),
+      const SizedBox(height: 14),
+      KeyedSubtree(
+        key: const Key('store-chart-rating'),
+        child: FactorTrendChart(
+          label: 'Store rating',
+          points: [for (final p in d.ratingSeries) TrendPoint(p.date, p.value)],
+          currentValue: d.rating,
+          goodThreshold: SellerStanding.ratingGood,
+          poorThreshold: SellerStanding.ratingPoor,
+          format: (v) => '${v.toStringAsFixed(1)}/10',
+          yTitle: 'Rating out of 10',
+          lineColor: BrokaColors.gold,
+        ),
+      ),
+      const SizedBox(height: 14),
+      _countChart(
+        key: const Key('store-chart-reviews'),
+        label: 'Reviews',
+        axisTitle: 'Reviews',
+        series: d.reviewSeries,
+        color: BrokaColors.neonPink,
+      ),
+      const SizedBox(height: 14),
+      KeyedSubtree(
+        key: const Key('store-chart-response'),
+        child: FactorTrendChart(
+          label: 'Response time',
+          points: [for (final p in d.responseSeries) TrendPoint(p.date, p.value)],
+          currentValue: d.responseMinutes,
+          higherIsBetter: false,
+          goodThreshold: SellerStanding.responseGood,
+          poorThreshold: SellerStanding.responsePoor,
+          format: SellerStanding.formatMinutes,
+          yTitle: 'Avg reply',
+          lineColor: BrokaColors.neonBlue,
+        ),
+      ),
+    ]);
+  }
+
+  Widget _countChart({
+    required Key key,
+    required String label,
+    required String axisTitle,
+    required List<StoreDayPoint> series,
+    required Color color,
+  }) {
+    return _card(
+      key: key,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(color: BrokaColors.textHigh, fontSize: 13,
+                fontWeight: FontWeight.w800)),
         const SizedBox(height: 10),
         SizedBox(
-          height: 164,
+          height: 150,
           child: series.isEmpty
               ? const Center(
-                  child: Text('No data yet', style: TextStyle(color: BrokaColors.textMid, fontSize: 13)))
+                  child: Text('No data yet',
+                      style: TextStyle(color: BrokaColors.textMid, fontSize: 13)))
               : AxisLineChart(
                   values: [for (final p in series) p.count.toDouble()],
                   positions: datePositions([for (final p in series) p.date]),
                   xTicks: dateTicks([for (final p in series) p.date]),
                   yFormat: (v) => v.round().toString(),
                   xTitle: 'Date',
-                  yTitle: _metric.axisTitle,
-                  lineColor: BrokaColors.neonBlue,
+                  yTitle: axisTitle,
+                  lineColor: color,
                   yFloor: 0,
                   minStep: 1,
                   showLastValue: true,
                 ),
         ),
-        const SizedBox(height: 10),
-        // A phone with a large text scale can leave the three choices
-        // narrower than one row. Wrap keeps all of them reachable instead
-        // of clipping the last period; the card itself scrolls vertically.
-        Wrap(spacing: 6, runSpacing: 6, children: [
-          for (final days in const [7, 30, 90])
-            _ChoiceChip(
-              key: Key('period-$days'),
-              label: '$days days',
-              selected: _days == days,
-              onTap: () => _setPeriod(days),
-            ),
-        ]),
       ]),
     );
   }

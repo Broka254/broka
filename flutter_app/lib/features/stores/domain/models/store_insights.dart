@@ -60,6 +60,23 @@ class StoreDayPoint {
       ];
 }
 
+/// One day on a measured-value series (rating /10, response minutes).
+/// Null value = not measured that day; the chart shows a gap, not zero.
+class StoreValuePoint {
+  final DateTime date;
+  final double? value;
+  const StoreValuePoint(this.date, this.value);
+
+  static List<StoreValuePoint> listFromJson(Object? json) => [
+        for (final row in json as List? ?? const [])
+          if (row is Map && DateTime.tryParse(row['date'] as String? ?? '') != null)
+            StoreValuePoint(
+              DateTime.parse(row['date'] as String),
+              (row['value'] as num?)?.toDouble(),
+            ),
+      ];
+}
+
 class StoreTopProduct {
   final String id;
   final String name;
@@ -147,6 +164,12 @@ class StoreInsights {
   final List<StoreDayPoint> viewSeries;
   final List<StoreDayPoint> chatSeries;
 
+  /// Distinct factor series, one graph each (like the seller dashboard):
+  /// the store's /10 rating, new reviews per day, and reply minutes.
+  final List<StoreValuePoint> ratingSeries;
+  final List<StoreDayPoint> reviewSeries;
+  final List<StoreValuePoint> responseSeries;
+
   final Map<String, int> visitsBySource;
   final Map<String, int> visitsBySurface;
   final Map<String, int> sharesByChannel;
@@ -183,6 +206,9 @@ class StoreInsights {
     this.visitSeries = const [],
     this.viewSeries = const [],
     this.chatSeries = const [],
+    this.ratingSeries = const [],
+    this.reviewSeries = const [],
+    this.responseSeries = const [],
     this.visitsBySource = const {},
     this.visitsBySurface = const {},
     this.sharesByChannel = const {},
@@ -238,6 +264,9 @@ class StoreInsights {
       visitSeries: StoreDayPoint.listFromJson(series['visits']),
       viewSeries: StoreDayPoint.listFromJson(series['product_views']),
       chatSeries: StoreDayPoint.listFromJson(series['chats']),
+      ratingSeries: StoreValuePoint.listFromJson(series['rating']),
+      reviewSeries: StoreDayPoint.listFromJson(series['reviews']),
+      responseSeries: StoreValuePoint.listFromJson(series['response_minutes']),
       visitsBySource: counts(sources['visits_by_source']),
       visitsBySurface: counts(sources['visits_by_surface']),
       sharesByChannel: counts(sources['shares_by_channel']),

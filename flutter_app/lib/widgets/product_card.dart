@@ -220,18 +220,6 @@ class ProductCard extends StatelessWidget {
     }
   }
 
-  // Real 0-5 rating, shown only when > 0 (a seller with no ratings yet
-  // showing "★ 0.0" would read as a bad rating, not "no data") - this is
-  // the honest substitute for the mockup's fabricated "🛡 99%", not an
-  // attempt to reproduce that exact number.
-  double get _sellerRating {
-    try {
-      return (item.sellerRating as num?)?.toDouble() ?? 0;
-    } catch (_) {
-      return 0;
-    }
-  }
-
   // FIX (2026-08-18, reported: "a 5.0 rating with 0 reviews/deals is
   // mathematically impossible... users will assume the app is fake/bots"):
   // User.rating defaults to 5.0 at account creation (database.py). The API
@@ -251,6 +239,31 @@ class ProductCard extends StatelessWidget {
       return (item.sellerCompletedDeals as num?)?.toInt() ?? 0;
     } catch (_) {
       return 0;
+    }
+  }
+
+  /// The headline rating: the composite out of 10, in which buyer
+  /// reviews are only one term beside reply speed and time on BROKA.
+  /// A store listing shows its SHOP's /10; a personal listing shows the
+  /// seller's. Never the raw 1-5 review average — one 5-star review
+  /// used to render as a perfect "★ 5.0 (1)".
+  double? get _overallRating {
+    try {
+      final store = (item.storeRating as num?)?.toDouble();
+      if (store != null) return store;
+      return (item.sellerOverallRating as num?)?.toDouble();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int get _overallReviewCount {
+    try {
+      final storeReviews = (item.storeReviewCount as num?)?.toInt() ?? 0;
+      if (storeReviews > 0) return storeReviews;
+      return _sellerReviewCount;
+    } catch (_) {
+      return _sellerReviewCount;
     }
   }
 
@@ -851,13 +864,16 @@ class ProductCard extends StatelessWidget {
               const SizedBox(width: 3),
               const Icon(Icons.verified, size: 11, color: Color(0xFF4DD6A5)),
             ],
-            if (_sellerRating > 0 && _sellerReviewCount > 0) ...[
+            if (_overallRating != null) ...[
               const SizedBox(width: 3),
               const Icon(Icons.star_rounded, size: 11, color: BrokaColors.gold),
               Text(
-                  showReviewCount
-                      ? '${_sellerRating.toStringAsFixed(1)} ($_sellerReviewCount)'
-                      : _sellerRating.toStringAsFixed(1),
+                  // On a store's row the shop's name is what a buyer can
+                  // act on, so the count gives way (as 'New seller' did).
+                  showReviewCount && !hasStore && _overallReviewCount > 0
+                      ? '${_overallRating!.toStringAsFixed(1)}/10 ($_overallReviewCount)'
+                      : '${_overallRating!.toStringAsFixed(1)}/10',
+                  key: const Key('product-card-rating'),
                   maxLines: 1,
                   softWrap: false,
                   style: const TextStyle(

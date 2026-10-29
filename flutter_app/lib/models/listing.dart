@@ -79,6 +79,11 @@ class Listing {
   final String? storeId;
   final String? storeName;
   final String? storeSlug;
+  /// Composite ratings out of 10 (reviews are only one term — see
+  /// backend seller_rating / stores rating). Null = not rated/shown.
+  final double? sellerOverallRating;
+  final double? storeRating;
+  final int?    storeReviewCount;
 
   Listing({
     required this.id,
@@ -130,6 +135,9 @@ class Listing {
     this.storeId,
     this.storeName,
     this.storeSlug,
+    this.sellerOverallRating,
+    this.storeRating,
+    this.storeReviewCount,
   });
 
   factory Listing.fromJson(Map<String, dynamic> j) => Listing(
@@ -193,6 +201,9 @@ class Listing {
         storeId:              j['store_id']    as String?,
         storeName:            j['store_name']  as String?,
         storeSlug:            j['store_slug']  as String?,
+        sellerOverallRating:  (j['seller_overall_rating'] as num?)?.toDouble(),
+        storeRating:          (j['store_rating'] as num?)?.toDouble(),
+        storeReviewCount:     (j['store_review_count'] as num?)?.toInt(),
       );
 
   // Category-alignment pass (2026-09-18): this four-case switch only

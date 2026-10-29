@@ -704,6 +704,24 @@ class AuctionMeta(Base):
     ending_soon_claimed_at = Column(DateTime, nullable=True)
 
 
+class ListingView(Base):
+    """One row per (listing, viewer account): the first time that account
+    viewed the listing. `Listing.views` is incremented only when a row is
+    inserted here, so one account viewing a product twice counts once —
+    for store listings and personal listings alike (both go through
+    ListingService.get_listing). Anonymous views have no account to
+    dedupe against and still increment the counter directly."""
+    __tablename__ = "listing_views"
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    listing_id = Column(String, ForeignKey("listings.id"), nullable=False, index=True)
+    viewer_id  = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("listing_id", "viewer_id", name="uq_listing_view_listing_viewer"),
+    )
+
+
 class Wishlist(Base):
     __tablename__ = "wishlists"
     id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))

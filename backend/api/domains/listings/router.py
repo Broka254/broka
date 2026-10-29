@@ -908,6 +908,10 @@ async def seller_metrics(
     days_on = ((datetime.utcnow() - user.created_at).total_seconds() / 86400.0
                if user.created_at else 0.0)
 
+    from api.domains.reviews.stats import seller_review_figures
+    review_count, review_average = (
+        (await seller_review_figures(db, [seller_id])).get(seller_id, (0, None))
+    )
     signals = SellerSignals(
         dcr_percent=dcr,
         median_response_minutes=median_minutes,
@@ -916,6 +920,8 @@ async def seller_metrics(
         days_on_broka=days_on,
         unique_counterparties=unique_counterparties,
         countable_value_deals=countable,
+        review_average=review_average,
+        review_count=review_count,
     )
     breakdown = overall_rating(signals)
 
@@ -964,7 +970,10 @@ async def seller_metrics(
                 "volume":   breakdown.volume_component,
                 "tenure":   breakdown.tenure_component,
                 "backlog":  breakdown.backlog_component,
+                "review":   breakdown.review_component,
             },
+            "review_count": review_count,
+            "review_average": review_average,
             "confidence": breakdown.confidence,
             "raw_rating": breakdown.raw_rating,
             # Track record rather than current form - see credibility_score.

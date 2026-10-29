@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, case, or_
 
 from api.database import (
-    Listing, ListingStatus, ListingType, User, Interest, Deal, DealStatus, Category,
+    Listing, ListingStatus, ListingType, ListingView, User, Interest, Deal, DealStatus, Category,
     CategoryFilter, ListingLike, SellerMetrics, Wishlist,
 )
 from api.models.store import Store
@@ -25,6 +25,32 @@ from .handover import handover, is_deliverable
 from .paid import fee_applies, fee_state, is_live, live_clause
 from .stock import is_stocked, units_taken, units_total
 from .validation import load_attributes
+
+
+def _seller_overall_rating(seller, seller_review) -> Optional[float]:
+    """The seller's composite /10 for a listing payload, from the cheap
+    signals a card page already has (reviews, account age, deals done).
+
+    Reply speed and DCR are measured by the nightly snapshot
+    (trust/public_standing.py), which the product screen prefers; this
+    live figure exists so a card never falls back to showing the raw
+    1-5 review average as if it were the rating.
+    """
+    if seller is None:
+        return None
+    from api.domains.trust.seller_rating import SellerSignals, overall_rating
+    count, average = seller_review if seller_review else (0, None)
+    days_on = (
+        (datetime.utcnow() - seller.created_at).total_seconds() / 86400.0
+        if getattr(seller, "created_at", None) else 0.0
+    )
+    return overall_rating(SellerSignals(
+        median_response_minutes=None,
+        completed_deals=int(getattr(seller, "completed_deals", 0) or 0),
+        days_on_broka=max(days_on, 0.0),
+        review_average=average,
+        review_count=int(count or 0),
+    )).rating
 
 
 def _coerce_dt(value) -> Optional[datetime]:
@@ -581,12 +607,34 @@ class ListingService:
         # one that never existed - its seller sees it at /private.
         if not listing or not is_live(listing):
             raise HTTPException(status_code=404, detail="Listing not found")
-        # A view is a buyer looking. The seller opening their own listing to
-        # check it counted too, and padded the views the sell probability
-        # divides saves by.
-        if viewer_id is None or viewer_id != listing.seller_id:
+        # A view is a buyer looking — once per account. The seller opening
+        # their own listing never counts, and a signed-in buyer opening it
+        # again does not count again: ListingView's unique (listing,
+        # viewer) row is the record, and the counter only moves when a
+        # new row lands. This is the one path for store and personal
+        # listings alike. Anonymous views have no account to dedupe
+        # against, so they count as before.
+        if viewer_id is None:
             listing.views = (listing.views or 0) + 1
             await self.db.commit()
+        elif viewer_id != listing.seller_id:
+            seen = (await self.db.execute(
+                select(ListingView.id).where(
+                    ListingView.listing_id == listing.id,
+                    ListingView.viewer_id == viewer_id,
+                )
+            )).scalar_one_or_none()
+            if seen is None:
+                self.db.add(ListingView(listing_id=listing.id, viewer_id=viewer_id))
+                listing.views = (listing.views or 0) + 1
+                try:
+                    await self.db.commit()
+                except IntegrityError:
+                    # Two opens raced: the other one counted this account.
+                    await self.db.rollback()
+                    fresh = await self.db.get(Listing, listing.id)
+                    if fresh is not None:
+                        listing.views = fresh.views
         seller = (await self.db.execute(select(User).where(User.id == listing.seller_id))).scalar_one_or_none()
         store = await self.db.get(Store, listing.store_id) if listing.store_id else None
         assets = await load_listing_media(self.db, [listing], [seller])
@@ -1537,6 +1585,24 @@ class ListingService:
             # gave, and a card that showed it made every new seller perfect.
             "seller_rating": seller_review[1] if seller else None,
             "seller_review_count": int(seller_review[0]) if seller else 0,
+            # The headline rating buyers judge by: the composite /10, in
+            # which buyer reviews are only one term beside reply speed,
+            # time on BROKA and the deal record. `seller_rating` above
+            # stays the raw 1-5 review average for surfaces that label it
+            # as such; a card must never present that average as the
+            # seller's rating (one 5-star review read as a perfect 5.0).
+            "seller_overall_rating": _seller_overall_rating(seller, seller_review),
+            # A store listing carries its SHOP's composite /10 too (its
+            # own reviews, reply speed and tenure — stores/rating.py),
+            # so a card can show the store's number, not the owner's
+            # raw review average.
+            "store_rating": (
+                round(float(store.rating), 2)
+                if store is not None and getattr(store, "rating", None) is not None else None
+            ),
+            "store_review_count": (
+                int(getattr(store, "rating_reviews", 0) or 0) if store is not None else 0
+            ),
             "seller_completed_deals": (seller.completed_deals or 0) if seller else 0,
             # FIX (home-redesign brief, 2026-08-16): needed for the listing
             # card's trader-avatar requirement - User.profile_photo already

@@ -36,8 +36,6 @@ import '../core/network/api_client.dart';
 import '../core/utils/result.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
-import '../features/stores/data/store_cart.dart';
-import '../features/stores/presentation/store_cart_screen.dart';
 import '../features/zeno_assistant/domain/zeno_about_listing.dart';
 import '../main.dart';
 import '../models/listing.dart';
@@ -324,6 +322,7 @@ class _ProductScreenState extends State<ProductScreen> {
     final tint = CategoryVisuals.gradientFor(l.category).first;
     final sections = <Widget>[
       _buildMediaSection(l),
+      _buildEngagementBar(l),
       _buildInfoSection(l),
       if (_detailRows(l).isNotEmpty) _buildDetailsCard(l),
       _buildDealTerms(l),
@@ -425,46 +424,92 @@ class _ProductScreenState extends State<ProductScreen> {
         ),
         const SizedBox(width: 8),
         _saleTypeBadge(l),
-        if (!_isMine) ...[
-          const SizedBox(width: 2),
-          _likeButton(),
-          _saveButton(),
-        ] else if (_engagement?.likes != null)
-          _myCounts(_engagement!),
       ]),
     );
   }
 
-  Widget _toggleIcon({
+  /// Like and Save as big, labelled actions under the photo — where a
+  /// buyer is already looking — not two 22px glyphs squeezed into the
+  /// header beside the sale badge. Each is a full-width-half pill, 52dp
+  /// tall with a 24px icon and a word, so liking or saving is an obvious
+  /// tap, and its on-state fills so it reads at a glance.
+  Widget _buildEngagementBar(Listing l) {
+    if (_isMine) {
+      final e = _engagement;
+      if (e?.likes == null) return const SizedBox.shrink();
+      return Padding(
+        key: const Key('product-engagement'),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+        child: _myCounts(e!),
+      );
+    }
+    return Padding(
+      key: const Key('product-engagement'),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      child: Row(children: [
+        Expanded(child: _likeButton()),
+        const SizedBox(width: 10),
+        Expanded(child: _saveButton()),
+      ]),
+    );
+  }
+
+  Widget _engagementPill({
     required Key key,
     required bool on,
     required String tooltip,
+    required String label,
     required IconData onIcon,
     required IconData offIcon,
     required Color onColor,
     required VoidCallback onPressed,
   }) =>
-      IconButton(
-        key: key,
-        tooltip: tooltip,
-        onPressed: onPressed,
-        visualDensity: VisualDensity.compact,
-        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-        padding: EdgeInsets.zero,
-        icon: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          transitionBuilder: (child, anim) => ScaleTransition(scale: anim, child: child),
-          child: Icon(on ? onIcon : offIcon,
-              key: ValueKey(on), color: on ? onColor : BrokaColors.textHigh, size: 22),
+      Semantics(
+        button: true,
+        selected: on,
+        label: tooltip,
+        child: Tooltip(
+          message: tooltip,
+          child: GestureDetector(
+            key: key,
+            onTap: onPressed,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: on ? onColor.withOpacity(0.18) : BrokaColors.bgCard.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: on ? onColor : BrokaColors.border, width: on ? 1.6 : 1),
+              ),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  transitionBuilder: (child, anim) =>
+                      ScaleTransition(scale: anim, child: child),
+                  child: Icon(on ? onIcon : offIcon,
+                      key: ValueKey(on),
+                      color: on ? onColor : BrokaColors.textHigh, size: 24),
+                ),
+                const SizedBox(width: 8),
+                Text(label,
+                    style: TextStyle(
+                        color: on ? onColor : BrokaColors.textHigh,
+                        fontSize: 15, fontWeight: FontWeight.w800)),
+              ]),
+            ),
+          ),
         ),
       );
 
   Widget _likeButton() {
     final liked = _engagement?.liked ?? false;
-    return _toggleIcon(
+    return _engagementPill(
       key: const Key('product-like'),
       on: liked,
       tooltip: liked ? 'Unlike' : 'Like',
+      label: liked ? 'Liked' : 'Like',
       onIcon: Icons.favorite_rounded,
       offIcon: Icons.favorite_border_rounded,
       onColor: BrokaColors.danger,
@@ -474,10 +519,11 @@ class _ProductScreenState extends State<ProductScreen> {
 
   Widget _saveButton() {
     final saved = _engagement?.saved ?? false;
-    return _toggleIcon(
+    return _engagementPill(
       key: const Key('product-save'),
       on: saved,
       tooltip: saved ? 'Remove from saved' : 'Save',
+      label: saved ? 'Saved' : 'Save',
       onIcon: Icons.bookmark_rounded,
       offIcon: Icons.bookmark_border_rounded,
       onColor: BrokaColors.gold,
@@ -495,15 +541,17 @@ class _ProductScreenState extends State<ProductScreen> {
               '${e.saves} ${e.saves == 1 ? 'save' : 'saves'}',
           excludeSemantics: true,
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.favorite_rounded, size: 15, color: BrokaColors.danger),
-            const SizedBox(width: 3),
-            Text('${e.likes}', style: const TextStyle(color: BrokaColors.textHigh,
-                fontSize: 13, fontWeight: FontWeight.w800)),
-            const SizedBox(width: 8),
-            const Icon(Icons.bookmark_rounded, size: 15, color: BrokaColors.gold),
-            const SizedBox(width: 3),
-            Text('${e.saves}', style: const TextStyle(color: BrokaColors.textHigh,
-                fontSize: 13, fontWeight: FontWeight.w800)),
+            const Icon(Icons.favorite_rounded, size: 20, color: BrokaColors.danger),
+            const SizedBox(width: 5),
+            Text('${e.likes} ${e.likes == 1 ? 'like' : 'likes'}',
+                style: const TextStyle(color: BrokaColors.textHigh,
+                    fontSize: 14, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 16),
+            const Icon(Icons.bookmark_rounded, size: 20, color: BrokaColors.gold),
+            const SizedBox(width: 5),
+            Text('${e.saves} ${e.saves == 1 ? 'save' : 'saves'}',
+                style: const TextStyle(color: BrokaColors.textHigh,
+                    fontSize: 14, fontWeight: FontWeight.w800)),
           ]),
         ),
       );
@@ -1454,15 +1502,17 @@ class _ProductScreenState extends State<ProductScreen> {
         border: const Border(top: BorderSide(color: BrokaColors.border)),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // A store product is bought like one in a shop: Add to cart beside
-        // the main action, the price above both. Everything else keeps the
-        // one-row bar.
+        // A store product: the price above two full buttons on the lower
+        // bar — Visit Store beside the main action. There is no Add to
+        // cart here: a buyer who wants the shop goes to it, and a buyer
+        // who wants this item starts the negotiation. Everything else
+        // keeps the one-row bar.
         if (_sellsFromStore(l))
           Column(mainAxisSize: MainAxisSize.min, children: [
             _ctaPrice(l),
             const SizedBox(height: 10),
             Row(children: [
-              Expanded(child: _addToCartButton(l)),
+              Expanded(child: _visitStoreButton(l)),
               const SizedBox(width: 10),
               Expanded(child: _ctaButton(l)),
             ]),
@@ -1630,53 +1680,25 @@ class _ProductScreenState extends State<ProductScreen> {
     Navigator.pushNamed(context, '/negotiate', arguments: {'listing': l, 'role': 'buyer'});
   }
 
-  /// Add to cart, or - once it's in - how many and the way to the cart.
-  Widget _addToCartButton(Listing l) {
-    final cart = StoreCart.of(l.storeId!);
-    return ListenableBuilder(
-      listenable: cart,
-      builder: (context, _) {
-        final inCart = cart.quantityOf(l.id);
-        void openCart() => openStoreCart(context,
-            storeId: l.storeId!, storeName: l.storeName ?? 'Store',
-            animateBackground: widget.animateBackground);
-        return OutlinedButton.icon(
-          key: const Key('product-add-to-cart'),
-          onPressed: () {
-            if (inCart > 0) return openCart();
-            cart.add(CartItem.fromFields(
-              id: l.id,
-              name: l.name,
-              price: l.price,
-              category: l.category,
-              priceUnit: l.priceUnit,
-              quantity: l.quantity,
-              unitsLeft: l.unitsLeft,
-              cover: l.cover,
-              photos: l.photos,
-            ));
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(SnackBar(
-                content: const Text('Added to your cart'),
-                action: SnackBarAction(label: 'View cart', onPressed: openCart),
-              ));
-          },
-          style: OutlinedButton.styleFrom(
-            foregroundColor: BrokaColors.textHigh,
-            minimumSize: const Size.fromHeight(50),
-            side: const BorderSide(color: BrokaColors.gold, width: 1.4),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          ),
-          icon: Icon(inCart > 0 ? Icons.shopping_cart_checkout_rounded
-              : Icons.add_shopping_cart_rounded, size: 19),
-          label: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(inCart > 0 ? 'In cart ($inCart)' : 'Add to cart',
-                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
-          ),
-        );
-      },
+  /// Visit the store this product is sold from. Same height as the main
+  /// action beside it (52dp), so the lower bar reads as two equal choices.
+  Widget _visitStoreButton(Listing l) {
+    return OutlinedButton.icon(
+      key: const Key('product-visit-store'),
+      onPressed: () => Navigator.pushNamed(
+        context, '/store-view', arguments: {'storeId': l.storeId}),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: BrokaColors.textHigh,
+        minimumSize: const Size.fromHeight(52),
+        side: const BorderSide(color: BrokaColors.gold, width: 1.4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      icon: const Icon(Icons.storefront_rounded, size: 20),
+      label: const FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text('Visit Store',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
+      ),
     );
   }
 

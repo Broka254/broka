@@ -121,6 +121,11 @@ async def write_daily_snapshots(db: AsyncSession, on_date: date | None = None) -
     )
     metrics = {r[0]: (r[1], r[2]) for r in metrics_r.all()}
 
+    # Buyer reviews per seller (count, 1-5 average): one term of the /10
+    # rating, never the rating itself.
+    from api.domains.reviews.stats import seller_review_figures
+    review_figures = await seller_review_figures(db, seller_ids)
+
     # Measured medians, or absent where there is too little history.
     try:
         response_medians = await compute_all_response_times(db)
@@ -157,6 +162,7 @@ async def write_daily_snapshots(db: AsyncSession, on_date: date | None = None) -
         days_on = ((datetime.utcnow() - created_at).total_seconds() / 86400.0
                    if created_at else 0.0)
 
+        _rcount, _raverage = review_figures.get(seller_id, (0, None))
         signals = SellerSignals(
             dcr_percent=dcr,
             median_response_minutes=response_medians.get(seller_id),
@@ -165,6 +171,8 @@ async def write_daily_snapshots(db: AsyncSession, on_date: date | None = None) -
             days_on_broka=days_on,
             unique_counterparties=uniq.get(seller_id, 0),
             countable_value_deals=countable.get(seller_id, 0),
+            review_average=_raverage,
+            review_count=_rcount,
         )
         breakdown = overall_rating(signals)
 

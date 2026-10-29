@@ -86,11 +86,24 @@ from dataclasses import dataclass
 from typing import Optional
 
 # ── Component weights (sum to 1.0 across the positive terms) ────────────────
-W_DCR       = 0.45
+# Buyer reviews are ONE term among the others — never the headline on
+# their own. A raw 5-star average shown as "5.0" told buyers a seller
+# with a single review was perfect; here reviews contribute 15% of the
+# /10 rating, beside reply speed (25%) and time on BROKA (5%), exactly
+# as the store rating treats them (stores/rating.py, different weights
+# because a store has no deal record to lean on).
+W_REVIEW    = 0.15
+W_DCR       = 0.35
 W_RESPONSE  = 0.25
-W_VOLUME    = 0.15
+W_VOLUME    = 0.10
 W_TENURE    = 0.05
 W_BACKLOG   = 0.10   # penalty term: contributes (1 - backlog_pressure)
+
+# The review prior, shared in spirit with the store rating: 4.0 stars
+# weighted as five reviews, so one 5-star review is a nudge (0.83) and
+# no reviews is the neutral 0.8 — not a perfect score nobody earned.
+REVIEW_PRIOR_STARS = 4.0
+REVIEW_PRIOR_WEIGHT = 5.0
 
 # ── Normalisation constants ─────────────────────────────────────────────────
 
@@ -145,11 +158,15 @@ W_DEAL_RECORD = W_DCR + W_VOLUME + W_BACKLOG
 # response_score() for a seller not yet measured.
 UNMEASURED_RESPONSE_SCORE = 0.7
 
+# The review term's worth with no reviews: the prior above, /5.
+UNREVIEWED_SCORE = REVIEW_PRIOR_STARS / 5.0
+
 # The deal record's worth (0..1) for a seller with none: chosen so a
-# brand-new seller - no deals, replies not yet measured, first day - still
-# lands exactly on NEUTRAL_RATING.
+# brand-new seller - no deals, no reviews, replies not yet measured,
+# first day - still lands exactly on NEUTRAL_RATING.
 DEAL_RECORD_PRIOR = (NEUTRAL_RATING / 10.0
-                     - W_RESPONSE * UNMEASURED_RESPONSE_SCORE) / W_DEAL_RECORD
+                     - W_RESPONSE * UNMEASURED_RESPONSE_SCORE
+                     - W_REVIEW * UNREVIEWED_SCORE) / W_DEAL_RECORD
 
 
 @dataclass(frozen=True)
@@ -163,6 +180,10 @@ class SellerSignals:
     unique_counterparties: int = 0
     # Completed deals whose value cleared MIN_COUNTABLE_DEAL_VALUE_KES.
     countable_value_deals: Optional[int] = None
+    # Buyer reviews of this seller: the 1-5 average and how many reviews
+    # it is over. None/0 = nobody has reviewed them yet.
+    review_average: Optional[float] = None       # 1-5 stars
+    review_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -182,6 +203,7 @@ class RatingBreakdown:
     volume_component: float
     tenure_component: float
     backlog_component: float
+    review_component: float = 0.0   # 0-1, buyer reviews (Bayesian-smoothed)
 
 
 def response_score(median_minutes: Optional[float]) -> float:
@@ -200,6 +222,21 @@ def response_score(median_minutes: Optional[float]) -> float:
     if median_minutes <= 0:
         return 1.0
     return math.exp(-math.log(2) * median_minutes / RESPONSE_HALFLIFE_MINUTES)
+
+
+def review_score(average: Optional[float], count: int) -> float:
+    """Buyer reviews, 0..1, Bayesian-smoothed toward REVIEW_PRIOR_STARS.
+
+    One 5-star review scores 0.83, not 1.0: thin evidence is a nudge.
+    Twenty reviews settle near their real average. No reviews scores
+    the prior (0.8), the same neutral the store rating starts from.
+    """
+    count = max(int(count or 0), 0)
+    if count == 0 or average is None:
+        return UNREVIEWED_SCORE
+    stars = min(max(float(average), 0.0), 5.0) * count
+    smoothed = (stars + REVIEW_PRIOR_WEIGHT * REVIEW_PRIOR_STARS) / (count + REVIEW_PRIOR_WEIGHT)
+    return max(0.0, min(1.0, smoothed / 5.0))
 
 
 def volume_score(completed: int) -> float:
@@ -316,8 +353,12 @@ def overall_rating(s: SellerSignals) -> RatingBreakdown:
     vol     = volume_score(s.completed_deals)
     ten     = tenure_score(s.days_on_broka)
     backlog = backlog_score(s.completed_deals, s.pending_deals)
+    review  = review_score(s.review_average, s.review_count)
 
-    measured = W_RESPONSE * resp + W_TENURE * ten
+    # Reviews, reply speed and tenure are measured directly (reviews are
+    # already Bayesian-smoothed), so they count as they are; only the
+    # deal record is shrunk toward its prior below.
+    measured = W_RESPONSE * resp + W_TENURE * ten + W_REVIEW * review
     raw = (W_DCR * dcr + W_VOLUME * vol + W_BACKLOG * backlog + measured) * 10.0
 
     # Quality multiplies DOWN; evidence decides how much of the result to
@@ -342,6 +383,7 @@ def overall_rating(s: SellerSignals) -> RatingBreakdown:
         volume_component=round(vol, 3),
         tenure_component=round(ten, 3),
         backlog_component=round(backlog, 3),
+        review_component=round(review, 3),
     )
 
 

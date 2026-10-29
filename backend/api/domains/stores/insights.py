@@ -46,9 +46,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import (
     Interest, Listing, ListingLike, ListingMetricSnapshot, ListingStatus,
-    NegotiationMessage, Wishlist,
+    NegotiationMessage, Review, Wishlist,
 )
-from api.models.store import Store, StoreDailyCount
+from api.models.store import Store, StoreDailyCount, StoreRatingSnapshot
 from api.domains.listings.paid import live_clause
 from . import stats as store_stats
 
@@ -295,6 +295,78 @@ async def _chat_series(
     ]
 
 
+async def _rating_review_response_series(
+    db: AsyncSession, store: Store, start: date, end: date, rating_block: dict,
+) -> Dict[str, List[dict]]:
+    """Distinct daily series for the rating, reviews and response-time
+    graphs — the store equivalent of the seller dashboard's factor charts.
+
+    Rating and response time come from StoreRatingSnapshot (written
+    daily by stores/rating.py): days with no snapshot are absent, not
+    zero, because a gap is honest and a zero is a false claim. Today's
+    point is appended from the live rating block when the nightly pass
+    has not written it yet, so the line always reaches today. Reviews
+    are counted per day from the reviews attributed to this store, and
+    every day in the window is present (zero really means none arrived).
+    """
+    rows = (await db.execute(
+        select(
+            StoreRatingSnapshot.snapshot_date,
+            StoreRatingSnapshot.rating,
+            StoreRatingSnapshot.response_minutes,
+        )
+        .where(
+            StoreRatingSnapshot.store_id == store.id,
+            StoreRatingSnapshot.snapshot_date >= start,
+            StoreRatingSnapshot.snapshot_date <= end,
+        )
+        .order_by(StoreRatingSnapshot.snapshot_date)
+    )).all()
+    rating_by_day: Dict[str, float] = {}
+    response_by_day: Dict[str, float] = {}
+    for day, rating, minutes in rows:
+        key = str(_day(day))
+        if rating is not None:
+            rating_by_day[key] = float(rating)
+        if minutes is not None:
+            response_by_day[key] = float(minutes)
+
+    today_key = str(end)
+    if rating_block.get("rating") is not None:
+        rating_by_day[today_key] = float(rating_block["rating"])
+    if rating_block.get("response_minutes") is not None:
+        response_by_day[today_key] = float(rating_block["response_minutes"])
+
+    lo = datetime.combine(start, datetime.min.time())
+    hi = datetime.combine(end + timedelta(days=1), datetime.min.time())
+    review_rows = (await db.execute(
+        select(func.date(Review.created_at), func.count(Review.id))
+        .where(
+            Review.store_id == store.id,
+            Review.created_at >= lo, Review.created_at < hi,
+        )
+        .group_by(func.date(Review.created_at))
+    )).all()
+    reviews_by_day = {str(_day(day)): int(n or 0) for day, n in review_rows}
+
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    return {
+        "rating": [
+            {"date": d.isoformat(), "value": rating_by_day[str(d)]}
+            for d in days if str(d) in rating_by_day
+        ],
+        "reviews": [
+            {"date": d.isoformat(), "value": reviews_by_day.get(str(d), 0),
+             "count": reviews_by_day.get(str(d), 0)}
+            for d in days
+        ],
+        "response_minutes": [
+            {"date": d.isoformat(), "value": response_by_day[str(d)]}
+            for d in days if str(d) in response_by_day
+        ],
+    }
+
+
 # ── Products ────────────────────────────────────────────────────────────────
 
 async def _top_products(db: AsyncSession, store_id: str, limit: int = 5) -> List[dict]:
@@ -535,6 +607,8 @@ async def insights_for(db: AsyncSession, store: Store, days: int = 7) -> dict:
 
     series_visits = await _visit_series(db, store.id, start, end)
     series_chats = await _chat_series(db, store.id, start, end)
+    factor_series = await _rating_review_response_series(
+        db, store, start, end, rating_block)
 
     advice = build_advice(
         rating=rating_block.get("rating"),
@@ -594,6 +668,7 @@ async def insights_for(db: AsyncSession, store: Store, days: int = 7) -> dict:
             "visits": series_visits,
             "product_views": view_block["by_day"] if view_block else None,
             "chats": series_chats,
+            **factor_series,
         },
         "sources": await _sources(db, store.id, start, end),
         "top_products": top,

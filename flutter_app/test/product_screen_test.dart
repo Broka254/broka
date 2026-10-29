@@ -11,8 +11,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:broka/main.dart' show BrokaColors, ZoneGlowText;
-import 'package:broka/features/stores/data/store_cart.dart';
-import 'package:broka/features/stores/presentation/store_cart_screen.dart';
 import 'package:broka/models/listing.dart';
 import 'package:broka/models/listing_photo.dart';
 import 'package:broka/screens/product_screen.dart';
@@ -416,32 +414,24 @@ void main() {
   });
 
   group("a store's product", () {
-    setUp(StoreCart.resetAll);
-
-    testWidgets('goes in the store\'s cart beside the main action', (tester) async {
-      await open(tester, _listing(storeId: 's1', quantity: 5, unitsLeft: 3));
+    testWidgets('offers Visit Store beside the main action, never Add to cart', (tester) async {
+      final opened = await open(tester, _listing(storeId: 's1', quantity: 5, unitsLeft: 3));
       expect(find.byKey(const Key('product-cta')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('product-add-to-cart')));
-      await tester.pumpAndSettle();
-      final cart = StoreCart.of('s1');
-      expect(cart.quantityOf('listing-1'), 1);
-      // As many as are left, not as many as there ever were.
-      expect(cart.items.single.maxQuantity, 3);
-      expect(find.text('In cart (1)'), findsOneWidget);
-      expect(find.text('Added to your cart'), findsOneWidget);
+      expect(find.byKey(const Key('product-visit-store')), findsOneWidget);
+      expect(find.text('Visit Store'), findsOneWidget);
+      expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
+      expect(find.text('Add to cart'), findsNothing);
 
-      // Once it's in, the button is the way to the cart.
-      await tester.tap(find.byKey(const Key('product-add-to-cart')));
+      await tester.tap(find.byKey(const Key('product-visit-store')));
       await tester.pumpAndSettle();
-      expect(find.byType(StoreCartScreen), findsOneWidget);
-      expect(cart.quantityOf('listing-1'), 1);
+      expect(opened, contains('/store-view'));
     });
 
-    testWidgets('a personal listing or an auction has no cart', (tester) async {
+    testWidgets('a personal listing or an auction has no Visit Store', (tester) async {
       await open(tester, _listing());
-      expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
+      expect(find.byKey(const Key('product-visit-store')), findsNothing);
       await open(tester, _listing(storeId: 's1', listingType: 'auction'));
-      expect(find.byKey(const Key('product-add-to-cart')), findsNothing);
+      expect(find.byKey(const Key('product-visit-store')), findsNothing);
     });
   });
 
@@ -495,7 +485,7 @@ void main() {
     await open(tester, _listing(negotiable: false, delivers: null, deliveryNote: null,
         storeId: 's1'));
     expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('product-add-to-cart')), findsOneWidget);
+    expect(find.byKey(const Key('product-visit-store')), findsOneWidget);
     // Scroll through every section so each one is laid out.
     for (var i = 0; i < 12; i++) {
       await tester.drag(find.byType(SingleChildScrollView), const Offset(0, -300));

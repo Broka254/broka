@@ -71,6 +71,11 @@ class BrokaListing {
   final String? storeId;
   final String? storeName;
   final String? storeSlug;
+  /// Composite ratings out of 10 (reviews are only one term — see
+  /// backend seller_rating / stores rating). Null = not rated/shown.
+  final double? sellerOverallRating;
+  final double? storeRating;
+  final int storeReviewCount;
 
   const BrokaListing({
     required this.id,
@@ -115,6 +120,9 @@ class BrokaListing {
     this.storeId,
     this.storeName,
     this.storeSlug,
+    this.sellerOverallRating,
+    this.storeRating,
+    this.storeReviewCount = 0,
   });
 
   factory BrokaListing.fromJson(Map<String, dynamic> json) {
@@ -162,6 +170,9 @@ class BrokaListing {
       storeId:    json['store_id']    as String?,
       storeName:  json['store_name']  as String?,
       storeSlug:  json['store_slug']  as String?,
+      sellerOverallRating: (json['seller_overall_rating'] as num?)?.toDouble(),
+      storeRating:         (json['store_rating'] as num?)?.toDouble(),
+      storeReviewCount:    (json['store_review_count'] as num?)?.toInt() ?? 0,
     );
   }
 

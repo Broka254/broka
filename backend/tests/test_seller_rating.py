@@ -117,12 +117,16 @@ def test_no_deals_and_fast_replies_still_below_a_proven_good_seller():
 
 
 def test_leaking_deals_off_platform_costs_the_most():
-    """DCR is the heaviest weight - that is the product intent."""
+    """DCR is the heaviest single weight - that is the product intent.
+
+    Buyer reviews joined the rating as a 15% term (they contribute to
+    the /10, never headline it), so DCR's share fell from 45% to 35%
+    and this swing is ~1.9 points rather than the old >2."""
     base = dict(median_response_minutes=30, completed_deals=30, pending_deals=8,
                 days_on_broka=730, unique_counterparties=28)
     good = overall_rating(SellerSignals(dcr_percent=95, **base)).rating
     leak = overall_rating(SellerSignals(dcr_percent=41, **base)).rating
-    assert good - leak > 2.0
+    assert good - leak > 1.5
 
 
 def test_backlog_is_a_ratio_not_a_count():
@@ -138,8 +142,10 @@ def test_backlog_is_a_ratio_not_a_count():
                          days_on_broka=400, unique_counterparties=150)
     # The margin was 2 while the stuck seller's prior was a flat 6.5; it now
     # carries their own 20-minute replies and 400 days, as the busy one's
-    # record does, so the gap is the deal record alone.
-    assert overall_rating(busy).rating > overall_rating(stuck).rating + 1.5
+    # record does, so the gap is the deal record alone. Reviews joining
+    # the rating (a neutral 0.8 for both here) diluted the deal record's
+    # share, so the gap is ~1.4 rather than the old >1.5.
+    assert overall_rating(busy).rating > overall_rating(stuck).rating + 1.0
     assert overall_rating(idle).rating - overall_rating(busy).rating < 0.3
 
 
