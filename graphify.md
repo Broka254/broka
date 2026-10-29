@@ -198,28 +198,28 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:186) |
 | GET | `/listings/seller/{seller_id}/metrics` | user | `seller_metrics` (backend/api/domains/listings/router.py:824) |
 | GET | `/listings/seller/{seller_id}/receipts` | user | `seller_receipts` (backend/api/domains/listings/router.py:763) |
-| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:993) |
+| GET | `/listings/seller/{seller_id}/revenue` | user | `get_seller_revenue` (backend/api/domains/listings/router.py:1002) |
 | GET | `/listings/stats` | public | `get_stats` (backend/api/domains/listings/router.py:179) |
-| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:1040) |
+| GET | `/listings/{listing_id}` | public | `get_listing` (backend/api/domains/listings/router.py:1049) |
 | PATCH | `/listings/{listing_id}` | user | `update_listing` (backend/api/domains/listings/router.py:353) |
-| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1122) |
-| GET | `/listings/{listing_id}/engagement` | user | `get_engagement` (backend/api/domains/listings/router.py:1087) |
-| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1157) |
-| POST | `/listings/{listing_id}/like` | user | `like_listing` (backend/api/domains/listings/router.py:1100) |
-| DELETE | `/listings/{listing_id}/like` | user | `unlike_listing` (backend/api/domains/listings/router.py:1112) |
-| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1191) |
+| DELETE | `/listings/{listing_id}` | user | `delete_listing` (backend/api/domains/listings/router.py:1131) |
+| GET | `/listings/{listing_id}/engagement` | user | `get_engagement` (backend/api/domains/listings/router.py:1096) |
+| POST | `/listings/{listing_id}/interest` | user | `express_interest` (backend/api/domains/listings/router.py:1166) |
+| POST | `/listings/{listing_id}/like` | user | `like_listing` (backend/api/domains/listings/router.py:1109) |
+| DELETE | `/listings/{listing_id}/like` | user | `unlike_listing` (backend/api/domains/listings/router.py:1121) |
+| GET | `/listings/{listing_id}/matches` | user | `get_matches` (backend/api/domains/listings/router.py:1200) |
 | GET | `/listings/{listing_id}/metrics` | user | `listing_metrics` (backend/api/domains/listings/router.py:620) |
-| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:1010) |
-| GET | `/listings/{listing_id}/save` | user | `get_saved` (backend/api/domains/listings/router.py:1053) |
-| POST | `/listings/{listing_id}/save` | user | `save_listing` (backend/api/domains/listings/router.py:1065) |
-| DELETE | `/listings/{listing_id}/save` | user | `unsave_listing` (backend/api/domains/listings/router.py:1077) |
+| GET | `/listings/{listing_id}/private` | user | `get_own_listing` (backend/api/domains/listings/router.py:1019) |
+| GET | `/listings/{listing_id}/save` | user | `get_saved` (backend/api/domains/listings/router.py:1062) |
+| POST | `/listings/{listing_id}/save` | user | `save_listing` (backend/api/domains/listings/router.py:1074) |
+| DELETE | `/listings/{listing_id}/save` | user | `unsave_listing` (backend/api/domains/listings/router.py:1086) |
 | POST | `/listings/{listing_id}/showcase` | user | `set_showcase` (backend/api/domains/showcase/router.py:77) |
 | DELETE | `/listings/{listing_id}/showcase` | user | `remove_showcase` (backend/api/domains/showcase/router.py:89) |
 | POST | `/listings/{listing_id}/showcase/generate` | user | `generate_showcase` (backend/api/domains/showcase/router.py:61) |
-| POST | `/listings/{listing_id}/sold-out` | user | `report_sold_out` (backend/api/domains/listings/router.py:1168) |
-| DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1180) |
-| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1134) |
-| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1146) |
+| POST | `/listings/{listing_id}/sold-out` | user | `report_sold_out` (backend/api/domains/listings/router.py:1177) |
+| DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1189) |
+| POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1143) |
+| DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1155) |
 | GET | `/live` | public | `live` (backend/main.py:595) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
@@ -625,44 +625,45 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | Table | Model | Defined at |
 |---|---|---|
 | `auction_meta` | `AuctionMeta` | backend/api/database.py:620 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1241 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1259 |
 | `bids` | `Bid` | backend/api/database.py:609 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:749 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:767 |
 | `categories` | `Category` | backend/api/database.py:332 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:340 |
-| `deals` | `Deal` | backend/api/database.py:801 |
+| `deals` | `Deal` | backend/api/database.py:819 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1140 |
+| `disputes` | `Dispute` | backend/api/database.py:1158 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1189 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1260 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1207 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1278 |
 | `interests` | `Interest` | backend/api/database.py:485 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:719 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1035 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:737 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1053 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1011 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1029 |
+| `listing_views` | `ListingView` | backend/api/database.py:707 |
 | `listings` | `Listing` | backend/api/database.py:349 |
 | `marketing_campaign_events` | `MarketingCampaignEvent` | backend/api/models/marketing.py:138 |
 | `marketing_campaigns` | `MarketingCampaign` | backend/api/models/marketing.py:51 |
 | `marketing_creatives` | `MarketingCreative` | backend/api/models/marketing.py:100 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1070 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1088 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:513 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:290 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1110 |
-| `reviews` | `Review` | backend/api/database.py:1155 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:961 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:940 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1128 |
+| `reviews` | `Review` | backend/api/database.py:1173 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:979 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:958 |
 | `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:171 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
 | `service_communication_versions` | `ServiceCommunicationVersion` | backend/api/models/service_communication.py:93 |
@@ -678,10 +679,10 @@ Counts: admin 45, optional 5, public 61, token 4, user 159.
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:574 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:734 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:752 |
 | `users` | `User` | backend/api/database.py:195 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1209 |
-| `wishlists` | `Wishlist` | backend/api/database.py:707 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1227 |
+| `wishlists` | `Wishlist` | backend/api/database.py:725 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
@@ -714,7 +715,7 @@ of a change.
 - **stores** — domains: auth, categories, listings, media, payments, pricing, reviews, trust; core: audit, client_ip, config, gemini, geo, idempotency, mpesa_stk, presence, rate_limit, reconciliation, text_search, zetupay; database, security
 - **traders** — domains: listings, media, reviews, trust; core: geo, text_search; database, security
 - **trending** — domains: listings; database
-- **trust** — domains: listings; core: config; database
+- **trust** — domains: listings, reviews; core: config; database
 - **users** — nothing outside itself
 - **verification** — nothing outside itself
 - **zeno_assistant** — domains: ai_broker, buy_agent, categories, listings, media, premium, pricing, trust; core: config, image_processing, rate_limit, vision; database, security
@@ -759,7 +760,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-130 files in `backend/tests/`.
+131 files in `backend/tests/`.
 
 - `test_admin_api_repair.py` — Contract and integrity tests for the admin API repairs.
 - `test_admin_contracts.py` — Contracts used by the external administrative dashboard.
@@ -882,6 +883,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_traders.py` — BROKA - Traders Endpoint Tests Run: pytest backend/tests/test_traders.py -v
 - `test_trending.py` — BROKA - Trending Endpoint Tests Run: pytest backend/tests/test_trending.py -v
 - `test_tts_voices.py` — BROKA - Which voice speaks what (POST /tts/speak) Run: pytest backend/tests/test_tts_voices.py -v
+- `test_unique_views_and_rating.py` — Unique views, composite /10 ratings, and store insight series.
 - `test_user_privacy.py` — BROKA - What one user can see of another Run: pytest backend/tests/test_user_privacy.py -v
 - `test_verification_payment_safety.py` — Verification payments: durable initiation, amount checks and replay safety.
 - `test_workers_v4.py` — Tests for ARQ + in-process worker infrastructure (v4.0).
@@ -1309,6 +1311,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `store_category_filters_test.dart` — A category screen narrows the way the directory does (2026-10-22).
 - `store_directory_duplicates_test.dart` — The store directory must show each shop once.
 - `store_directory_test.dart` — The Stores directory is a single-column list of wide cards - the picture on the left of each row, the facts beside it.
+- `store_graphs_and_rating_test.dart` — Distinct store graphs (visits, product views, rating, reviews, response time — one graph each, like the seller dashboard) and the product c…
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
