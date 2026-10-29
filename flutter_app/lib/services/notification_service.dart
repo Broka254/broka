@@ -206,6 +206,15 @@ class NotificationService {
   final StreamController<String> _answerRequests = StreamController<String>.broadcast();
   Stream<String> get answerRequests => _answerRequests.stream;
 
+  // Rooms whose foreground incoming-call push is already being verified /
+  // rung. FCM can deliver the same call twice (and the poller can find it
+  // meanwhile); without this, concurrent duplicates each waited on the
+  // /calls/pending check and then raced to ring for the same room.
+  final Set<String> _foregroundCallsInFlight = <String>{};
+
+  @visibleForTesting
+  int get foregroundCallsInFlight => _foregroundCallsInFlight.length;
+
   /// How long an incoming call waits for its caller's photo before it is
   /// posted without one. From a closed app the notification IS the ring,
   /// so this is time the phone is silent: short. A photo seen before is
@@ -466,7 +475,23 @@ class NotificationService {
     }
     if (data['type'] != 'incoming_call') return;
     final roomId = data['roomId'] as String?;
-    if (roomId == null) return;
+    if (roomId == null || roomId.isEmpty) return;
+    // One verification/ring attempt per room at a time: a duplicate FCM
+    // delivery for the same call must not ring (or acknowledge) twice.
+    if (!_foregroundCallsInFlight.add(roomId)) {
+      debugPrint('[Notifications] duplicate foreground call push for '
+          '$roomId - already being handled');
+      return;
+    }
+    try {
+      await _handleForegroundIncomingCall(data, roomId);
+    } finally {
+      _foregroundCallsInFlight.remove(roomId);
+    }
+  }
+
+  Future<void> _handleForegroundIncomingCall(
+      Map<String, dynamic> data, String roomId) async {
     await _endReplacedCall(data);
     // On a call, or done with this one: nothing rings, and the server is
     // not told this phone is ringing.

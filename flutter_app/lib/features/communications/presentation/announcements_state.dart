@@ -21,6 +21,7 @@ import '../../../core/utils/result.dart';
 import '../../../services/api_service.dart';
 import '../data/repositories/communications_repository.dart';
 import '../domain/models/announcement.dart';
+import 'priority_announcement_coordinator.dart';
 
 class AnnouncementsState extends ChangeNotifier {
   AnnouncementsState({CommunicationsRepository? repository})
@@ -113,10 +114,20 @@ class AnnouncementsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Unread, unexpired high/critical announcements from the loaded feed,
+  /// critical first, then newest first - the ones important enough to
+  /// surface automatically (see PriorityAnnouncementCoordinator). This is
+  /// a view over [items] only; whether the feed is fresh enough to act on
+  /// is the caller's call (a successful [refresh]).
+  List<Announcement> get priorityAnnouncements =>
+      PriorityAnnouncements.select(_items);
+
   /// Reload the feed from the server, first page. Safe to call on startup,
   /// resume, login and pull-to-refresh; concurrent calls collapse onto the
-  /// latest one.
-  Future<void> refresh() async {
+  /// latest one. Returns true only when the server answered, so callers
+  /// that act on the feed (the priority coordinator) never treat a failed
+  /// or superseded refresh - or the cache it painted - as proof.
+  Future<bool> refresh() async {
     // No await before the seq capture below: two overlapping refreshes
     // must take sequence numbers in call order, or the slower older
     // answer wins (the reset itself is synchronous for this reason).
@@ -124,13 +135,13 @@ class AnnouncementsState extends ChangeNotifier {
     final seq = ++_loadSeq;
     if (_items.isEmpty) {
       await _paintCache();
-      if (_disposed || seq != _loadSeq) return;
+      if (_disposed || seq != _loadSeq) return false;
     }
     _loading = _items.isEmpty;
     _error = null;
     notifyListeners();
     final result = await _repo.announcements(limit: pageSize, offset: 0);
-    if (_disposed || seq != _loadSeq) return;
+    if (_disposed || seq != _loadSeq) return false;
     switch (result) {
       case Success(:final data):
         // A cached copy can outlive its expiry; the server already filters
@@ -144,12 +155,14 @@ class AnnouncementsState extends ChangeNotifier {
         // An acknowledgement that failed earlier (offline, restart) gets
         // its retry now that the network answered.
         unawaited(_retryPendingReads());
+        return true;
       case Failure(:final message):
         _loading = false;
         // Something on screen stays on screen - a failed refresh over a
         // working feed shows the feed, not an error page.
         if (_items.isEmpty) _error = message;
         notifyListeners();
+        return false;
     }
   }
 

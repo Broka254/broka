@@ -8,7 +8,10 @@ import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
 import 'features/communications/presentation/announcement_detail_screen.dart';
 import 'features/communications/presentation/announcements_screen.dart';
+import 'features/communications/domain/models/announcement.dart';
 import 'features/communications/presentation/announcements_state.dart';
+import 'features/communications/presentation/priority_announcement_coordinator.dart';
+import 'features/communications/presentation/priority_announcement_dialog.dart';
 import 'screens/splash_screen.dart';
 import 'screens/saved_listings_screen.dart';
 import 'screens/auth_screen.dart';
@@ -492,6 +495,12 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
 
   final _zeno = ZenoSession();
 
+  // Surfaces unread critical/high announcements without waiting for the
+  // user to open the announcements centre. Session-scoped: a fresh app
+  // launch starts with no deferrals, so an unread notice is eligible
+  // again (see PriorityAnnouncementCoordinator).
+  final _priorityAnnouncements = PriorityAnnouncementCoordinator();
+
   // App-wide presence heartbeat. Individual chat screens also ping this
   // endpoint while open (harmless/redundant), but WhatsApp-style presence
   // should reflect "the app is open", not "the user happens to be inside a
@@ -520,17 +529,123 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
       if (!mounted) return;
       final announcements =
           Provider.of<AnnouncementsState>(context, listen: false);
-      NotificationService.instance.onAnnouncementsChanged =
-          announcements.onPushReceived;
-      // The poller's throttled announcements check refreshes the badge
+      // A foreground announcement push refreshes state, then gets the
+      // same priority check as every other trigger - the local
+      // notification alone is not the in-app surfacing.
+      NotificationService.instance.onAnnouncementsChanged = () {
+        announcements.onPushReceived();
+        unawaited(_checkPriorityAnnouncements());
+      };
+      // The poller's throttled announcements check refreshes the feed
       // while the app is alive, so in-app-only publishes surface without
       // a push and without opening the centre.
-      GlobalPollerService.instance.onAnnouncementsPoll =
-          announcements.refreshUnreadCount;
+      GlobalPollerService.instance.onAnnouncementsPoll = () async {
+        await announcements.refreshUnreadCount();
+        await _checkPriorityAnnouncements();
+      };
       // The badge's first load for a restored session - the Menu shows it
       // before the announcements screen ever opens.
       unawaited(announcements.useAccount(ApiService.currentUserId));
+      // Cold launch with a restored session: surface priority notices
+      // once the app reaches a safe screen (not the splash/auth/call).
+      unawaited(_checkPriorityAnnouncementsWhenReady());
     });
+  }
+
+  /// Whether a priority overlay may go up right now: signed in, in the
+  /// foreground, navigator ready, and not over the splash, sign-in, a
+  /// call, or the announcements screens themselves (a notification tap
+  /// that already routed there takes precedence).
+  bool _canPresentPriorityAnnouncement() {
+    if (!mounted || ApiService.currentUserId == null) return false;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return false;
+    }
+    if (ActiveCall.instance.onCall) return false;
+    final nav = navigatorKey.currentState;
+    if (nav == null) return false;
+    const blocked = {
+      '/splash', '/auth', '/voip-call', '/announcements',
+      '/announcement-detail',
+    };
+    return !blocked.contains(NotificationService.topRouteName(nav));
+  }
+
+  /// One priority check: refresh from the backend first (the cache is
+  /// never proof), then present once through the coordinator's lock.
+  Future<void> _checkPriorityAnnouncements() async {
+    if (!mounted) return;
+    final announcements =
+        Provider.of<AnnouncementsState>(context, listen: false);
+    await _priorityAnnouncements.checkAndPresent(
+      accountId: ApiService.currentUserId,
+      refreshFeed: announcements.refresh,
+      feed: () => announcements.items,
+      canPresent: _canPresentPriorityAnnouncement,
+      present: _presentPriorityAnnouncements,
+    );
+  }
+
+  /// Startup variant: the splash (or a cold-start notification route) is
+  /// still on top at first frame, so wait briefly for a safe screen
+  /// instead of dropping the check. A call, or a tap that already opened
+  /// the announcement, ends the wait without presenting.
+  Future<void> _checkPriorityAnnouncementsWhenReady() async {
+    for (var attempt = 0; attempt < 30; attempt++) {
+      if (!mounted || ApiService.currentUserId == null) return;
+      final nav = navigatorKey.currentState;
+      final top = nav == null ? null : NotificationService.topRouteName(nav);
+      if (top == '/voip-call' ||
+          top == '/announcements' ||
+          top == '/announcement-detail' ||
+          ActiveCall.instance.onCall) {
+        return;
+      }
+      if (_canPresentPriorityAnnouncement()) {
+        await _checkPriorityAnnouncements();
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    }
+  }
+
+  Future<void> _presentPriorityAnnouncements(
+      List<Announcement> eligible) async {
+    final nav = navigatorKey.currentState;
+    final dialogContext = nav?.context;
+    if (dialogContext == null || eligible.isEmpty) return;
+    final primary = eligible.first;
+    // The foreground push may also have posted a local notification for
+    // this announcement: the overlay replaces it, not competes with it.
+    for (final a in eligible) {
+      unawaited(NotificationService.instance.cancelAnnouncement(a.id));
+    }
+    var readChosen = false;
+    await showPriorityAnnouncementDialog(
+      dialogContext,
+      announcements: eligible,
+      onRead: (announcement) {
+        readChosen = true;
+        Navigator.of(dialogContext).pop();
+        // The existing detail route + markRead acknowledgement. Opening
+        // it is the read; merely showing this overlay was not.
+        nav!.pushNamed('/announcement-detail',
+            arguments: {'id': announcement.id});
+      },
+      onRemindLater: () {
+        // Still unread, suppressed for this session only.
+        _priorityAnnouncements.defer(primary.id);
+        Navigator.of(dialogContext).pop();
+      },
+      onViewAll: () {
+        _priorityAnnouncements.defer(primary.id);
+        Navigator.of(dialogContext).pop();
+        nav!.pushNamed('/announcements');
+      },
+    );
+    // Dismissed by tapping outside: same session-only deferral, still
+    // unread, eligible again on the next cold launch.
+    if (!readChosen) _priorityAnnouncements.defer(primary.id);
   }
 
   @override
@@ -580,6 +695,10 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
       try {
         unawaited(Provider.of<AnnouncementsState>(context, listen: false)
             .refreshUnreadCount());
+        // Returning to the foreground is a priority-announcement trigger:
+        // refresh the feed, then surface newly discovered critical/high
+        // notices (session deferrals still apply).
+        unawaited(_checkPriorityAnnouncements());
       } catch (_) {}
 
       final pausedAt = _pausedAt;

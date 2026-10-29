@@ -194,6 +194,10 @@ class GlobalPollerService {
     _deferredStart?.cancel();
     _deferredStart = null;
     _running = true;
+    // A (re)start is a sign-in or session restore: check announcements
+    // on the first sweep rather than waiting out the throttle from a
+    // previous account's session.
+    _lastAnnouncementsCheck = null;
     unawaited(_seedUnreadFromCache());
     _startTimer();
     // Run once immediately rather than waiting for the first tick.
