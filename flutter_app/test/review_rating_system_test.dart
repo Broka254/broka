@@ -360,19 +360,25 @@ void main() {
       expect(find.text('5.0'), findsNothing);
     });
 
-    testWidgets('with reviews, the card carries the average and its count',
+    testWidgets('with reviews, the card carries the /10 score and its count',
         (tester) async {
       final listing = BrokaListing.fromJson({
         ...fakeListingJson(1),
         'seller_rating': 4.8,
         'seller_review_count': 3,
+        // What listings/service.py sends beside the raw 1-5 average: the
+        // composite in which reviews are one term.
+        'seller_overall_rating': 6.9,
       });
       await tester.pumpWidget(_host(SizedBox(
         width: 180,
         height: 320,
         child: ProductCard(item: listing),
       )));
-      expect(find.text('4.8 (3)'), findsOneWidget);
+      expect(find.text('6.9/10 (3)'), findsOneWidget);
+      // The raw review average stays available as `seller_rating` but is
+      // never the headline, and never printed as a five-star score.
+      expect(find.text('4.8 (3)'), findsNothing);
     });
 
     test('the account figures use reviews, not deals', () {
