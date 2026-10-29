@@ -218,6 +218,13 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // Opened by a call's notification with nobody signed in: no call is
     // opened, so the app goes back behind the lock screen it was shown over.
     if (coldStartCall != null) {
+      if (coldStartCall['type'] == 'service_communication') {
+        // An announcement tap with nobody signed in: keep the destination
+        // for after sign-in (AuthScreen routes it) instead of dropping it.
+        final id = coldStartCall['communication_id'];
+        NotificationService.instance.stashPendingAnnouncementTap(
+            id is String && id.isNotEmpty ? id : null);
+      }
       NotificationService.instance.releaseLockScreenUnlessOnCall();
     }
 

@@ -1236,6 +1236,79 @@ async def test_expired_announcement_disappears_and_cannot_be_read(client):
     assert read.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_unread_count_tracks_reads_and_stays_per_user(client):
+    """GET /communications/unread-count backs the app's badge: the whole
+    feed's unread total for exactly this user, dropping as reads land."""
+    admin = await _user(admin=True)
+    first = await _user()
+    second = await _user()
+    created = await _create(
+        client, admin, audience={"kind": "user_ids", "user_ids": [first.id]},
+    )
+    await _publish(client, admin, created["id"], "unread-count-reads")
+    await _pass(RecordingSender())
+    count = await client.get("/communications/unread-count", headers=_auth(first))
+    assert count.status_code == 200
+    assert count.json() == {"unread_count": 1}
+    # Another user's audience, another count: no cross-user leakage.
+    other = await client.get("/communications/unread-count", headers=_auth(second))
+    assert other.json() == {"unread_count": 0}
+    # Reading drops this user's count; repeats stay idempotent at zero.
+    assert (await client.post(
+        f"/communications/{created['id']}/read", headers=_auth(first),
+    )).status_code == 200
+    assert (await client.get(
+        "/communications/unread-count", headers=_auth(first),
+    )).json() == {"unread_count": 0}
+    assert (await client.post(
+        f"/communications/{created['id']}/read", headers=_auth(first),
+    )).status_code == 200
+    assert (await client.get(
+        "/communications/unread-count", headers=_auth(first),
+    )).json() == {"unread_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_unread_count_ignores_expired_and_unpublished_rows(client):
+    """The badge counts what the feed shows: published and unexpired only.
+    Drafts, scheduled and expired rows never inflate it."""
+    admin = await _user(admin=True)
+    buyer = await _user()
+    live = await _create(
+        client, admin, audience={"kind": "user_ids", "user_ids": [buyer.id]},
+    )
+    await _publish(client, admin, live["id"], "unread-count-live")
+    await _pass(RecordingSender())
+    # A draft and a scheduled campaign exist but publish nothing yet.
+    await _create(
+        client, admin, audience={"kind": "user_ids", "user_ids": [buyer.id]},
+    )
+    scheduled = await _create(
+        client, admin, audience={"kind": "user_ids", "user_ids": [buyer.id]},
+    )
+    schedule = await client.post(
+        f"/admin/communications/{scheduled['id']}/schedule",
+        headers=_auth(admin),
+        json={"scheduled_at": (datetime.utcnow() + timedelta(hours=1)).isoformat()},
+    )
+    assert schedule.status_code == 200
+    count = await client.get("/communications/unread-count", headers=_auth(buyer))
+    assert count.json() == {"unread_count": 1}
+    # Expiring the live row removes it from the count, like the feed.
+    async with AsyncSessionLocal() as db:
+        communication = await db.get(ServiceCommunication, live["id"])
+        communication.expires_at = datetime.utcnow() - timedelta(minutes=1)
+        await db.commit()
+    expired = await client.get("/communications/unread-count", headers=_auth(buyer))
+    assert expired.json() == {"unread_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_unread_count_requires_authentication(client):
+    assert (await client.get("/communications/unread-count")).status_code == 401
+
+
 # ── Audit, pagination and response contracts ─────────────────────────────────
 
 @pytest.mark.asyncio

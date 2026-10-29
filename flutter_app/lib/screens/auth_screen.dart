@@ -24,6 +24,7 @@ import '../main.dart';
 import '../widgets/gradient_button.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
+import '../services/notification_service.dart';
 import '../services/sms_autofill_service.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/country_phone_field.dart';
@@ -743,6 +744,20 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
   /// Zeno chat instead of dropping back to Home). Only fall back to
   /// replacing with Home when this screen has nothing to pop to.
   void _returnAuthenticated() {
+    // A guest tapped an announcement push (or cold-started on one): land
+    // them where they were headed instead of dropping them at Home.
+    final pending =
+        NotificationService.instance.consumePendingAnnouncementTap();
+    if (pending.hasTap) {
+      final id = pending.communicationId;
+      if (id != null) {
+        Navigator.pushReplacementNamed(context, '/announcement-detail',
+            arguments: {'id': id});
+      } else {
+        Navigator.pushReplacementNamed(context, '/announcements');
+      }
+      return;
+    }
     if (Navigator.canPop(context)) {
       Navigator.pop(context, true);
     } else {

@@ -17,6 +17,11 @@
 //   missed_call    a notification Android draws itself
 //   new_message    a notification Android draws itself, one per
 //                  conversation (tag thread_<listing>_<buyer>)
+//   service_communication
+//                  an admin announcement; Android draws it itself when the
+//                  app is not in front, this service draws it (Updates
+//                  channel, one per announcement) when it is. Tapping opens
+//                  the announcements centre, or the announcement itself.
 //   deal / auction alerts, drawn by Android on the Updates channel
 // Without a google-services.json in the build, Firebase.initializeApp()
 // throws, main.dart catches it, and this service still works on what
@@ -380,6 +385,10 @@ class NotificationService {
       // its conversation, as the server's own pushes do.
       final type = data?['type'];
       if (type == 'new_message' || type == 'missed_call') return data;
+      // An announcement notification the app posted itself (foreground
+      // handler or sweep) opens the announcement - the FCM-drawn ones
+      // arrive via getInitialMessage instead.
+      if (type == 'service_communication') return data;
       if (type != 'incoming_call') return null;
       // Also how a locked phone's fullScreenIntent launches the app - only
       // Accept answers; see navigateFromPayload.
@@ -444,6 +453,15 @@ class NotificationService {
       // never appeared for a message that arrived by push.
       await markDeliveredFromPush(data);
       await showMessageFromPush(data);
+      return;
+    }
+    if (data['type'] == 'service_communication') {
+      // An admin announcement (backend service._push_data): FCM never
+      // auto-displays while the app is frontmost, so draw it here - on the
+      // Updates channel, collapsed per announcement - and refresh the
+      // announcements badge. Receiving it is NOT reading it: the feed's
+      // read state only changes when the user opens the announcement.
+      await showAnnouncementFromPush(data);
       return;
     }
     if (data['type'] != 'incoming_call') return;
@@ -630,6 +648,17 @@ class NotificationService {
         await svc.initialize(
             navKey: GlobalKey<NavigatorState>(), requestPermission: false);
         await svc.addFaceToPushed(data);
+        return;
+      case 'service_communication':
+        // An admin announcement: Android drew it from the push already
+        // (title/body ride on the notification block). Record it as
+        // announced so the foreground handler and the sweep never announce
+        // it a second time - and nothing else: this isolate has no
+        // session, no navigator and no announcements state. The badge and
+        // the feed refresh when the app next runs (main.dart resume hooks
+        // + the announcements screen itself). Receiving it is NOT reading
+        // it.
+        await recordAnnouncementAnnounced(data);
         return;
     }
   }
@@ -864,6 +893,209 @@ class NotificationService {
     );
   }
 
+  /// Set by the announcements centre: whether it (or one of its details)
+  /// is on screen right now, in which case an announcement push is being
+  /// read as it arrives and a notification for it would be noise - the
+  /// same suppression isThreadOnScreen gives chat threads.
+  bool Function()? isAnnouncementsOnScreen;
+
+  /// The tag one announcement's notification is posted under. Android keys
+  /// a notification on (tag, id), so one announcement is one notification
+  /// whether the push, the foreground handler or the sweep posted it, and
+  /// a re-sent push updates it rather than stacking another.
+  static String announcementTag(String communicationId) =>
+      'announcement_$communicationId';
+
+  /// Announcement ids already announced, newest last - the same
+  /// newest-20 comma-separated list the per-thread seen ids use, in one
+  /// shared slot (announcements are account-wide, not per-thread).
+  @visibleForTesting
+  static const String announcedAnnouncementsKey =
+      'global_poll_seen_announcements';
+
+  static List<String> announcedAnnouncementIds(SharedPreferences prefs) =>
+      (prefs.getString(announcedAnnouncementsKey) ?? '')
+          .split(',')
+          .where((id) => id.isNotEmpty)
+          .toList();
+
+  static bool wasAnnouncementAnnounced(
+          SharedPreferences prefs, String communicationId) =>
+      announcedAnnouncementIds(prefs).contains(communicationId);
+
+  static Future<void> markAnnouncementAnnounced(
+      SharedPreferences prefs, String communicationId) async {
+    if (communicationId.isEmpty) return;
+    final ids = announcedAnnouncementIds(prefs)..remove(communicationId);
+    ids.add(communicationId);
+    final kept = ids.length > _seenIdsKept
+        ? ids.sublist(ids.length - _seenIdsKept)
+        : ids;
+    await prefs.setString(announcedAnnouncementsKey, kept.join(','));
+  }
+
+  /// An announcement push Android drew itself (the app was not in front)
+  /// is not announced again by the foreground handler or the sweep.
+  static Future<void> recordAnnouncementAnnounced(
+      Map<String, dynamic> data) async {
+    final id = data['communication_id'] as String?;
+    if (id == null || id.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // The other isolate may have written since this copy was loaded.
+      await prefs.reload();
+      await markAnnouncementAnnounced(prefs, id);
+    } catch (_) {}
+  }
+
+  /// The server's announcement push with the app in front, where Android
+  /// does not draw it: shown here on the Updates channel, unless the
+  /// announcements centre is on screen (then the feed refreshes quietly
+  /// instead - the user is looking at it).
+  ///
+  /// [onAnnouncementsChanged] refreshes the feed and badge; it is a
+  /// callback rather than a direct AnnouncementsState dependency so this
+  /// service - also used from the background isolate, which has no
+  /// provider tree - stays constructible without one.
+  Future<void> showAnnouncementFromPush(Map<String, dynamic> data) async {
+    final id = _nonEmpty(data['communication_id']);
+    if (id == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final onScreen = isAnnouncementsOnScreen?.call() ?? false;
+    if (!onScreen && wasAnnouncementAnnounced(prefs, id)) {
+      return; // already announced (a re-sent push, or the sweep)
+    }
+    await markAnnouncementAnnounced(prefs, id);
+    onAnnouncementsChanged?.call();
+    if (onScreen) return;
+
+    final title = _nonEmpty(data['title']) ?? 'News from BROKA';
+    final body = _nonEmpty(data['body']) ?? 'Tap to read the announcement.';
+    await showAnnouncement(
+      communicationId: id,
+      title: title,
+      body: body,
+      severity: _nonEmpty(data['severity']),
+    );
+  }
+
+  /// Called whenever an announcement push arrives in the foreground (or a
+  /// locally-detected one is announced): the app refreshes the
+  /// announcements feed and badge. Wired in main.dart; null in the
+  /// background isolate and in tests that do not need it.
+  VoidCallback? onAnnouncementsChanged;
+
+  /// One announcement as a notification on the Updates channel
+  /// ("Deals & updates"), collapsed per announcement id. Critical ones
+  /// buzz; low ones arrive silently; the rest use the channel default.
+  /// The payload carries only the type and the id - the detail screen
+  /// fetches the authoritative row from the backend on tap.
+  Future<void> showAnnouncement({
+    required String communicationId,
+    required String title,
+    required String body,
+    String? severity,
+  }) async {
+    if (!_ready) return;
+    final tag = announcementTag(communicationId);
+    final silent = severity == 'low';
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _updatesChannel.id,
+        _updatesChannel.name,
+        channelDescription: _updatesChannel.description,
+        importance: Importance.high,
+        priority: severity == 'critical' ? Priority.max : Priority.high,
+        category: AndroidNotificationCategory.message,
+        tag: tag,
+        icon: smallIcon,
+        color: _accent,
+        silent: silent,
+        styleInformation: BigTextStyleInformation(body),
+      ),
+      iOS: DarwinNotificationDetails(
+        threadIdentifier: tag,
+        presentSound: !silent,
+      ),
+    );
+    try {
+      await _plugin.show(
+        0,
+        title,
+        body,
+        details,
+        payload: jsonEncode({
+          'type': 'service_communication',
+          'communication_id': communicationId,
+        }),
+      );
+    } catch (e) {
+      debugPrint('[Notifications] showAnnouncement failed: $e');
+    }
+  }
+
+  /// Take one announcement's notification down - it has been opened, so
+  /// what it announced is being read.
+  Future<void> cancelAnnouncement(String communicationId) async {
+    if (!_ready) return;
+    try {
+      await _plugin.cancel(0, tag: announcementTag(communicationId));
+    } catch (e) {
+      debugPrint('[Notifications] cancelAnnouncement failed: $e');
+    }
+  }
+
+  /// A guest tapped an announcement push: the id they were headed for,
+  /// kept so sign-in can land them there (see consumePendingAnnouncementTap).
+  /// [_pendingAnnouncementTap] set means a tap is waiting; a null id inside
+  /// means the list (the payload named no valid announcement).
+  bool _hasPendingAnnouncementTap = false;
+  String? _pendingAnnouncementTap;
+ 
+  /// Stash an announcement destination for after sign-in - a guest's push
+  /// tap (navigateFromPayload), or a cold-start tap with nobody signed in
+  /// (SplashScreen). Null [communicationId] means the list.
+  void stashPendingAnnouncementTap(String? communicationId) {
+    _hasPendingAnnouncementTap = true;
+    _pendingAnnouncementTap = communicationId;
+  }
+
+  /// The announcement destination a guest was headed for, consumed once
+  /// after sign-in (AuthScreen). Null when no tap is waiting; otherwise
+  /// the id, or null for the list.
+  ({bool hasTap, String? communicationId}) consumePendingAnnouncementTap() {
+    final hasTap = _hasPendingAnnouncementTap;
+    final id = _pendingAnnouncementTap;
+    _hasPendingAnnouncementTap = false;
+    _pendingAnnouncementTap = null;
+    return (hasTap: hasTap, communicationId: id);
+  }
+
+  /// Route to one announcement (or the list when [communicationId] is
+  /// missing/invalid). Never stacks the same destination twice: tapping
+  /// a push for the announcement already on screen is a no-op, and
+  /// tapping another announcement's push replaces the detail rather than
+  /// piling details ten deep.
+  void _openAnnouncement(NavigatorState nav, String? communicationId) {
+    final top = topRouteName(nav);
+    if (communicationId == null) {
+      if (top != '/announcements') nav.pushNamed('/announcements');
+      return;
+    }
+    if (top == '/announcement-detail') {
+      nav.pushReplacementNamed('/announcement-detail',
+          arguments: {'id': communicationId});
+      return;
+    }
+    if (top == '/announcements') {
+      nav.pushNamed('/announcement-detail',
+          arguments: {'id': communicationId});
+      return;
+    }
+    nav.pushNamed('/announcement-detail',
+        arguments: {'id': communicationId});
+  }
+
   /// POST /calls/initiate refused a call (ApiService.initiateCall's
   /// {'refused': ...}): the person is on another call, or this user is.
   /// The server's reason is shown - it used to be "Couldn't start the
@@ -925,6 +1157,22 @@ class NotificationService {
       // The catch-up summary for an offline stretch: the Inbox is where
       // everything it counts is read.
       if (topRouteName(nav) != '/inbox') nav.pushNamed('/inbox');
+      return;
+    }
+    if (type == 'service_communication') {
+      // An admin announcement's notification, tapped: the announcement
+      // itself when the payload names a valid one, else the announcements
+      // list. Guests sign in first - the feed is authenticated - and land
+      // back here after. The payload is untrusted input: only the type and
+      // the id are read from it, and the detail screen fetches the
+      // authoritative row from the backend before showing anything.
+      final id = _nonEmpty(data['communication_id']);
+      if (!ApiService.isLoggedIn) {
+        stashPendingAnnouncementTap(id);
+        nav.pushNamed('/auth');
+        return;
+      }
+      _openAnnouncement(nav, id);
       return;
     }
     if (type == 'new_message' || type == 'missed_call') {
@@ -1718,4 +1966,3 @@ class NotificationService {
     await showIncomingCall(roomId: roomId, callerName: callerName, listingName: listingName);
   }
 }
-

@@ -539,11 +539,42 @@ class GlobalPollerService {
           preview: primePreview ?? '',
         ));
       }
+      // Admin announcements published without a push (in-app-only, or FCM
+      // unconfigured server-side) still surface while the app is alive -
+      // throttled, since announcements are low-frequency and this sweep
+      // runs every few seconds. Failures are silent: the next sweep, the
+      // next resume, or the announcements screen itself retries.
+      unawaited(_checkAnnouncementsThrottled());
     } catch (_) {
       // Network hiccup or not logged in - just try again next tick.
     } finally {
       _checking = false;
     }
+  }
+
+  /// How often the sweep may ask about announcements. Announcements are
+  /// published rarely; asking on every ~7s sweep would be a request the
+  /// user pays for on every screen for data that almost never changes.
+  static const _announcementsCheckEvery = Duration(minutes: 2);
+  DateTime? _lastAnnouncementsCheck;
+
+  /// Called when the sweep (or anything else polling) should refresh the
+  /// announcements badge. Wired in main.dart where the provider tree
+  /// exists; null when unwired (tests, background isolate).
+  Future<void> Function()? onAnnouncementsPoll;
+
+  Future<void> _checkAnnouncementsThrottled() async {
+    final poll = onAnnouncementsPoll;
+    if (poll == null || ApiService.currentUserId == null) return;
+    final now = DateTime.now();
+    final last = _lastAnnouncementsCheck;
+    if (last != null && now.difference(last) < _announcementsCheckEvery) {
+      return;
+    }
+    _lastAnnouncementsCheck = now;
+    try {
+      await poll();
+    } catch (_) {}
   }
 
   String get _accountKey => ApiService.currentUserId ?? 'anon';

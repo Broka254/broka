@@ -6,6 +6,9 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
+import 'features/communications/presentation/announcement_detail_screen.dart';
+import 'features/communications/presentation/announcements_screen.dart';
+import 'features/communications/presentation/announcements_state.dart';
 import 'screens/splash_screen.dart';
 import 'screens/saved_listings_screen.dart';
 import 'screens/auth_screen.dart';
@@ -233,8 +236,14 @@ void main() async {
 
 
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => MarketplaceState(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => MarketplaceState()),
+        // The announcements centre's shared state: feed, badge count and
+        // read acknowledgement, above the Navigator so the Menu badge, the
+        // list, the detail and the push handler all share it.
+        ChangeNotifierProvider(create: (_) => AnnouncementsState()),
+      ],
       child: const BrokaApp(),
     ),
   );
@@ -501,12 +510,35 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _startHeartbeat();
+    // An announcement push that arrives in the foreground refreshes the
+    // feed and badge through the shared announcements state (wired here,
+    // where the provider tree exists - the notification service itself
+    // must stay constructible without one for the background isolate).
+    // Deferred a frame: the providers above this widget are not readable
+    // until the first build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final announcements =
+          Provider.of<AnnouncementsState>(context, listen: false);
+      NotificationService.instance.onAnnouncementsChanged =
+          announcements.onPushReceived;
+      // The poller's throttled announcements check refreshes the badge
+      // while the app is alive, so in-app-only publishes surface without
+      // a push and without opening the centre.
+      GlobalPollerService.instance.onAnnouncementsPoll =
+          announcements.refreshUnreadCount;
+      // The badge's first load for a restored session - the Menu shows it
+      // before the announcements screen ever opens.
+      unawaited(announcements.useAccount(ApiService.currentUserId));
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _heartbeatTimer?.cancel();
+    NotificationService.instance.onAnnouncementsChanged = null;
+    GlobalPollerService.instance.onAnnouncementsPoll = null;
     _zeno.dispose();
     super.dispose();
   }
@@ -541,6 +573,14 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
       // dip out of the app is not worth yanking someone's screen for, but
       // it is absolutely long enough to miss a call.
       unawaited(GlobalPollerService.instance.catchUp());
+      // Same for announcements: a push handled while the app was away (or
+      // a publish with no push at all) moves the badge. Cheap - one count
+      // query - and the lazy account sync inside drops a signed-out
+      // session's badge rather than showing it stale.
+      try {
+        unawaited(Provider.of<AnnouncementsState>(context, listen: false)
+            .refreshUnreadCount());
+      } catch (_) {}
 
       final pausedAt = _pausedAt;
       _pausedAt = null;
@@ -579,6 +619,15 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         '/profile':          (_) => const ProfileScreen(),
         '/settings':         (_) => const SettingsScreen(),
         '/inbox':            (_) => const InboxScreen(),
+        // Admin-published announcements: the centre (const, like /inbox -
+        // scope comes from the signed-in account) and one announcement by
+        // id (push taps and deep links; arguments: {id}).
+        '/announcements':      (_) => const AnnouncementsScreen(),
+        '/announcement-detail': (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final id = args is Map ? args['id'] as String? : args as String?;
+          return AnnouncementDetailRoute(communicationId: id);
+        },
         '/negotiate':        (_) => const NegotiateScreen(),
         '/direct-chat':      (_) => const NegotiationScreen(),
         '/assistant':        (_) => const AiAssistantScreen(),

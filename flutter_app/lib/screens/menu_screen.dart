@@ -18,9 +18,12 @@
 // On the constellation, like Home and every screen reached from it.
 import 'package:flutter/material.dart';
 
+import 'package:provider/provider.dart';
+
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
 import '../features/account/domain/models/my_account.dart';
+import '../features/communications/presentation/announcements_state.dart';
 import '../features/safe_payment/escrow_callout.dart';
 import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show safePaymentRepository;
@@ -28,6 +31,7 @@ import '../features/stores/presentation/widgets/menu_store_section.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../services/global_poller_service.dart';
+import '../utils/auth_gate.dart';
 import '../widgets/broka_image.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
@@ -105,6 +109,22 @@ class _MenuScreenState extends State<MenuScreen> {
   Future<void> _open(String route) async {
     await Navigator.pushNamed(context, route);
     if (mounted) _load();
+  }
+
+  /// The announcements centre is authenticated: guests are asked first
+  /// (requireAuth), then land straight in it - the same pattern the Inbox
+  /// tab uses. Back from reading, the badge reconciles with the server.
+  Future<void> _openAnnouncements() async {
+    final authed = await requireAuth(context,
+        reason: 'to read announcements from BROKA');
+    if (!mounted || !authed) return;
+    await Navigator.pushNamed(context, '/announcements');
+    if (!mounted) return;
+    _load();
+    try {
+      await Provider.of<AnnouncementsState>(context, listen: false)
+          .refreshUnreadCount();
+    } catch (_) {}
   }
 
   void _confirmSignOut() {
@@ -217,6 +237,7 @@ class _MenuScreenState extends State<MenuScreen> {
       ),
       const MenuSectionLabel('Account'),
       MenuGroup(children: [
+        _AnnouncementsMenuTile(onOpen: _openAnnouncements),
         MenuTile(
           key: const Key('menu-saved'),
           icon: Icons.bookmark_rounded,
@@ -532,6 +553,62 @@ class _Avatar extends StatelessWidget {
             ? BrokaImage(photo, fit: BoxFit.cover, placeholder: initials)
             : initials,
       ),
+    );
+  }
+}
+
+/// The Menu's entry to the announcements centre, with the unread count as
+/// its trailing badge. The badge shows only while the count is
+/// server-known: unknown (never loaded) or failed shows the plain chevron
+/// rather than a stale - or false zero - number.
+class _AnnouncementsMenuTile extends StatelessWidget {
+  const _AnnouncementsMenuTile({required this.onOpen});
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget? trailing;
+    int? unread;
+    var known = false;
+    try {
+      final state = Provider.of<AnnouncementsState>(context);
+      known = state.unreadKnown;
+      unread = state.unreadCount;
+    } catch (_) {}
+    if (known && (unread ?? 0) > 0) {
+      final label = unread! > 99 ? '99+' : '$unread';
+      trailing = Semantics(
+        label: '$unread unread announcements',
+        excludeSemantics: true,
+        child: Container(
+          key: const Key('announcements-unread-badge'),
+          constraints: const BoxConstraints(minWidth: 24),
+          height: 24,
+          padding: const EdgeInsets.symmetric(horizontal: 7),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: BrokaColors.danger,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(label,
+              maxLines: 1,
+              textScaler: TextScaler.noScaling,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0)),
+        ),
+      );
+    }
+    return MenuTile(
+      key: const Key('menu-announcements'),
+      icon: Icons.campaign_rounded,
+      tint: BrokaColors.gold,
+      title: 'Announcements',
+      subtitle: 'News from BROKA - maintenance, incidents, updates',
+      trailing: trailing,
+      onTap: onOpen,
     );
   }
 }

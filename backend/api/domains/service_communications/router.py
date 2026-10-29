@@ -403,6 +403,10 @@ class ReadOut(BaseModel):
     read_at: Optional[str]
 
 
+class UnreadCountOut(BaseModel):
+    unread_count: int
+
+
 def _push_available() -> bool:
     from api.routers import calls
     return calls._get_fcm() is not None
@@ -1093,6 +1097,38 @@ async def mark_announcement_read(
         "is_read": True,
         "read_at": _iso(recipient.read_at),
     }
+
+
+# NOTE: this static path must be registered BEFORE "/{communication_id}/read"
+# in route order for clarity, but FastAPI matches "/unread-count" (one
+# segment) against "/{communication_id}/read" (two segments) without
+# ambiguity, so placement here is safe.
+@customer_router.get("/unread-count", response_model=UnreadCountOut)
+async def unread_announcement_count(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """How many published announcements this user has not read yet.
+
+    The customer app shows this as the badge on its announcements entry
+    point. Counted server-side under the same visibility rules as the feed
+    (published/completed, unexpired, own recipient row, read_at IS NULL) so
+    the badge reflects the whole feed, not just the loaded page.
+    """
+    now = datetime.utcnow()
+    joined = (
+        select(ServiceCommunicationRecipient, ServiceCommunication)
+        .join(ServiceCommunication, ServiceCommunication.id == ServiceCommunicationRecipient.communication_id)
+        .where(
+            ServiceCommunicationRecipient.user_id == current_user["id"],
+            ServiceCommunicationRecipient.read_at.is_(None),
+            *_visible_conditions(now),
+        )
+    )
+    unread = int((await db.execute(
+        select(func.count()).select_from(joined.subquery())
+    )).scalar() or 0)
+    return {"unread_count": unread}
 
 
 __all__ = ["admin_router", "customer_router"]
