@@ -485,7 +485,15 @@ async def _call_gemini(system: str, messages: List[dict], image_base64: Optional
     if response.status_code != 200:
         raise ValueError(f"Gemini error {response.status_code}: {response.text[:200]}")
 
-    return gemini.reply_text(response.json())
+    data = response.json()
+    # Cost accounting (best-effort, never fails the reply): one AI row per
+    # answered call so the revenue dashboard prices API spend.
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="gemini", response_data=data, model=settings.gemini_model,
+        call_site="negotiate_chat",
+    )
+    return gemini.reply_text(data)
 
 
 async def _call_deepseek(system: str, messages: List[dict],
@@ -623,6 +631,13 @@ async def _call_deepseek(system: str, messages: List[dict],
             logger.warning("DeepSeek returned malformed/incomplete response: %s", e)
             raise ValueError("DeepSeek response missing choices/message/content") from e
 
+        # Cost accounting (best-effort): inside _do_call so a breaker
+        # retry that eventually answers still logs exactly one row.
+        from api.core.cost_ledger import record_ai_cost
+        await record_ai_cost(
+            provider="deepseek", response_data=data, model=DEEPSEEK_MODEL,
+            call_site="negotiate_chat",
+        )
         return content.strip()
 
     logger.info("DeepSeek request started")
@@ -690,7 +705,14 @@ async def _call_groq(system: str, messages: List[dict],
     if response.status_code != 200:
         raise ValueError(f"Groq error {response.status_code}: {response.text[:200]}")
 
-    return response.json()["choices"][0]["message"]["content"].strip()
+    data = response.json()
+    # Cost accounting (best-effort, never fails the reply).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="groq", response_data=data, model=GROQ_MODEL,
+        call_site="negotiate_chat",
+    )
+    return data["choices"][0]["message"]["content"].strip()
 
 
 async def _call_openrouter(system: str, messages: List[dict],
@@ -747,7 +769,14 @@ async def _call_openrouter(system: str, messages: List[dict],
     if response.status_code != 200:
         raise ValueError(f"OpenRouter error {response.status_code}: {response.text[:200]}")
 
-    return response.json()["choices"][0]["message"]["content"].strip()
+    data = response.json()
+    # Cost accounting (best-effort, never fails the reply).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="openrouter", response_data=data, model=OPENROUTER_MODEL,
+        call_site="negotiate_chat",
+    )
+    return data["choices"][0]["message"]["content"].strip()
 
 
 async def _extract_delivery_date(message_text: str) -> Optional["_dt"]:

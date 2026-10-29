@@ -234,6 +234,12 @@ async def _settle(db: AsyncSession, payment: ZetuPayPayment, event: zetupay.Zetu
         f"reference={payment.reference} purpose={payment.purpose} amount={payment.amount} "
         f"target={payment.target_id} wave={event.wave_transaction_id} receipt={event.receipt}",
     )
+    # Provider cost of collecting BROKA's own income. 1.5% of the settled
+    # No collection-fee row is written here on purpose: fees are a pure
+    # function of settled payments, so api/core/revenue.py derives them at
+    # report time (complete by construction, backfills history, no
+    # redelivery double-count). A stored payment_fee row would double-count
+    # against the derived figure — see cost_ledger.py's header.
     await _domain(payment.purpose).zetupay_settled(db, payment.target_id, event.receipt)
 
 

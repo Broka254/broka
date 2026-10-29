@@ -1614,7 +1614,14 @@ class AIBrokerService:
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.post(url, json={"contents": [{"parts": parts}]})
         r.raise_for_status()
-        return gemini.reply_text(r.json())
+        data = r.json()
+        # Cost accounting (best-effort, never fails the reply).
+        from api.core.cost_ledger import record_ai_cost
+        await record_ai_cost(
+            provider="gemini", response_data=data,
+            model=settings.gemini_model, call_site="ai_broker",
+        )
+        return gemini.reply_text(data)
 
     async def _call_deepseek(self, messages: list[dict], image_base64: Optional[str] = None) -> str:
         """
@@ -1706,6 +1713,12 @@ class AIBrokerService:
 
         logger.info("[ai_broker] DeepSeek request succeeded")
         logger.info("[ai_broker] DeepSeek response received in %.2fs", elapsed)
+        # Cost accounting (best-effort, never fails the reply).
+        from api.core.cost_ledger import record_ai_cost
+        await record_ai_cost(
+            provider="deepseek", response_data=data,
+            model=settings.deepseek_model, call_site="ai_broker",
+        )
         return content
 
     async def _call_openrouter(self, messages: list[dict]) -> str:
@@ -1721,7 +1734,14 @@ class AIBrokerService:
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.post(OPENROUTER_URL, json=payload, headers=headers)
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        data = r.json()
+        # Cost accounting (best-effort, never fails the reply).
+        from api.core.cost_ledger import record_ai_cost
+        await record_ai_cost(
+            provider="openrouter", response_data=data,
+            model=settings.openrouter_model, call_site="ai_broker",
+        )
+        return data["choices"][0]["message"]["content"]
 
     async def _call_groq(self, messages: list[dict]) -> str:
         payload = {"model": settings.groq_model, "messages": messages, "max_tokens": 512}
@@ -1729,4 +1749,11 @@ class AIBrokerService:
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.post(GROQ_URL, json=payload, headers=headers)
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        data = r.json()
+        # Cost accounting (best-effort, never fails the reply).
+        from api.core.cost_ledger import record_ai_cost
+        await record_ai_cost(
+            provider="groq", response_data=data,
+            model=settings.groq_model, call_site="ai_broker",
+        )
+        return data["choices"][0]["message"]["content"]

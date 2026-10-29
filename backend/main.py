@@ -119,6 +119,7 @@ import api.core.message_push         # noqa: F401  pushes every chat message to 
 import api.core.zeno_subscribers                    # noqa: F401  Zeno reacts to platform events
 import api.core.trader_specialization_subscribers   # noqa: F401  derives seller specializations from listings
 import api.core.buy_agent_subscribers               # noqa: F401  matches new listings against standing buy requests
+import api.core.admin_alert_subscribers         # noqa: F401  raises ops alerts from platform events
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -262,6 +263,8 @@ app.include_router(reviews_router,    prefix="/reviews",    tags=["Reviews v3"])
 app.include_router(negotiate.router,  prefix="/negotiate",  tags=["Negotiate (legacy)"])
 app.include_router(ai_broker_router,  prefix="/negotiate",  tags=["AI Broker v3"])
 app.include_router(admin_router,      prefix="/admin",      tags=["Admin v3"])
+from api.domains.admin.alerts_revenue import router as admin_additions_router
+app.include_router(admin_additions_router, prefix="/admin", tags=["Admin v3"])
 app.include_router(
     service_communications_admin_router,
     prefix="/admin/communications",

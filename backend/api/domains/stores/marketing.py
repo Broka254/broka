@@ -502,7 +502,14 @@ async def _call_gemini(prompt: str) -> str:
         )
     if response.status_code != 200:
         raise RuntimeError(f"Gemini HTTP {response.status_code}")
-    return gemini.reply_text(response.json())
+    data = response.json()
+    # Cost accounting (best-effort, never fails the copy).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="gemini", response_data=data,
+        model=settings.gemini_model, call_site="store_marketing",
+    )
+    return gemini.reply_text(data)
 
 
 async def _call_deepseek(prompt: str) -> str:
@@ -528,6 +535,12 @@ async def _call_deepseek(prompt: str) -> str:
     text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
     if not text:
         raise RuntimeError("DeepSeek returned no content")
+    # Cost accounting (best-effort, never fails the copy).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="deepseek", response_data=data,
+        model=settings.deepseek_model, call_site="store_marketing",
+    )
     return text
 
 

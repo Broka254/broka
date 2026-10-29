@@ -116,7 +116,13 @@ async def _call_gemini(system: str, messages: list, image_base64: str = "") -> s
         )
     if resp.status_code != 200:
         raise ValueError(f"Gemini error {resp.status_code}: {resp.text[:200]}")
-    return gemini.reply_text(resp.json())
+    data = resp.json()
+    # Cost accounting (best-effort, never fails the assessment).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="gemini", response_data=data, call_site="dispute_ai",
+    )
+    return gemini.reply_text(data)
 
 
 async def _call_groq(system: str, messages: list) -> str:
@@ -141,7 +147,14 @@ async def _call_groq(system: str, messages: list) -> str:
         )
     if resp.status_code != 200:
         raise ValueError(f"Groq error {resp.status_code}: {resp.text[:200]}")
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    data = resp.json()
+    # Cost accounting (best-effort, never fails the assessment).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="groq", response_data=data, model=GROQ_MODEL,
+        call_site="dispute_ai",
+    )
+    return data["choices"][0]["message"]["content"].strip()
 
 
 async def _call_openrouter(system: str, messages: list) -> str:
@@ -172,7 +185,14 @@ async def _call_openrouter(system: str, messages: list) -> str:
         )
     if resp.status_code != 200:
         raise ValueError(f"OpenRouter error {resp.status_code}: {resp.text[:200]}")
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    data = resp.json()
+    # Cost accounting (best-effort, never fails the assessment).
+    from api.core.cost_ledger import record_ai_cost
+    await record_ai_cost(
+        provider="openrouter", response_data=data, model=OPENROUTER_MODEL,
+        call_site="dispute_ai",
+    )
+    return data["choices"][0]["message"]["content"].strip()
 
 
 async def _call_ai(system: str, messages: list, image_base64: str = "") -> str:

@@ -86,6 +86,21 @@ services:
         sync: false          # Africa's Talking API key — required for OTP + SMS nudges to actually send
       - key: AT_SENDER_ID
         sync: false          # Optional: registered AT sender ID, else uses the shared AT number
+      - key: SMS_COST_MINOR_MOBITECH
+        value: "35"          # Cost ledger: Mobitech KES 0.35/message (billed rate, PRICING.md)
+      - key: SMS_COST_MINOR_AT
+        value: "80"          # Cost ledger: AT rate unconfirmed — top of Kenya's bulk band;
+                             # rows stay estimated until the real rate is set
+      - key: ZETUPAY_FEE_PCT
+        value: "1.5"         # Cost ledger: assumed ZetuPay collection fee % (no published schedule)
+      - key: AI_FREE_PROVIDERS
+        value: "groq,openrouter"   # Cost ledger: providers on free tier, billed zero
+      - key: AI_USD_TO_KES
+        value: "129.5"       # Cost ledger: FX for AI pricing (PRICING.md, Sept 2026)
+      - key: AI_DEEPSEEK_INPUT_PER_1M_USD
+        value: "0.15"        # Cost ledger: DeepSeek off-peak input $/1M tokens (PRICING.md)
+      - key: AI_DEEPSEEK_OUTPUT_PER_1M_USD
+        value: "0.60"        # Cost ledger: DeepSeek off-peak output $/1M tokens (PRICING.md)
       - key: DATABASE_URL
         fromDatabase:
           name: broka-db

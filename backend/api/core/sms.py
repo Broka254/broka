@@ -120,7 +120,16 @@ class AfricasTalkingSMS:
 
     async def send(self, phone: str, message: str) -> bool:
         try:
-            return await _at_breaker.call(self._send_once, phone, message)
+            # One cost row per actual provider handoff: only a True from
+            # _send_once means Africa's Talking accepted the message, and a
+            # retry that fails here costs nothing. The row is written after
+            # the fact on a detached session so accounting can never fail
+            # the send itself.
+            ok = await _at_breaker.call(self._send_once, phone, message)
+            if ok:
+                from api.core.cost_ledger import record_sms_cost
+                await record_sms_cost(provider="africas_talking")
+            return ok
         except (CircuitOpenError, httpx.HTTPError) as e:
             logger.error("[sms:africastalking] send failed err=%s", type(e).__name__)
             return False
@@ -334,7 +343,15 @@ class MobitechSMS:
 
     async def send(self, phone: str, message: str) -> bool:
         try:
-            return await _mobitech_breaker.call(self._send_once, phone, message)
+            # Same one-row-per-handoff rule as AfricasTalkingSMS above: only
+            # a provider-accepted send (status_code 1000 inside _send_once)
+            # writes a KES 0.35 Mobitech row, billed per message whatever its
+            # length (PRICING.md §1).
+            ok = await _mobitech_breaker.call(self._send_once, phone, message)
+            if ok:
+                from api.core.cost_ledger import record_sms_cost
+                await record_sms_cost(provider="mobitech")
+            return ok
         except (CircuitOpenError, httpx.HTTPError) as e:
             logger.error("[sms:mobitech] send failed err=%s", type(e).__name__)
             return False

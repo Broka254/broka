@@ -224,6 +224,47 @@ class Settings:
     at_username: str = field(default_factory=lambda: os.getenv("AT_USERNAME", ""))
     at_api_key: str = field(default_factory=lambda: os.getenv("AT_API_KEY", ""))
     at_sender_id: str = field(default_factory=lambda: os.getenv("AT_SENDER_ID", ""))
+    # ── Platform cost ledger (api/core/cost_ledger.py) ────────────────────────
+    # Per-message SMS spend in minor units (KES cents: 35 = KES 0.35).
+    # Mobitech bills KES 0.35 a message whatever its length (PRICING.md §1).
+    # The Africa's Talking rate was never confirmed against our account, so
+    # its default sits at the top of Kenya's bulk band (KES 0.80) and every
+    # such row is flagged estimated until the real rate is configured.
+    sms_cost_minor_mobitech: int = field(default_factory=lambda: int(
+        os.getenv("SMS_COST_MINOR_MOBITECH", "35")
+    ))
+    sms_cost_minor_at: int = field(default_factory=lambda: int(
+        os.getenv("SMS_COST_MINOR_AT", "80")
+    ))
+    # ZetuPay collection fee, percent of the settled amount. ZetuPay's
+    # published docs state no fee schedule, so this is a 1.5% assumption
+    # and every such figure is estimated until the real schedule is known.
+    # (Derived at report time in api/core/revenue.py, not stored per row.)
+    zetupay_fee_pct: float = field(default_factory=lambda: float(
+        os.getenv("ZETUPAY_FEE_PCT", "1.5")
+    ))
+    # ── AI cost rates (api/core/cost_ledger.py ai_cost_minor) ────────────────
+    # Providers billed at zero because the configured models are free-tier
+    # (Groq's free tier, OpenRouter's :free Nemotron). If a paid model is
+    # ever configured, remove it here and add its per-1M rates instead.
+    ai_free_providers: str = field(default_factory=lambda: os.getenv(
+        "AI_FREE_PROVIDERS", "groq,openrouter"
+    ))
+    # USD→KES for AI pricing (PRICING.md: late-September 2026 rate).
+    ai_usd_to_kes: float = field(default_factory=lambda: float(
+        os.getenv("AI_USD_TO_KES", "129.5")
+    ))
+    # DeepSeek V4.1 Flash off-peak USD per 1M tokens (PRICING.md §"what it
+    # costs to serve"): $0.15 input (cache miss), $0.60 output. Peak
+    # doubling and cache-hit ratios are not tracked per call, so every
+    # priced AI row stays estimated. Providers without rate settings
+    # (Gemini today) record unpriced rows with real token counts in meta.
+    ai_deepseek_input_per_1m_usd: float = field(default_factory=lambda: float(
+        os.getenv("AI_DEEPSEEK_INPUT_PER_1M_USD", "0.15")
+    ))
+    ai_deepseek_output_per_1m_usd: float = field(default_factory=lambda: float(
+        os.getenv("AI_DEEPSEEK_OUTPUT_PER_1M_USD", "0.60")
+    ))
     otp_length: int = field(default_factory=lambda: int(os.getenv("OTP_LENGTH", "6")))
     otp_expiry_seconds: int = field(default_factory=lambda: int(os.getenv("OTP_EXPIRY_SECONDS", "300")))
     otp_max_attempts: int = field(default_factory=lambda: int(os.getenv("OTP_MAX_ATTEMPTS", "5")))
