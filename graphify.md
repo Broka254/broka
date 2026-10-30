@@ -1081,6 +1081,12 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `domain/models/feedback.dart` — One feedback or complaint submission, as /feedback returns it (backend/api/domains/feedback/router.py).
 - `presentation/feedback_screen.dart` — Feedback & complaints: tell BROKA what works, what doesn't, or report a problem that needs a human.
 
+### `flutter_app/lib/features/launch_offers/`
+
+- `data/launch_offers_repository.dart` — BROKA - Launch offers: GET /pricing/launch-offers.
+- `domain/launch_offers.dart` — Launch offers + time left, as the server computes them (backend/api/domains/pricing/launch_offers.py, backend/api/domains/listings/time_lef…
+- `presentation/launch_offer_widgets.dart` — The free-offer banner and the time-left surfaces.
+
 ### `flutter_app/lib/features/listing_fee/`
 
 - `data/listing_fee_repository.dart` — BROKA - Listing fee: quotes, the M-Pesa payment and its progress (backend/api/domains/pricing/router.py).
@@ -1349,6 +1355,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `image_upload_test.dart` — Image uploads and image display (Online Stores phase 1).
 - `inbox_screen_test.dart` — The Inbox on Home's visual system (2026-09-26): the constellation, the collapsing header the Menu next to it uses, and cards like Home's in…
 - `incoming_call_notification_test.dart` — The incoming-call notification's Accept and Decline.
+- `launch_offers_test.dart` — Launch offers + time left: parsing and the widgets that sell/warn.
 - `listing_fee_test.dart` — The listing fee in the app (PRICING.md): the quote as the server sends it, the Listing fee screen, and Go live handing an unpaid listing to…
 - `listing_publish_test.dart` — Publishing a listing from the sell wizard (LISTING_POSTING_REVIEW.md).
 - `listing_search_test.dart` — Home's search: listings only, and the bugs the old SearchDelegate had.
