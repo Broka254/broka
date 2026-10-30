@@ -242,6 +242,8 @@ async def listing_fee_quote(
     launch_eligible = bool(new_listing and await launch_offers.peek_listing_offer(db, user_id))
     result["launch_offer"] = {
         "eligible": launch_eligible,
+        "enabled": bool(settings.listing_fees_enabled
+                        and settings.free_listing_offer_limit > 0),
         "free_days": settings.free_listing_offer_days,
         "remaining": (await launch_offers.status(
             db, LaunchOfferType.LISTING_FREE)).remaining,

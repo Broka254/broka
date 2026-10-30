@@ -35,6 +35,7 @@ import '../../../widgets/constellation_background.dart';
 import '../../../widgets/gradient_button.dart';
 import '../../../widgets/wizard_scaffold.dart';
 import '../../categories/domain/category_visual.dart';
+import '../../launch_offers/presentation/launch_offer_widgets.dart';
 import '../../listing_fee/presentation/listing_fee_screen.dart';
 import '../../listings/data/repositories/listings_repository.dart';
 import '../../listings/presentation/change_price.dart';
@@ -974,7 +975,9 @@ class _StorePlanCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final billing = store.billing!;
     final active = billing.active;
-    final color = active ? BrokaColors.success : BrokaColors.warning;
+    final timeLeft = billing.timeLeft ?? store.timeLeft;
+    final ending = active && (timeLeft?.isExpiringSoon ?? false);
+    final color = !active || ending ? BrokaColors.warning : BrokaColors.success;
     return Container(
       key: const Key('my-store-plan-card'),
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
@@ -988,15 +991,18 @@ class _StorePlanCard extends StatelessWidget {
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(active ? 'Plan active' : 'Plan unpaid',
+            Text(ending ? 'Plan ending soon' : (active ? 'Plan active' : 'Plan unpaid'),
                 style: const TextStyle(color: BrokaColors.textHigh,
                     fontWeight: FontWeight.w700, fontSize: 15)),
             const SizedBox(height: 2),
             Text(
               active
-                  ? (billing.paidUntil == null
-                      ? 'Buyers can see your store'
-                      : 'Buyers can see your store until ${_shortDate(billing.paidUntil!)}')
+                  ? (timeLeft != null && !timeLeft.isUnlimited
+                      ? '${timeLeft.label} · goes offline ${timeLeft.offlineDateLabel ?? ''}. '
+                          'We text you 2 days before.'
+                      : (billing.paidUntil == null
+                          ? 'Buyers can see your store'
+                          : 'Buyers can see your store until ${_shortDate(billing.paidUntil!)}'))
                   : "Buyers can't see your store or its products yet",
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
             ),
@@ -1005,8 +1011,8 @@ class _StorePlanCard extends StatelessWidget {
         TextButton(
           key: const Key('my-store-plan-action'),
           onPressed: () => _open(context),
-          child: Text(active ? 'Manage' : 'Pay now',
-              style: TextStyle(color: active ? BrokaColors.gold : BrokaColors.warning,
+          child: Text(ending ? 'Renew' : (active ? 'Manage' : 'Pay now'),
+              style: TextStyle(color: active && !ending ? BrokaColors.gold : BrokaColors.warning,
                   fontWeight: FontWeight.w800)),
         ),
       ]),

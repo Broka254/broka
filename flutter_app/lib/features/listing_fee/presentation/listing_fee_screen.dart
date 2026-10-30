@@ -26,6 +26,8 @@ import '../../../utils/price_format.dart';
 import '../../payments/domain/checkout.dart';
 import '../../payments/presentation/checkout_widgets.dart';
 import '../../payments/presentation/payment_method_screen.dart';
+import '../../launch_offers/domain/launch_offers.dart';
+import '../../launch_offers/presentation/launch_offer_widgets.dart';
 import '../data/listing_fee_repository.dart';
 import '../domain/listing_fee.dart';
 
@@ -201,11 +203,25 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
 
   Widget _choosing() {
     final q = _quote!;
+    if (q.storeCovered || q.state?.isStoreCovered == true) {
+      return CheckoutMessage(
+        icon: Icons.storefront_rounded,
+        title: 'Covered by your store plan',
+        body: 'Listings in your store never pay a listing fee. '
+            'This one stays live while your store plan is paid.',
+        action: 'Done',
+        onAction: () => Navigator.of(context).pop(true),
+      );
+    }
     if (!q.feesEnabled) {
+      final offer = q.launchOffer;
       return CheckoutMessage(
         icon: Icons.celebration_rounded,
-        title: 'Listing is free right now',
-        body: 'There is nothing to pay while BROKA launches.',
+        title: q.freeListing ? 'This listing is free' : 'Listing is free right now',
+        body: q.freeListing && offer?.eligible == true
+            ? 'Your launch offer covers it: ${offer!.freeDays} days free, '
+                'no payment due. Only ${offer.remaining} free listings left after yours.'
+            : 'There is nothing to pay while BROKA launches.',
         action: 'Done',
         onAction: () => Navigator.of(context).pop(true),
       );
@@ -231,6 +247,10 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
         const SizedBox(height: 14),
+        if (_timeLeftFor(q) != null) ...[
+          TimeLeftBanner(timeLeft: _timeLeftFor(q), subject: 'Your listing'),
+          const SizedBox(height: 12),
+        ],
         _PriceHero(quote: q),
         const SizedBox(height: 12),
         for (final line in feeReasons(q)) _Reason(line),
@@ -251,6 +271,25 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
       ]),
     );
   }
+}
+
+/// The quote's fee state as a countdown, for the banner above the price.
+/// Null when the listing has no deadline to warn about.
+TimeLeft? _timeLeftFor(ListingFeeQuote q) {
+  final state = q.state;
+  if (state == null || state.isStoreCovered) return null;
+  final until = state.paidUntil;
+  if (until == null) return null;
+  final seconds = until.difference(DateTime.now()).inSeconds;
+  if (seconds > 7 * 86400) return null;
+  return TimeLeft(
+    status: seconds <= 0 ? 'expired' : 'ending',
+    label: seconds <= 0 ? 'Offline' : '${(seconds / 86400).ceil()}d left',
+    secondsLeft: seconds < 0 ? 0 : seconds,
+    daysLeft: seconds / 86400,
+    goesOfflineAt: until,
+    isExpiringSoon: seconds > 0,
+  );
 }
 
 String _date(DateTime d) {

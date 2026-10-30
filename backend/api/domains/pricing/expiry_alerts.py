@@ -139,12 +139,19 @@ async def send_due_expiry_alerts(db: AsyncSession,
     for listing in listings:
         if getattr(listing, "sms_alerts", True) is False:
             continue
+        seller = await db.get(User, listing.seller_id)
+        if seller is None or not seller.phone:
+            # No number to text: claim the period so every later pass
+            # doesn't re-claim, fail and unclaim the same listing for
+            # the rest of the window. There is nobody to retry for.
+            await _claim(db, ExpiryEntity.LISTING, listing.id,
+                         listing.seller_id, listing.paid_until)
+            continue
         if not await _claim(db, ExpiryEntity.LISTING, listing.id,
                             listing.seller_id, listing.paid_until):
             continue
-        seller = await db.get(User, listing.seller_id)
         ok = await _send(
-            seller.phone if seller else None,
+            seller.phone,
             listing_sms(listing.name or "your item", listing.paid_until, now),
         )
         if ok:
@@ -165,12 +172,16 @@ async def send_due_expiry_alerts(db: AsyncSession,
         ).order_by(StoreSubscription.paid_until).limit(MAX_PER_PASS)
     )).all()
     for sub, store in rows:
+        owner = await db.get(User, store.owner_id)
+        if owner is None or not owner.phone:
+            await _claim(db, ExpiryEntity.STORE, store.id,
+                         store.owner_id, sub.paid_until)
+            continue
         if not await _claim(db, ExpiryEntity.STORE, store.id,
                             store.owner_id, sub.paid_until):
             continue
-        owner = await db.get(User, store.owner_id)
         ok = await _send(
-            owner.phone if owner else None,
+            owner.phone,
             store_sms(store.name or "your store", sub.paid_until, now),
         )
         if ok:

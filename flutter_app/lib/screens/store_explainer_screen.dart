@@ -24,6 +24,10 @@
 
 import 'package:flutter/material.dart';
 
+import '../core/utils/result.dart';
+import '../features/launch_offers/data/launch_offers_repository.dart';
+import '../features/launch_offers/domain/launch_offers.dart';
+import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/stores/presentation/store_entry.dart';
 import '../main.dart';
 import '../widgets/constellation_background.dart';
@@ -37,12 +41,24 @@ class StoreExplainerScreen extends StatefulWidget {
 }
 
 class _StoreExplainerScreenState extends State<StoreExplainerScreen> {
+  LaunchOffer? _storeOffer;
+
   @override
   void initState() {
     super.initState();
     // Shown once as the introduction; after this, store buttons go
     // straight to My Store.
     StoreEntry.markExplainerSeen();
+    _loadOffer();
+  }
+
+  Future<void> _loadOffer() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _storeOffer = offers.storeFree),
+      onFailure: (_, __) {},
+    );
   }
 
   static const _reasons = [
@@ -106,6 +122,13 @@ class _StoreExplainerScreenState extends State<StoreExplainerScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
               FadeSlideIn(index: 0, child: _hero()),
+              if (_storeOffer != null) ...[
+                const SizedBox(height: 14),
+                FadeSlideIn(
+                  index: 0,
+                  child: LaunchOfferBanner(offer: _storeOffer!, kind: LaunchOfferKind.store),
+                ),
+              ],
               const SizedBox(height: 18),
               for (int i = 0; i < _reasons.length; i++)
                 FadeSlideIn(index: i + 1,

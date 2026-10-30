@@ -16,6 +16,9 @@ import '../utils/price_format.dart';
 import '../utils/price_unit.dart';
 import '../widgets/broka_image.dart';
 import '../widgets/sell_step_scaffold.dart';
+import '../features/launch_offers/data/launch_offers_repository.dart';
+import '../features/launch_offers/domain/launch_offers.dart';
+import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/stores/data/repositories/stores_repository.dart';
 import '../features/stores/domain/models/store.dart';
 import 'sell_flow.dart';
@@ -33,6 +36,7 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
   // simply has no store - both render the same way (no selector at all),
   // so there's no separate "loading" flicker for the common case.
   Store? _myStore;
+  LaunchOffer? _listingOffer;
 
   SellWizardData get _data => widget.data;
 
@@ -40,6 +44,16 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
   void initState() {
     super.initState();
     _loadMyStore();
+    _loadOffer();
+  }
+
+  Future<void> _loadOffer() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _listingOffer = offers.listingFree),
+      onFailure: (_, __) {},
+    );
   }
 
   Future<void> _loadMyStore() async {
@@ -124,6 +138,12 @@ class _SellReviewScreenState extends State<SellReviewScreen> {
           _storeToggle(data),
           SellGap.section,
         ],
+
+        if (data.storeId != null)
+          StoreCoveredBanner(storeName: _myStore?.name)
+        else if (_listingOffer != null)
+          LaunchOfferBanner(offer: _listingOffer!, kind: LaunchOfferKind.listing),
+        if (data.storeId != null || _listingOffer?.shouldShow == true) SellGap.section,
 
         SellCard(child: Column(children: [
           _row('Name', data.name),

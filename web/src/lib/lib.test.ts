@@ -187,6 +187,20 @@ describe('product cards', () => {
       priceLabel: 'KES 18,000 / bag',
     })
   })
+  it('shows time left only when the listing is ending soon', () => {
+    const ending = toProductCard(
+      listing({
+        time_left: {
+          status: 'ending', label: '2d 3h left', seconds_left: 183600,
+          days_left: 2.13, goes_offline_at: '2026-10-03T12:00:00', is_expiring_soon: true,
+        },
+      }),
+      'clanix',
+      API,
+    )
+    expect(ending.endsLabel).toBe('Ends in 2d 3h')
+    expect(toProductCard(listing(), 'clanix', API).endsLabel).toBeNull()
+  })
   it('fall back to an unconverted base64 photo, then the category emoji', () => {
     const b64 = 'iVBORw0KGgo' + 'A'.repeat(40)
     expect(toProductCard(listing({ verified_photos: `${b64},other` }), 'clanix', API).image).toBe(

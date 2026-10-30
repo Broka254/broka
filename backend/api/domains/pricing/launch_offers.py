@@ -54,7 +54,8 @@ class OfferStatus:
         return max(0, self.limit - self.claimed)
 
     def to_dict(self, eligible: Optional[bool] = None,
-                already_claimed: Optional[bool] = None) -> dict:
+                already_claimed: Optional[bool] = None,
+                enabled: Optional[bool] = None) -> dict:
         out = {
             "limit": self.limit,
             "claimed": self.claimed,
@@ -62,6 +63,12 @@ class OfferStatus:
             "free_days": self.days,
             "one_per_user": True,
         }
+        if enabled is not None:
+            # False means the matching billing switch is off (or the limit
+            # is 0): the offer is paused, not exhausted. A client that
+            # only read `remaining` would tease "3 left!" for an offer
+            # nobody can claim, or hide one that is merely paused.
+            out["enabled"] = enabled
         if eligible is not None:
             out["eligible"] = eligible
         if already_claimed is not None:
@@ -173,14 +180,17 @@ async def claim_for_entity(db: AsyncSession, offer_type: str,
 async def offers_status(db: AsyncSession, user_id: Optional[str] = None) -> dict:
     """Both offers for GET /pricing/launch-offers and the sell/store screens."""
     out: dict = {}
-    for key, offer_type, peek in (
-        ("listing_free", LaunchOfferType.LISTING_FREE, peek_listing_offer),
-        ("store_free", LaunchOfferType.STORE_FREE, peek_store_offer),
+    for key, offer_type, peek, billing_on in (
+        ("listing_free", LaunchOfferType.LISTING_FREE, peek_listing_offer,
+         settings.listing_fees_enabled),
+        ("store_free", LaunchOfferType.STORE_FREE, peek_store_offer,
+         settings.store_billing_enabled),
     ):
         st = await status(db, offer_type, user_id)
         eligible = await peek(db, user_id) if user_id else None
         already = None
         if user_id:
             already = await _user_claim(db, offer_type, user_id) is not None
-        out[key] = st.to_dict(eligible=eligible, already_claimed=already)
+        out[key] = st.to_dict(eligible=eligible, already_claimed=already,
+                              enabled=bool(billing_on and st.limit > 0))
     return out

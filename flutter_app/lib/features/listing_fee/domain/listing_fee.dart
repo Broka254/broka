@@ -7,6 +7,7 @@
 // the widget, so they can be tested with plain values.
 
 import '../../../utils/price_format.dart';
+import '../../launch_offers/domain/launch_offers.dart';
 
 int _int(Object? v) => (v as num?)?.toInt() ?? 0;
 double _double(Object? v) => (v as num?)?.toDouble() ?? 0;
@@ -46,6 +47,9 @@ class FeeState {
   final DateTime? paidUntil;
 
   bool get unpaid => status == 'unpaid';
+
+  /// Covered by its store's plan: live, and never a payment to offer.
+  bool get isStoreCovered => status == 'store_covered';
   bool get needsPayment => status == 'unpaid' || status == 'ending' || status == 'expired';
 
   static FeeState? fromJson(Object? j) {
@@ -82,6 +86,9 @@ class ListingFeeQuote {
     this.monthsAvailable,
     this.state,
     this.periodMonths = 2,
+    this.freeListing = false,
+    this.storeCovered = false,
+    this.launchOffer,
   });
 
   final String category;
@@ -125,6 +132,16 @@ class ListingFeeQuote {
   final int? monthsAvailable;
   final FeeState? state;
 
+  /// This (new) listing posts free: a free place, the founding offer, or
+  /// the launch offer. The sell screen says so instead of quoting a fee.
+  final bool freeListing;
+
+  /// Posted through the seller's store: no listing fee, ever.
+  final bool storeCovered;
+
+  /// The launch offer as this seller stands with it, when quoted.
+  final LaunchOffer? launchOffer;
+
   factory ListingFeeQuote.fromJson(Map<String, dynamic> j) {
     final risk = (j['risk'] as Map?)?.cast<String, dynamic>() ?? const {};
     final discounts = (j['discounts'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -154,6 +171,11 @@ class ListingFeeQuote {
       listingValue: _double(j['listing_value']),
       monthsAvailable: j['months_available'] == null ? null : _int(j['months_available']),
       state: FeeState.fromJson(j['listing_fee']),
+      freeListing: j['free_listing'] == true,
+      storeCovered: j['store_covered'] == true,
+      launchOffer: j['launch_offer'] is Map
+          ? LaunchOffer.fromQuoteJson((j['launch_offer'] as Map).cast<String, dynamic>())
+          : null,
     );
   }
 
@@ -223,6 +245,7 @@ class ListingAwaitingFee {
     required this.price,
     required this.state,
     this.coverThumb,
+    this.timeLeft,
   });
 
   final String id;
@@ -231,6 +254,9 @@ class ListingAwaitingFee {
   final FeeState state;
   final String? coverThumb;
 
+  /// Server-computed countdown before it goes offline, when present.
+  final TimeLeft? timeLeft;
+
   factory ListingAwaitingFee.fromJson(Map<String, dynamic> j) => ListingAwaitingFee(
         id: j['id'] as String? ?? '',
         name: j['name'] as String? ?? '',
@@ -238,6 +264,7 @@ class ListingAwaitingFee {
         state: FeeState.fromJson(j['listing_fee']) ??
             const FeeState(status: 'unpaid', live: false, paidUntil: null),
         coverThumb: (j['cover'] as Map?)?['thumb'] as String?,
+        timeLeft: TimeLeft.fromPayload(j),
       );
 }
 

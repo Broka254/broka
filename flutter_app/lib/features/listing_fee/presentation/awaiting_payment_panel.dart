@@ -175,10 +175,12 @@ class _Row extends StatelessWidget {
 
   String get _status => switch (listing.state.status) {
         'unpaid' => 'Not published yet',
-        'expired' => 'Ended - hidden from buyers',
-        _ => listing.state.paidUntil == null
-            ? 'Ending soon'
-            : 'Ends ${_daysLeft(listing.state.paidUntil!)}',
+        'expired' => 'Offline - hidden from buyers',
+        _ => listing.timeLeft != null
+            ? 'Ends in ${listing.timeLeft!.label.replaceAll(' left', '')} · ${listing.timeLeft!.offlineDateLabel ?? ''}'
+            : (listing.state.paidUntil == null
+                ? 'Ending soon'
+                : 'Ends ${_daysLeft(listing.state.paidUntil!)}'),
       };
 
   static String _daysLeft(DateTime until) {

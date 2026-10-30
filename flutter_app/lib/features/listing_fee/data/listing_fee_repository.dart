@@ -32,16 +32,20 @@ class ListingFeeRepository {
   }
 
   /// The fee for a listing that doesn't exist yet - the Go live teaser.
+  /// [storeId] posts through the seller's own store: no listing fee, ever,
+  /// and no free/launch slot is consumed by asking.
   Future<Result<ListingFeeQuote>> quoteForDraft({
     required String category,
     required double price,
     int quantity = 1,
+    String? storeId,
   }) =>
       _guard(() async => ListingFeeQuote.fromJson(
             await _client.get('/pricing/listing-fee/quote', queryParams: {
               'category': category,
               'price': price.toString(),
               'quantity': '${quantity < 1 ? 1 : quantity}',
+              if (storeId != null) 'store_id': storeId,
             }) as Map<String, dynamic>,
           ));
 

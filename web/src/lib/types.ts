@@ -81,6 +81,10 @@ export interface Store {
   opening_hours_week?: OpeningHoursWeekRow[] | null
   opening_hours_available?: boolean
   open_status?: OpenStatus | null
+  /** Time before the store goes offline, for every reader (older APIs: absent). */
+  paid_until?: string | null
+  time_left?: TimeLeft | null
+  time_left_label?: string | null
 }
 
 export interface OpeningHoursDay {
@@ -111,6 +115,16 @@ export interface OpenStatus {
 export interface StoreCategory {
   name: string
   count: number
+}
+
+/** Server-computed time before a listing/store goes offline. */
+export interface TimeLeft {
+  status: 'unlimited' | 'live' | 'ending' | 'unpaid' | 'expired' | 'store_covered'
+  label: string
+  seconds_left: number | null
+  days_left: number | null
+  goes_offline_at: string | null
+  is_expiring_soon: boolean
 }
 
 export interface Listing {
@@ -151,6 +165,10 @@ export interface Listing {
   store_id: string | null
   store_slug: string | null
   store_name: string | null
+  /** Paid time's end and the server's countdown to it (older APIs: absent). */
+  paid_until?: string | null
+  time_left?: TimeLeft | null
+  time_left_label?: string | null
 }
 
 /** The buyer-review figures for one store (GET /stores/{id}/reviews). */

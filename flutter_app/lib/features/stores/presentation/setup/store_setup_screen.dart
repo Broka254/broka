@@ -8,6 +8,9 @@ import '../../../../widgets/gradient_button.dart';
 import '../../../../widgets/constellation_background.dart';
 import '../../../../core/utils/result.dart';
 import '../../../../widgets/wizard_scaffold.dart';
+import '../../../launch_offers/data/launch_offers_repository.dart';
+import '../../../launch_offers/domain/launch_offers.dart';
+import '../../../launch_offers/presentation/launch_offer_widgets.dart';
 import '../store_billing_screen.dart';
 import '../store_launched_screen.dart';
 import 'store_setup_controller.dart';
@@ -28,12 +31,23 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
   late final StoreSetupController c = widget.controller ?? StoreSetupController();
   int _index = 0;
   String? _error;
+  LaunchOffer? _storeOffer;
 
   @override
   void initState() {
     super.initState();
     c.addListener(_onChange);
     _load();
+    _loadOffer();
+  }
+
+  Future<void> _loadOffer() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _storeOffer = offers.storeFree),
+      onFailure: (_, __) {},
+    );
   }
 
   Future<void> _load() async {
@@ -195,7 +209,13 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
         loading: c.busy,
         error: _error,
         animateBackground: widget.animateBackground,
-        child: KeyedSubtree(key: ValueKey(_step), child: _content()),
+        child: Column(children: [
+          if (_index == 0 && _storeOffer != null) ...[
+            LaunchOfferBanner(offer: _storeOffer!, kind: LaunchOfferKind.store),
+            const SizedBox(height: 16),
+          ],
+          KeyedSubtree(key: ValueKey(_step), child: _content()),
+        ]),
       ),
     );
   }

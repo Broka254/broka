@@ -380,11 +380,14 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
           Container(
             margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(
-              color: BrokaColors.bgCard.withOpacity(0.72),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: BrokaColors.border),
             ),
-            child: ListTile(
+            child: Material(
+              color: BrokaColors.bgCard.withOpacity(0.72),
+              borderRadius: BorderRadius.circular(12),
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
               dense: true,
               onTap: () => _searchFor(entry),
               leading: const Icon(Icons.history_rounded, color: BrokaColors.textMid, size: 19),
@@ -399,6 +402,7 @@ class _ListingSearchScreenState extends State<ListingSearchScreen> {
                   final list = await SearchHistory.remove(entry);
                   if (mounted) setState(() => _history = list);
                 },
+              ),
               ),
             ),
           ),

@@ -26,6 +26,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../main.dart';
+import '../features/launch_offers/domain/launch_offers.dart';
+import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/listings/domain/models/listing.dart' show BrokaListing;
 import '../utils/backend_time.dart';
 import '../utils/land_size.dart';
@@ -300,6 +302,15 @@ class ProductCard extends StatelessWidget {
       if (raw is String) return parseBackendUtc(raw);
     } catch (_) {}
     return null;
+  }
+
+  /// The server's countdown to this listing going offline, either model.
+  TimeLeft? get _timeLeft {
+    try {
+      return item.timeLeft as TimeLeft?;
+    } catch (_) {
+      return null;
+    }
   }
 
   String? get _freshnessText {
@@ -699,6 +710,13 @@ class ProductCard extends StatelessWidget {
           const Positioned(
             bottom: 8, left: 8,
             child: _PhotoChip(label: '✨ AI Showcase'),
+          ),
+        // Buyer urgency, only when the server says time is actually
+        // short: a listing ending within days, never a guessed deadline.
+        if (_timeLeft?.showOnCard == true)
+          Positioned(
+            bottom: 8, right: 8,
+            child: TimeLeftChip(timeLeft: _timeLeft),
           ),
       ],
     );

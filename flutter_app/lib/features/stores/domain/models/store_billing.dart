@@ -5,6 +5,7 @@
 // off), the priced quote the billing screen reads, and one M-Pesa payment's
 // progress. Amounts are always the server's - the app shows them, never
 // works them out.
+import '../../../launch_offers/domain/launch_offers.dart';
 
 /// A plan's price for one prepay period, opening fee included in [amount].
 class StorePlanPeriod {
@@ -130,6 +131,10 @@ class StoreBilling {
   /// time was free, the fee is still owed.
   final bool setupFeePaid;
 
+  /// Server-computed time before the store goes offline, when the state
+  /// carries the flat countdown fields (stores/billing.state_for).
+  final TimeLeft? timeLeft;
+
   const StoreBilling({
     required this.active,
     this.planId,
@@ -137,6 +142,7 @@ class StoreBilling {
     this.monthlyPrice,
     this.paidUntil,
     this.setupFeePaid = false,
+    this.timeLeft,
   });
 
   static DateTime? _date(Object? v) =>
@@ -154,6 +160,7 @@ class StoreBilling {
       monthlyPrice: (m['monthly_price'] as num?)?.toInt(),
       paidUntil: _date(m['paid_until']),
       setupFeePaid: m['setup_fee_paid'] as bool? ?? false,
+      timeLeft: TimeLeft.fromPayload(m),
     );
   }
 }
@@ -170,6 +177,9 @@ class StoreBillingQuote {
   final List<int> monthsOptions;
   final StorePlanQuote? plan;
 
+  /// The launch offer covered this store's setup (first free stores).
+  final bool launchOfferClaimed;
+
   const StoreBillingQuote({
     required this.rateCard,
     required this.setupFee,
@@ -179,6 +189,7 @@ class StoreBillingQuote {
     required this.current,
     this.monthsOptions = const [1, 3, 6, 12],
     this.plan,
+    this.launchOfferClaimed = false,
   });
 
   factory StoreBillingQuote.fromJson(Map<String, dynamic> j) => StoreBillingQuote(
@@ -197,6 +208,7 @@ class StoreBillingQuote {
         plan: j['plan'] == null
             ? null
             : StorePlanQuote.fromJson((j['plan'] as Map).cast<String, dynamic>()),
+        launchOfferClaimed: j['launch_offer_claimed'] == true,
       );
 }
 

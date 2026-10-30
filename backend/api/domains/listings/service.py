@@ -32,6 +32,27 @@ def _public_time_left(listing) -> dict:
     from api.domains.listings.time_left import time_left
 
     paid_until = getattr(listing, "paid_until", None)
+    if getattr(listing, "store_id", None):
+        # A store listing's clock is its store's subscription, not its own
+        # paid_until (paid.fee_applies). Reporting that column would say
+        # "No expiry" for a listing whose store can lapse, or "Offline"
+        # off a stale date from before it joined the store. The store's
+        # own payload carries the real deadline (_store_dict); here the
+        # honest answer is coverage, not a countdown we don't have.
+        return {
+            "paid_until": paid_until.isoformat() if paid_until else None,
+            "time_left": {
+                "status": "store_covered",
+                "paid_until": paid_until.isoformat() if paid_until else None,
+                "goes_offline_at": None,
+                "seconds_left": None,
+                "days_left": None,
+                "label": "Live via store plan",
+                "is_expiring_soon": False,
+            },
+            "time_left_label": "Live via store plan",
+            "goes_offline_at": None,
+        }
     countdown = time_left(paid_until, created_at=getattr(listing, "created_at", None))
     return {
         "paid_until": paid_until.isoformat() if paid_until else None,

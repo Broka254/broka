@@ -1,6 +1,7 @@
 // BROKA - Listing Model
 import '../utils/backend_time.dart';
 import '../features/categories/domain/category_visual.dart';
+import '../features/launch_offers/domain/launch_offers.dart';
 import 'listing_photo.dart';
 
 class Listing {
@@ -85,6 +86,10 @@ class Listing {
   final double? storeRating;
   final int?    storeReviewCount;
 
+  /// Paid time's end and the server's countdown to it (see BrokaListing).
+  final DateTime? paidUntil;
+  final TimeLeft? timeLeft;
+
   Listing({
     required this.id,
     required this.name,
@@ -138,6 +143,8 @@ class Listing {
     this.sellerOverallRating,
     this.storeRating,
     this.storeReviewCount,
+    this.paidUntil,
+    this.timeLeft,
   });
 
   factory Listing.fromJson(Map<String, dynamic> j) => Listing(
@@ -204,6 +211,8 @@ class Listing {
         sellerOverallRating:  (j['seller_overall_rating'] as num?)?.toDouble(),
         storeRating:          (j['store_rating'] as num?)?.toDouble(),
         storeReviewCount:     (j['store_review_count'] as num?)?.toInt(),
+        paidUntil:            parseBackendUtc(j['paid_until'] as String?),
+        timeLeft:             TimeLeft.fromPayload(j),
       );
 
   // Category-alignment pass (2026-09-18): this four-case switch only

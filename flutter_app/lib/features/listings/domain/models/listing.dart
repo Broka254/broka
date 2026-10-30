@@ -1,6 +1,8 @@
 // BROKA v3.0 - Listing domain model
 import '../../../../models/listing_photo.dart';
+import '../../../../utils/backend_time.dart';
 import '../../../../utils/price_format.dart';
+import '../../../launch_offers/domain/launch_offers.dart';
 
 class BrokaListing {
   final String id;
@@ -77,6 +79,12 @@ class BrokaListing {
   final double? storeRating;
   final int storeReviewCount;
 
+  /// When paid listing time runs out (null = no fee deadline), and the
+  /// server's countdown to it. Store listings read `store_covered` here:
+  /// their deadline is the store's, not this listing's.
+  final DateTime? paidUntil;
+  final TimeLeft? timeLeft;
+
   const BrokaListing({
     required this.id,
     required this.sellerId,
@@ -123,6 +131,8 @@ class BrokaListing {
     this.sellerOverallRating,
     this.storeRating,
     this.storeReviewCount = 0,
+    this.paidUntil,
+    this.timeLeft,
   });
 
   factory BrokaListing.fromJson(Map<String, dynamic> json) {
@@ -173,6 +183,8 @@ class BrokaListing {
       sellerOverallRating: (json['seller_overall_rating'] as num?)?.toDouble(),
       storeRating:         (json['store_rating'] as num?)?.toDouble(),
       storeReviewCount:    (json['store_review_count'] as num?)?.toInt() ?? 0,
+      paidUntil:           parseBackendUtc(json['paid_until'] as String?),
+      timeLeft:            TimeLeft.fromPayload(json),
     );
   }
 

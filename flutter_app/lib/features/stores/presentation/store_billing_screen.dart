@@ -25,6 +25,7 @@ import '../../../utils/price_format.dart';
 import '../../payments/domain/checkout.dart';
 import '../../payments/presentation/checkout_widgets.dart';
 import '../../payments/presentation/payment_method_screen.dart';
+import '../../launch_offers/presentation/launch_offer_widgets.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store_billing.dart';
 
@@ -302,6 +303,14 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 13)),
         const SizedBox(height: 14),
         _StatusCard(storeName: widget.storeName, current: q.current),
+        if (q.launchOfferClaimed) ...[
+          const SizedBox(height: 12),
+          const _LaunchClaimedNote(),
+        ],
+        if (q.current.timeLeft != null) ...[
+          const SizedBox(height: 12),
+          TimeLeftBanner(timeLeft: q.current.timeLeft, subject: 'Your store'),
+        ],
         const SizedBox(height: 16),
         if (plan != null) ...[
           CheckoutCard(
@@ -460,7 +469,8 @@ class _StatusCard extends StatelessWidget {
             Text(
               active
                   ? 'Buyers can see $storeName and its products'
-                      '${current.paidUntil == null ? '' : ' until ${_date(current.paidUntil!)}'}.'
+                      '${current.timeLeft != null && !current.timeLeft!.isUnlimited ? ' · ${current.timeLeft!.label}' : (current.paidUntil == null ? '' : ' until ${_date(current.paidUntil!)}')}.'
+                      '${current.timeLeft?.isExpiringSoon == true ? ' Renew before it goes offline — we text you 2 days before.' : ''}'
                   : "Buyers can't see $storeName or its products until the plan "
                       'is paid. Your link, products and settings are all kept.',
               style: const TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4),
@@ -559,6 +569,35 @@ class _MonthOption extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// This store's setup was covered by the launch offer.
+class _LaunchClaimedNote extends StatelessWidget {
+  const _LaunchClaimedNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('store-launch-claimed'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: BrokaColors.success.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.success.withOpacity(0.45)),
+      ),
+      child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.verified_outlined, color: BrokaColors.success, size: 22),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Free setup — launch offer. One of the first free stores claimed this shop, '
+            'so no opening fee was charged. Renewals after the free period are paid as usual.',
+            style: TextStyle(color: BrokaColors.textHigh, fontSize: 12.5, height: 1.4, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ]),
     );
   }
 }

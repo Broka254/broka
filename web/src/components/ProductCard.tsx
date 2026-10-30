@@ -33,6 +33,7 @@ export function ProductCard({ product, storeId }: { product: ProductCardData; st
           <span className={styles.badges}>
             {product.isAuction && <span className={`${styles.badge} ${styles.badgeAuction}`}>Auction</span>}
             {product.condition && <span className={styles.badge}>{product.condition}</span>}
+            {product.endsLabel && <span className={`${styles.badge} ${styles.badgeEnding}`}>{product.endsLabel}</span>}
           </span>
         </div>
         <div className={styles.productBody}>

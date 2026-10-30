@@ -87,6 +87,8 @@ export interface ProductCardData {
   condition: string | null
   /** How many can go in a cart: the listing's stock, one for a single item. */
   maxQuantity: number
+  /** "Ends in 2d 3h" when the server says this listing is ending soon. */
+  endsLabel?: string | null
 }
 
 /** Everything a product card shows, with image URLs resolved against the API. */
@@ -107,5 +109,8 @@ export function toProductCard(listing: Listing, storeSlug: string, apiUrl: strin
     isAuction: listing.listing_type === 'auction',
     condition: conditionLabel(listing.condition),
     maxQuantity: Math.max(1, Math.floor(listing.quantity ?? 1)),
+    endsLabel: listing.time_left?.is_expiring_soon
+      ? `Ends in ${listing.time_left.label.replace(/ left$/, '')}`
+      : null,
   }
 }

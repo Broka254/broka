@@ -38,6 +38,7 @@ import 'package:flutter/services.dart';
 
 import '../core/network/api_client.dart';
 import '../core/utils/result.dart';
+import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/listing_fee/data/listing_fee_repository.dart';
 import '../features/listing_fee/domain/listing_fee.dart';
 import '../features/listing_fee/presentation/listing_fee_screen.dart';
@@ -165,9 +166,14 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
       category: _data.category,
       price: price,
       quantity: int.tryParse(_data.quantity) ?? 1,
+      storeId: _data.storeId,
     );
     if (!mounted) return;
-    if (r case Success(:final data) when data.feesEnabled) setState(() => _fee = data);
+    // Keep free and store-covered quotes too: they are the reason there
+    // is no fee to teaser, and the screen must say which one applies
+    // instead of saying nothing (the old `when data.feesEnabled` guard
+    // hid exactly the listings the launch offer had just made free).
+    if (r case Success(:final data)) setState(() => _fee = data);
   }
 
   Future<void> _loadPlan() async {
@@ -387,7 +393,22 @@ class _SellZenoAlertScreenState extends State<SellZenoAlertScreen> with TickerPr
           SellGap.section,
           _summary(),
           if (_unpaidListingId != null) _savedUnpaid()
-          else if (_fee != null) _feeTeaser(_fee!),
+          else if (_fee?.storeCovered == true)
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: StoreCoveredBanner(),
+            )
+          else if (_fee?.launchOffer?.eligible == true && _fee?.launchOffer != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: LaunchOfferBanner(offer: _fee!.launchOffer!, kind: LaunchOfferKind.listing),
+            )
+          else if (_fee != null && _fee!.feesEnabled) _feeTeaser(_fee!)
+          else if (_fee?.freeListing == true)
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: _FreeListingNote(),
+            ),
         ]),
       ),
       if (_live)
@@ -853,6 +874,33 @@ class _SmsPitch extends StatelessWidget {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
           ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// A free listing that is not the launch offer (a free place / founding):
+/// still say it is free, so "no fee teaser" never reads as a missing price.
+class _FreeListingNote extends StatelessWidget {
+  const _FreeListingNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('sell-free-listing-note'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: BrokaColors.success.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrokaColors.success.withOpacity(0.45)),
+      ),
+      child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.verified_outlined, color: BrokaColors.success, size: 22),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text('This listing posts free — no listing fee, no payment step.',
+              style: TextStyle(color: BrokaColors.textHigh, fontSize: 13, fontWeight: FontWeight.w700, height: 1.4)),
         ),
       ]),
     );

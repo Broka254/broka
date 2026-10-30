@@ -6,6 +6,7 @@
 // shop is judged on its own reviews, reply speed and tenure; the owner's
 // record says who is behind the counter.
 import '../../../../models/listing_photo.dart';
+import '../../../launch_offers/domain/launch_offers.dart';
 import 'store_billing.dart';
 
 /// The store owner's seller record, as shown on the storefront.
@@ -355,6 +356,10 @@ class Store {
   /// STORE_BILLING_ENABLED is off. The app shows billing surfaces only
   /// when this is not null (a fresh store's screen, My Store's card).
   final StoreBilling? billing;
+
+  /// Time before this store goes offline, for every reader (the billing
+  /// object above is owner-only). Null from older backends.
+  final TimeLeft? timeLeft;
   final int listingCount;
   /// Straight-line km from the viewer, one decimal, to the owner's
   /// approximate point (±1 km) - null when the viewer sent no location,
@@ -417,6 +422,7 @@ class Store {
     this.ratingBreakdown,
     this.ratingExplanation,
     this.billing,
+    this.timeLeft,
     this.listingCount = 0,
     this.distanceKm,
     this.distanceLabel,
@@ -473,6 +479,7 @@ class Store {
       ratingBreakdown: StoreRatingBreakdown.fromJson(json['rating_breakdown']),
       ratingExplanation: json['rating_explanation'] as String?,
       billing:      StoreBilling.fromJson(json['billing']),
+      timeLeft:     TimeLeft.fromPayload(json),
       listingCount: (json['listing_count'] as num?)?.toInt() ?? 0,
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
       distanceLabel: json['distance_label'] as String?,

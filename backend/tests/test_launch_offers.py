@@ -319,6 +319,47 @@ async def test_expiry_sms_skips_drafts_store_listings_and_failed_sends_retry(cli
 
 
 @pytest.mark.asyncio
+async def test_offers_status_reports_enabled_and_store_listing_time_left(client):
+    _, headers = await _user()
+    offers = (await client.get("/pricing/launch-offers", headers=headers)).json()
+    assert offers["listing_free"]["enabled"] is True
+    assert offers["store_free"]["enabled"] is True
+    # A store listing must never report "No expiry" off its own paid_until:
+    # its store's plan is the clock (listings/service._public_time_left).
+    from api.domains.listings.service import _public_time_left
+
+    class _L:
+        store_id = "store-1"
+        paid_until = None
+        created_at = datetime(2026, 10, 1)
+
+    out = _public_time_left(_L())
+    assert out["time_left"]["status"] == "store_covered"
+    assert out["time_left_label"] == "Live via store plan"
+
+
+@pytest.mark.asyncio
+async def test_expiry_sms_no_phone_claims_period_without_sending(client, monkeypatch):
+    from api.domains.pricing import expiry_alerts
+    from api.models.expiry_notification import ExpiryNotification
+
+    fake = _FakeSMS()
+    monkeypatch.setattr("api.core.sms.get_sms_provider", lambda: fake)
+    async with AsyncSessionLocal() as db:
+        u = User(name="NoPhone", phone="", password_hash="x")
+        db.add(u)
+        await db.commit()
+        seller_id = u.id
+    now = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
+    lid = await _listing_row(seller_id, now + timedelta(days=1))
+    async with AsyncSessionLocal() as db:
+        assert (await expiry_alerts.send_due_expiry_alerts(db, now))["listings"] == 0
+        rows = (await db.execute(select(ExpiryNotification).where(
+            ExpiryNotification.entity_id == lid))).scalars().all()
+    assert fake.sent == [] and len(rows) == 1
+
+
+@pytest.mark.asyncio
 async def test_expiry_sms_for_store_and_quiet_hours_defer(client, monkeypatch):
     from api.domains.pricing import expiry_alerts
 
