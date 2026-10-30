@@ -69,6 +69,26 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() + "Z"
 
 
+def _announcement_deadline(anchor: datetime) -> datetime:
+    """Last moment an announcement anchored at `anchor` may be shown."""
+    from datetime import timedelta
+    return anchor + timedelta(
+        days=settings.service_communication_announcement_ttl_days)
+
+
+def _cap_expiry(anchor: datetime, expires_at: Optional[datetime]) -> datetime:
+    """Apply the 30-day announcement lifetime.
+
+    No explicit expiry means the full window; an explicit expiry further
+    out than the window is pulled back to it. An earlier explicit expiry
+    (a two-hour maintenance notice) is honoured as-is.
+    """
+    deadline = _announcement_deadline(anchor)
+    if expires_at is None:
+        return deadline
+    return min(expires_at, deadline)
+
+
 def _clean_text(value: str, *, allow_newlines: bool = False) -> str:
     value = (value or "").strip().replace("\x00", "")
     allowed = "\n\t" if allow_newlines else ""
@@ -407,6 +427,15 @@ class UnreadCountOut(BaseModel):
     unread_count: int
 
 
+class DismissOut(BaseModel):
+    id: str
+    dismissed: bool = True
+
+
+class ReadAllOut(BaseModel):
+    marked_read: int
+
+
 def _push_available() -> bool:
     from api.routers import calls
     return calls._get_fcm() is not None
@@ -636,7 +665,7 @@ async def create_communication(
         audience_json=audience_json(audience),
         channels_json=json.dumps(body.channels, separators=(",", ":")),
         deep_link=body.deep_link,
-        expires_at=body.expires_at,
+        expires_at=_cap_expiry(now, body.expires_at),
         created_by_id=admin.id,
         updated_by_id=admin.id,
         created_at=now,
@@ -714,6 +743,9 @@ async def update_communication(
             setattr(communication, field, getattr(body, field))
     if communication.expires_at is not None and communication.expires_at <= datetime.utcnow():
         raise HTTPException(status_code=422, detail="expires_at must be in the future")
+    if "expires_at" in changes:
+        communication.expires_at = _cap_expiry(
+            communication.created_at, communication.expires_at)
     communication.version += 1
     communication.updated_by_id = admin.id
     communication.updated_at = datetime.utcnow()
@@ -1039,7 +1071,11 @@ async def list_my_announcements(
     db: AsyncSession = Depends(get_db),
 ):
     now = datetime.utcnow()
-    conditions = [ServiceCommunicationRecipient.user_id == current_user["id"], *_visible_conditions(now)]
+    conditions = [
+        ServiceCommunicationRecipient.user_id == current_user["id"],
+        ServiceCommunicationRecipient.dismissed_at.is_(None),
+        *_visible_conditions(now),
+    ]
     joined = (
         select(ServiceCommunicationRecipient, ServiceCommunication)
         .join(ServiceCommunication, ServiceCommunication.id == ServiceCommunicationRecipient.communication_id)
@@ -1082,6 +1118,7 @@ async def mark_announcement_read(
         .where(
             ServiceCommunicationRecipient.communication_id == communication_id,
             ServiceCommunicationRecipient.user_id == current_user["id"],
+            ServiceCommunicationRecipient.dismissed_at.is_(None),
             *_visible_conditions(now),
         )
         .with_for_update()
@@ -1122,6 +1159,7 @@ async def unread_announcement_count(
         .where(
             ServiceCommunicationRecipient.user_id == current_user["id"],
             ServiceCommunicationRecipient.read_at.is_(None),
+            ServiceCommunicationRecipient.dismissed_at.is_(None),
             *_visible_conditions(now),
         )
     )
@@ -1129,6 +1167,84 @@ async def unread_announcement_count(
         select(func.count()).select_from(joined.subquery())
     )).scalar() or 0)
     return {"unread_count": unread}
+
+
+async def _dismiss_announcement(
+    communication_id: str, current_user: dict, db: AsyncSession,
+) -> dict:
+    """Per-user delete. Only the caller's own recipient row is touched;
+    other recipients and the admin delivery ledger are unaffected.
+    Idempotent: deleting an already-deleted announcement succeeds."""
+    now = datetime.utcnow()
+    recipient = (await db.execute(
+        select(ServiceCommunicationRecipient)
+        .join(ServiceCommunication, ServiceCommunication.id == ServiceCommunicationRecipient.communication_id)
+        .where(
+            ServiceCommunicationRecipient.communication_id == communication_id,
+            ServiceCommunicationRecipient.user_id == current_user["id"],
+            *_visible_conditions(now),
+        )
+        .with_for_update()
+    )).scalar_one_or_none()
+    if recipient is None:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    if recipient.dismissed_at is None:
+        recipient.dismissed_at = now
+        recipient.updated_at = now
+        await db.commit()
+    return {"id": communication_id, "dismissed": True}
+
+
+@customer_router.delete("/{communication_id}", response_model=DismissOut)
+async def dismiss_announcement(
+    communication_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _dismiss_announcement(communication_id, current_user, db)
+
+
+@customer_router.post("/{communication_id}/dismiss", response_model=DismissOut)
+async def dismiss_announcement_post(
+    communication_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST spelling of DELETE for clients/proxies that drop DELETE bodies."""
+    return await _dismiss_announcement(communication_id, current_user, db)
+
+
+@customer_router.post("/read-all", response_model=ReadAllOut)
+async def mark_all_announcements_read(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    now = datetime.utcnow()
+    visible_ids = (
+        select(ServiceCommunication.id)
+        .join(
+            ServiceCommunicationRecipient,
+            ServiceCommunicationRecipient.communication_id == ServiceCommunication.id,
+        )
+        .where(
+            ServiceCommunicationRecipient.user_id == current_user["id"],
+            ServiceCommunicationRecipient.read_at.is_(None),
+            ServiceCommunicationRecipient.dismissed_at.is_(None),
+            *_visible_conditions(now),
+        )
+    )
+    result = await db.execute(
+        update(ServiceCommunicationRecipient)
+        .where(
+            ServiceCommunicationRecipient.user_id == current_user["id"],
+            ServiceCommunicationRecipient.read_at.is_(None),
+            ServiceCommunicationRecipient.dismissed_at.is_(None),
+            ServiceCommunicationRecipient.communication_id.in_(visible_ids),
+        )
+        .values(read_at=now, updated_at=now)
+    )
+    await db.commit()
+    return {"marked_read": int(result.rowcount or 0)}
 
 
 __all__ = ["admin_router", "customer_router"]

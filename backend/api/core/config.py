@@ -442,6 +442,12 @@ class Settings:
     service_communication_retention_days: int = field(default_factory=lambda: max(
         1, int(os.getenv("SERVICE_COMMUNICATION_RETENTION_DAYS", "730") or 730)
     ))
+    # Announcements live at most this long after publication. A draft with
+    # no explicit expires_at gets published_at + this; an explicit expiry
+    # further out is capped to it, so the feed cannot grow without bound.
+    service_communication_announcement_ttl_days: int = field(default_factory=lambda: max(
+        1, int(os.getenv("SERVICE_COMMUNICATION_ANNOUNCEMENT_TTL_DAYS", "30") or 30)
+    ))
 
     # ── Observability ─────────────────────────────────────────────────────────
     sentry_dsn: str = field(default_factory=lambda: os.getenv("SENTRY_DSN", ""))

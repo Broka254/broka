@@ -23,7 +23,24 @@ import '../../../widgets/constellation_background.dart';
 import '../../../widgets/gradient_button.dart';
 import '../domain/models/announcement.dart';
 import 'announcement_detail_screen.dart';
+import 'announcement_presentation.dart';
 import 'announcements_state.dart';
+
+enum _FeedFilter { all, unread, important }
+
+extension on _FeedFilter {
+  bool accepts(Announcement a) {
+    switch (this) {
+      case _FeedFilter.all:
+        return true;
+      case _FeedFilter.unread:
+        return !a.isRead;
+      case _FeedFilter.important:
+        return a.severity == AnnouncementSeverity.high ||
+            a.severity == AnnouncementSeverity.critical;
+    }
+  }
+}
 
 class AnnouncementsScreen extends StatefulWidget {
   const AnnouncementsScreen({super.key, this.animateBackground = true});
@@ -38,6 +55,7 @@ class AnnouncementsScreen extends StatefulWidget {
 class _AnnouncementsScreenState extends State<AnnouncementsScreen>
     with WidgetsBindingObserver {
   final ScrollController _scroll = ScrollController();
+  _FeedFilter _filter = _FeedFilter.all;
 
   AnnouncementsState get _state =>
       Provider.of<AnnouncementsState>(context, listen: false);
@@ -107,6 +125,48 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen>
     }
   }
 
+  Future<void> _delete(Announcement announcement) async {
+    final ok = await _state.dismissAnnouncement(announcement);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Announcement deleted'
+          : "Couldn't delete it. Check your connection and try again."),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  Future<bool> _confirmDelete(Announcement announcement) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete this announcement?',
+            style: TextStyle(
+                color: BrokaColors.textHigh, fontWeight: FontWeight.w800)),
+        content: Text(
+            '“${announcement.title}” will be removed from your announcements. '
+            'This only affects you.',
+            style: const TextStyle(color: BrokaColors.textMid)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep',
+                style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete',
+                style: TextStyle(
+                    color: BrokaColors.danger, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
   Future<void> _open(Announcement announcement) async {
     await Navigator.push(
       context,
@@ -155,7 +215,12 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen>
                           .clamp(1.0, 1.35)
                           .toDouble(),
                       trailing: state.unreadKnown && state.unreadCount! > 0
-                          ? _UnreadPill(state.unreadCount!)
+                          ? Row(mainAxisSize: MainAxisSize.min, children: [
+                              _UnreadPill(state.unreadCount!),
+                              const SizedBox(width: 8),
+                              _MarkAllReadButton(
+                                  onPressed: () => _state.markAllRead()),
+                            ])
                           : null,
                       trailingKey: state.unreadCount ?? 0,
                     ),
@@ -235,13 +300,53 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen>
       ];
     }
 
+    final visible =
+        state.items.where((a) => _filter.accepts(a)).toList();
     return [
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+          child: Row(children: [
+            _FilterChip(
+              label: 'All',
+              selected: _filter == _FeedFilter.all,
+              onTap: () => setState(() => _filter = _FeedFilter.all),
+            ),
+            const SizedBox(width: 8),
+            _FilterChip(
+              label: 'Unread',
+              selected: _filter == _FeedFilter.unread,
+              onTap: () => setState(() => _filter = _FeedFilter.unread),
+            ),
+            const SizedBox(width: 8),
+            _FilterChip(
+              label: 'Important',
+              selected: _filter == _FeedFilter.important,
+              onTap: () => setState(() => _filter = _FeedFilter.important),
+            ),
+          ]),
+        ),
+      ),
+      if (visible.isEmpty)
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+              child: BrokaEmptyState(
+            emoji: '📣',
+            gradient: kChatGradient,
+            headline: 'Nothing here',
+            body: _filter == _FeedFilter.unread
+                ? 'You have read everything. New announcements will appear here.'
+                : 'No announcements match this filter.',
+          )),
+        )
+      else
       SliverPadding(
         padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + media.padding.bottom),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (_, i) {
-              if (i >= state.items.length) {
+              if (i >= visible.length) {
                 // The next page failed or is loading: a spinner while it
                 // loads, a retry row when it stalled.
                 if (state.loadingMore) {
@@ -265,15 +370,39 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen>
                   ),
                 );
               }
-              final announcement = state.items[i];
-              return _AnnouncementCard(
-                key: ValueKey('announcement-${announcement.id}'),
-                announcement: announcement,
-                onTap: () => _open(announcement),
+              final announcement = visible[i];
+              return Dismissible(
+                key: ValueKey('announcement-dismiss-${announcement.id}'),
+                direction: DismissDirection.endToStart,
+                confirmDismiss: (_) => _confirmDelete(announcement),
+                onDismissed: (_) => _delete(announcement),
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.only(right: 20),
+                  decoration: BoxDecoration(
+                    color: BrokaColors.danger.withOpacity(0.16),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                        color: BrokaColors.danger.withOpacity(0.5)),
+                  ),
+                  child: const Icon(Icons.delete_outline_rounded,
+                      color: BrokaColors.danger),
+                ),
+                child: _AnnouncementCard(
+                  key: ValueKey('announcement-${announcement.id}'),
+                  announcement: announcement,
+                  onTap: () => _open(announcement),
+                  onDelete: () async {
+                    if (await _confirmDelete(announcement)) {
+                      await _delete(announcement);
+                    }
+                  },
+                ),
               );
             },
             childCount:
-                state.items.length + (state.hasMore ? 1 : 0),
+                visible.length + (state.hasMore ? 1 : 0),
           ),
         ),
       ),
@@ -312,32 +441,106 @@ class _UnreadPill extends StatelessWidget {
       );
 }
 
-/// One announcement row: unread ones carry the gold edge and the dot, read
-/// ones sit quiet. Severity and type ride as small pills under the title.
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        selected: selected,
+        label: '$label filter',
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 36),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: selected
+                  ? BrokaColors.gold.withOpacity(0.18)
+                  : BrokaColors.bgCard.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: selected ? BrokaColors.gold : BrokaColors.border,
+                width: selected ? 1.3 : 1,
+              ),
+            ),
+            child: Text(label,
+                style: TextStyle(
+                    color: selected ? BrokaColors.textHigh : BrokaColors.textMid,
+                    fontSize: 12.5,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600)),
+          ),
+        ),
+      );
+}
+
+class _MarkAllReadButton extends StatelessWidget {
+  const _MarkAllReadButton({required this.onPressed});
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: 'Mark all announcements as read',
+        child: IconButton(
+          key: const Key('announcements-mark-all-read'),
+          onPressed: onPressed,
+          icon: const Icon(Icons.done_all_rounded, size: 20),
+          color: BrokaColors.textHigh,
+          tooltip: 'Mark all read',
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          style: IconButton.styleFrom(
+            backgroundColor: BrokaColors.bgCard,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: BrokaColors.border),
+            ),
+          ),
+        ),
+      );
+}
+
+/// One announcement row on the app's card system: type badge, title,
+/// preview, then date/time and expiry in readable (textMid) type.
+/// Unread rows are brighter with a gold dot and "New" pill; severity is
+/// icon + label, never colour alone. Swipe or the delete action removes
+/// the row for this user only.
 class _AnnouncementCard extends StatelessWidget {
   const _AnnouncementCard(
-      {super.key, required this.announcement, required this.onTap});
+      {super.key,
+      required this.announcement,
+      required this.onTap,
+      required this.onDelete});
 
   final Announcement announcement;
   final VoidCallback onTap;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
     final a = announcement;
     final unread = !a.isRead;
-    final severityColor = _severityColor(a.severity);
+    final expiry = AnnouncementPresentation.expiryLine(a);
+    final soon = AnnouncementPresentation.expiresSoon(a);
     return Semantics(
       button: true,
-      label: '${a.title}. ${unread ? 'Unread. ' : ''}${_typeLabel(a.type)}.',
+      label: '${a.title}. ${unread ? 'Unread. ' : ''}'
+          '${AnnouncementPresentation.typeLabel(a.type)}, '
+          '${AnnouncementPresentation.severityLabel(a.severity)} severity.'
+          '${a.publishedAt != null ? ' Published ${AnnouncementPresentation.fullDateTime(a.publishedAt!)}.' : ''}',
       excludeSemantics: true,
       child: GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
           margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.fromLTRB(14, 14, 6, 14),
           decoration: BoxDecoration(
-            color: BrokaColors.bgCard.withOpacity(unread ? 0.96 : 0.82),
+            color: BrokaColors.bgCard.withOpacity(unread ? 0.97 : 0.78),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: unread
@@ -346,146 +549,119 @@ class _AnnouncementCard extends StatelessWidget {
               width: unread ? 1.4 : 1,
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            AnnouncementTypeBadge(announcement: a),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (unread)
-                    Container(
-                      key: Key('announcement-unread-dot-${a.id}'),
-                      width: 8,
-                      height: 8,
-                      margin: const EdgeInsets.only(top: 5, right: 8),
-                      decoration: const BoxDecoration(
-                        color: BrokaColors.gold,
-                        shape: BoxShape.circle,
+                  Row(children: [
+                    if (unread) ...[
+                      Container(
+                        key: Key('announcement-unread-dot-${a.id}'),
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: BrokaColors.gold,
+                          shape: BoxShape.circle,
+                        ),
                       ),
+                      const SizedBox(width: 7),
+                    ],
+                    Expanded(
+                      child: Text(a.title,
+                          style: TextStyle(
+                              color: BrokaColors.textHigh,
+                              fontSize: 15,
+                              fontWeight:
+                                  unread ? FontWeight.w800 : FontWeight.w600,
+                              height: 1.3)),
                     ),
-                  Expanded(
-                    child: Text(a.title,
-                        style: TextStyle(
-                            color: BrokaColors.textHigh,
-                            fontSize: 15,
-                            fontWeight:
-                                unread ? FontWeight.w800 : FontWeight.w600,
-                            height: 1.3)),
+                  ]),
+                  const SizedBox(height: 5),
+                  Text(a.body,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: BrokaColors.textMid,
+                          fontSize: 13,
+                          height: 1.45)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      AnnouncementPill(
+                          label: AnnouncementPresentation.typeLabel(a.type),
+                          color: BrokaColors.neonBlue,
+                          icon: AnnouncementPresentation.typeIcon(a.type)),
+                      AnnouncementPill(
+                          label:
+                              AnnouncementPresentation.severityLabel(a.severity),
+                          color: AnnouncementPresentation.severityColor(
+                              a.severity),
+                          icon: AnnouncementPresentation.severityIcon(
+                              a.severity)),
+                      if (unread)
+                        const AnnouncementPill(
+                            label: 'New',
+                            color: BrokaColors.gold,
+                            icon: Icons.fiber_new_outlined),
+                    ],
                   ),
+                  if (a.publishedAt != null) ...[
+                    const SizedBox(height: 9),
+                    Row(children: [
+                      const Icon(Icons.schedule_rounded,
+                          size: 13, color: BrokaColors.textMid),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                            AnnouncementPresentation.publishedLine(
+                                a.publishedAt!),
+                            style: const TextStyle(
+                                color: BrokaColors.textMid, fontSize: 11.5)),
+                      ),
+                    ]),
+                  ],
+                  if (expiry != null) ...[
+                    const SizedBox(height: 4),
+                    Row(children: [
+                      Icon(Icons.hourglass_bottom_rounded,
+                          size: 13,
+                          color: soon
+                              ? BrokaColors.warning
+                              : BrokaColors.textMid),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(expiry,
+                            style: TextStyle(
+                                color: soon
+                                    ? BrokaColors.warning
+                                    : BrokaColors.textMid,
+                                fontSize: 11.5,
+                                fontWeight: soon
+                                    ? FontWeight.w700
+                                    : FontWeight.w400)),
+                      ),
+                    ]),
+                  ],
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(a.body,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: BrokaColors.textMid,
-                      fontSize: 13,
-                      height: 1.45)),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _Pill(
-                      label: _typeLabel(a.type),
-                      color: BrokaColors.neonBlue),
-                  _Pill(
-                      label: _severityLabel(a.severity),
-                      color: severityColor),
-                  if (a.publishedAt != null)
-                    Text(_relativeTime(a.publishedAt!),
-                        style: const TextStyle(
-                            color: BrokaColors.textLow, fontSize: 11.5)),
-                  if (a.expiresAt != null && !a.isExpired)
-                    Text('· expires ${_shortDate(a.expiresAt!)}',
-                        style: const TextStyle(
-                            color: BrokaColors.textLow, fontSize: 11.5)),
-                ],
-              ),
-            ],
-          ),
+            ),
+            IconButton(
+              key: Key('announcement-delete-${a.id}'),
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline_rounded, size: 20),
+              color: BrokaColors.textMid,
+              tooltip: 'Delete announcement',
+              constraints:
+                  const BoxConstraints(minWidth: 48, minHeight: 48),
+            ),
+          ]),
         ),
       ),
     );
   }
-
-  static Color _severityColor(AnnouncementSeverity severity) {
-    switch (severity) {
-      case AnnouncementSeverity.critical:
-        return BrokaColors.danger;
-      case AnnouncementSeverity.high:
-        return BrokaColors.warning;
-      case AnnouncementSeverity.low:
-        return BrokaColors.textLow;
-      case AnnouncementSeverity.normal:
-        return BrokaColors.neonGreen;
-    }
-  }
-
-  static String _typeLabel(AnnouncementType type) {
-    switch (type) {
-      case AnnouncementType.maintenance:
-        return 'Maintenance';
-      case AnnouncementType.incident:
-        return 'Incident';
-      case AnnouncementType.productUpdate:
-        return 'Product update';
-      case AnnouncementType.announcement:
-      case AnnouncementType.unknown:
-        return 'Announcement';
-    }
-  }
-
-  static String _severityLabel(AnnouncementSeverity severity) {
-    switch (severity) {
-      case AnnouncementSeverity.low:
-        return 'Low';
-      case AnnouncementSeverity.normal:
-        return 'Normal';
-      case AnnouncementSeverity.high:
-        return 'High';
-      case AnnouncementSeverity.critical:
-        return 'Critical';
-    }
-  }
-
-  static String _relativeTime(DateTime at) {
-    final now = DateTime.now().toUtc();
-    final diff = now.difference(at.toUtc());
-    if (diff.isNegative || diff.inMinutes < 1) return 'Just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return _shortDate(at);
-  }
-
-  static String _shortDate(DateTime at) {
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    final local = at.toLocal();
-    return '${months[local.month - 1]} ${local.day}';
-  }
-}
-
-class _Pill extends StatelessWidget {
-  const _Pill({required this.label, required this.color});
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.45)),
-        ),
-        child: Text(label,
-            style: TextStyle(
-                color: color, fontSize: 10.5, fontWeight: FontWeight.w700)),
-      );
 }

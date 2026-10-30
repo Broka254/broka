@@ -430,7 +430,10 @@ async def test_immediate_publish_is_durable_idempotent_and_reaches_in_app(client
     assert result.recipients_resolved == 1
     assert len(sender.calls) == 1
     assert sender.calls[0]["data"]["communication_id"] == created["id"]
-    assert sender.calls[0]["ttl_seconds"] is None
+    # No explicit expiry: publication stamps the 30-day announcement
+    # lifetime, so the push TTL follows it (capped at FCM's 28 days)
+    # instead of living forever.
+    assert sender.calls[0]["ttl_seconds"] == 28 * 24 * 60 * 60
 
     customer = await client.get("/communications", headers=_auth(buyer))
     assert customer.status_code == 200

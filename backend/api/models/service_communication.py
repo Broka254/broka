@@ -142,6 +142,10 @@ class ServiceCommunicationRecipient(Base):
     provider_message_id = Column(String(255), nullable=True)
     delivered_at = Column(DateTime, nullable=True)
     read_at = Column(DateTime, nullable=True)
+    # Per-user delete: the user removed this announcement from their feed.
+    # The row (and its delivery ledger) stays for admin delivery stats;
+    # only the customer's feed, badge and detail hide it.
+    dismissed_at = Column(DateTime, nullable=True)
     failure_category = Column(String(64), nullable=True)
     retry_eligible = Column(Boolean, nullable=False, default=False)
     next_attempt_at = Column(DateTime, nullable=True)

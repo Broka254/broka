@@ -590,6 +590,15 @@ async def publish_claimed(
             .values(
                 status="published",
                 published_at=func.coalesce(ServiceCommunication.published_at, final_now),
+                # 30-day lifetime anchored at publication: a draft that sat
+                # unpublished does not burn its window, and nothing stays
+                # in user feeds longer than the configured TTL.
+                expires_at=min(
+                    expires_at, final_now + timedelta(
+                        days=settings.service_communication_announcement_ttl_days),
+                ) if expires_at is not None else (
+                    final_now + timedelta(
+                        days=settings.service_communication_announcement_ttl_days)),
                 audience_count=total_recipients,
                 publish_claim_token=None,
                 publish_claim_expires_at=None,

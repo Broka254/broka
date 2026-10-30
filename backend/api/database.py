@@ -1395,7 +1395,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1409,6 +1409,9 @@ SCHEMA_REVISIONS = (
     # database wait for `python -m api.migrate` before serving traffic,
     # rather than accepting registrations it cannot record.
     (8, "legal_acceptances"),
+    # Per-user announcement delete (dismissed_at) + user_feedback table.
+    # The table comes from create_all(); the column needs the ALTER below.
+    (9, "announcement_dismiss_and_feedback"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1657,6 +1660,7 @@ async def _init_db_impl():
         ("api.models.sold_out_report", ("SoldOutReport",)),
         ("api.models.payment_callback", ("PaymentCallback",)),
         ("api.models.legal", ("LegalAcceptance",)),
+        ("api.models.feedback", ("UserFeedback",)),
         (
             "api.models.service_communication",
             (
@@ -1682,6 +1686,8 @@ async def _init_db_impl():
         # Lightweight forward-compat: add new columns to existing rows-only DBs.
         # SQLite/Postgres ignore the IF NOT EXISTS path via try/except.
         migrations = [
+            # Announcement per-user delete + 30-day lifecycle (rev 9).
+            "ALTER TABLE service_communication_recipients ADD COLUMN dismissed_at DATETIME",
             # v2.x columns
             "ALTER TABLE thread_read_state ADD COLUMN last_delivered_at DATETIME",
             # Edit/unsend (2026-10-21): tombstones keep the row so unread

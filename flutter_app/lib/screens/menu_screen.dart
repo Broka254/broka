@@ -284,6 +284,14 @@ class _MenuScreenState extends State<MenuScreen> {
             onTap: () => _open('/escrow-services'),
           ),
         MenuTile(
+          key: const Key('menu-feedback'),
+          icon: Icons.rate_review_outlined,
+          tint: BrokaColors.gold,
+          title: 'Feedback & complaints',
+          subtitle: 'Ideas, problems, or report a trader or listing',
+          onTap: () => _open('/feedback'),
+        ),
+        MenuTile(
           icon: Icons.help_outline_rounded,
           tint: BrokaColors.neonBlue,
           title: 'Help & how BROKA works',

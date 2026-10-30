@@ -65,6 +65,37 @@ class CommunicationsRepository {
     }
   }
 
+  /// Delete [communicationId] from this user's feed (DELETE
+  /// /communications/{id}). Per-user only: other recipients keep it and
+  /// admin delivery stats are untouched. Idempotent server-side.
+  Future<Result<void>> dismiss(String communicationId) async {
+    try {
+      await _client.delete('/communications/$communicationId');
+      return const Success(null);
+    } on ApiException catch (e) {
+      return Failure(_messageFor(e), statusCode: e.statusCode, code: e.code);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
+  /// Mark every visible announcement read; returns how many changed.
+  Future<Result<int>> markAllRead() async {
+    try {
+      final data = await _client.post('/communications/read-all', const {});
+      final map = data is Map<String, dynamic>
+          ? data
+          : data is Map
+              ? Map<String, dynamic>.from(data)
+              : <String, dynamic>{};
+      return Success((map['marked_read'] as num?)?.toInt() ?? 0);
+    } on ApiException catch (e) {
+      return Failure(_messageFor(e), statusCode: e.statusCode, code: e.code);
+    } catch (e) {
+      return Failure(userFacingError(e));
+    }
+  }
+
   /// The server-backed unread total for the badge. Counted server-side
   /// under the same visibility rules as the feed, so it reflects the whole
   /// feed - not just whatever page is loaded.

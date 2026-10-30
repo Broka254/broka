@@ -8,6 +8,7 @@ import 'core/state/marketplace_state.dart';
 import 'core/network/api_client.dart';
 import 'features/communications/presentation/announcement_detail_screen.dart';
 import 'features/communications/presentation/announcements_screen.dart';
+import 'features/feedback/presentation/feedback_screen.dart';
 import 'features/communications/domain/models/announcement.dart';
 import 'features/communications/presentation/announcements_state.dart';
 import 'features/communications/presentation/priority_announcement_coordinator.dart';
@@ -742,6 +743,7 @@ class _BrokaAppState extends State<BrokaApp> with WidgetsBindingObserver {
         // scope comes from the signed-in account) and one announcement by
         // id (push taps and deep links; arguments: {id}).
         '/announcements':      (_) => const AnnouncementsScreen(),
+        '/feedback':           (_) => const FeedbackScreen(),
         '/announcement-detail': (ctx) {
           final args = ModalRoute.of(ctx)?.settings.arguments;
           final id = args is Map ? args['id'] as String? : args as String?;

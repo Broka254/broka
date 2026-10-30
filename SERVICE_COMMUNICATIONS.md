@@ -177,12 +177,41 @@ Title/body content and provider payloads are not copied into audit metadata.
 
 | Method and path | Purpose |
 |---|---|
-| `GET /communications?limit=50&offset=0` | The authenticated user's published, unexpired announcements |
+| `GET /communications?limit=50&offset=0` | The authenticated user's published, unexpired, not-deleted announcements |
 | `POST /communications/{id}/read` | Record idempotent read state |
+| `DELETE /communications/{id}` (or `POST /communications/{id}/dismiss`) | Delete the announcement from this user's feed only |
+| `POST /communications/read-all` | Mark every visible announcement read |
+| `GET /communications/unread-count` | Server-backed unread badge count |
 
 The customer query is scoped by the recipient row's `user_id`, never by an id
 or audience supplied in the request. Another user's announcement returns 404.
 Expired announcements are hidden from the feed and cannot be marked read.
+
+Announcements live at most 30 days after publication
+(`SERVICE_COMMUNICATION_ANNOUNCEMENT_TTL_DAYS`): a communication with no
+explicit `expires_at` is stamped `published_at + 30 days` at publication,
+and a further-out explicit expiry is capped to the same deadline, so the
+feed cannot grow without bound. Deleting is per-user
+(`service_communication_recipients.dismissed_at`): the row and its delivery
+ledger stay for admin stats, but the feed, badge and detail hide it, and
+delete is idempotent.
+
+Every customer item carries `published_at` and `expires_at` as UTC ISO-8601
+with a `Z` suffix; the app renders both the full local date and time and a
+relative age.
+
+## Feedback & complaints
+
+Users file feedback or complaints at `POST /feedback` (kinds `feedback` /
+`complaint`, categories from `FEEDBACK_CATEGORIES`, severities
+`low|normal|high|urgent`), list and read their own submissions at
+`GET /feedback` / `GET /feedback/{id}`, and see admin replies and status
+(`open → acknowledged → in_progress → resolved|closed`) on the same rows.
+Admins triage at `GET /admin/feedback`, `GET /admin/feedback/stats` and
+`PATCH /admin/feedback/{id}` under `can_view_feedback` /
+`can_manage_feedback`. Submission is rate-limited per user
+(`feedback_submit`, 10/hour). This is not the dispute engine: deal-money
+rulings still belong to `/disputes`.
 
 ## Configuration
 

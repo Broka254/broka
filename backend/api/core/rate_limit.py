@@ -280,3 +280,9 @@ call_ws_connect_limiter    = _make_limiter("call_ws_connect",    limit=20, windo
 # succeeds. Generous limit: a single IP can legitimately represent many
 # users behind carrier-grade NAT, common on Kenyan mobile data.
 call_ws_preauth_limiter    = _make_limiter("call_ws_preauth",    limit=30, window_seconds=60)
+
+# Feedback & complaints (POST /feedback), keyed by authenticated user.
+# A person files a handful a day at most; the cap stops scripted flooding
+# of the admin triage queue without blocking a frustrated user retrying.
+feedback_submit_limiter = _make_limiter(
+    "feedback_submit", limit=1000 if _settings.is_test else 10, window_seconds=3600)

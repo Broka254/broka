@@ -15,6 +15,7 @@ import '../../../widgets/chat_parts.dart' show kChatGradient;
 import '../../../widgets/collapsing_screen_header.dart';
 import '../../../widgets/constellation_background.dart';
 import '../domain/models/announcement.dart';
+import 'announcement_presentation.dart';
 import 'announcements_state.dart';
 
 class AnnouncementDetailScreen extends StatefulWidget {
@@ -175,6 +176,47 @@ class _AnnouncementDetailScreenState
     _acknowledge(widget.announcement);
   }
 
+  Future<void> _delete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: BrokaColors.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete this announcement?',
+            style: TextStyle(
+                color: BrokaColors.textHigh, fontWeight: FontWeight.w800)),
+        content: const Text(
+            'It will be removed from your announcements. This only affects you.',
+            style: TextStyle(color: BrokaColors.textMid)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep',
+                style: TextStyle(color: BrokaColors.textMid)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete',
+                style: TextStyle(
+                    color: BrokaColors.danger, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final state = Provider.of<AnnouncementsState>(context, listen: false);
+    final ok = await state.dismissAnnouncement(widget.announcement);
+    if (!mounted) return;
+    if (ok) {
+      Navigator.maybePop(context);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content:
+            Text("Couldn't delete it. Check your connection and try again."),
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
@@ -219,33 +261,42 @@ class _AnnouncementDetailScreenState
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            _Pill(
-                                label: _typeLabel(announcement.type),
-                                color: BrokaColors.neonBlue),
-                            _Pill(
-                                label:
-                                    _severityLabel(announcement.severity),
-                                color: _severityColor(
-                                    announcement.severity)),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
+                        Row(children: [
+                          AnnouncementTypeBadge(announcement: announcement, size: 44),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                AnnouncementPill(
+                                    label: AnnouncementPresentation.typeLabel(
+                                        announcement.type),
+                                    color: BrokaColors.neonBlue,
+                                    icon: AnnouncementPresentation.typeIcon(
+                                        announcement.type)),
+                                AnnouncementPill(
+                                    label: AnnouncementPresentation.severityLabel(
+                                        announcement.severity),
+                                    color:
+                                        AnnouncementPresentation.severityColor(
+                                            announcement.severity),
+                                    icon:
+                                        AnnouncementPresentation.severityIcon(
+                                            announcement.severity)),
+                              ],
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 14),
                         SelectableText(announcement.title,
                             style: const TextStyle(
                                 color: BrokaColors.textHigh,
                                 fontSize: 19,
                                 fontWeight: FontWeight.w800,
                                 height: 1.3)),
-                        const SizedBox(height: 4),
-                        Text(
-                          _metaLine(announcement),
-                          style: const TextStyle(
-                              color: BrokaColors.textLow, fontSize: 12),
-                        ),
+                        const SizedBox(height: 8),
+                        _MetaRows(announcement: announcement),
                         const Divider(
                             height: 28, color: BrokaColors.border),
                         SelectableText(announcement.body,
@@ -264,6 +315,25 @@ class _AnnouncementDetailScreenState
                           failed: _ackFailed,
                           onRetry: _retry,
                         ),
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            key: const Key('announcement-detail-delete'),
+                            onPressed: _delete,
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                size: 18),
+                            label: const Text('Delete announcement'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: BrokaColors.danger,
+                              side: BorderSide(
+                                  color: BrokaColors.danger.withOpacity(0.5)),
+                              minimumSize: const Size.fromHeight(48),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -276,87 +346,56 @@ class _AnnouncementDetailScreenState
     );
   }
 
-  static String _metaLine(Announcement a) {
-    final parts = <String>[];
-    if (a.publishedAt != null) {
-      parts.add('Published ${_fullDate(a.publishedAt!)}');
-    }
-    if (a.expiresAt != null && !a.isExpired) {
-      parts.add('Expires ${_fullDate(a.expiresAt!)}');
-    }
-    return parts.join('  ·  ');
-  }
-
-  static String _fullDate(DateTime at) {
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    final local = at.toLocal();
-    final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
-    final minute = local.minute.toString().padLeft(2, '0');
-    final ampm = local.hour < 12 ? 'AM' : 'PM';
-    return '${months[local.month - 1]} ${local.day}, ${local.year} '
-        '$hour:$minute $ampm';
-  }
-
-  static Color _severityColor(AnnouncementSeverity severity) {
-    switch (severity) {
-      case AnnouncementSeverity.critical:
-        return BrokaColors.danger;
-      case AnnouncementSeverity.high:
-        return BrokaColors.warning;
-      case AnnouncementSeverity.low:
-        return BrokaColors.textLow;
-      case AnnouncementSeverity.normal:
-        return BrokaColors.neonGreen;
-    }
-  }
-
-  static String _typeLabel(AnnouncementType type) {
-    switch (type) {
-      case AnnouncementType.maintenance:
-        return 'Maintenance';
-      case AnnouncementType.incident:
-        return 'Incident';
-      case AnnouncementType.productUpdate:
-        return 'Product update';
-      case AnnouncementType.announcement:
-      case AnnouncementType.unknown:
-        return 'Announcement';
-    }
-  }
-
-  static String _severityLabel(AnnouncementSeverity severity) {
-    switch (severity) {
-      case AnnouncementSeverity.low:
-        return 'Low';
-      case AnnouncementSeverity.normal:
-        return 'Normal';
-      case AnnouncementSeverity.high:
-        return 'High';
-      case AnnouncementSeverity.critical:
-        return 'Critical';
-    }
-  }
 }
 
-class _Pill extends StatelessWidget {
-  const _Pill({required this.label, required this.color});
-  final String label;
-  final Color color;
+/// When it was published and when it expires, each on its own row with
+/// full local date and time - the record a user can quote to support,
+/// not a relative age that changes meaning every day.
+class _MetaRows extends StatelessWidget {
+  const _MetaRows({required this.announcement});
+  final Announcement announcement;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.45)),
+  Widget build(BuildContext context) {
+    final a = announcement;
+    final expiry = AnnouncementPresentation.expiryLine(a);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (a.publishedAt != null)
+        _row(
+          Icons.schedule_rounded,
+          'Published ${AnnouncementPresentation.publishedLine(a.publishedAt!)}',
         ),
-        child: Text(label,
-            style: TextStyle(
-                color: color, fontSize: 10.5, fontWeight: FontWeight.w700)),
+      if (expiry != null) ...[
+        const SizedBox(height: 5),
+        _row(
+          Icons.hourglass_bottom_rounded,
+          expiry,
+          highlight: AnnouncementPresentation.expiresSoon(a),
+        ),
+      ],
+      if (a.readAt != null) ...[
+        const SizedBox(height: 5),
+        _row(Icons.check_circle_rounded,
+            'Read ${AnnouncementPresentation.fullDateTime(a.readAt!)}'),
+      ],
+    ]);
+  }
+
+  Widget _row(IconData icon, String text, {bool highlight = false}) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon,
+              size: 14,
+              color: highlight ? BrokaColors.warning : BrokaColors.textMid),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(
+                    color: highlight ? BrokaColors.warning : BrokaColors.textMid,
+                    fontSize: 12,
+                    fontWeight: highlight ? FontWeight.w700 : FontWeight.w400)),
+          ),
+        ],
       );
 }
 
@@ -420,11 +459,11 @@ class _ReadState extends StatelessWidget {
           width: 14,
           height: 14,
           child: CircularProgressIndicator(
-              color: BrokaColors.textLow, strokeWidth: 1.5)),
+              color: BrokaColors.textMid, strokeWidth: 1.5)),
       SizedBox(width: 8),
       Text('Confirming…',
           style:
-              TextStyle(color: BrokaColors.textLow, fontSize: 12.5)),
+              TextStyle(color: BrokaColors.textMid, fontSize: 12.5)),
     ]);
   }
 }

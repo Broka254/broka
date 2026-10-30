@@ -294,6 +294,68 @@ class AnnouncementsState extends ChangeNotifier {
     }
   }
 
+  /// Delete [announcement] from this user's feed. Optimistic: the row
+  /// leaves the list at once and comes back if the server refuses (a 404
+  /// means it was already gone - expiry, another device - so that stays
+  /// deleted). Returns true when the server confirmed or had already
+  /// removed it.
+  Future<bool> dismissAnnouncement(Announcement announcement) async {
+    _resetForAccount(ApiService.currentUserId);
+    final index = _items.indexWhere((a) => a.id == announcement.id);
+    Announcement? removed;
+    if (index >= 0) {
+      removed = _items.removeAt(index);
+      if (_total > 0) _total--;
+      if (!announcement.isRead) _bumpUnread(-1);
+      notifyListeners();
+      unawaited(_saveCache(_items));
+    }
+    final result = await _repo.dismiss(announcement.id);
+    if (_disposed) return false;
+    switch (result) {
+      case Success():
+        unawaited(_dropPendingRead(announcement.id));
+        unawaited(refreshUnreadCount());
+        return true;
+      case Failure(:final statusCode):
+        if (statusCode == 404) {
+          unawaited(refreshUnreadCount());
+          return true;
+        }
+        if (removed != null) {
+          _items.insert(index.clamp(0, _items.length), removed);
+          _total++;
+          if (!announcement.isRead) _bumpUnread(1);
+          notifyListeners();
+          unawaited(_saveCache(_items));
+        }
+        return false;
+    }
+  }
+
+  /// Mark the whole feed read in one request; the badge reconciles with
+  /// the server afterwards rather than trusting local arithmetic.
+  Future<bool> markAllRead() async {
+    _resetForAccount(ApiService.currentUserId);
+    final result = await _repo.markAllRead();
+    if (_disposed) return false;
+    switch (result) {
+      case Success():
+        final now = DateTime.now().toUtc();
+        _items = _items
+            .map((a) => a.isRead ? a : a.copyWith(readAt: now))
+            .toList();
+        _unreadCount = 0;
+        _unreadFailed = false;
+        notifyListeners();
+        unawaited(_saveCache(_items));
+        unawaited(refreshUnreadCount());
+        return true;
+      case Failure():
+        return false;
+    }
+  }
+
   /// One announcement by id, from the loaded feed - for opening a detail
   /// from a push. The backend remains authoritative for anything not
   /// loaded: callers fetch the feed rather than trusting the payload.

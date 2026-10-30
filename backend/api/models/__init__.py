@@ -24,6 +24,7 @@ from api.models.service_communication import (
     ServiceCommunicationRecipient,
     ServiceCommunicationDeviceDelivery,
 )
+from api.models.feedback import UserFeedback
 
 __all__ = [
     "User",
@@ -43,4 +44,5 @@ __all__ = [
     "LegalAcceptance",
     "ServiceCommunication", "ServiceCommunicationVersion",
     "ServiceCommunicationRecipient", "ServiceCommunicationDeviceDelivery",
+    "UserFeedback",
 ]
