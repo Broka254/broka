@@ -12,7 +12,8 @@ from sqlalchemy import delete, select
 from api.database import AsyncSessionLocal, User, init_db, reset_engine
 from api.models.feedback import UserFeedback
 from api.models.service_communication import (
-    ServiceCommunication, ServiceCommunicationRecipient,
+    ServiceCommunication, ServiceCommunicationDeviceDelivery,
+    ServiceCommunicationRecipient, ServiceCommunicationVersion,
 )
 from api.routers import calls
 from api.security import create_access_token
@@ -49,7 +50,14 @@ def fcm_configured(monkeypatch):
 @pytest_asyncio.fixture(autouse=True)
 async def clean():
     async with AsyncSessionLocal() as db:
+        # Children before parents: Postgres enforces the foreign keys that
+        # SQLite ignores. Every created communication leaves a version row
+        # (POST /admin/communications snapshots version 1), and a published
+        # pass leaves recipient and per-device delivery rows. Deleting the
+        # parent first fails with a ForeignKeyViolationError on Postgres.
+        await db.execute(delete(ServiceCommunicationDeviceDelivery))
         await db.execute(delete(ServiceCommunicationRecipient))
+        await db.execute(delete(ServiceCommunicationVersion))
         await db.execute(delete(ServiceCommunication))
         await db.execute(delete(UserFeedback))
         await db.commit()
