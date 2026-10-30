@@ -53,14 +53,14 @@ Where things usually are:
 
 ## Backend endpoints
 
-285 endpoints served by `backend/main.py`. **Auth** is read from each
+294 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 55, optional 5, public 61, token 4, user 160.
+Counts: admin 58, optional 5, public 61, token 4, user 166.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
-| GET | `/` | public | `root` (backend/main.py:487) |
+| GET | `/` | public | `root` (backend/main.py:495) |
 | GET | `/admin/ai-savings` | admin | `ai_savings` (backend/api/domains/admin/router.py:1855) |
 | GET | `/admin/alerts` | admin | `list_alerts` (backend/api/domains/admin/alerts_revenue.py:59) |
 | POST | `/admin/alerts` | admin | `create_alert` (backend/api/domains/admin/alerts_revenue.py:92) |
@@ -69,19 +69,19 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | POST | `/admin/alerts/{alert_id}/resolve` | admin | `resolve_alert` (backend/api/domains/admin/alerts_revenue.py:167) |
 | GET | `/admin/analytics/timeseries` | admin | `admin_timeseries` (backend/api/domains/admin/alerts_revenue.py:279) |
 | GET | `/admin/audit-logs` | admin | `get_audit_logs` (backend/api/domains/admin/router.py:1943) |
-| GET | `/admin/communications` | admin | `list_communications` (backend/api/domains/service_communications/router.py:574) |
-| POST | `/admin/communications` | admin | `create_communication` (backend/api/domains/service_communications/router.py:617) |
-| GET | `/admin/communications/diagnostics/worker` | admin | `worker_diagnostics` (backend/api/domains/service_communications/router.py:1016) |
-| POST | `/admin/communications/preview` | admin | `preview_audience` (backend/api/domains/service_communications/router.py:556) |
-| GET | `/admin/communications/{communication_id}` | admin | `get_communication` (backend/api/domains/service_communications/router.py:661) |
-| PATCH | `/admin/communications/{communication_id}` | admin | `update_communication` (backend/api/domains/service_communications/router.py:674) |
-| POST | `/admin/communications/{communication_id}/cancel` | admin | `cancel_communication` (backend/api/domains/service_communications/router.py:853) |
-| POST | `/admin/communications/{communication_id}/complete` | admin | `complete_communication` (backend/api/domains/service_communications/router.py:877) |
-| POST | `/admin/communications/{communication_id}/publish` | admin | `publish_communication` (backend/api/domains/service_communications/router.py:752) |
-| GET | `/admin/communications/{communication_id}/recipients` | admin | `list_recipients` (backend/api/domains/service_communications/router.py:959) |
-| POST | `/admin/communications/{communication_id}/recipients/retry` | admin | `retry_recipients` (backend/api/domains/service_communications/router.py:926) |
-| POST | `/admin/communications/{communication_id}/schedule` | admin | `schedule_communication` (backend/api/domains/service_communications/router.py:729) |
-| GET | `/admin/communications/{communication_id}/stats` | admin | `communication_stats` (backend/api/domains/service_communications/router.py:1000) |
+| GET | `/admin/communications` | admin | `list_communications` (backend/api/domains/service_communications/router.py:603) |
+| POST | `/admin/communications` | admin | `create_communication` (backend/api/domains/service_communications/router.py:646) |
+| GET | `/admin/communications/diagnostics/worker` | admin | `worker_diagnostics` (backend/api/domains/service_communications/router.py:1048) |
+| POST | `/admin/communications/preview` | admin | `preview_audience` (backend/api/domains/service_communications/router.py:585) |
+| GET | `/admin/communications/{communication_id}` | admin | `get_communication` (backend/api/domains/service_communications/router.py:690) |
+| PATCH | `/admin/communications/{communication_id}` | admin | `update_communication` (backend/api/domains/service_communications/router.py:703) |
+| POST | `/admin/communications/{communication_id}/cancel` | admin | `cancel_communication` (backend/api/domains/service_communications/router.py:885) |
+| POST | `/admin/communications/{communication_id}/complete` | admin | `complete_communication` (backend/api/domains/service_communications/router.py:909) |
+| POST | `/admin/communications/{communication_id}/publish` | admin | `publish_communication` (backend/api/domains/service_communications/router.py:784) |
+| GET | `/admin/communications/{communication_id}/recipients` | admin | `list_recipients` (backend/api/domains/service_communications/router.py:991) |
+| POST | `/admin/communications/{communication_id}/recipients/retry` | admin | `retry_recipients` (backend/api/domains/service_communications/router.py:958) |
+| POST | `/admin/communications/{communication_id}/schedule` | admin | `schedule_communication` (backend/api/domains/service_communications/router.py:761) |
+| GET | `/admin/communications/{communication_id}/stats` | admin | `communication_stats` (backend/api/domains/service_communications/router.py:1032) |
 | GET | `/admin/deals` | admin | `admin_deals` (backend/api/domains/admin/router.py:908) |
 | GET | `/admin/deals/{deal_id}` | admin | `admin_deal_detail` (backend/api/domains/admin/router.py:946) |
 | POST | `/admin/deals/{deal_id}/econfirm-refunded` | admin | `econfirm_refunded` (backend/api/domains/admin/router.py:1923) |
@@ -91,6 +91,9 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | GET | `/admin/disputes/{dispute_id}` | admin | `admin_dispute_detail` (backend/api/domains/admin/alerts_revenue.py:336) |
 | GET | `/admin/event-catalog` | admin | `get_event_catalog` (backend/api/domains/admin/router.py:2063) |
 | GET | `/admin/event-metrics` | admin | `get_event_metrics` (backend/api/domains/admin/router.py:2044) |
+| GET | `/admin/feedback` | admin | `list_feedback` (backend/api/domains/feedback/router.py:228) |
+| GET | `/admin/feedback/stats` | admin | `feedback_stats` (backend/api/domains/feedback/router.py:266) |
+| PATCH | `/admin/feedback/{feedback_id}` | admin | `triage_feedback` (backend/api/domains/feedback/router.py:289) |
 | GET | `/admin/finance-integrity` | admin | `finance_integrity` (backend/api/domains/admin/router.py:1284) |
 | GET | `/admin/fraud-events` | admin | `get_fraud_events` (backend/api/domains/admin/router.py:1975) |
 | POST | `/admin/fraud-events/{event_id}/resolve` | admin | `resolve_fraud_event` (backend/api/domains/admin/router.py:1589) |
@@ -167,9 +170,12 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | GET | `/categories/tree` | public | `category_tree` (backend/api/domains/categories/router.py:21) |
 | GET | `/categories/{category_id}/filters` | public | `list_filters` (backend/api/domains/categories/router.py:31) |
 | GET | `/categories/{category_id}/subcategories` | public | `list_subcategories` (backend/api/domains/categories/router.py:26) |
-| GET | `/communications` | user | `list_my_announcements` (backend/api/domains/service_communications/router.py:1035) |
-| GET | `/communications/unread-count` | user | `unread_announcement_count` (backend/api/domains/service_communications/router.py:1107) |
-| POST | `/communications/{communication_id}/read` | user | `mark_announcement_read` (backend/api/domains/service_communications/router.py:1073) |
+| GET | `/communications` | user | `list_my_announcements` (backend/api/domains/service_communications/router.py:1067) |
+| POST | `/communications/read-all` | user | `mark_all_announcements_read` (backend/api/domains/service_communications/router.py:1218) |
+| GET | `/communications/unread-count` | user | `unread_announcement_count` (backend/api/domains/service_communications/router.py:1144) |
+| DELETE | `/communications/{communication_id}` | user | `dismiss_announcement` (backend/api/domains/service_communications/router.py:1199) |
+| POST | `/communications/{communication_id}/dismiss` | user | `dismiss_announcement_post` (backend/api/domains/service_communications/router.py:1208) |
+| POST | `/communications/{communication_id}/read` | user | `mark_announcement_read` (backend/api/domains/service_communications/router.py:1109) |
 | WS | `/deal-ws/ws/{deal_id}` | token | `deal_status_ws` (backend/api/domains/deal_ws/router.py:67) |
 | GET | `/deal/` | user | `get_my_deals` (backend/api/domains/escrow/router.py:349) |
 | POST | `/deal/finalize` | user | `finalize_deal` (backend/api/domains/escrow/router.py:88) |
@@ -203,7 +209,10 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | GET | `/featured/my-listings` | user | `get_my_listings` (backend/api/routers/featured.py:77) |
 | GET | `/featured/plans` | public | `get_plans` (backend/api/routers/featured.py:71) |
 | GET | `/featured/status/{listing_id}` | user | `boost_status` (backend/api/routers/featured.py:296) |
-| GET | `/health` | public | `health` (backend/main.py:515) |
+| GET | `/feedback` | user | `list_my_feedback` (backend/api/domains/feedback/router.py:183) |
+| POST | `/feedback` | user | `submit_feedback` (backend/api/domains/feedback/router.py:154) |
+| GET | `/feedback/{feedback_id}` | user | `get_my_feedback` (backend/api/domains/feedback/router.py:211) |
+| GET | `/health` | public | `health` (backend/main.py:523) |
 | GET | `/listings/` | public | `list_listings` (backend/api/domains/listings/router.py:196) |
 | POST | `/listings/` | user | `create_listing` (backend/api/domains/listings/router.py:254) |
 | GET | `/listings/saved` | user | `saved_listings` (backend/api/domains/listings/router.py:186) |
@@ -231,7 +240,7 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | DELETE | `/listings/{listing_id}/sold-out` | user | `revoke_sold_out` (backend/api/domains/listings/router.py:1189) |
 | POST | `/listings/{listing_id}/store` | user | `set_listing_store` (backend/api/domains/listings/router.py:1143) |
 | DELETE | `/listings/{listing_id}/store` | user | `remove_listing_store` (backend/api/domains/listings/router.py:1155) |
-| GET | `/live` | public | `live` (backend/main.py:598) |
+| GET | `/live` | public | `live` (backend/main.py:606) |
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
@@ -282,7 +291,7 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:144) |
 | GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:176) |
 | GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:150) |
-| GET | `/ready` | public | `ready` (backend/main.py:521) |
+| GET | `/ready` | public | `ready` (backend/main.py:529) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:48) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:82) |
 | GET | `/reviews/seller/{seller_id}` | public | `get_seller_reviews` (backend/api/domains/reviews/router.py:63) |
@@ -409,6 +418,11 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 - `repository.py` — Escrow / Deal Repository.
 - `router.py` — Escrow / Deal Router v4.0 - adds E-Confirm marketplace escrow endpoints (fee-quote, fund, payment-status) alongside the original finalize c…
 - `service.py` — Escrow Service v4.0 Hardened: atomic DB operations, audit logs, fraud checks, event publishing.
+
+### `backend/api/domains/feedback/`
+
+- `__init__.py` — User feedback and complaints.
+- `router.py` — HTTP contracts for user feedback and complaints.
 
 ### `backend/api/domains/listings/`
 
@@ -601,6 +615,7 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 - `dispute.py` — BROKA v5.0 - Dispute Engine Models
 - `escrow_ledger.py` — LedgerEntry model — moved here for domain consistency.
 - `external_escrow.py` — ExternalEscrow model - tracks E-Confirm's side of a marketplace deal.
+- `feedback.py` — User feedback and complaints.
 - `legal.py` — Durable evidence of what a user accepted, and when.
 - `listing.py` — Listing, Interest, Bid models — re-exported from api.database.
 - `listing_payment.py` — ListingPayment - one M-Pesa payment for a listing's monthly fee.
@@ -685,7 +700,7 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | `reviews` | `Review` | backend/api/database.py:1173 |
 | `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:979 |
 | `seller_metrics` | `SellerMetrics` | backend/api/database.py:958 |
-| `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:171 |
+| `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:175 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
 | `service_communication_versions` | `ServiceCommunicationVersion` | backend/api/models/service_communication.py:93 |
 | `service_communications` | `ServiceCommunication` | backend/api/models/service_communication.py:40 |
@@ -700,6 +715,7 @@ Counts: admin 55, optional 5, public 61, token 4, user 160.
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:574 |
+| `user_feedback` | `UserFeedback` | backend/api/models/feedback.py:35 |
 | `user_specializations` | `UserSpecialization` | backend/api/database.py:752 |
 | `users` | `User` | backend/api/database.py:195 |
 | `verification_payments` | `VerificationPayment` | backend/api/database.py:1227 |
@@ -724,6 +740,7 @@ of a change.
 - **deal_ws** — core: deal_hub; database, security
 - **disputes** — domains: escrow; core: audit, client_ip, cost_ledger, gemini, ledger, workers; database, security
 - **escrow** — domains: listings, pricing; core: audit, client_ip, config, econfirm_client, events, fraud, idempotency, ledger, money, mpesa_stk, nudge_templates, reconciliation, secrets_crypto, sms, workers; database, security
+- **feedback** — core: audit, client_ip, permissions, rate_limit; database, security
 - **listings** — domains: auctions, categories, escrow, media, premium, pricing, reviews, stores, trust; core: audit, config, events, geo, push_devices, rate_limit, text_search, timeutil; database, security
 - **media** — core: config, image_processing, media_storage, rate_limit; database, security
 - **negotiation** — nothing outside itself
@@ -777,11 +794,11 @@ of a change.
 Read by `backend/api/core/config.py`; documented in `.env.example` and
 `render.yaml`. The web storefront's are in `web/.env.example`.
 
-`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `AI_DEEPSEEK_INPUT_PER_1M_USD`, `AI_DEEPSEEK_OUTPUT_PER_1M_USD`, `AI_FREE_PROVIDERS`, `AI_USD_TO_KES`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_STORE_CALLBACK_URL`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SERVICE_COMMUNICATION_CLAIM_SECONDS`, `SERVICE_COMMUNICATION_COMMUNICATION_BATCH`, `SERVICE_COMMUNICATION_MAX_ATTEMPTS`, `SERVICE_COMMUNICATION_MAX_AUDIENCE`, `SERVICE_COMMUNICATION_MAX_EXPLICIT_RECIPIENTS`, `SERVICE_COMMUNICATION_PROVIDER_CONCURRENCY`, `SERVICE_COMMUNICATION_PROVIDER_TIMEOUT_SECONDS`, `SERVICE_COMMUNICATION_RECIPIENT_BATCH`, `SERVICE_COMMUNICATION_RETENTION_DAYS`, `SERVICE_COMMUNICATION_RETRY_BASE_SECONDS`, `SERVICE_COMMUNICATION_RETRY_MAX_SECONDS`, `SERVICE_COMMUNICATION_SWEEP_SECONDS`, `SMS_COST_MINOR_AT`, `SMS_COST_MINOR_MOBITECH`, `STOREFRONT_API_KEY`, `STORE_BILLING_ENABLED`, `STORE_BILLING_GRACE_DAYS`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_FEE_PCT`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `ADMIN_BOOTSTRAP_EMAIL`, `AI_DEEPSEEK_INPUT_PER_1M_USD`, `AI_DEEPSEEK_OUTPUT_PER_1M_USD`, `AI_FREE_PROVIDERS`, `AI_USD_TO_KES`, `ALLOWED_ORIGINS`, `AT_API_KEY`, `AT_SENDER_ID`, `AT_USERNAME`, `AUCTIONS_ENABLED`, `AUCTION_DEFAULT_DURATION_HOURS`, `AUCTION_DEFAULT_MIN_INCREMENT`, `AUCTION_ENDING_SOON_MINUTES`, `AUCTION_FUNDING_SETTLE_MINUTES`, `AUCTION_PAYMENT_DEADLINE_HOURS`, `BROKA_NATIVE`, `BUY_AGENT_MAX_ACTIVE`, `BUY_AGENT_WATCH_DAYS`, `CALL_TOKEN_EXPIRE_MINUTES`, `CLIENT_IP_HEADER`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `CLOUDFLARE_TURN_KEY_ID`, `DATABASE_URL`, `DCR_ENABLED`, `DEBUG`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_TIMEOUT_SECONDS`, `ECONFIRM_API_KEY`, `ECONFIRM_BASE_URL`, `ECONFIRM_FALLBACK_EMAIL_DOMAIN`, `ECONFIRM_MAX_POLL_SECONDS`, `ECONFIRM_POLL_INTERVAL_SECONDS`, `ECONFIRM_TIMEOUT_SECONDS`, `ENV`, `ENVIRONMENT`, `ESCROW_GUIDANCE_ENABLED`, `FOUNDING_DISCOUNT_DAYS`, `FOUNDING_SELLER_TIERS`, `FREE_LISTINGS_PER_SELLER`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROQ_API_KEY`, `HF_SHOWCASE_MODEL`, `HF_TOKEN`, `IN_APP_PAYMENTS_ENABLED`, `LISTING_FEES_ENABLED`, `MAX_REQUEST_BODY_MB`, `MEDIA_PUBLIC_BASE_URL`, `MOBITECH_API_KEY`, `MOBITECH_BASE_URL`, `MOBITECH_SENDER_NAME`, `MOBITECH_SEND_ENDPOINT`, `MPESA_B2C_CREDENTIAL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_RESULT_URL`, `MPESA_B2C_TIMEOUT_URL`, `MPESA_CALLBACK_SECRET`, `MPESA_CALLBACK_URL`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_ENV`, `MPESA_FEATURED_CALLBACK_URL`, `MPESA_LISTING_FEE_CALLBACK_URL`, `MPESA_PASSKEY`, `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_SHORTCODE`, `MPESA_STORE_CALLBACK_URL`, `MPESA_VERIFY_CALLBACK_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OTP_EXPIRY_SECONDS`, `OTP_LENGTH`, `OTP_MAX_ATTEMPTS`, `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `PREMIUM_ENABLED`, `PUBLIC_API_BASE_URL`, `R2_ACCESS_KEY_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_SECRET_ACCESS_KEY`, `REDIS_URL`, `REFRESH_TOKEN_EXPIRE_DAYS`, `RENDER`, `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_REPLY_TO`, `SECRET_KEY`, `SENTRY_DSN`, `SERVICE_COMMUNICATION_ANNOUNCEMENT_TTL_DAYS`, `SERVICE_COMMUNICATION_CLAIM_SECONDS`, `SERVICE_COMMUNICATION_COMMUNICATION_BATCH`, `SERVICE_COMMUNICATION_MAX_ATTEMPTS`, `SERVICE_COMMUNICATION_MAX_AUDIENCE`, `SERVICE_COMMUNICATION_MAX_EXPLICIT_RECIPIENTS`, `SERVICE_COMMUNICATION_PROVIDER_CONCURRENCY`, `SERVICE_COMMUNICATION_PROVIDER_TIMEOUT_SECONDS`, `SERVICE_COMMUNICATION_RECIPIENT_BATCH`, `SERVICE_COMMUNICATION_RETENTION_DAYS`, `SERVICE_COMMUNICATION_RETRY_BASE_SECONDS`, `SERVICE_COMMUNICATION_RETRY_MAX_SECONDS`, `SERVICE_COMMUNICATION_SWEEP_SECONDS`, `SMS_COST_MINOR_AT`, `SMS_COST_MINOR_MOBITECH`, `STOREFRONT_API_KEY`, `STORE_BILLING_ENABLED`, `STORE_BILLING_GRACE_DAYS`, `STORE_LINK_BASE`, `TRUSTED_PROXY_HOPS`, `VERIFIED_BADGE_ENABLED`, `ZAC_SECRET`, `ZETUPAY_BASE_URL`, `ZETUPAY_ENABLED`, `ZETUPAY_FEE_PCT`, `ZETUPAY_SECRET_KEY`, `ZETUPAY_TIMEOUT_SECONDS`
 
 ## Backend tests
 
-135 files in `backend/tests/`.
+136 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -792,6 +809,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_ai_broker_v4.py` — Tests for AI broker with circuit breaker integration (v4.0).
 - `test_ai_cost.py` — Tests for the AI cost controls (api/core/ai_cost.py).
 - `test_ai_costs.py` — AI cost capture: pricing math, provider hooks, derived fees.
+- `test_announcement_lifecycle_feedback.py` — Announcement 30-day lifecycle, per-user delete, and feedback/complaints.
 - `test_answered_call_not_lost.py` — An answered call is never lost, never "missed", never keeps anyone busy (2026-10-09).
 - `test_assemblyai_token.py` — BROKA - /stt/assemblyai-token tests Run: pytest backend/tests/test_assemblyai_token.py -v
 - `test_auction_leaderboard.py` — GET /auction/{listing_id}/leaderboard - the list the auction screen shows.
@@ -937,6 +955,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 | `/dispute` | `DisputeScreen` |
 | `/escrow-payment` | `EConfirmPaymentScreen` |
 | `/escrow-services` | `EscrowServicesScreen` |
+| `/feedback` | `FeedbackScreen` |
 | `/home` | `HomeScreen` |
 | `/how-broka-works` | `HowBrokaWorksScreen` |
 | `/inbox` | `InboxScreen` |
@@ -1025,6 +1044,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `data/repositories/communications_repository.dart` — The customer's announcements feed: GET /communications, POST /communications/{id}/read and GET /communications/unread-count (backend/api/do…
 - `domain/models/announcement.dart` — One admin-published announcement, as GET /communications returns it (backend/api/domains/service_communications/router.py, CustomerAnnounce…
 - `presentation/announcement_detail_screen.dart` — One announcement, opened from the announcements centre or from a push.
+- `presentation/announcement_presentation.dart` — Shared look and wording for announcements: the list card, the detail screen and the priority dialog must agree on what a severity means, wh…
 - `presentation/announcements_screen.dart` — BROKA - Announcements centre.
 - `presentation/announcements_state.dart` — The announcements centre's shared state: the feed, the server-backed unread count behind the badge, and read acknowledgement.
 - `presentation/priority_announcement_coordinator.dart` — App-wide priority announcement coordination.
@@ -1044,6 +1064,12 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `presentation/deal_status_screen.dart` — BROKA v3.0 - Deal Status Screen Full screen view of a deal with live WebSocket status, escrow timeline, action buttons (confirm delivery /…
 - `presentation/deal_status_widget.dart` — BROKA v3.0 - Real-time Deal Status Widget Drop this into any screen that shows a deal.
 - `presentation/escrow_actions.dart` — Buyer protection, as the two deal chats (Zeno's room and the direct chat) show it: paying into escrow at once or in parts, releasing the mo…
+
+### `flutter_app/lib/features/feedback/`
+
+- `data/repositories/feedback_repository.dart` — Feedback & complaints API: POST /feedback, GET /feedback, GET /feedback/{id} (backend/api/domains/feedback/router.py).
+- `domain/models/feedback.dart` — One feedback or complaint submission, as /feedback returns it (backend/api/domains/feedback/router.py).
+- `presentation/feedback_screen.dart` — Feedback & complaints: tell BROKA what works, what doesn't, or report a problem that needs a human.
 
 ### `flutter_app/lib/features/listing_fee/`
 
@@ -1282,6 +1308,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ### Tests (`flutter_app/test/`)
 
+- `announcement_feedback_ui_drive_test.dart` — Public-UI drive for the announcement lifecycle and feedback flows: date/time display, unread badge + mark-all-read, All/Unread/Important fi…
 - `announcements_notification_test.dart` — Announcement push routing: the service_communication payload the backend sends (service._push_data) - recognition, foreground presentation,…
 - `announcements_repository_test.dart` — The communications repository: GET /communications, POST .../read and GET /communications/unread-count (backend/api/domains/service_communi…
 - `announcements_screen_test.dart` — The announcements centre as the user sees it: loading, empty, populated and error states, title/body display, read/unread visuals, pull-to-…
@@ -1304,6 +1331,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `direct_chat_delivery_test.dart` — The one-on-one chat, as reported from a phone (2026-10-02): the last two messages showed twice until the chat was reopened, a message the o…
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `escrow_actions_test.dart` — Buyer protection dialogs (2026-10-02): paying in parts, releasing with the delivery check first, asking for a refund.
+- `feedback_and_announcement_time_test.dart` — Announcement date/time wording and feedback model parsing.
 - `home_buy_agent_watch_test.dart` — Home's "Zeno is watching for you" card can stop the watch (buying-agent review, 2026-09-26).
 - `home_collapsing_scroll_test.dart` — Covers the Home collapsing-scroll architecture (2026-09-18 brief).
 - `home_inbox_badge_test.dart` — Home's Inbox tab shows how many messages are unread (2026-10-02).
