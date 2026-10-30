@@ -39,6 +39,8 @@ async def listing_fee_quote(
     category: str = Query(..., min_length=1, max_length=60),
     price: float = Query(..., gt=0, le=_MAX_PRICE, description="Price of one unit, KES"),
     quantity: int = Query(1, ge=1, le=100_000, description="Units offered in the listing"),
+    store_id: Optional[str] = Query(None, max_length=64,
+                                    description="Posting through this store: no listing fee, ever"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -48,8 +50,30 @@ async def listing_fee_quote(
     category table (GET /pricing/categories) shows everyone the new-seller
     price.
     """
+    if store_id:
+        # store_covered must mean YOUR store: quoting someone else's store
+        # as covered would only fail later at create, after the seller was
+        # told there is no fee.
+        from api.models.store import Store
+
+        store = await db.get(Store, store_id)
+        if store is None or store.owner_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="You do not own this store")
     return await service.listing_fee_quote(db, current_user["id"], category, price, quantity,
-                                           new_listing=True)
+                                           new_listing=True, store_id=store_id)
+
+
+@router.get("/launch-offers")
+async def launch_offers(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch offers: first 50 listings free, first 10 stores free, one each
+    per user - how many are left, and whether THIS user still qualifies.
+    A read never claims a slot; claiming happens in the create calls."""
+    from api.domains.pricing import launch_offers as offers
+
+    return await offers.offers_status(db, current_user["id"])
 
 
 @router.get("/listing-fee/listings/{listing_id}/quote")

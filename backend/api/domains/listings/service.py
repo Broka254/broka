@@ -27,6 +27,20 @@ from .stock import is_stocked, units_taken, units_total
 from .validation import load_attributes
 
 
+def _public_time_left(listing) -> dict:
+    """paid_until + countdown keys for _listing_dict (see time_left.py)."""
+    from api.domains.listings.time_left import time_left
+
+    paid_until = getattr(listing, "paid_until", None)
+    countdown = time_left(paid_until, created_at=getattr(listing, "created_at", None))
+    return {
+        "paid_until": paid_until.isoformat() if paid_until else None,
+        "time_left": countdown,
+        "time_left_label": countdown["label"],
+        "goes_offline_at": countdown["goes_offline_at"],
+    }
+
+
 def _seller_overall_rating(seller, seller_review) -> Optional[float]:
     """The seller's composite /10 for a listing payload, from the cheap
     signals a card page already has (reviews, account age, deals done).
@@ -426,6 +440,12 @@ class ListingService:
             founding = await founding_discount(self.db, seller_id)
             if founding.percent >= 100:
                 listing.paid_until = founding.ends_at
+                # It IS live (paid_until is in the future), so it must be
+                # announced below like any live listing. awaiting_fee kept
+                # meaning "fees are on for this listing", not "hidden",
+                # and founding-free listings were created visible but
+                # never announced to the Buying Agent.
+                awaiting_fee = False
         # Hosting an auction is premium (PRICING.md): one of the seller's
         # plan's auctions, spent last - every check that could refuse the
         # listing has already run - and given back below if this turns out
@@ -439,6 +459,21 @@ class ListingService:
             # record. They used to be two commits, so a failure between
             # them left an auction with no window to open or close by.
             await self.db.flush()
+            # Launch offer: the first FREE_LISTING_OFFER_LIMIT personal
+            # listings post free, one per user (pricing/launch_offers.py).
+            # Claimed here - after the flush, so the claim binds the real
+            # listing id, and inside this transaction, so a rolled-back
+            # create consumes no slot. Store listings and auctions never
+            # reach here as awaiting_fee (fee_applies), and a founding-free
+            # listing already went live above without burning a slot.
+            if awaiting_fee:
+                from api.domains.pricing import launch_offers
+
+                claim = await launch_offers.claim_listing_offer(
+                    self.db, seller_id, listing.id)
+                if claim is not None:
+                    listing.paid_until = claim.expires_at
+                    awaiting_fee = False
             # An auction listing gets its lifecycle record here, at
             # creation, rather than being conjured by whatever places the
             # first bid. Creating it lazily was how auctions ended up with
@@ -1622,4 +1657,11 @@ class ListingService:
             "store_id": listing.store_id,
             "store_name": store.name if store else None,
             "store_slug": store.slug if store else None,
+            # Time before this listing goes offline (listings/time_left.py),
+            # on the public payload too: "ends in 3d" is buyer-facing
+            # urgency, and the server computing it means no client clock
+            # can disagree. Store listings report their own paid_until
+            # here; their real gate is the store's clock (fee_state's
+            # store_covered status carries that for the owner).
+            **_public_time_left(listing),
         }

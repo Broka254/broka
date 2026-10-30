@@ -560,6 +560,37 @@ class Settings:
     founding_discount_days: int = field(default_factory=lambda: max(0, int(os.getenv(
         "FOUNDING_DISCOUNT_DAYS", "30"
     ))))
+    # ── Launch offers (pricing/launch_offers.py) ─────────────────────────────
+    # The first FREE_LISTING_OFFER_LIMIT personal listings platform-wide post
+    # free, and the first FREE_STORE_OFFER_LIMIT stores set up free - one of
+    # each per user (launch_offer_claims' unique indexes enforce both).
+    # Distinct from the founding tiers above: those discount by SELLER rank,
+    # these count CLAIMS, are consumed only while the matching billing switch
+    # is on (a free-for-everyone period must not burn the launch slots), and
+    # grant a whole paid period (60 days = one 2-month period) rather than
+    # the founding 30 days. 0 switches an offer off.
+    free_listing_offer_limit: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "FREE_LISTING_OFFER_LIMIT", "50"
+    ))))
+    free_store_offer_limit: int = field(default_factory=lambda: max(0, int(os.getenv(
+        "FREE_STORE_OFFER_LIMIT", "10"
+    ))))
+    free_listing_offer_days: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "FREE_LISTING_OFFER_DAYS", "60"
+    ))))
+    free_store_offer_days: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "FREE_STORE_OFFER_DAYS", "60"
+    ))))
+    # ── Expiry SMS (pricing/expiry_alerts.py) ────────────────────────────────
+    # One text this many days before a listing's/store's paid time runs out,
+    # deduped per paid period (expiry_notifications). Off: no texts, but the
+    # time-left fields in listing/store payloads still show the countdown.
+    expiry_sms_enabled: bool = field(default_factory=lambda: os.getenv(
+        "EXPIRY_SMS_ENABLED", "true"
+    ).strip().lower() in ("1", "true", "yes", "on"))
+    expiry_sms_days_before: int = field(default_factory=lambda: max(1, int(os.getenv(
+        "EXPIRY_SMS_DAYS_BEFORE", "2"
+    ))))
     # Where Safaricom posts the result of a listing-fee STK push. Unset, it is
     # derived from MPESA_CALLBACK_SECRET (pricing/payments.py), the same way
     # mpesa.py derives its own - so the secret-protected route is the default.

@@ -106,6 +106,22 @@ def store_link(slug: str) -> str:
     return f"{settings.store_link_base}/{slug}"
 
 
+def _store_time_left(sub) -> dict:
+    """paid_until + countdown keys for _store_dict (listings/time_left.py)."""
+    from api.domains.listings.time_left import time_left
+
+    paid_until = sub.paid_until if sub is not None else None
+    countdown = time_left(paid_until)
+    return {
+        "paid_until": paid_until.isoformat() if paid_until else None,
+        "time_left": countdown,
+        "seconds_left": countdown["seconds_left"],
+        "days_left": countdown["days_left"],
+        "time_left_label": countdown["label"],
+        "goes_offline_at": countdown["goes_offline_at"],
+    }
+
+
 class StoreService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -227,7 +243,20 @@ class StoreService:
                 for name in categories:
                     self.db.add(StoreCategoryLink(store_id=store.id, category=name))
                 if store_billing.enabled():
-                    store_billing.create_unpaid_subscription(self.db, store.id)
+                    # Launch offer: the first FREE_STORE_OFFER_LIMIT stores
+                    # set up free, one per user (pricing/launch_offers.py) -
+                    # claimed in this transaction, so a rolled-back create
+                    # (the slug retry below) consumes no slot. A claimed
+                    # store opens live on a free period instead of opening
+                    # unpaid and hidden.
+                    from api.domains.pricing import launch_offers
+
+                    claim = await launch_offers.claim_store_offer(
+                        self.db, owner_id, store.id)
+                    if claim is not None:
+                        store_billing.grant_free_store_period(self.db, store, claim)
+                    else:
+                        store_billing.create_unpaid_subscription(self.db, store.id)
                 await self.db.commit()
             except IntegrityError:
                 # The only unique constraint on this table is slug: someone
@@ -1802,12 +1831,13 @@ class StoreService:
             category_names = (await self._categories_for([store.id])).get(store.id, [])
         active = bool(store.is_active)
         billing_state = None
+        billing_sub = None
         if store_billing.enabled():
-            sub = (billing_subs.get(store.id) if billing_subs is not None
-                   else await store_billing.subscription_for(self.db, store.id))
+            billing_sub = (billing_subs.get(store.id) if billing_subs is not None
+                           else await store_billing.subscription_for(self.db, store.id))
             if owner_view:
-                billing_state = store_billing.state_for(sub)
-            elif not store_billing.is_live(sub):
+                billing_state = store_billing.state_for(billing_sub)
+            elif not store_billing.is_live(billing_sub):
                 active = False
 
         store_type_public = store.store_type or DEFAULT_STORE_TYPE
@@ -1910,6 +1940,10 @@ class StoreService:
             # routes a fresh store to the billing screen on this being
             # non-null and not active.
             "billing": billing_state,
+            # Time before this store goes offline, for every reader (the
+            # billing object above is owner-only). Billing off, or a store
+            # with no deadline, reads "No expiry" (listings/time_left.py).
+            **_store_time_left(billing_sub),
             "listing_count": listing_count,
             "distance_km": distance_km,
             "distance_label": distance_label,

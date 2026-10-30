@@ -1395,7 +1395,7 @@ async def _apply_optional_statements(conn, statements) -> None:
         await conn.execute(text(prepared))
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 SCHEMA_REVISIONS = (
     (1, "legacy_schema_adoption"),
     (2, "durable_payment_intents_and_callbacks"),
@@ -1412,6 +1412,9 @@ SCHEMA_REVISIONS = (
     # Per-user announcement delete (dismissed_at) + user_feedback table.
     # The table comes from create_all(); the column needs the ALTER below.
     (9, "announcement_dismiss_and_feedback"),
+    # Launch offers (first 50 listings / 10 stores free) + expiry-SMS dedup.
+    # New tables only, from create_all().
+    (10, "launch_offers_and_expiry_notifications"),
 )
 
 # Tables/columns that must exist before an API process is safe to serve
@@ -1653,6 +1656,8 @@ async def _init_db_impl():
         ("api.models.listing_payment", ("ListingPayment",)),
         ("api.models.subscription", ("Subscription", "SubscriptionPayment", "FeatureUsage")),
         ("api.models.store_billing", ("StoreSubscription", "StorePayment", "StoreBillingMeta")),
+        ("api.models.launch_offer", ("LaunchOfferClaim",)),
+        ("api.models.expiry_notification", ("ExpiryNotification",)),
         ("api.models.zetupay", ("ZetuPayPayment", "ZetuPayTransaction")),
         ("api.models.admin_alert", ("AdminAlert",)),
         ("api.models.platform_cost", ("PlatformCost",)),

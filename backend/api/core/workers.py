@@ -290,7 +290,22 @@ async def _periodic_sweep_loop(interval_seconds: int = 300) -> None:
                     await task_sync_listing_stock()
                 except Exception as exc:
                     logger.error("[sweep] listing stock sync failed: %s", exc)
+                try:
+                    await task_notify_expiry_alerts({})
+                except Exception as exc:
+                    logger.error("[sweep] expiry SMS sweep failed: %s", exc)
         await asyncio.sleep(interval_seconds)
+
+
+async def task_notify_expiry_alerts(ctx: dict | None = None) -> None:
+    """Text sellers 2 days before a listing/store goes offline
+    (pricing/expiry_alerts.py). Deduped per paid period in the database,
+    so the scheduler lease above is a courtesy, not the only guard."""
+    from api.database import AsyncSessionLocal
+    from api.domains.pricing.expiry_alerts import send_due_expiry_alerts
+
+    async with AsyncSessionLocal() as db:
+        await send_due_expiry_alerts(db)
 
 
 async def task_sync_listing_stock() -> int:
@@ -500,6 +515,7 @@ class WorkerSettings:
         "api.core.workers.task_recompute_dcr_and_leaks",
         "api.core.workers.task_retrain_ml_models",
         "api.core.workers.task_process_service_communications",
+        "api.core.workers.task_notify_expiry_alerts",
     ]
     max_jobs         = 20
     job_timeout      = 300

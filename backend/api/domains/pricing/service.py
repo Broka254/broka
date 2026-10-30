@@ -117,6 +117,8 @@ async def free_listings_left(db: AsyncSession, seller_id: str) -> int:
         select(func.count(Listing.id)).where(
             Listing.seller_id == seller_id,
             Listing.paid_until.is_(None),
+            # Store listings pay no fee and use no free place (paid.fee_applies).
+            Listing.store_id.is_(None),
             Listing.listing_type != ListingType.auction,
             Listing.status.in_((ListingStatus.active, ListingStatus.pending)),
         )
@@ -158,14 +160,18 @@ async def founding_discount(
     about to post it); time bought from its end on is full price.
     """
     now = datetime.utcnow()
+    # Store listings are not a seller's "first listing" for fee offers: they
+    # never pay a fee, so counting one would burn the seller's founding /
+    # launch-offer place on a listing that was free anyway.
     not_auction = Listing.listing_type != ListingType.auction
+    personal = Listing.store_id.is_(None)
     first_row = (await db.execute(
         select(Listing.id, Listing.created_at)
-        .where(Listing.seller_id == seller_id, not_auction)
+        .where(Listing.seller_id == seller_id, not_auction, personal)
         .order_by(Listing.created_at, Listing.id).limit(1)
     )).first()
     firsts = (select(Listing.seller_id, func.min(Listing.created_at).label("first"))
-              .where(not_auction).group_by(Listing.seller_id).subquery())
+              .where(not_auction, personal).group_by(Listing.seller_id).subquery())
     if first_row is None:
         ahead = (await db.execute(select(func.count()).select_from(firsts))).scalar() or 0
         first, is_first_listing = now, listing_id is None
@@ -184,7 +190,7 @@ async def founding_discount(
 async def listing_fee_quote(
     db: AsyncSession, user_id: str, category_name: str, unit_price: float, quantity: int,
     new_listing: bool = False, starts_at: Optional[datetime] = None,
-    listing_id: Optional[str] = None,
+    listing_id: Optional[str] = None, store_id: Optional[str] = None,
 ) -> dict:
     """`starts_at`: when the time being priced begins (the end of time
     already paid, for a renewal); now when left out."""
@@ -213,11 +219,39 @@ async def listing_fee_quote(
         "ends_at": founding.ends_at.isoformat(),
     }
     result["featured"] = featured_options(tier)
+    # A listing posted through an online store never pays a listing fee:
+    # the store's plan covers it. Said explicitly, with its own flag, so no
+    # client has to infer it from fees_enabled alone - and no free-listing
+    # or launch-offer slot is consumed by saying so.
+    if store_id:
+        result["store_covered"] = True
+        result["free_listing"] = True
+        result["free_listings_per_seller"] = settings.free_listings_per_seller
+        result["launch_offer"] = {"eligible": False, "reason": "store_covered"}
+        result["fees_enabled"] = False
+        return result
+    result["store_covered"] = False
+    # Launch offer (first FREE_LISTING_OFFER_LIMIT listings, one per user):
+    # a peek only - the slot is claimed in ListingService.create_listing's
+    # transaction, never by a quote, or refreshing the sell screen would
+    # spend offers nobody posted.
+    from api.domains.pricing import launch_offers
+
+    from api.models.launch_offer import LaunchOfferType
+
+    launch_eligible = bool(new_listing and await launch_offers.peek_listing_offer(db, user_id))
+    result["launch_offer"] = {
+        "eligible": launch_eligible,
+        "free_days": settings.free_listing_offer_days,
+        "remaining": (await launch_offers.status(
+            db, LaunchOfferType.LISTING_FREE)).remaining,
+    }
     # A listing about to be posted into one of the seller's free places, or
     # by a seller whose founding offer is 100%, pays nothing:
     # ListingService.create posts it live.
     free = (new_listing and settings.listing_fees_enabled
-            and (founding_free or await free_listings_left(db, user_id) > 0))
+            and (founding_free or launch_eligible
+                 or await free_listings_left(db, user_id) > 0))
     result["free_listing"] = free
     result["free_listings_per_seller"] = settings.free_listings_per_seller
     # Whether this seller is charged (LISTING_FEES_ENABLED, and not a free

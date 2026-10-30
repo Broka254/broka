@@ -97,10 +97,12 @@ def _refuse_unless_payable(listing: Listing) -> None:
     if not settings.listing_fees_enabled:
         raise HTTPException(status_code=409, detail="Listing on BROKA is free right now.")
     if not fee_applies(listing):
-        if settings.store_billing_enabled and getattr(listing, "store_id", None):
-            # fee_applies excludes store listings once store billing is on
-            # (PRICING.md §5); the store's own billing screen is where that
-            # is paid, so this path refuses instead of silently quoting one.
+        if getattr(listing, "store_id", None):
+            # fee_applies always excludes store listings (PRICING.md §5);
+            # the store's own billing screen is where that is paid, so this
+            # path refuses instead of silently quoting one. This used to
+            # require STORE_BILLING_ENABLED, so with billing off a store
+            # listing fell through to the auction message below.
             raise HTTPException(status_code=409, detail=(
                 "This listing is covered by its store's plan - renew on the store's billing screen."))
         raise HTTPException(status_code=409, detail="Auctions don't pay a listing fee.")
@@ -452,6 +454,8 @@ async def listings_needing_payment(db: AsyncSession, user_id: str) -> list[dict]
         select(Listing).where(
             Listing.seller_id == user_id,
             Listing.status == ListingStatus.active,
+            # Store listings are renewed on the store, never here.
+            Listing.store_id.is_(None),
             Listing.paid_until.is_not(None),
             Listing.paid_until <= now + ENDING_SOON,
         ).order_by(Listing.paid_until).limit(100)

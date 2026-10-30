@@ -160,8 +160,11 @@ async def store_live(db: AsyncSession, store: Store, now: Optional[datetime] = N
 def state_for(sub: Optional[StoreSubscription], now: Optional[datetime] = None) -> dict:
     """The owner's view of their billing: what plan, until when, and whether
     the opening fee is already covered."""
+    from api.domains.listings.time_left import time_left
+
     now = now or datetime.utcnow()
     plan = plan_of(sub)
+    countdown = time_left(sub.paid_until if sub else None, now)
     return {
         "active": is_live(sub, now),
         "plan_id": sub.plan_id if sub else None,
@@ -169,6 +172,13 @@ def state_for(sub: Optional[StoreSubscription], now: Optional[datetime] = None) 
         "monthly_price": plan.monthly_price if plan else None,
         "paid_until": sub.paid_until.isoformat() if sub and sub.paid_until else None,
         "setup_fee_paid": bool(sub.setup_fee_paid) if sub else False,
+        # Time before this store goes offline, server-computed like a
+        # listing's (listings/time_left.py): nested object plus flat fields.
+        "time_left": countdown,
+        "seconds_left": countdown["seconds_left"],
+        "days_left": countdown["days_left"],
+        "time_left_label": countdown["label"],
+        "goes_offline_at": countdown["goes_offline_at"],
     }
 
 
@@ -211,8 +221,17 @@ async def summary(db, store: Store, listings: Optional[int] = None) -> dict:
     card = rate_card_for(store.category)
     sub = await subscription_for(db, store.id)
     setup_paid = bool(sub.setup_fee_paid) if sub else False
+    from api.domains.pricing import launch_offers
+    from api.models.launch_offer import LaunchOfferType
+
+    store_claim = await launch_offers.claim_for_entity(
+        db, LaunchOfferType.STORE_FREE, store.id)
     out = {
         "rate_card": card.to_dict(),
+        # Whether the launch offer (first FREE_STORE_OFFER_LIMIT stores)
+        # covered this store, so the billing screen can say "free setup -
+        # launch offer" instead of quoting a setup it never charged.
+        "launch_offer_claimed": store_claim is not None,
         "setup_fee": 0 if (setup_paid or card.setup_fee == 0) else card.setup_fee,
         "setup_fee_waived_from_months": STORE_SETUP_WAIVED_FROM_MONTHS,
         "min_listings": card.min_listings,
@@ -535,6 +554,31 @@ async def payment_status(db: AsyncSession, owner_id: str, store_id: str, payment
         "failure_reason": payment.failure_reason,
         "paid_until": payment.period_end.isoformat() if payment.period_end else None,
     }
+
+
+def grant_free_store_period(db: AsyncSession, store: Store, claim,
+                            now: Optional[datetime] = None) -> StoreSubscription:
+    """Apply a launch-offer claim to a just-created store, in its creation
+    transaction: the store opens live on its rate card's smallest plan,
+    setup fee settled, paid for FREE_STORE_OFFER_DAYS.
+
+    "Free setup" has to mean free TIME, not just a waived setup fee: the
+    goods card's setup fee is already 0, so waiving it alone would give
+    the first 10 online stores an offer worth nothing. The claim's
+    expires_at is the deadline either way - one source, set at claim time.
+    An existing subscription row (create_unpaid_subscription ran first)
+    is upgraded in place; its unique store_id forbids a second row.
+    """
+    now = now or datetime.utcnow()
+    card = rate_card_for(store.category)
+    plan = card.plan(card.min_listings)
+    sub = StoreSubscription(
+        store_id=store.id, plan_id=plan.id, listings=plan.listings,
+        setup_fee_paid=True, paid_until=claim.expires_at,
+        created_at=now, updated_at=now,
+    )
+    db.add(sub)
+    return sub
 
 
 def create_unpaid_subscription(
