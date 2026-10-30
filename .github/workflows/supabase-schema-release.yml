@@ -1,0 +1,114 @@
+name: BROKA Supabase schema release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_database:
+        description: Type MIGRATE to authorize the BROKA production schema release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: broka-supabase-production-schema-release
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Migrate Supabase production schema
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENV: production
+      BROKA_NATIVE: "off"
+      DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      DB_POOL_SIZE: "1"
+      DB_MAX_OVERFLOW: "0"
+      DB_CONNECT_TIMEOUT_SECONDS: "15"
+      CONFIRM_PRODUCTION_DATABASE: ${{ inputs.confirm_production_database }}
+
+    steps:
+      - name: Check out BROKA
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Check explicit production confirmation
+        shell: bash
+        run: |
+          if [ "$CONFIRM_PRODUCTION_DATABASE" != "MIGRATE" ]; then
+            echo "::error::Type MIGRATE in the workflow input to proceed."
+            exit 1
+          fi
+
+      - name: Validate Supabase session-pooler target
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from urllib.parse import urlsplit
+
+          raw = os.environ.get("DATABASE_URL", "").strip()
+          if not raw:
+              sys.exit("SUPABASE_DATABASE_URL repository secret is missing.")
+
+          try:
+              parsed = urlsplit(raw)
+              port = parsed.port
+          except ValueError:
+              sys.exit("DATABASE_URL is malformed; check the copied Session Pooler URI.")
+
+          expected_user = "postgres.ydpbbosfttsnzpheowik"
+          if parsed.scheme not in {"postgres", "postgresql", "postgresql+asyncpg"}:
+              sys.exit("DATABASE_URL must be a PostgreSQL connection URI.")
+          if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+              sys.exit("DATABASE_URL must use this project's Supabase shared pooler host.")
+          if port != 5432:
+              sys.exit("Use Supabase Session Pooler port 5432, not transaction mode 6543.")
+          if parsed.username != expected_user:
+              sys.exit("DATABASE_URL username does not match the BROKA Supabase project ref.")
+          if parsed.path.rstrip("/") != "/postgres" or not parsed.password:
+              sys.exit("DATABASE_URL must target the postgres database and include its password.")
+
+          print("Connection target validated: BROKA Supabase project, Session Pooler, port 5432.")
+          PY
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Apply and re-check the schema release
+        run: |
+          python -u -m api.migrate
+          python -u -m api.migrate
+          python -u - <<'PY'
+          import asyncio
+          from api.database import SCHEMA_VERSION, engine, schema_status
+
+          async def main():
+              try:
+                  status = await schema_status()
+                  print(
+                      f"Final schema status: version={status['current_version']} "
+                      f"required={SCHEMA_VERSION} current={status['current']}"
+                  )
+                  if not status["current"]:
+                      raise SystemExit("Supabase schema verification failed.")
+              finally:
+                  await engine.dispose()
+
+          asyncio.run(main())
+          PY
