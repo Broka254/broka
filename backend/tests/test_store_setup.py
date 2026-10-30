@@ -859,12 +859,15 @@ class TestOwnerProducts:
         from api.database import ListingStatus
         sid = (await _store(client, headers))["id"]
         made = {name: (await _listing(client, headers, sid, name))["id"] for name in (
-            "Live phone", "Unpaid charger", "Expired cable", "Phone in a deal",
+            "Live phone", "Charger in stock", "Cable in stock", "Phone in a deal",
             "Sold laptop", "Deleted case")}
         now = datetime.utcnow()
-        # Never paid: paid_until no later than it was listed.
-        await _set_listing(made["Unpaid charger"], paid_until=lambda row: row.created_at)
-        await _set_listing(made["Expired cable"], created_at=now - timedelta(days=40),
+        # A store listing's paid_until is not its clock: the store's plan is
+        # (listings/paid.py fee_state). These stale values would read unpaid
+        # and expired for a personal listing; in a store they must not hide
+        # the product from buyers - that is the regression this covers.
+        await _set_listing(made["Charger in stock"], paid_until=lambda row: row.created_at)
+        await _set_listing(made["Cable in stock"], created_at=now - timedelta(days=40),
                            paid_until=now - timedelta(days=1))
         await _set_listing(made["Phone in a deal"], status=ListingStatus.pending)
         await _set_listing(made["Sold laptop"], status=ListingStatus.completed)
@@ -876,23 +879,25 @@ class TestOwnerProducts:
         sid, _ = await self._stocked_store(client, headers)
 
         public = (await client.get(f"/stores/{sid}/listings")).json()
-        assert [p["name"] for p in public] == ["Live phone"]
+        assert {p["name"] for p in public} == {
+            "Live phone", "Charger in stock", "Cable in stock"}
 
         r = await client.get(f"/stores/{sid}/manage/listings", headers=headers)
         assert r.status_code == 200, r.text
         body = r.json()
         states = {p["name"]: p["store_state"] for p in body["items"]}
         assert states == {
-            "Live phone": "live", "Unpaid charger": "hidden", "Expired cable": "hidden",
+            "Live phone": "live", "Charger in stock": "live", "Cable in stock": "live",
             "Phone in a deal": "in_deal", "Sold laptop": "sold",
         }
         assert body["counts"] == {
-            "live": 1, "hidden": 2, "in_deal": 1, "sold": 1, "archived": 0, "all": 5,
+            "live": 3, "hidden": 0, "in_deal": 1, "sold": 1, "archived": 0, "all": 5,
         }
-        fees = {p["name"]: p["listing_fee"]["status"] for p in body["items"]}
-        assert fees["Unpaid charger"] == "unpaid" and fees["Expired cable"] == "expired"
-        assert all(p["listing_fee"]["needs_payment"] for p in body["items"]
-                   if p["store_state"] == "hidden")
+        # No product in a store carries a listing fee of its own - the
+        # store's plan pays for the shelf, however paid_until was left.
+        fees = {p["name"]: p["listing_fee"] for p in body["items"]}
+        assert {fee["status"] for fee in fees.values()} == {"store_covered"}
+        assert not any(fee["needs_payment"] for fee in fees.values())
 
     async def test_filtering_by_state_and_search(self, client):
         _, headers = await _register(client)
@@ -903,10 +908,14 @@ class TestOwnerProducts:
             assert r.status_code == 200, r.text
             return r.json()
 
-        hidden = await get(state="hidden")
-        assert {p["name"] for p in hidden["items"]} == {"Unpaid charger", "Expired cable"}
+        live = await get(state="live")
+        assert {p["name"] for p in live["items"]} == {
+            "Live phone", "Charger in stock", "Cable in stock"}
         # The counts are for every state, whichever one is shown.
-        assert hidden["counts"]["all"] == 5
+        assert live["counts"]["all"] == 5
+        # A listing whose fee ran out while it was personal still shows as
+        # store-covered here, so the hidden filter has nothing to return.
+        assert (await get(state="hidden"))["items"] == []
 
         phones = await get(search="phone")
         assert {p["name"] for p in phones["items"]} == {"Live phone", "Phone in a deal"}
@@ -934,6 +943,9 @@ class TestOwnerProducts:
         assert (await client.get(f"/stores/{sid}/listings")).json() == []
         body = (await client.get(f"/stores/{sid}/manage/listings", headers=headers)).json()
         assert [p["name"] for p in body["items"]] == ["Kept for later"]
+        # A closed store is what hides an otherwise-live product now; the
+        # per-listing fee no longer can (listings/paid.py fee_state).
+        assert body["items"][0]["store_state"] == "hidden"
 
     async def test_only_the_owner_and_only_their_store(self, client):
         _, owner = await _register(client)
