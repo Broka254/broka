@@ -59,7 +59,7 @@ async def test_fresh_database_records_every_revision_and_required_columns():
     assert status["current_version"] == SCHEMA_VERSION
     assert status["missing"] == {}
     assert status["missing_indexes"] == {}
-    assert [row["version"] for row in status["versions"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert [row["version"] for row in status["versions"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     async with database.engine.connect() as conn:
         columns = await conn.run_sync(_columns, "mpesa_transactions")
         indexes = await conn.run_sync(_indexes, "mpesa_transactions")
@@ -116,7 +116,7 @@ async def test_an_older_database_gets_new_columns_and_revisions_back():
     await database._init_db_impl()
     status = await database.schema_status()
     assert status["current"] is True
-    assert [row["version"] for row in status["versions"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert [row["version"] for row in status["versions"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     async with database.engine.connect() as conn:
         columns = await conn.run_sync(_columns, "mpesa_transactions")
         indexes = await conn.run_sync(_indexes, "mpesa_transactions")

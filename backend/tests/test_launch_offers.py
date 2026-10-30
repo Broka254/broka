@@ -32,7 +32,6 @@ from api.models.launch_offer import LaunchOfferClaim, LaunchOfferType
 from api.models.store import Store
 from api.models.store_billing import StoreSubscription
 from api.security import create_access_token
-from tests.legal_payload import legal_payload
 
 _MODULES = (
     "api.domains.listings.service", "api.domains.listings.paid",
@@ -96,19 +95,24 @@ _n = iter(range(1000, 9999))
 
 
 async def _register_store_owner(client) -> tuple[str, dict]:
+    """A long-term seller, made directly in the DB (like _user).
+
+    Through /auth/register this needed an OTP round trip, and the OTP
+    rate limiter is shared across the whole suite: by the time this file
+    runs in a full-suite pass the budget is spent and registration 429s.
+    The store endpoints only need the account shape, not the signup path.
+    """
+    from api.database import AccountType, SellerTier
+
     n = next(_n)
-    phone = f"0746{n:06d}"
-    code = (await client.post("/auth/otp/request", json={"phone": phone})).json()["debug_code"]
-    token = (await client.post("/auth/otp/verify", json={"phone": phone, "code": code})).json()["phone_verify_token"]
-    reg = await client.post("/auth/register", json={
-        "phone_verify_token": token, "name": f"Owner {n}", "password": "Passw0rd!x",
-        "lat": -1.286, "lng": 36.817, "account_type": "buyer_seller",
-        "seller_tier": "long_term", "business_name": f"Biz {n}",
-        "business_category": "Electronics", "business_location": "Nairobi",
-        "legal_acceptance": legal_payload(),
-    })
-    assert reg.status_code == 201, reg.text
-    return reg.json()["user_id"], {"Authorization": f"Bearer {reg.json()['access_token']}"}
+    u = User(name=f"Owner {n}", phone=f"+254799{n:06d}", password_hash="x",
+             account_type=AccountType.buyer_seller, seller_tier=SellerTier.long_term,
+             business_name=f"Biz {n}", business_category="Electronics")
+    async with AsyncSessionLocal() as db:
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+    return u.id, {"Authorization": f"Bearer {create_access_token({'sub': u.id})}"}
 
 
 async def _listing(client, headers, **extra) -> dict:
