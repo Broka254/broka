@@ -29,7 +29,7 @@ class ApiException implements Exception {
 class ApiClient {
   static const String _baseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://api.broka.co.ke',
+    defaultValue: 'https://broka-a6vh.onrender.com',
   );
 
   String? _token;

@@ -390,7 +390,7 @@ The web storefront's settings, set in Vercel:
 
 | Variable | Needed | Purpose |
 |---|---|---|
-| `BROKA_API_URL` | Required | The API (the Render URL). Read on the server only |
+| `BROKA_API_URL` | Required | The API: `https://broka-a6vh.onrender.com` (the Render service). Read on the server only |
 | `NEXT_PUBLIC_SITE_URL` | Default `https://broka.co.ke` | The address visitors see, for canonical links and link previews: broka.co.ke, not the project's own `*.vercel.app` |
 | `STOREFRONT_API_KEY` | Required | The same value as on the API: lets it trust the visitor address sent with visit and share counts |
 | `STOREFRONT_PROXY_KEY` | For visit stats | The same value as in the BROKA website's project: lets this site trust the visitor address the website sends with the requests it passes on |

@@ -18,9 +18,9 @@ import 'last_screen_tracker.dart';
 import 'sell_draft_store.dart';
 
 class ApiService {
-  // api.broka.co.ke, a custom domain on the Railway service (broka-api). The
-  // compiled-in address stays on installed phones for good, so it names our
-  // domain, not a host's: moving hosts again is a DNS change, not a release.
+  // The Render service (broka-a6vh.onrender.com), which replaced the
+  // Railway one. The compiled-in address stays on installed phones for good,
+  // so moving hosts again means a new build, not a DNS change.
   // Point a build elsewhere with --dart-define=API_URL=... and
   // API_WS_URL=... together. The WebSocket
   // default lives in deal_ws_client.dart and auction_ws_client.dart, and a
@@ -28,7 +28,7 @@ class ApiService {
   // and auction updates to the other (test/api_endpoints_test.dart).
   static const String baseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://api.broka.co.ke',
+    defaultValue: 'https://broka-a6vh.onrender.com',
   );
 
   static String? _token;

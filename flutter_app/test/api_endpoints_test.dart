@@ -50,6 +50,14 @@ void main() {
         defaults['API_URL']!.first.replaceFirst('https://', 'wss://'));
   });
 
+  test('the defaults name the production Render backend', () {
+    // CI passes no --dart-define, so a release APK ships exactly these
+    // defaults. Keep them on the new host, or every installed app keeps
+    // calling the retired Railway one.
+    expect(defaults['API_URL']!.first, 'https://broka-a6vh.onrender.com');
+    expect(defaults['API_WS_URL']!.first, 'wss://broka-a6vh.onrender.com');
+  });
+
   test('ApiService and ApiClient resolve to the same base URL', () {
     // Calls and negotiation derive their sockets from ApiService.baseUrl;
     // every feature repository goes through ApiClient.
