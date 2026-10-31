@@ -1491,6 +1491,7 @@ Modules:
 | `.github/workflows/build.yml` | `web` | Web Storefront (Next.js) |
 | `.github/workflows/build.yml` | `repo-map` | Repository map (graphify.md) |
 | `.github/workflows/build.yml` | `build-apk` | Build Android APK |
+| `.github/workflows/production-release.yml` | `release` | Migrate Supabase, then deploy Render |
 | `.github/workflows/supabase-schema-release.yml` | `migrate` | Migrate Supabase production schema |
 
 ## Documents
