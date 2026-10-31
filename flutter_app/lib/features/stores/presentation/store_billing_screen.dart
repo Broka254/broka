@@ -25,6 +25,8 @@ import '../../../utils/price_format.dart';
 import '../../payments/domain/checkout.dart';
 import '../../payments/presentation/checkout_widgets.dart';
 import '../../payments/presentation/payment_method_screen.dart';
+import '../../launch_offers/data/launch_offers_repository.dart';
+import '../../launch_offers/domain/launch_offers.dart';
 import '../../launch_offers/presentation/launch_offer_widgets.dart';
 import '../data/repositories/stores_repository.dart';
 import '../domain/models/store_billing.dart';
@@ -67,6 +69,11 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
   /// only the response whose sequence is still latest may land.
   int _quoteSeq = 0;
   String? _error;
+
+  /// The free-store launch offer as this owner stands with it: why a
+  /// paywall is (or is not) in front of them has to be stated here,
+  /// at the screen that asks for the money.
+  LaunchOffer? _storeOffer;
   final _sizeCtrl = TextEditingController();
   final _sizeFocus = FocusNode();
   Timer? _sizeDebounce;
@@ -83,6 +90,16 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
       }
     });
     _load();
+    _loadOffer();
+  }
+
+  Future<void> _loadOffer() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _storeOffer = offers.storeFree),
+      onFailure: (_, __) {},
+    );
   }
 
   @override
@@ -306,6 +323,11 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
         if (q.launchOfferClaimed) ...[
           const SizedBox(height: 12),
           const _LaunchClaimedNote(),
+        ] else if (_storeOffer != null) ...[
+          // Why this screen is asking for money at all, in offer terms:
+          // claimed elsewhere, claimed at creation, or ended.
+          const SizedBox(height: 12),
+          OfferStateLine(offer: _storeOffer, kind: LaunchOfferKind.store, existingStore: true),
         ],
         if (q.current.timeLeft != null) ...[
           const SizedBox(height: 12),

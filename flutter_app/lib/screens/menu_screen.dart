@@ -22,6 +22,8 @@ import 'package:provider/provider.dart';
 
 import '../core/utils/result.dart';
 import '../features/account/data/repositories/account_repository.dart';
+import '../features/launch_offers/data/launch_offers_repository.dart';
+import '../features/launch_offers/domain/launch_offers.dart';
 import '../features/account/domain/models/my_account.dart';
 import '../features/communications/presentation/announcements_state.dart';
 import '../features/safe_payment/escrow_callout.dart';
@@ -59,6 +61,9 @@ class _MenuScreenState extends State<MenuScreen> {
   bool _loading = true;
   int? _listingCount;
 
+  /// The free-listing launch offer, for the Sell tile's subtitle.
+  LaunchOffer? _listingOffer;
+
   /// Bumped to remount the store section, which loads itself.
   int _storeNonce = 0;
 
@@ -72,9 +77,19 @@ class _MenuScreenState extends State<MenuScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadOffers();
     safePaymentRepository.fetch().then((info) {
       if (mounted && info != null && info.inAppPayments) setState(() => _inAppPayments = true);
     });
+  }
+
+  Future<void> _loadOffers() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _listingOffer = offers.listingFree),
+      onFailure: (_, __) {},
+    );
   }
 
   Future<void> _load() async {
@@ -219,14 +234,26 @@ class _MenuScreenState extends State<MenuScreen> {
             icon: Icons.add_circle_outline_rounded,
             tint: BrokaColors.neonGreen,
             title: 'Sell something',
-            subtitle: 'Post a new listing',
+            subtitle: switch (_listingOffer) {
+              LaunchOffer(alreadyClaimed: true) =>
+                'Post a new listing · your free listing is claimed',
+              LaunchOffer(hasSlots: true, :final remaining, :final freeDays) =>
+                'Post a new listing · free for $freeDays days — $remaining left',
+              LaunchOffer(limit: > 0) =>
+                'Post a new listing · free-listing offer has ended',
+              _ => 'Post a new listing',
+            },
             onTap: () => _open('/sell'),
           ),
         ] else
           MenuTile(
             icon: Icons.sell_outlined,
             title: 'Start selling',
-            subtitle: 'A few items or a whole business - set up in a minute',
+            subtitle: switch (_listingOffer) {
+              LaunchOffer(hasSlots: true, :final remaining) =>
+                'Your first listing is free — $remaining of the launch listings left',
+              _ => 'A few items or a whole business - set up in a minute',
+            },
             onTap: () => _open('/start-selling'),
           ),
       ]),

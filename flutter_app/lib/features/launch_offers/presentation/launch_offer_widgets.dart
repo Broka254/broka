@@ -273,6 +273,86 @@ class ListingTimeLeftRow extends StatelessWidget {
   }
 }
 
+/// The offer's state in one line, for the exact spots where money is
+/// asked: the Menu's store card, the store Review step, the store billing
+/// screen. Unlike the banner, this also speaks when the offer is GONE —
+/// a seller facing a paywall deserves to read "all 10 free stores were
+/// claimed" instead of silently wondering where the free offer went.
+/// Renders nothing only when the offer is not configured at all, or
+/// when [offer] has not loaded.
+class OfferStateLine extends StatelessWidget {
+  const OfferStateLine({
+    super.key,
+    required this.offer,
+    required this.kind,
+    this.existingStore = false,
+  });
+
+  final LaunchOffer? offer;
+  final LaunchOfferKind kind;
+
+  /// On the billing screen of a store that already exists: a free slot
+  /// still remaining platform-wide does not cover THIS store — claiming
+  /// happens when the store is created, one per person.
+  final bool existingStore;
+
+  bool get _isListing => kind == LaunchOfferKind.listing;
+
+  @override
+  Widget build(BuildContext context) {
+    final o = offer;
+    if (o == null || o.limit <= 0) return const SizedBox.shrink();
+    final (icon, color, text) = switch (o) {
+      LaunchOffer(alreadyClaimed: true) => (
+          Icons.verified_rounded,
+          BrokaColors.success,
+          _isListing
+              ? 'Your free listing is claimed — no payment needed for it.'
+              : 'Your free store setup is claimed — no payment needed.',
+        ),
+      LaunchOffer(hasSlots: true) when existingStore => (
+          Icons.info_outline_rounded,
+          BrokaColors.textMid,
+          'The launch offer is claimed when a store is created — this store '
+              'opened without one, so its plan is paid. (${o.remaining} free stores left.)',
+        ),
+      LaunchOffer(hasSlots: true) => (
+          Icons.celebration_rounded,
+          BrokaColors.success,
+          _isListing
+              ? 'First ${o.limit} listings free — only ${o.remaining} left. '
+                  'Post now and yours is free for ${o.freeDays} days.'
+              : 'First ${o.limit} online stores free — only ${o.remaining} left. '
+                  'Open yours now and setup is free, with ${o.freeDays} days on BROKA.',
+        ),
+      _ => (
+          Icons.info_outline_rounded,
+          BrokaColors.warning,
+          _isListing
+              ? 'All ${o.limit} free listings have been claimed — the launch offer has ended.'
+              : 'All ${o.limit} free stores have been claimed — the launch offer has ended.',
+        ),
+    };
+    return Container(
+      key: const Key('offer-state-line'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(color: color, fontSize: 12.5, fontWeight: FontWeight.w700, height: 1.35)),
+        ),
+      ]),
+    );
+  }
+}
+
 /// A listing posted through a store never pays a listing fee.
 class StoreCoveredBanner extends StatelessWidget {
   const StoreCoveredBanner({super.key, this.storeName});

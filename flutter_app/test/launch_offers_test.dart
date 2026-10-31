@@ -303,6 +303,42 @@ void main() {
       expect(find.textContaining('store plan'), findsOneWidget);
     });
 
+    testWidgets('offer state line speaks for available, claimed and ended offers', (tester) async {
+      await tester.pumpWidget(_host(const OfferStateLine(
+        offer: LaunchOffer(limit: 10, claimed: 9, remaining: 1, freeDays: 60),
+        kind: LaunchOfferKind.store,
+      )));
+      expect(find.byKey(const Key('offer-state-line')), findsOneWidget);
+      expect(find.textContaining('only 1 left'), findsOneWidget);
+
+      await tester.pumpWidget(_host(const OfferStateLine(
+        offer: LaunchOffer(limit: 10, claimed: 10, remaining: 0, freeDays: 60),
+        kind: LaunchOfferKind.store,
+      )));
+      expect(find.textContaining('have been claimed'), findsOneWidget);
+
+      await tester.pumpWidget(_host(const OfferStateLine(
+        offer: LaunchOffer(limit: 50, claimed: 3, remaining: 47, freeDays: 60, alreadyClaimed: true),
+        kind: LaunchOfferKind.listing,
+      )));
+      expect(find.textContaining('is claimed'), findsOneWidget);
+
+      // Existing store that missed the claim: says so, with slots left.
+      await tester.pumpWidget(_host(const OfferStateLine(
+        offer: LaunchOffer(limit: 10, claimed: 5, remaining: 5, freeDays: 60),
+        kind: LaunchOfferKind.store,
+        existingStore: true,
+      )));
+      expect(find.textContaining('opened without one'), findsOneWidget);
+
+      // Not configured: silent.
+      await tester.pumpWidget(_host(const OfferStateLine(
+        offer: LaunchOffer(limit: 0, claimed: 0, remaining: 0, freeDays: 60),
+        kind: LaunchOfferKind.store,
+      )));
+      expect(find.byKey(const Key('offer-state-line')), findsNothing);
+    });
+
     testWidgets('store-covered banner explains no fee', (tester) async {
       await tester.pumpWidget(_host(const StoreCoveredBanner(storeName: 'Clanix')));
       expect(find.byKey(const Key('store-covered-banner')), findsOneWidget);

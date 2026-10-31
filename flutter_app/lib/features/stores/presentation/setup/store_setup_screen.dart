@@ -165,7 +165,11 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
       case StoreSetupStep.email:
         return c.email.trim().isEmpty ? 'Skip' : 'Continue';
       case StoreSetupStep.review:
-        return 'Open my store';
+        // Say it on the button itself: with a free slot left and this
+        // user's offer untaken, opening costs nothing.
+        return _storeOffer?.hasSlots == true && _storeOffer?.alreadyClaimed != true
+            ? 'Open my store — free'
+            : 'Open my store';
       default:
         return 'Continue';
     }
@@ -210,8 +214,13 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
         error: _error,
         animateBackground: widget.animateBackground,
         child: Column(children: [
-          if (_index == 0 && _storeOffer != null) ...[
-            LaunchOfferBanner(offer: _storeOffer!, kind: LaunchOfferKind.store),
+          if ((_index == 0 || _step == StoreSetupStep.review) && _storeOffer != null) ...[
+            if (_step == StoreSetupStep.review)
+              // The final check before committing: what opening costs,
+              // stated even when the answer is "the offer has ended".
+              OfferStateLine(offer: _storeOffer, kind: LaunchOfferKind.store)
+            else
+              LaunchOfferBanner(offer: _storeOffer!, kind: LaunchOfferKind.store),
             const SizedBox(height: 16),
           ],
           KeyedSubtree(key: ValueKey(_step), child: _content()),

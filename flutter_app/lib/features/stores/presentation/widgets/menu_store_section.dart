@@ -21,6 +21,9 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/utils/result.dart';
 import '../../../../main.dart' show BrokaColors;
+import '../../../launch_offers/data/launch_offers_repository.dart';
+import '../../../launch_offers/domain/launch_offers.dart';
+import '../../../launch_offers/presentation/launch_offer_widgets.dart';
 import '../../../../screens/start_selling_screen.dart';
 import '../../../../widgets/broka_image.dart';
 import '../../../../widgets/gradient_button.dart';
@@ -55,11 +58,22 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
   Store? _store;
   StoreStats? _stats;
   bool _hasDraft = false;
+  LaunchOffer? _storeOffer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadOffer();
+  }
+
+  Future<void> _loadOffer() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _storeOffer = offers.storeFree),
+      onFailure: (_, __) {},
+    );
   }
 
   Future<void> _load() async {
@@ -141,6 +155,7 @@ class _MenuStoreSectionState extends State<MenuStoreSection> {
         hasDraft: _hasDraft,
         needsBusiness: widget.businessReady == false,
         onStart: _openStoreFlow,
+        storeOffer: _storeOffer,
       );
     }
     return _StoreCard(
@@ -475,12 +490,20 @@ class _SquareAction extends StatelessWidget {
 // ── No store yet ─────────────────────────────────────────────────────────────
 
 class _NoStoreCard extends StatelessWidget {
-  const _NoStoreCard({required this.hasDraft, required this.needsBusiness, required this.onStart});
+  const _NoStoreCard({
+    required this.hasDraft,
+    required this.needsBusiness,
+    required this.onStart,
+    this.storeOffer,
+  });
   final bool hasDraft;
 
   /// Not a business seller yet: the button sets the business up first.
   final bool needsBusiness;
   final VoidCallback onStart;
+
+  /// The free-store launch offer as this user stands with it, when loaded.
+  final LaunchOffer? storeOffer;
 
   static const _benefits = [
     (Icons.link_rounded, 'Your own link - broka.co.ke/store/your-name'),
@@ -542,6 +565,10 @@ class _NoStoreCard extends StatelessWidget {
                 ),
               ]),
             ),
+          if (storeOffer != null && storeOffer!.limit > 0) ...[
+            const SizedBox(height: 2),
+            OfferStateLine(offer: storeOffer, kind: LaunchOfferKind.store),
+          ],
           const SizedBox(height: 6),
           GradientButton(
             height: 46,
@@ -551,7 +578,11 @@ class _NoStoreCard extends StatelessWidget {
             child: Text(
                 needsBusiness
                     ? 'Set up my business'
-                    : (hasDraft ? 'Continue setting up' : 'Open a store'),
+                    : (hasDraft
+                        ? 'Continue setting up'
+                        : (storeOffer?.hasSlots == true && storeOffer?.alreadyClaimed != true
+                            ? 'Open a store — free'
+                            : 'Open a store')),
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14.5)),
           ),
         ]),
