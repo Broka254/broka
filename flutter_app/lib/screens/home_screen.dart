@@ -164,10 +164,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool get _showLaunchHero {
     final offers = _launchOffers;
     if (offers == null) return false;
-    // Mirrors the hero's own rule: show while at least one offer still
-    // has something this viewer can take.
-    bool takeable(LaunchOffer o) => o.hasSlots && o.alreadyClaimed != true;
-    return takeable(offers.listingFree) || takeable(offers.storeFree);
+    // Mirrors the hero's own rule (LaunchOffer.shouldShow): a claimed
+    // offer is gone, not greyed out.
+    return offers.listingFree.shouldShow || offers.storeFree.shouldShow;
   }
 
   Future<void> _openSellFromHero() async {

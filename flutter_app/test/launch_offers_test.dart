@@ -92,12 +92,12 @@ void main() {
       expect(off.shouldShow, isFalse);
     });
 
-    test('already claimed still shows, so the free period is explained', () {
+    test('already claimed disappears everywhere', () {
       const offer = LaunchOffer(
         limit: 10, claimed: 1, remaining: 9, freeDays: 60,
         eligible: false, alreadyClaimed: true, enabled: true,
       );
-      expect(offer.shouldShow, isTrue);
+      expect(offer.shouldShow, isFalse);
       expect(offer.isAvailableForUser, isFalse);
     });
 
@@ -335,11 +335,12 @@ void main() {
       )));
       expect(find.textContaining('have been claimed'), findsOneWidget);
 
+      // A claimed offer disappears instead of lingering as a confirmation.
       await tester.pumpWidget(_host(const OfferStateLine(
         offer: LaunchOffer(limit: 50, claimed: 3, remaining: 47, freeDays: 60, alreadyClaimed: true),
         kind: LaunchOfferKind.listing,
       )));
-      expect(find.textContaining('is claimed'), findsOneWidget);
+      expect(find.byKey(const Key('offer-state-line')), findsNothing);
 
       // Existing store that missed the claim: says so, with slots left.
       await tester.pumpWidget(_host(const OfferStateLine(
@@ -419,18 +420,32 @@ void main() {
       expect(find.textContaining('0 of 50 claimed'), findsNothing);
     });
 
-    testWidgets('claimed offer: calm confirmation, no bar, no CTA', (tester) async {
+    testWidgets('claimed offer vanishes, live one stays', (tester) async {
       await tester.pumpWidget(_host(const LaunchOffersCard(
         offers: LaunchOffers(
           listingFree: LaunchOffer(
             limit: 50, claimed: 3, remaining: 47, freeDays: 60, alreadyClaimed: true),
           storeFree: LaunchOffer(
-            limit: 10, claimed: 10, remaining: 0, freeDays: 60, alreadyClaimed: false),
+            limit: 10, claimed: 1, remaining: 9, freeDays: 60, alreadyClaimed: false),
         ),
       )));
-      expect(find.text('Your free listing — claimed'), findsOneWidget);
-      expect(find.byKey(const Key('launch-offers-progress-listing')), findsNothing);
+      expect(find.byKey(const Key('launch-offers-card')), findsOneWidget);
+      expect(find.text('First 50 listings free'), findsNothing);
       expect(find.text('Post free'), findsNothing);
+      expect(find.text('First 10 online stores free'), findsOneWidget);
+      expect(find.text('Open free'), findsOneWidget);
+    });
+
+    testWidgets('card disappears once both offers are claimed', (tester) async {
+      await tester.pumpWidget(_host(const LaunchOffersCard(
+        offers: LaunchOffers(
+          listingFree: LaunchOffer(
+            limit: 50, claimed: 3, remaining: 47, freeDays: 60, alreadyClaimed: true),
+          storeFree: LaunchOffer(
+            limit: 10, claimed: 1, remaining: 9, freeDays: 60, alreadyClaimed: true),
+        ),
+      )));
+      expect(find.byKey(const Key('launch-offers-card')), findsNothing);
     });
   });
 
@@ -451,8 +466,8 @@ void main() {
         onOpenStore: () => opened = true,
       )));
       expect(find.byKey(const Key('launch-home-hero')), findsOneWidget);
-      expect(find.text('First 50 listings free · 50 left'), findsOneWidget);
-      expect(find.text('First 10 online stores free · 10 left'), findsOneWidget);
+      expect(find.text('First 50 listings free · 60 days · 50 left'), findsOneWidget);
+      expect(find.text('First 10 online stores free · 60 days · 10 left'), findsOneWidget);
       expect(find.byKey(const Key('launch-offers-urgent-pill')), findsNothing);
 
       await tester.tap(find.byKey(const Key('launch-home-post')));
@@ -474,11 +489,12 @@ void main() {
         onPostListing: () {},
         onOpenStore: () {},
       )));
-      expect(find.text('First 50 listings free · 3 left'), findsOneWidget);
+      expect(find.text('First 50 listings free · 60 days · 3 left'), findsOneWidget);
       expect(find.text('Almost gone'), findsOneWidget);
+      expect(find.text('48 launch slots already claimed — yours is still free'), findsOneWidget);
     });
 
-    testWidgets('one claimed, one live: live CTA plus claimed context', (tester) async {
+    testWidgets('one claimed, one live: claimed row vanishes, live CTA stays', (tester) async {
       await tester.pumpWidget(_host(LaunchOfferHomeHero(
         offers: const LaunchOffers(
           listingFree: LaunchOffer(
@@ -490,7 +506,8 @@ void main() {
         onOpenStore: () {},
       )));
       expect(find.byKey(const Key('launch-home-hero')), findsOneWidget);
-      expect(find.text('Your free listing is claimed'), findsOneWidget);
+      expect(find.textContaining('listings free'), findsNothing);
+      expect(find.text('First 10 online stores free · 60 days · 9 left'), findsOneWidget);
       expect(find.byKey(const Key('launch-home-open')), findsOneWidget);
       expect(find.byKey(const Key('launch-home-post')), findsNothing);
     });

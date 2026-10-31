@@ -127,11 +127,12 @@ class LaunchOffer {
   /// offer invisible on every screen — the offer existed only in the API.
   bool get hasSlots => limit > 0 && remaining > 0;
 
-  /// Show the card at all: slots remain (a promotion users can act on by
-  /// posting/opening now), or this user already took it (so they know
-  /// where their free period came from). Only a configured-off offer
-  /// (limit 0) or an exhausted one nobody took stays silent.
-  bool get shouldShow => hasSlots || alreadyClaimed == true;
+  /// Show it at all: slots remain AND this user has not taken theirs.
+  /// A claimed offer disappears instead of lingering as a confirmation —
+  /// one offer per person, and once yours is used there is nothing left
+  /// to act on. Only a configured-off offer (limit 0) or an exhausted
+  /// one stays silent otherwise.
+  bool get shouldShow => hasSlots && alreadyClaimed != true;
 
   factory LaunchOffer.fromJson(Map<String, dynamic> j) => LaunchOffer(
         limit: (j['limit'] as num?)?.toInt() ?? 0,

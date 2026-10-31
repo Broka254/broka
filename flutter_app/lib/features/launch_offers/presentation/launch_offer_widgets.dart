@@ -1,9 +1,9 @@
 // The free-offer banner and the time-left surfaces.
 //
-// One visual language, three jobs:
+// One visual language, two jobs:
 //  * sell the offer before it is taken (scarcity + what is free + one
-//    per user, in plain words, with a real remaining count);
-//  * confirm it once taken (free until a date, no payment due);
+//    per user, in plain words, with a real remaining count) — and vanish
+//    the moment it is taken, everywhere;
 //  * warn before a listing/store goes offline, with the way to renew.
 //
 // Colour is meaning, not decoration: green = free/live, amber = ending,
@@ -36,18 +36,16 @@ class LaunchOfferHomeHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Home is the front door, not the dashboard: a claimed offer with no
-    // CTA is noise here. The hero shows while at least one offer still has
-    // something the viewer can take; a claimed row only ever appears next
-    // to a live one, as context for the remaining CTA.
-    final takeListing = _takeable(offers.listingFree);
-    final takeStore = _takeable(offers.storeFree);
-    if (!takeListing && !takeStore) return const SizedBox.shrink();
-    final showListing = takeListing || offers.listingFree.shouldShow;
-    final showStore = takeStore || offers.storeFree.shouldShow;
+    // Claimed offers are gone here, not greyed out: one per person, and
+    // once yours is used the hero has nothing left to sell you.
+    final showListing = offers.listingFree.shouldShow;
+    final showStore = offers.storeFree.shouldShow;
     if (!showListing && !showStore) return const SizedBox.shrink();
     final urgent = _isLow(offers.listingFree) || _isLow(offers.storeFree);
     final accent = urgent ? BrokaColors.warning : BrokaColors.success;
+    // Social proof, from live counts: slots are per offer, so a seller who
+    // took both counts twice — "slots claimed" stays honest either way.
+    final takenCount = offers.listingFree.claimed + offers.storeFree.claimed;
     return Container(
       key: const Key('launch-home-hero'),
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -80,16 +78,21 @@ class LaunchOfferHomeHero extends StatelessWidget {
                       color: BrokaColors.warning, fontSize: 10.5, fontWeight: FontWeight.w800)),
             ),
         ]),
+        if (takenCount > 0) ...[
+          const SizedBox(height: 3),
+          Text('$takenCount launch slots already claimed — yours is still free',
+              style: const TextStyle(
+                  color: BrokaColors.textMid, fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.3)),
+        ],
         if (showListing) ...[
           const SizedBox(height: 10),
           _HomeHeroRow(
             icon: Icons.sell_rounded,
-            text: offers.listingFree.alreadyClaimed == true
-                ? 'Your free listing is claimed'
-                : 'First ${offers.listingFree.limit} listings free · ${offers.listingFree.remaining} left',
+            text: 'First ${offers.listingFree.limit} listings free · '
+                '${offers.listingFree.freeDays} days · ${offers.listingFree.remaining} left',
             fraction: _fraction(offers.listingFree),
             low: _isLow(offers.listingFree),
-            actionLabel: offers.listingFree.alreadyClaimed == true ? null : 'Post free',
+            actionLabel: 'Post free',
             onAction: onPostListing,
             actionKey: const Key('launch-home-post'),
           ),
@@ -98,12 +101,11 @@ class LaunchOfferHomeHero extends StatelessWidget {
           const SizedBox(height: 8),
           _HomeHeroRow(
             icon: Icons.storefront_rounded,
-            text: offers.storeFree.alreadyClaimed == true
-                ? 'Your free store is claimed'
-                : 'First ${offers.storeFree.limit} online stores free · ${offers.storeFree.remaining} left',
+            text: 'First ${offers.storeFree.limit} online stores free · '
+                '${offers.storeFree.freeDays} days · ${offers.storeFree.remaining} left',
             fraction: _fraction(offers.storeFree),
             low: _isLow(offers.storeFree),
-            actionLabel: offers.storeFree.alreadyClaimed == true ? null : 'Open free',
+            actionLabel: 'Open free',
             onAction: onOpenStore,
             actionKey: const Key('launch-home-open'),
           ),
@@ -188,24 +190,16 @@ class LaunchOfferBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // shouldShow already excludes claimed offers: once yours is used the
+    // banner vanishes instead of lingering as a confirmation.
     if (!offer.shouldShow) return const SizedBox.shrink();
-    final taken = offer.alreadyClaimed == true;
-    final title = taken
-        ? (_isListing ? 'Your free listing is claimed' : 'Your free store setup is claimed')
-        : (_isListing
-            ? 'Post your first listing free'
-            : 'Open your online store free');
-    final body = taken
-        ? 'One launch offer per person — yours is already used. '
-            'Renewals after the free period are paid as usual.'
-        : '${offer.freeDays} days free, no M-Pesa prompt, no card. '
-            'Only ${offer.remaining} of ${offer.limit} '
-            '${_isListing ? 'free listings' : 'free stores'} left — one per person. '
-            '${_isListing ? 'When it is gone, listing is paid.' : 'When they are gone, store setup is paid.'}';
+    final title = _isListing ? 'Post your first listing free' : 'Open your online store free';
+    final body = '${offer.freeDays} days free, no M-Pesa prompt, no card. '
+        'Only ${offer.remaining} of ${offer.limit} '
+        '${_isListing ? 'free listings' : 'free stores'} left — one per person. '
+        '${_isListing ? 'When it is gone, listing is paid.' : 'When they are gone, store setup is paid.'}';
     return Container(
-      key: Key(taken
-          ? 'launch-offer-claimed'
-          : (_isListing ? 'launch-offer-listing' : 'launch-offer-store')),
+      key: Key(_isListing ? 'launch-offer-listing' : 'launch-offer-store'),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: BrokaColors.success.withOpacity(0.09),
@@ -223,17 +217,16 @@ class LaunchOfferBanner extends StatelessWidget {
                     style: const TextStyle(
                         color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800)),
               ),
-              if (!taken)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: BrokaColors.success.withOpacity(0.16),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text('${offer.remaining} left',
-                      style: const TextStyle(
-                          color: BrokaColors.success, fontSize: 11, fontWeight: FontWeight.w800)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: BrokaColors.success.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(20),
                 ),
+                child: Text('${offer.remaining} left',
+                    style: const TextStyle(
+                        color: BrokaColors.success, fontSize: 11, fontWeight: FontWeight.w800)),
+              ),
             ]),
             const SizedBox(height: 4),
             Text(body,
@@ -251,9 +244,10 @@ class LaunchOfferBanner extends StatelessWidget {
 /// claimed-so-far bar and big remaining counts per offer, turning amber
 /// with an "Almost gone" pill at five or fewer left - because a new seller
 /// must never scroll past it wondering where the free offer is.
-/// Each offer keeps its own remaining count and state: a taken or exhausted
-/// offer says so instead of offering a dead button, and five or fewer left
-/// turns the card urgent (amber) instead of calm (green).
+/// Each offer keeps its own remaining count: only takeable offers render —
+/// a claimed offer is gone from the card entirely, and an exhausted one
+/// stays silent. Five or fewer left turns the card urgent (amber) instead
+/// of calm (green).
 class LaunchOffersCard extends StatelessWidget {
   const LaunchOffersCard({
     super.key,
@@ -315,14 +309,10 @@ class LaunchOffersCard extends StatelessWidget {
           _OfferRow(
             icon: Icons.sell_rounded,
             offer: offers.listingFree,
-            title: offers.listingFree.alreadyClaimed == true
-                ? 'Your free listing — claimed'
-                : 'First ${offers.listingFree.limit} listings free',
-            detail: offers.listingFree.alreadyClaimed == true
-                ? 'You have used your one free listing. It stays live for its free period.'
-                : '${offers.listingFree.freeDays} days free · ${offers.listingFree.remaining} of ${offers.listingFree.limit} left · one per person',
+            title: 'First ${offers.listingFree.limit} listings free',
+            detail: '${offers.listingFree.freeDays} days free · ${offers.listingFree.remaining} of ${offers.listingFree.limit} left · one per person',
             scarcityUnit: 'posting',
-            actionLabel: offers.listingFree.alreadyClaimed == true ? null : 'Post free',
+            actionLabel: 'Post free',
             onAction: onPostListing,
             key: const Key('launch-offers-listing-row'),
           ),
@@ -332,14 +322,10 @@ class LaunchOffersCard extends StatelessWidget {
           _OfferRow(
             icon: Icons.storefront_rounded,
             offer: offers.storeFree,
-            title: offers.storeFree.alreadyClaimed == true
-                ? 'Your free store — claimed'
-                : 'First ${offers.storeFree.limit} online stores free',
-            detail: offers.storeFree.alreadyClaimed == true
-                ? 'You have used your one free store setup.'
-                : 'Free setup + ${offers.storeFree.freeDays} days · ${offers.storeFree.remaining} of ${offers.storeFree.limit} left · one per person · listings in a store never pay a listing fee',
+            title: 'First ${offers.storeFree.limit} online stores free',
+            detail: 'Free setup + ${offers.storeFree.freeDays} days · ${offers.storeFree.remaining} of ${offers.storeFree.limit} left · one per person · listings in a store never pay a listing fee',
             scarcityUnit: 'store setup',
-            actionLabel: offers.storeFree.alreadyClaimed == true ? null : 'Open free',
+            actionLabel: 'Open free',
             onAction: onOpenStore,
             key: const Key('launch-offers-store-row'),
           ),
@@ -353,11 +339,6 @@ class LaunchOffersCard extends StatelessWidget {
 /// to say so loudly.
 bool _isLow(LaunchOffer o) =>
     o.alreadyClaimed != true && o.remaining > 0 && o.remaining <= 5;
-
-/// Something the viewer can still take: slots remain and they have not
-/// taken theirs. The Home hero's visibility rule.
-bool _takeable(LaunchOffer o) =>
-    o.hasSlots && o.alreadyClaimed != true;
 
 class _OfferRow extends StatelessWidget {
   const _OfferRow({
@@ -383,9 +364,11 @@ class _OfferRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final taken = offer.alreadyClaimed == true;
+    // Rows only ever render while the offer is takeable (shouldShow);
+    // claimed offers vanish instead of lingering, so there is no taken
+    // state left to draw here.
     final low = _isLow(offer);
-    final last = !taken && offer.remaining == 1;
+    final last = offer.remaining == 1;
     final fraction = offer.limit <= 0
         ? 0.0
         : (offer.claimed / offer.limit).clamp(0.0, 1.0);
@@ -416,35 +399,33 @@ class _OfferRow extends StatelessWidget {
           ),
         ],
       ]),
-      if (!taken) ...[
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: LinearProgressIndicator(
-            key: Key('launch-offers-progress-${scarcityUnit == 'posting' ? 'listing' : 'store'}'),
-            value: fraction,
-            minHeight: 6,
-            backgroundColor: BrokaColors.textHigh.withOpacity(0.10),
-            valueColor: AlwaysStoppedAnimation<Color>(accent),
-          ),
+      const SizedBox(height: 8),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: LinearProgressIndicator(
+          key: Key('launch-offers-progress-${scarcityUnit == 'posting' ? 'listing' : 'store'}'),
+          value: fraction,
+          minHeight: 6,
+          backgroundColor: BrokaColors.textHigh.withOpacity(0.10),
+          valueColor: AlwaysStoppedAnimation<Color>(accent),
         ),
-        const SizedBox(height: 4),
-        Text(
-          last
-              ? 'Last free slot — after this, $scarcityUnit is paid.'
-              : low
-                  ? 'Only ${offer.remaining} left — when they run out, $scarcityUnit is paid.'
-                  : offer.claimed == 0
-                      ? 'Be the first to claim yours'
-                      : '${offer.claimed} of ${offer.limit} claimed',
-          key: Key('launch-offers-scarcity-${scarcityUnit == 'posting' ? 'listing' : 'store'}'),
-          style: TextStyle(
-              color: low ? BrokaColors.warning : BrokaColors.textMid,
-              fontSize: 11.5,
-              fontWeight: low ? FontWeight.w800 : FontWeight.w600,
-              height: 1.3),
-        ),
-      ],
+      ),
+      const SizedBox(height: 4),
+      Text(
+        last
+            ? 'Last free slot — after this, $scarcityUnit is paid.'
+            : low
+                ? 'Only ${offer.remaining} left — when they run out, $scarcityUnit is paid.'
+                : offer.claimed == 0
+                    ? 'Be the first to claim yours'
+                    : '${offer.claimed} of ${offer.limit} claimed',
+        key: Key('launch-offers-scarcity-${scarcityUnit == 'posting' ? 'listing' : 'store'}'),
+        style: TextStyle(
+            color: low ? BrokaColors.warning : BrokaColors.textMid,
+            fontSize: 11.5,
+            fontWeight: low ? FontWeight.w800 : FontWeight.w600,
+            height: 1.3),
+      ),
     ]);
   }
 }
@@ -551,14 +532,9 @@ class OfferStateLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final o = offer;
     if (o == null || o.limit <= 0) return const SizedBox.shrink();
+    // A claimed offer disappears instead of lingering as a confirmation.
+    if (o.alreadyClaimed == true) return const SizedBox.shrink();
     final (icon, color, text) = switch (o) {
-      LaunchOffer(alreadyClaimed: true) => (
-          Icons.verified_rounded,
-          BrokaColors.success,
-          _isListing
-              ? 'Your free listing is claimed — no payment needed for it.'
-              : 'Your free store setup is claimed — no payment needed.',
-        ),
       LaunchOffer(hasSlots: true) when existingStore => (
           Icons.info_outline_rounded,
           BrokaColors.textMid,

@@ -235,8 +235,9 @@ class _MenuScreenState extends State<MenuScreen> {
             tint: BrokaColors.neonGreen,
             title: 'Sell something',
             subtitle: switch (_listingOffer) {
-              LaunchOffer(alreadyClaimed: true) =>
-                'Post a new listing · your free listing is claimed',
+              // Claimed offers vanish: no lingering confirmation, just
+              // the plain action like any other listing post.
+              LaunchOffer(alreadyClaimed: true) => 'Post a new listing',
               LaunchOffer(hasSlots: true, :final remaining, :final freeDays) =>
                 'Post a new listing · free for $freeDays days — $remaining left',
               LaunchOffer(limit: > 0) =>
@@ -250,6 +251,8 @@ class _MenuScreenState extends State<MenuScreen> {
             icon: Icons.sell_outlined,
             title: 'Start selling',
             subtitle: switch (_listingOffer) {
+              LaunchOffer(alreadyClaimed: true) =>
+                'A few items or a whole business - set up in a minute',
               LaunchOffer(hasSlots: true, :final remaining) =>
                 'Your first listing is free — $remaining of the launch listings left',
               _ => 'A few items or a whole business - set up in a minute',
