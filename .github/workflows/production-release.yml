@@ -36,8 +36,6 @@ jobs:
       ENV: production
       BROKA_NATIVE: "off"
 
-    outputs:
-      release_commit: ${{ steps.guard.outputs.release_commit }}
     steps:
       - name: Check out the exact commit that passed CI
         uses: actions/checkout@v4
@@ -74,7 +72,7 @@ jobs:
             echo "Only the generated graphify.md changed after the tested commit; proceeding with tested code."
           fi
           echo "The tested application commit is current: $tested_sha"
-          echo "release_commit=$tested_sha" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_COMMIT=$tested_sha" >> "$GITHUB_ENV"
 
       - name: Validate production secrets and Render target
         shell: bash
@@ -141,7 +139,7 @@ jobs:
             --header "Accept: application/json" \
             --header "Content-Type: application/json" \
             --header "Authorization: Bearer $RENDER_API_KEY" \
-            --data "{\"commitId\":\"$GITHUB_SHA\",\"clearCache\":\"do_not_clear\"}")"
+            --data "{\"commitId\":\"$RELEASE_COMMIT\",\"clearCache\":\"do_not_clear\"}")"
           deploy_id="$(printf '%s' "$response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id") or d.get("deploy",{}).get("id") or "")')"
           if [ -z "$deploy_id" ]; then
             echo "::error::Render accepted no identifiable deployment ID."
@@ -165,7 +163,7 @@ jobs:
             echo "Render deploy status: $status (check $attempt/90)"
             case "$status" in
               live)
-                echo "Render is live on commit $GITHUB_SHA."
+                echo "Render is live on commit $RELEASE_COMMIT."
                 exit 0
                 ;;
               build_failed|pre_deploy_failed|update_failed|canceled)
