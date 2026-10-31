@@ -9,7 +9,6 @@
   reviews and response time, not only visits/views/chats.
 """
 import itertools
-from datetime import date
 
 import pytest
 import pytest_asyncio
@@ -161,6 +160,8 @@ class TestStoreInsightSeries:
             assert key in series, f"missing distinct series: {key}"
             assert isinstance(series[key], list)
             assert all("date" in p for p in series[key])
-        # Today is always present so the chart can plot the current value.
-        today = date.today().isoformat()
-        assert any(p["date"] == today for p in series["rating"])
+        # The window ends on the server's today - a Kenyan calendar day
+        # (stores/stats.py), not the container's - and it is always present
+        # so the chart can plot the current value.
+        end = r.json()["period"]["to"]
+        assert any(p["date"] == end for p in series["rating"])
