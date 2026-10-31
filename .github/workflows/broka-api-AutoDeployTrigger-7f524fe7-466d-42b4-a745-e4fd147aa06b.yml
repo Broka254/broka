@@ -1,13 +1,9 @@
-name: Deploy BROKA API to Azure
+name: Deploy BROKA API to Azure (manual legacy)
 
+# Render is the production API host. Keep this legacy Azure workflow available
+# for an intentional operator-run deployment, but never deploy to Azure on
+# ordinary main-branch pushes.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'backend/**'
-      - '.github/workflows/**'
-
   workflow_dispatch:
 
 jobs:
