@@ -224,6 +224,7 @@ class TestTraderPage:
             await db.commit()
         page = (await client.get(f"/traders/{user_id}")).json()
         assert page["about"] == "Phones and accessories, Nairobi CBD."
+        assert page["phone"] == "+254744001700"
         assert page["member_since"]
         assert page["active_listings"] == 0
         # No reviews is no average, not 0.

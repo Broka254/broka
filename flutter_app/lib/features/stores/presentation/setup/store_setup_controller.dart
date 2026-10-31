@@ -36,8 +36,7 @@ enum StoreSetupStep {
 
 bool isPhysicalOnlyStep(StoreSetupStep step) =>
     step == StoreSetupStep.location ||
-    step == StoreSetupStep.hours ||
-    step == StoreSetupStep.photos;
+    step == StoreSetupStep.hours;
 
 /// The store wizard's and settings pages' picked images, in the app's own
 /// storage until the store is saved (see pickStoreImage).
@@ -263,7 +262,10 @@ class StoreSetupController extends ChangeNotifier {
         // a physical store can serve a county or the whole country too.
         StoreSetupStep.coverage,
         StoreSetupStep.logo,
-        if (storeType == StoreType.physical) StoreSetupStep.photos,
+        // Every store gets photos: a physical shop shows its premises, an
+        // online store its cover and what it sells. Only a physical shop
+        // must have at least one (validate).
+        StoreSetupStep.photos,
         StoreSetupStep.email,
         StoreSetupStep.review,
       ];
@@ -844,9 +846,9 @@ class StoreSetupController extends ChangeNotifier {
       case StoreSetupStep.logo:
         return null;
       case StoreSetupStep.photos:
-        // A physical shop opens with at least one real photo of it. A
-        // virtual store has no premises to photograph, and the server no
-        // longer demands one of it.
+        // A physical shop opens with at least one real photo of it, so
+        // buyers can find it. An online store has no premises to
+        // photograph, so its photos stay optional.
         if (storeType == StoreType.virtual) return null;
         if (photos.isEmpty) return 'Add at least one photo of your shop.';
         return null;

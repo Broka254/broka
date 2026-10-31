@@ -888,9 +888,10 @@ class AuthService:
         """What one user may see of another.
 
         Everything a public surface shows - the chat header, a product's
-        seller block, a profile - and nothing else: no email or phone, no
-        trust score or fraud flag, no admin bit, no language or security
-        settings. [_user_dict] is for the account itself (/auth/me, and
+        seller block, a profile - and nothing else: no email, no trust
+        score or fraud flag, no admin bit, no language or security
+        settings. The phone number is shown so buyers can reach the
+        seller. [_user_dict] is for the account itself (/auth/me, and
         /auth/user/{id} on your own id).
 
         `rating` is the buyer-review average from the reviews themselves,
@@ -918,6 +919,7 @@ class AuthService:
             "rating": review_avg,
             "review_count": review_count,
             "completed_deals": user.completed_deals,
+            "phone": user.phone,
             "is_verified": user.is_verified,
             "profile_photo": user.profile_photo,
             "last_seen": user.last_seen.isoformat() if user.last_seen else None,

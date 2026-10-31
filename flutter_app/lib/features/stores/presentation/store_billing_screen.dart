@@ -441,7 +441,7 @@ class _StoreBillingScreenState extends State<StoreBillingScreen> {
           const CheckoutLabel('Billed every 2 months - how far ahead?'),
           const SizedBox(height: 4),
           const Text(
-            'Prices below are totals for the whole period, with the monthly cost beside them.',
+            'Prices below are totals for the whole period.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 10),
@@ -564,14 +564,14 @@ class _MonthOption extends StatelessWidget {
                                     fontWeight: FontWeight.w800)),
                           ),
                       ]),
-                  // Total first, monthly cost second: the total is what
-                  // leaves the phone, and the per-month figure is what
-                  // stops it reading as a monthly price.
-                  Text(
-                      'KES ${formatKesAmount(period.perMonth.round())}/month'
-                      '${period.savingPercent > 0 ? '  ·  Save ${period.savingPercent}%' : ''}',
-                      key: Key('store-billing-per-month-${period.months}'),
-                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 11.5)),
+                  // The total on the right is what leaves the phone; the
+                  // only figure under the period is what it saves, never a
+                  // monthly price.
+                  if (period.savingPercent > 0)
+                    Text('Save ${period.savingPercent}%',
+                        key: Key('store-billing-save-${period.months}'),
+                        style: const TextStyle(
+                            color: BrokaColors.textMid, fontSize: 11.5)),
                   if (period.setupFee > 0)
                     Text(
                         '+ KES ${formatKesAmount(period.setupFee)} opening fee',

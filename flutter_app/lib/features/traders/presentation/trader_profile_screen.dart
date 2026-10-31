@@ -458,9 +458,11 @@ class _TraderProfileScreenState extends State<TraderProfileScreen> {
 
   Widget _divider() => Container(width: 1, height: 36, color: BrokaColors.border.withOpacity(0.7));
 
-  /// Member since, last seen - small facts as chips.
+  /// Member since, last seen, phone - small facts as chips.
   Widget _facts(Trader trader) {
     final chips = <Widget>[
+      if (trader.phone != null)
+        _chip(Icons.phone_rounded, trader.phone!, color: BrokaColors.neonGreen),
       if (trader.memberSince != null)
         _chip(Icons.event_available_rounded, 'On BROKA since ${_monthYear(trader.memberSince!)}'),
       if (trader.isOnline)

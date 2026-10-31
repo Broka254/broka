@@ -215,6 +215,7 @@ class TradersService:
         seen = user.last_seen
         return {
             "about": (user.business_description or "").strip() or None,
+            "phone": user.phone,
             "member_since": user.created_at.isoformat() if user.created_at else None,
             "active_listings": int(active or 0),
             "review_count": int(review_count),

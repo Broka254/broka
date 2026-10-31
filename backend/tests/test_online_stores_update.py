@@ -51,17 +51,17 @@ class TestDistanceLabels:
 
 
 class TestOnlinePricing:
-    def test_twenty_is_smallest_at_799_for_two_months(self):
+    def test_twenty_is_smallest_at_999_for_two_months(self):
         goods = plans.STORE_RATE_CARDS_BY_ID["goods"]
         assert goods.min_listings == 20
         assert goods.setup_fee == 0
-        assert goods.price(20) == 400
-        assert plans.store_period_prices(400)[0]["total"] == 799
+        assert goods.price(20) == 500
+        assert plans.store_period_prices(500)[0]["total"] == 999
 
-    def test_thirty_is_1099_not_1200(self):
+    def test_thirty_is_1299_not_1300(self):
         goods = plans.STORE_RATE_CARDS_BY_ID["goods"]
-        assert goods.price(30) == 550
-        assert plans.store_period_prices(550)[0]["total"] == 1_099
+        assert goods.price(30) == 650
+        assert plans.store_period_prices(650)[0]["total"] == 1_299
 
     def test_store_periods_are_bi_monthly(self):
         assert sorted(plans.STORE_PERIODS) == [2, 4, 6, 12]

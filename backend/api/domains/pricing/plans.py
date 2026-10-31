@@ -348,10 +348,10 @@ def _slot_cost(category: str) -> float:
     return costs.listing_month_cost(for_category(category).chats_per_month)
 
 
-# VAT included. An online (goods) store is KES 40 a listing per two months:
-# 20 listings (the smallest plan) is 800 -> 799 charmed for two months
-# (400 a month), 30 listings is 550 a month -> 1,099 for two months instead
-# of 1,200, and the per-listing rate keeps falling after that (14 to 100,
+# VAT included. An online (goods) store is KES 50 a listing per two months:
+# 20 listings (the smallest plan) is 1,000 -> 999 charmed for two months
+# (500 a month), 30 listings is 650 a month -> 1,299 for two months instead
+# of 1,300, and the per-listing rate keeps falling after that (14 to 100,
 # 13 to 250 and 13 to 1,000 a month - ~28/26/26 per two months).
 # No opening fee. Car yards and agents start at 2,999 for 10: KES 167-300
 # a car, against ~866 a month for a KABA member's Sunday spot at Jamhuri
@@ -359,7 +359,7 @@ def _slot_cost(category: str) -> float:
 # 10,000 for 20 listings. tests/test_pricing.py checks the margin rule at
 # every size of every card.
 STORE_RATE_CARDS: tuple[StoreRateCard, ...] = (
-    StoreRateCard(id="goods", name="Store", included=20, base_price=400,
+    StoreRateCard(id="goods", name="Store", included=20, base_price=500,
                   bands=((30, 15), (100, 14), (250, 13), (1_000, 13)), max_listings=1_000,
                   min_listings=20, setup_fee=0),
     StoreRateCard(id="vehicles", name="Car yard", included=10, base_price=2_999,

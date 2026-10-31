@@ -684,6 +684,23 @@ void main() {
       c.dispose();
     });
 
+    test('an online store gets the photos step, but its photos stay optional', () async {
+      final backend = FakeBackend({
+        'GET /auth/me': (_) => _json(_owner()),
+        'GET /stores/name-available': (r) => _json({'name': r.url.queryParameters['name'],
+            'available': true}),
+      });
+      final c = StoreSetupController(repository: backend.repo, linkCheckDelay: Duration.zero);
+      await c.load();
+      await pumpEventQueue();
+      c.setStoreType(StoreType.virtual);
+      expect(c.steps, contains(StoreSetupStep.photos),
+          reason: 'online stores can upload a cover and store photos too');
+      expect(c.validate(StoreSetupStep.photos), isNull,
+          reason: 'no premises to photograph, so nothing is demanded');
+      c.dispose();
+    });
+
     test("the server's photo refusal comes back as the photos step", () async {
       final backend = FakeBackend({
         'GET /auth/me': (_) => _json(_owner()),

@@ -296,24 +296,24 @@ class TestPlans:
         per_listing = [p / n for n, p in enumerate(prices, start=card.included)]
         assert all(a >= b for a, b in zip(per_listing, per_listing[1:]))
 
-    def test_an_online_store_is_40_a_listing_per_two_months(self):
-        """KES 40 a listing per two months, 20 listings minimum: 20 is 400
-        a month -> 799 for two months charmed, 30 is 550 a month -> 1,099
-        for two months instead of 1,200, and bigger keeps falling per
+    def test_an_online_store_is_50_a_listing_per_two_months(self):
+        """KES 50 a listing per two months, 20 listings minimum: 20 is 500
+        a month -> 999 for two months charmed, 30 is 650 a month -> 1,299
+        for two months instead of 1,300, and bigger keeps falling per
         listing. No opening fee."""
         goods = plans.STORE_RATE_CARDS_BY_ID["goods"]
         assert goods.min_listings == 20 and goods.setup_fee == 0
-        assert goods.price(20) == 400
+        assert goods.price(20) == 500
         assert goods.plan(10).listings == 20
-        assert goods.price(30) == 400 + 10 * 15 == 550
+        assert goods.price(30) == 500 + 10 * 15 == 650
         two = plans.store_period_prices(goods.price(20))
         assert two[0] == {
-            "months": 2, "total": 799, "per_month": 399.5, "saving_percent": 0.0,
+            "months": 2, "total": 999, "per_month": 499.5, "saving_percent": 0.0,
         }
         thirty_two = plans.store_period_prices(goods.price(30))[0]["total"]
-        assert thirty_two == 1_099
+        assert thirty_two == 1_299
         # Bigger is cheaper per listing, no cliffs.
-        assert goods.price(40) == 550 + 10 * 14 == 690
+        assert goods.price(40) == 650 + 10 * 14 == 790
 
     @pytest.mark.parametrize("card, category, price", [
         ("goods", ELECTRONICS, 20_000),
@@ -479,7 +479,7 @@ class TestPublicEndpoints:
         r = await client.get("/pricing/store-plan", params={"listings": 40})
         assert r.status_code == 200
         plan = r.json()["plan"]
-        assert plan["trade"] == "goods" and plan["listings"] == 40 and plan["monthly_price"] == 690
+        assert plan["trade"] == "goods" and plan["listings"] == 40 and plan["monthly_price"] == 790
         assert plan["periods"][0]["months"] == 2
         yard = (await client.get("/pricing/store-plan",
                                  params={"trade": "vehicles", "listings": 25})).json()["plan"]

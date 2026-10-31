@@ -49,13 +49,13 @@ http.Response _json(Object? body, [int status = 200]) =>
 
 // ── The server's shapes (stores/billing.py, pricing/plans.py) ───────────────
 
-/// The goods card: 400 a month for 20 listings (KES 40 a listing per two
+/// The goods card: 500 a month for 20 listings (KES 50 a listing per two
 /// months), then 15/14/13/13 a listing - and no opening fee.
 Map<String, dynamic> _rateCard() => {
       'id': 'goods',
       'name': 'Goods store',
       'included_listings': 20,
-      'base_price': 400,
+      'base_price': 500,
       'per_listing_bands': [
         {'up_to': 30, 'price': 15},
         {'up_to': 100, 'price': 14},
@@ -68,8 +68,8 @@ Map<String, dynamic> _rateCard() => {
       'setup_fee': 0,
     };
 
-/// store_period_prices() totals for 400, as plans.py rounds them.
-const _totals = {2: 799, 4: 1499, 6: 2109, 12: 3939};
+/// store_period_prices() totals for 500, as plans.py rounds them.
+const _totals = {2: 999, 4: 1879, 6: 2639, 12: 4919};
 
 int _amount(int months) => _totals[months]!;
 
@@ -79,7 +79,7 @@ List<Map<String, dynamic>> _periods() => [
           'months': e.key,
           'total': e.value,
           'per_month': e.value / e.key,
-          'saving_percent': (100 * (1 - e.value / (400 * e.key))).round(),
+          'saving_percent': (100 * (1 - e.value / (500 * e.key))).round(),
           'setup_fee': 0,
           'amount': _amount(e.key),
         },
@@ -88,7 +88,7 @@ List<Map<String, dynamic>> _periods() => [
 Map<String, dynamic> _plan() => {
       'id': 'goods-20',
       'name': 'Goods store, 20 listings',
-      'monthly_price': 400,
+      'monthly_price': 500,
       'listings': 20,
       'periods': _periods(),
     };
@@ -110,7 +110,7 @@ Map<String, dynamic> _billingUnpaid() => {
     };
 
 Map<String, dynamic> _billingActive() => {
-      'active': true, 'plan_id': 'goods-20', 'listings': 20, 'monthly_price': 400,
+      'active': true, 'plan_id': 'goods-20', 'listings': 20, 'monthly_price': 500,
       // Naive UTC, as the backend sends it.
       'paid_until': '2026-12-16T10:00:00', 'setup_fee_paid': true,
     };
@@ -221,7 +221,7 @@ class _BillingBackend extends _Backend {
         polls++;
         return _json({
           'payment_id': 'bp1', 'status': status, 'plan_id': 'goods-20', 'listings': 20,
-          'months': 2, 'amount': 799,
+          'months': 2, 'amount': 999,
           'failure_reason': status == 'failed' ? 'Request cancelled by user' : null,
           'paid_until': status == 'success' ? '2026-12-16T10:00:00' : null,
         });
@@ -333,9 +333,9 @@ void main() {
       expect(q.minListings, 20);
       expect(q.monthsOptions, [2, 4, 6, 12]);
       expect(q.plan!.listings, 20);
-      expect(q.plan!.monthlyPrice, 400);
-      expect(q.plan!.period(2)!.amount, 799, reason: '400 a month for two months');
-      expect(q.plan!.period(6)!.amount, 2109);
+      expect(q.plan!.monthlyPrice, 500);
+      expect(q.plan!.period(2)!.amount, 999, reason: '500 a month for two months');
+      expect(q.plan!.period(6)!.amount, 2639);
       expect(q.plan!.period(6)!.setupFee, 0);
       expect(q.plan!.period(12)!.savingPercent, 18);
     });
@@ -355,12 +355,12 @@ void main() {
       expect(find.textContaining("Buyers can't see Clanix Electronics"), findsOneWidget);
       expect(find.byKey(const Key('store-billing-plan')), findsOneWidget);
       expect(find.text('Goods store · 20 listings'), findsOneWidget);
-      // The period rows show the total charged plus its monthly cost, so
-      // a 2-month total never reads as a monthly price. Any size in one
+      // The period rows show the bimonthly total charged and what each
+      // longer period saves - never a monthly price. Any size in one
       // gesture: type, drag, tap.
       expect(find.text('2 live now'), findsOneWidget);
-      expect(find.byKey(const Key('store-billing-per-month-2')), findsOneWidget);
-      expect(find.textContaining('/month'), findsWidgets);
+      expect(find.byKey(const Key('store-billing-save-4')), findsOneWidget);
+      expect(find.textContaining('/month'), findsNothing);
       expect(find.textContaining('for 2 months'), findsOneWidget);
       expect(find.byKey(const Key('store-billing-size-field')), findsOneWidget);
       expect(find.byKey(const Key('store-billing-size-slider')), findsOneWidget);
@@ -369,12 +369,12 @@ void main() {
           findsOneWidget);
       // Every period is priced; nothing wears a waiver on a fee-free card.
       expect(find.text('Opening fee waived'), findsNothing);
-      expect(find.text('Continue to payment · KES 799'), findsOneWidget);
+      expect(find.text('Continue to payment · KES 999'), findsOneWidget);
 
       await _tap(tester, find.byKey(const Key('store-billing-months-6')));
       await tester.pumpAndSettle();
-      expect(find.text('Continue to payment · KES 2,109'), findsOneWidget);
-      expect(find.text('KES 2,109'), findsOneWidget);
+      expect(find.text('Continue to payment · KES 2,639'), findsOneWidget);
+      expect(find.text('KES 2,639'), findsOneWidget);
     });
 
     testWidgets('dragging the size slider and typing a size both re-price the plan',
@@ -443,7 +443,7 @@ void main() {
       final popped = await _openBilling(tester, backend);
 
       await _toMpesa(tester, '0712 345 678');
-      expect(find.text('Pay KES 799'), findsOneWidget);
+      expect(find.text('Pay KES 999'), findsOneWidget);
       await _tap(tester, find.byKey(const Key('mpesa-pay')));
       await tester.pump();
       expect(find.byKey(const Key('checkout-waiting')), findsOneWidget);

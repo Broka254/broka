@@ -264,6 +264,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     return v == null || v.isEmpty ? null : v;
   }
 
+  /// The seller's phone number, as the API sends it on a public profile
+  /// so buyers can reach them. Null when the profile carries none.
+  String? get _phone {
+    final v = (_profile?['phone'] as String?)?.trim();
+    return v == null || v.isEmpty ? null : v;
+  }
+
   /// From the approximate point, to someone else only: your own distance
   /// from yourself was "0.0 km away".
   double? get _distanceKm =>
@@ -622,6 +629,17 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             if (since != null)
               _chip(Icons.calendar_month_rounded, 'Member since $since', BrokaColors.gold),
           ]),
+          if (_phone != null) ...[
+            const SizedBox(height: 12),
+            Row(key: const Key('profile-phone'), children: [
+              const Icon(Icons.phone_outlined, size: 15, color: BrokaColors.neonGreen),
+              const SizedBox(width: 8),
+              Flexible(child: Text(_phone!,
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.textHigh,
+                      fontSize: 14, fontWeight: FontWeight.w700))),
+            ]),
+          ],
           if (!_isSelf && _listings.isNotEmpty) ...[
             const SizedBox(height: 16),
             _buildListingsButton(),

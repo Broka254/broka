@@ -36,6 +36,10 @@ class Trader {
 
   // The trader's own page only (GET /traders/{id}); defaults on a list card.
   final String? about;
+
+  /// The seller's phone number, so buyers can reach them. Only on the
+  /// trader's own page (GET /traders/{id}); null on list cards.
+  final String? phone;
   final DateTime? memberSince;
   final int? activeListings;
   final int reviewCount;
@@ -58,6 +62,7 @@ class Trader {
     this.distanceKm,
     this.coverUrl,
     this.about,
+    this.phone,
     this.memberSince,
     this.activeListings,
     this.reviewCount = 0,
@@ -83,6 +88,7 @@ class Trader {
         distanceKm: (json['distance_km'] as num?)?.toDouble(),
         coverUrl: (json['cover'] as Map?)?['medium'] as String?,
         about: json['about'] as String?,
+        phone: _nonBlank(json['phone'] as String?),
         memberSince: DateTime.tryParse(json['member_since'] as String? ?? ''),
         activeListings: (json['active_listings'] as num?)?.toInt(),
         reviewCount: (json['review_count'] as num?)?.toInt() ?? 0,
@@ -95,6 +101,13 @@ class Trader {
             TraderStore.fromJson(s as Map<String, dynamic>),
         ],
       );
+}
+
+/// A phone number with nothing but digits and a plus left, or null when
+/// the payload carries none - an empty string is not a number to show.
+String? _nonBlank(String? value) {
+  final trimmed = value?.trim();
+  return trimmed == null || trimmed.isEmpty ? null : trimmed;
 }
 
 class TraderStore {

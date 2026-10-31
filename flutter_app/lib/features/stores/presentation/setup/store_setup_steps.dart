@@ -43,7 +43,7 @@ String stepSubtitle(StoreSetupStep step) => switch (step) {
       StoreSetupStep.logo => 'Optional - a square image works best',
       StoreSetupStep.hours => 'Optional - buyers see when you are open',
       StoreSetupStep.coverage => 'Where you deliver to, and how',
-      StoreSetupStep.photos => 'Required - show buyers your shop',
+      StoreSetupStep.photos => 'Show buyers your store',
       StoreSetupStep.email => 'Optional - where order updates go',
       StoreSetupStep.review => 'Check everything, then open your store',
     };
@@ -507,7 +507,7 @@ class TypeStep extends StatelessWidget {
           'You will add your county, area, opening hours and a photo of the premises.'),
       const SizedBox(height: 12),
       option(StoreType.virtual, Icons.language_rounded,
-          'You will add where you deliver. No shop address, map pin or premises photo needed.'),
+          'You will add where you deliver, plus a cover and store photos. No shop address or map pin needed.'),
       const SizedBox(height: 16),
       const _Hint('You can change this before opening your store, and later in Settings. '
           'Changing it never deletes what you already entered.'),
@@ -1207,10 +1207,15 @@ class PhotosStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // An online store has no premises; its photos are the cover and what
+    // it sells, and they stay optional. A physical shop must show itself.
+    final physical = c.storeType == StoreType.physical;
     final cover = c.cover;
     Future<void> pickCover() async {
       final f = await pickStoreImage(context,
-          hint: 'Your shop front or your best display - it runs across the top of your store.');
+          hint: physical
+              ? 'Your shop front or your best display - it runs across the top of your store.'
+              : 'A wide photo for the top of your store - your products or brand.');
       if (f != null) c.setCover(f);
     }
 
@@ -1224,7 +1229,9 @@ class PhotosStep extends StatelessWidget {
           context,
           alreadyTaken: c.photos.length,
           maxPhotos: StoreSetupController.maxPhotos,
-          hint: 'Your shop front, shelves and team - real photos build trust with buyers.',
+          hint: physical
+              ? 'Your shop front, shelves and team - real photos build trust with buyers.'
+              : 'Your products, packaging or workspace - real photos build trust with buyers.',
           onCaptured: (photo) async {
             final kept = await storeDraftPhotos.keep(photo, moveOriginal: true);
             c.addPhoto(kept);
@@ -1254,7 +1261,9 @@ class PhotosStep extends StatelessWidget {
               ),
       ),
       const SizedBox(height: 24),
-      _label('Shop photos (${c.photos.length} of ${StoreSetupController.maxPhotos})'),
+      _label(physical
+          ? 'Shop photos (${c.photos.length} of ${StoreSetupController.maxPhotos})'
+          : 'Store photos (${c.photos.length} of ${StoreSetupController.maxPhotos})'),
       GridView.count(
         crossAxisCount: 3,
         shrinkWrap: true,
@@ -1273,8 +1282,10 @@ class PhotosStep extends StatelessWidget {
               // the end of the grid.
               onReplace: () async {
                 final f = await pickStoreImage(context,
-                    hint: 'A clearer photo of this part of your shop - it '
-                        'takes the place of this one.');
+                    hint: physical
+                        ? 'A clearer photo of this part of your shop - it '
+                            'takes the place of this one.'
+                        : 'A clearer photo - it takes the place of this one.');
                 if (f != null) c.replacePhoto(i, f);
               },
             ),
@@ -1284,9 +1295,20 @@ class PhotosStep extends StatelessWidget {
         ],
       ),
       const SizedBox(height: 18),
-      const _Hint('Your shop front, shelves, team - photos of a real place build '
-          'trust with buyers who have never visited. At least one photo is '
-          'needed to open your store.'),
+      if (physical) ...[
+        const _Hint(
+            'Use actual photos of your store - your storefront, signboard and '
+            'entrance - so customers can easily find your physical store.',
+            icon: Icons.storefront_rounded),
+        const SizedBox(height: 12),
+        const _Hint('Your shop front, shelves, team - photos of a real place build '
+            'trust with buyers who have never visited. At least one photo is '
+            'needed to open your store.'),
+      ] else ...[
+        const _Hint('Real photos of your products, packaging or workspace build '
+            'trust with buyers who have never ordered from you. Photos are '
+            'optional for online stores - add them any time.'),
+      ],
     ]);
   }
 }
@@ -1519,7 +1541,11 @@ class ReviewStep extends StatelessWidget {
         c.logo != null ? 'Logo' : 'No logo',
         c.cover != null ? 'cover photo' : 'no cover',
         if (c.storeType == StoreType.physical)
-          '${c.photos.length} shop photo${c.photos.length == 1 ? '' : 's'}',
+          '${c.photos.length} shop photo${c.photos.length == 1 ? '' : 's'}'
+        else if (c.photos.isNotEmpty)
+          '${c.photos.length} store photo${c.photos.length == 1 ? '' : 's'}'
+        else
+          'no store photos',
       ].join(', '), StoreSetupStep.logo),
       _row('Business email',
           c.email.trim().isEmpty ? 'None' : '${c.email.trim()}${c.emailVerified ? ' (verified)' : ''}',

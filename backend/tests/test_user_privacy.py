@@ -7,7 +7,8 @@ GET /auth/search and GET /auth/user/{id} returned the full account record
 trust score, fraud flag, admin bit, language and security settings. Search
 also matched on email, so "@gmail" listed who had an account with which
 address. Other people now get AuthService._public_user_dict; the account
-itself still gets everything on its own id.
+itself still gets everything on its own id. The phone number stays public
+on purpose, so a buyer can reach the seller.
 """
 
 import pytest
@@ -65,8 +66,10 @@ async def _register(client, phone, name, email) -> tuple[str, str]:
 # Grace's exact GPS fix. Two decimals is -1.29, 36.82 - about 500 m away.
 GRACE_LAT, GRACE_LNG = -1.28634, 36.81722
 
+# The phone number is intentionally public, so a buyer can reach the
+# seller - it is not in this set.
 PRIVATE_FIELDS = {
-    "email", "email_verified", "phone", "phone_verified", "trust_score",
+    "email", "email_verified", "phone_verified", "trust_score",
     "trust_band", "is_flagged", "is_admin", "preferred_language",
     "biometric_enrolled", "location_visible", "verify_expires_at",
     "dcr_score", "rank_score",
@@ -145,6 +148,7 @@ class TestProfile:
         assert not leaked, f"profile returned {sorted(leaked)} of another user"
         # What the chat header, product page and profile screen do read.
         assert body["name"] == "Grace Akinyi"
+        assert body["phone"] == "+254746661101"
         assert body["completed_deals"] == 4
         assert "is_online" in body and "last_seen_label" in body
         # Social proof for a seller with deals (Volume 2 §2.4) stays public.

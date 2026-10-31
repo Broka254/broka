@@ -8,7 +8,7 @@ What must hold:
     empty, its listings out of the feeds - while its owner keeps every
     screen and sees what is owed;
   * a plan is bought at the rate card's price for its size every 2 months
-    (20 listings minimum, KES 40 a listing per two months, cheaper per
+    (20 listings minimum, KES 50 a listing per two months, cheaper per
     listing as it grows); online stores carry no opening fee, dealer/agent
     cards keep theirs (waived from 6 months), and a callback claiming
     another amount buys nothing;
@@ -321,7 +321,7 @@ class TestPaying:
         assert quote["current"]["setup_fee_paid"] is False
         assert quote["setup_fee"] == 0
         amounts = {p["months"]: p["amount"] for p in quote["plan"]["periods"]}
-        assert amounts == {2: 1_099, 4: 2_069, 6: 2_899, 12: 5_409}
+        assert amounts == {2: 1_299, 4: 2_439, 6: 3_429, 12: 6_399}
         # Below the online minimum and past the card's most: a person prices
         # that, not the app.
         assert (await client.get(f"/stores/{sid}/billing",
@@ -335,8 +335,8 @@ class TestPaying:
         sid = (await _store(client, h))["id"]
         listing = await _listing(client, h, sid, "Phone C")
         started = await _pay(client, h, sid, months=2)
-        assert started["amount"] == 1_099 and started["setup_fee"] == 0
-        assert mpesa.prompts[-1]["amount"] == 1_099
+        assert started["amount"] == 1_299 and started["setup_fee"] == 0
+        assert mpesa.prompts[-1]["amount"] == 1_299
         assert mpesa.prompts[-1]["phone"] == "254712345678"
 
         sub = await _sub(sid)
@@ -352,7 +352,7 @@ class TestPaying:
 
         receipt = next(c for c in (await client.get(
             f"/listings/seller/{uid}/receipts", headers=h)).json()["charges"] if c["kind"] == "store")
-        assert receipt["amount"] == 1_099 and "opening fee" not in receipt["detail"]
+        assert receipt["amount"] == 1_299 and "opening fee" not in receipt["detail"]
 
         # Pause and reopen: only now can the door come back open.
         await client.post(f"/stores/{sid}/status", json={"is_active": False}, headers=h)
@@ -364,8 +364,8 @@ class TestPaying:
         _, h = await _register(client)
         sid = (await _store(client, h))["id"]
         started = await _pay(client, h, sid, months=6)
-        assert started["amount"] == 2_899 and started["setup_fee"] == 0
-        assert mpesa.prompts[-1]["amount"] == 2_899
+        assert started["amount"] == 3_429 and started["setup_fee"] == 0
+        assert mpesa.prompts[-1]["amount"] == 3_429
         sub = await _sub(sid)
         assert sub.setup_fee_paid is True
         assert timedelta(days=179) < sub.paid_until - datetime.utcnow() <= timedelta(days=180)
@@ -378,7 +378,7 @@ class TestPaying:
         first_end = (await _sub(sid)).paid_until
         await _pay(client, h, sid, months=2)
         assert (await _sub(sid)).paid_until - first_end == timedelta(days=60)
-        assert mpesa.prompts[-1]["amount"] == 1_099, "renewal is the plan price alone"
+        assert mpesa.prompts[-1]["amount"] == 1_299, "renewal is the plan price alone"
 
     @pytest.mark.asyncio
     async def test_a_callback_claiming_another_amount_is_refused(self, client, billing_on, mpesa):
@@ -475,10 +475,10 @@ class TestChangingPlans:
         sid = (await _store(client, h))["id"]
         await _pay(client, h, sid, listings=30, months=2)
         started = await _pay(client, h, sid, listings=50, months=2)
-        assert started["amount"] == 1_659 and started["setup_fee"] == 0
+        assert started["amount"] == 1_859 and started["setup_fee"] == 0
         sub = await _sub(sid)
         assert sub.plan_id == "goods-50" and sub.listings == 50
-        # ~60 days of 550 become ~39.8 days of 830, plus the 2 months bought.
+        # ~60 days of 650 become ~41.9 days of 930, plus the 2 months bought.
         left = sub.paid_until - datetime.utcnow()
         assert timedelta(days=90) < left < timedelta(days=112)
 
@@ -556,7 +556,7 @@ class TestGrace:
                                   params={"listings": 30}, headers=h)).json()
         assert quote["setup_fee"] == 0, "online stores carry no opening fee"
         started = await _pay(client, h, sid, months=2)
-        assert started["amount"] == 1_099
+        assert started["amount"] == 1_299
 
     @pytest.mark.asyncio
     async def test_a_store_created_while_billing_is_on_gets_no_grace(
@@ -629,7 +629,7 @@ class TestZetuPay:
         async with AsyncSessionLocal() as db:
             payment = StorePayment(
                 store_id=sid, user_id=uid, plan_id="goods-30", listings=30, months=2,
-                amount=1_099, setup_fee=0, phone="254712345678", status="pending",
+                amount=1_299, setup_fee=0, phone="254712345678", status="pending",
                 provider="zetupay",
             )
             db.add(payment)

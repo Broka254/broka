@@ -232,6 +232,18 @@ void main() {
       expect(find.text('Westlands, Nairobi'), findsOneWidget);
       expect(textIn(tester, const Key('profile-distance')), '~3.4 km away');
     });
+
+    testWidgets("the seller's phone, so a buyer can reach them", (tester) async {
+      backend(profile: _seller(extra: {'phone': '+254712345678'}));
+      await open(tester);
+      expect(find.byKey(const Key('profile-phone')), findsOneWidget);
+      expect(find.text('+254712345678'), findsOneWidget);
+    });
+
+    testWidgets('no phone on the profile means no phone row', (tester) async {
+      await open(tester);
+      expect(find.byKey(const Key('profile-phone')), findsNothing);
+    });
   });
 
   group('your own profile', () {
