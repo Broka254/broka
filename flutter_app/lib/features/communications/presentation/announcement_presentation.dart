@@ -127,8 +127,9 @@ abstract final class AnnouncementPresentation {
   /// "Expires today", "Expires in 3 days · Nov 1, 2026".
   static String? expiryLine(Announcement a, {DateTime? now}) {
     final expiry = a.expiresAt;
-    if (expiry == null || a.isExpired) return null;
+    if (expiry == null) return null;
     final current = now ?? DateTime.now();
+    if (!expiry.isAfter(current.toUtc())) return null;
     final left = expiry.toLocal().difference(current.toLocal());
     if (left.inHours < 1) return 'Expires within the hour';
     if (left.inHours < 24) return 'Expires today · ${timeOfDay(expiry)}';
@@ -141,8 +142,9 @@ abstract final class AnnouncementPresentation {
 
   static bool expiresSoon(Announcement a, {DateTime? now}) {
     final expiry = a.expiresAt;
-    if (expiry == null || a.isExpired) return false;
+    if (expiry == null) return false;
     final current = now ?? DateTime.now();
+    if (!expiry.isAfter(current.toUtc())) return false;
     return expiry.difference(current) < const Duration(days: 3);
   }
 }
