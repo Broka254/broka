@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-295 endpoints served by `backend/main.py`. **Auth** is read from each
+296 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 58, optional 5, public 61, token 4, user 167.
+Counts: admin 58, optional 5, public 61, token 4, user 168.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -280,18 +280,19 @@ Counts: admin 58, optional 5, public 61, token 4, user 167.
 | GET | `/premium/me` | user | `my_premium` (backend/api/domains/premium/router.py:29) |
 | GET | `/premium/payments/{payment_id}` | user | `premium_payment_status` (backend/api/domains/premium/router.py:72) |
 | POST | `/premium/subscribe` | user | `subscribe` (backend/api/domains/premium/router.py:54) |
-| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:194) |
-| GET | `/pricing/launch-offers` | user | `launch_offers` (backend/api/domains/pricing/router.py:67) |
-| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:151) |
-| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:161) |
-| GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:80) |
-| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:132) |
-| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:101) |
-| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:123) |
-| GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:38) |
-| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:168) |
-| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:200) |
-| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:174) |
+| GET | `/pricing/categories` | public | `pricing_categories` (backend/api/domains/pricing/router.py:214) |
+| GET | `/pricing/launch-offers` | user | `launch_offers` (backend/api/domains/pricing/router.py:68) |
+| POST | `/pricing/listing-fee/callback` | public | `listing_fee_callback` (backend/api/domains/pricing/router.py:171) |
+| POST | `/pricing/listing-fee/callback/{secret}` | public | `listing_fee_callback_secured` (backend/api/domains/pricing/router.py:181) |
+| GET | `/pricing/listing-fee/listings/{listing_id}/quote` | user | `listing_quote` (backend/api/domains/pricing/router.py:81) |
+| GET | `/pricing/listing-fee/mine` | user | `my_listings_needing_payment` (backend/api/domains/pricing/router.py:152) |
+| POST | `/pricing/listing-fee/pay` | user | `pay_listing_fee` (backend/api/domains/pricing/router.py:102) |
+| GET | `/pricing/listing-fee/payments/{payment_id}` | user | `listing_fee_payment_status` (backend/api/domains/pricing/router.py:124) |
+| GET | `/pricing/listing-fee/quote` | user | `listing_fee_quote` (backend/api/domains/pricing/router.py:39) |
+| POST | `/pricing/listing-fee/renew-free` | user | `renew_listing_free` (backend/api/domains/pricing/router.py:137) |
+| GET | `/pricing/plans` | public | `pricing_plans` (backend/api/domains/pricing/router.py:188) |
+| GET | `/pricing/safe-payment` | public | `safe_payment_info` (backend/api/domains/pricing/router.py:220) |
+| GET | `/pricing/store-plan` | public | `store_plan` (backend/api/domains/pricing/router.py:194) |
 | GET | `/ready` | public | `ready` (backend/main.py:529) |
 | POST | `/reviews/` | user | `submit_review` (backend/api/domains/reviews/router.py:48) |
 | GET | `/reviews/my-deals` | user | `my_reviewable_deals` (backend/api/domains/reviews/router.py:82) |
