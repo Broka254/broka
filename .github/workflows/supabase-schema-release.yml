@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: broka-supabase-production-schema-release
+  group: broka-production-release
   cancel-in-progress: false
 
 jobs:
