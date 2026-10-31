@@ -20,19 +20,30 @@ Map<String, dynamic> _ann({
   String title = 'Maintenance tonight',
   String severity = 'critical',
   String? readAt,
-}) =>
-    {
-      'id': id,
-      'title': title,
-      'body': 'The app will be down from 2am to 3am EAT.',
-      'communication_type': 'maintenance',
-      'severity': severity,
-      'deep_link': null,
-      'published_at': '2026-10-28T10:00:00Z',
-      'expires_at': '2026-11-02T10:00:00Z',
-      'read_at': readAt,
-      'is_read': readAt != null,
-    };
+  DateTime? publishedAt,
+  DateTime? expiresAt,
+}) {
+  // The card counts down from the wall clock ("Expires in N days" only
+  // while two or more days are left), so fixed 2026 dates turned this
+  // test into a calendar time bomb: from Oct 31 the fixture read
+  // "Expires tomorrow" and the test failed. Ride relative to the run.
+  final now = DateTime.now().toUtc();
+  return {
+    'id': id,
+    'title': title,
+    'body': 'The app will be down from 2am to 3am EAT.',
+    'communication_type': 'maintenance',
+    'severity': severity,
+    'deep_link': null,
+    'published_at':
+        (publishedAt ?? now.subtract(const Duration(days: 3)))
+            .toIso8601String(),
+    'expires_at':
+        (expiresAt ?? now.add(const Duration(days: 5))).toIso8601String(),
+    'read_at': readAt,
+    'is_read': readAt != null,
+  };
+}
 
 Map<String, dynamic> _page(List<Map<String, dynamic>> items) =>
     {'items': items, 'total': items.length, 'limit': 50, 'offset': 0};
@@ -76,15 +87,23 @@ void main() {
   testWidgets('date/time, badge, filters, mark-all-read and delete',
       (tester) async {
     var unread = 1;
+    // One instant for every fixture and expectation: published 3 days
+    // ago ("3d ago"), expiring in 5 ("Expires in ..."), read 4 days ago.
+    final now = DateTime.now().toUtc();
+    final publishedAt = now.subtract(const Duration(days: 3));
+    final expiresAt = now.add(const Duration(days: 5));
+    final readAt = now.subtract(const Duration(days: 4)).toIso8601String();
     setFakeRoute((uri) {
       if (uri.path == '/communications') {
         return _page([
-          _ann(),
+          _ann(publishedAt: publishedAt, expiresAt: expiresAt),
           _ann(
               id: 'comm-2',
               title: 'New M-Pesa limits',
               severity: 'normal',
-              readAt: '2026-10-27T09:00:00Z'),
+              readAt: readAt,
+              publishedAt: publishedAt,
+              expiresAt: expiresAt),
         ]);
       }
       if (uri.path == '/communications/unread-count') {
@@ -114,8 +133,18 @@ void main() {
     expect(tester.takeException(), isNull);
 
     // Full local date + time and relative age are both on the card.
-    expect(find.textContaining('Oct 28, 2026'), findsWidgets);
-    expect(find.textContaining('ago)'), findsWidgets);
+    // The date is derived from the fixture instant above (rendered in
+    // local time, as the card does), never a fixed calendar string.
+    final local = publishedAt.toLocal();
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    expect(
+        find.textContaining(
+            '${months[local.month - 1]} ${local.day}, ${local.year}'),
+        findsWidgets);
+    expect(find.textContaining('3d ago)'), findsWidgets);
     expect(find.textContaining('Expires in'), findsWidgets);
 
     // Filters narrow the feed (before anything is marked read).
