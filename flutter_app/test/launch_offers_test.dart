@@ -124,7 +124,8 @@ void main() {
         'fees_enabled': false,
         'free_listing': true,
         'store_covered': false,
-        'launch_offer': {'eligible': true, 'enabled': true, 'free_days': 60, 'remaining': 7},
+        'launch_offer': {'eligible': true, 'enabled': true, 'limit': 50,
+          'free_days': 60, 'remaining': 7},
         'options': [],
         'recommendation': {},
         'risk': {},
@@ -132,6 +133,7 @@ void main() {
       });
       expect(q.freeListing, isTrue);
       expect(q.launchOffer?.remaining, 7);
+      expect(q.launchOffer?.limit, 50);
       expect(q.launchOffer?.isEnabled, isTrue);
     });
 
@@ -232,6 +234,21 @@ void main() {
       expect(find.textContaining('text you 2 days before'), findsOneWidget);
       await tester.tap(find.byKey(const Key('time-left-renew')));
       expect(renewed, isTrue);
+    });
+
+    testWidgets('a quote offer with a limit sells the slots too', (tester) async {
+      // The sell screen's banner reads the fee quote's smaller offer
+      // object: with the limit riding along, it shows the same scarcity.
+      await tester.pumpWidget(_host(LaunchOfferBanner(
+        offer: LaunchOffer.fromQuoteJson(const {
+          'limit': 50, 'remaining': 7, 'free_days': 60,
+          'eligible': true, 'enabled': false,
+        }),
+        kind: LaunchOfferKind.listing,
+      )));
+      expect(find.byKey(const Key('launch-offer-listing')), findsOneWidget);
+      expect(find.text('7 left'), findsOneWidget);
+      expect(find.textContaining('60 days free'), findsOneWidget);
     });
 
     testWidgets('banner shows while slots remain even with billing off', (tester) async {
@@ -345,6 +362,66 @@ void main() {
       expect(find.textContaining('covered by the store plan'), findsOneWidget);
       // BrokaColors is exercised through the banner's styling.
       expect(BrokaColors.success, isNotNull);
+    });
+  });
+
+  group('offers hero urgency', () {
+    LaunchOffers _offers({required int listingRemaining, required int storeRemaining}) =>
+        LaunchOffers(
+          listingFree: LaunchOffer(
+            limit: 50, claimed: 50 - listingRemaining, remaining: listingRemaining,
+            freeDays: 60, eligible: true, alreadyClaimed: false, enabled: false,
+          ),
+          storeFree: LaunchOffer(
+            limit: 10, claimed: 10 - storeRemaining, remaining: storeRemaining,
+            freeDays: 60, eligible: true, alreadyClaimed: false, enabled: false,
+          ),
+        );
+
+    testWidgets('plenty left: calm card, claimed-so-far bars, no alarm', (tester) async {
+      await tester.pumpWidget(_host(LaunchOffersCard(offers: _offers(
+        listingRemaining: 10, storeRemaining: 9,
+      ))));
+      expect(find.byKey(const Key('launch-offers-card')), findsOneWidget);
+      expect(find.byKey(const Key('launch-offers-urgent-pill')), findsNothing);
+      expect(find.text('40 of 50 claimed'), findsOneWidget);
+      expect(find.text('1 of 10 claimed'), findsOneWidget);
+      final bar = tester.widget<LinearProgressIndicator>(
+          find.byKey(const Key('launch-offers-progress-listing')));
+      expect(bar.value, closeTo(0.8, 0.001));
+    });
+
+    testWidgets('five or fewer left: Almost gone pill and hurry copy', (tester) async {
+      await tester.pumpWidget(_host(LaunchOffersCard(offers: _offers(
+        listingRemaining: 3, storeRemaining: 9,
+      ))));
+      expect(find.byKey(const Key('launch-offers-urgent-pill')), findsOneWidget);
+      expect(find.text('Almost gone'), findsOneWidget);
+      expect(find.text('Only 3 left — when they run out, posting is paid.'), findsOneWidget);
+      final bar = tester.widget<LinearProgressIndicator>(
+          find.byKey(const Key('launch-offers-progress-listing')));
+      expect(bar.value, closeTo(0.94, 0.001));
+    });
+
+    testWidgets('last slot says so', (tester) async {
+      await tester.pumpWidget(_host(LaunchOffersCard(offers: _offers(
+        listingRemaining: 10, storeRemaining: 1,
+      ))));
+      expect(find.text('Last free slot — after this, store setup is paid.'), findsOneWidget);
+    });
+
+    testWidgets('claimed offer: calm confirmation, no bar, no CTA', (tester) async {
+      await tester.pumpWidget(_host(const LaunchOffersCard(
+        offers: LaunchOffers(
+          listingFree: LaunchOffer(
+            limit: 50, claimed: 3, remaining: 47, freeDays: 60, alreadyClaimed: true),
+          storeFree: LaunchOffer(
+            limit: 10, claimed: 10, remaining: 0, freeDays: 60, alreadyClaimed: false),
+        ),
+      )));
+      expect(find.text('Your free listing — claimed'), findsOneWidget);
+      expect(find.byKey(const Key('launch-offers-progress-listing')), findsNothing);
+      expect(find.text('Post free'), findsNothing);
     });
   });
 }

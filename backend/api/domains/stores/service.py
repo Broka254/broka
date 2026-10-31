@@ -242,21 +242,24 @@ class StoreService:
                 await self.db.flush()
                 for name in categories:
                     self.db.add(StoreCategoryLink(store_id=store.id, category=name))
-                if store_billing.enabled():
-                    # Launch offer: the first FREE_STORE_OFFER_LIMIT stores
-                    # set up free, one per user (pricing/launch_offers.py) -
-                    # claimed in this transaction, so a rolled-back create
-                    # (the slug retry below) consumes no slot. A claimed
-                    # store opens live on a free period instead of opening
-                    # unpaid and hidden.
-                    from api.domains.pricing import launch_offers
+                # Launch offer: the first FREE_STORE_OFFER_LIMIT stores
+                # set up free, one per user (pricing/launch_offers.py) -
+                # claimed in this transaction, so a rolled-back create
+                # (the slug retry below) consumes no slot. A claimed
+                # store opens live on a free period. Claiming is not gated
+                # on billing: while billing is off the claim stamps the
+                # 60-day live window (countdown + 2-day SMS) instead of a
+                # fee waiver; an unclaimed store opens with no row, as
+                # before. With billing on, an unclaimed store opens with
+                # its own unpaid subscription row instead.
+                from api.domains.pricing import launch_offers
 
-                    claim = await launch_offers.claim_store_offer(
-                        self.db, owner_id, store.id)
-                    if claim is not None:
-                        store_billing.grant_free_store_period(self.db, store, claim)
-                    else:
-                        store_billing.create_unpaid_subscription(self.db, store.id)
+                claim = await launch_offers.claim_store_offer(
+                    self.db, owner_id, store.id)
+                if claim is not None:
+                    store_billing.grant_free_store_period(self.db, store, claim)
+                elif store_billing.enabled():
+                    store_billing.create_unpaid_subscription(self.db, store.id)
                 await self.db.commit()
             except IntegrityError:
                 # The only unique constraint on this table is slug: someone
@@ -1839,6 +1842,14 @@ class StoreService:
                 billing_state = store_billing.state_for(billing_sub)
             elif not store_billing.is_live(billing_sub):
                 active = False
+        elif owner_view:
+            # A launch-offer store carries a free-period subscription row
+            # even while billing is off (service.create_store claims
+            # regardless of the switch). The owner's own payload must show
+            # that row's real countdown, not "No expiry". `billing` itself
+            # stays null - the billing screens are hidden while off.
+            billing_sub = (billing_subs.get(store.id) if billing_subs is not None
+                           else await store_billing.subscription_for(self.db, store.id))
 
         store_type_public = store.store_type or DEFAULT_STORE_TYPE
         distance_km, distance_approximate = self._store_distance(

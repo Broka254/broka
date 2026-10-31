@@ -88,12 +88,17 @@ _SETTINGS_USERS = (
     "api.core.zetupay", "api.domains.payments.service",
     "api.domains.listings.service", "api.domains.pricing.payments",
     "api.domains.pricing.service", "api.domains.pricing.router",
+    "api.domains.pricing.launch_offers",
     "api.domains.premium.entitlements", "api.domains.premium.payments",
     "api.domains.premium.router",
 )
 
 
 def _settings(monkeypatch, **changes):
+    # Fee mechanics in isolation: the launch offer is off here (its
+    # interplay with paying lives in test_launch_offers.py).
+    changes.setdefault("free_listing_offer_limit", 0)
+    changes.setdefault("free_store_offer_limit", 0)
     patched = dataclasses.replace(settings, **changes)
     for module in _SETTINGS_USERS:
         monkeypatch.setattr(f"{module}.settings", patched)

@@ -144,9 +144,11 @@ class LaunchOffer {
         enabled: j['enabled'] as bool?,
       );
 
-  /// The listing-fee quote's smaller `launch_offer` object.
+  /// The listing-fee quote's smaller `launch_offer` object. The server
+  /// rides the offer's `limit` along so the sell screen's banner can say
+  /// "only X of 50 left" from the quote alone.
   factory LaunchOffer.fromQuoteJson(Map<String, dynamic> j) => LaunchOffer(
-        limit: 0,
+        limit: (j['limit'] as num?)?.toInt() ?? 0,
         claimed: 0,
         remaining: (j['remaining'] as num?)?.toInt() ?? 0,
         freeDays: (j['free_days'] as num?)?.toInt() ?? 0,

@@ -447,7 +447,9 @@ class ListingService:
         # With listing fees on, a new listing waits, hidden, for its first
         # payment (pricing/payments.py): paid_until == created_at is how
         # "never paid" reads (listings/paid.py). Created while fees are off,
-        # it stays free - paid_until NULL - even after they are switched on.
+        # it still gets a launch window (below) instead of a NULL that never
+        # expires - every listing carries a real deadline, so "No expiry"
+        # never describes a listing that actually goes offline.
         # A seller's first FREE_LISTINGS_PER_SELLER listings are posted free
         # (pricing/service.free_listings_left).
         awaiting_fee = settings.listing_fees_enabled and fee_applies(listing)
@@ -485,15 +487,32 @@ class ListingService:
             # Claimed here - after the flush, so the claim binds the real
             # listing id, and inside this transaction, so a rolled-back
             # create consumes no slot. Store listings and auctions never
-            # reach here as awaiting_fee (fee_applies), and a founding-free
-            # listing already went live above without burning a slot.
-            if awaiting_fee:
+            # qualify (fee_applies), and a founding-free listing already
+            # went live above without burning a slot.
+            #
+            # While fees are off there is no awaiting-fee branch, but the
+            # launch window still applies: a claimed listing goes live on
+            # the claim's 60 days, and any other personal listing goes
+            # live on a plain launch window of the same length (no slot
+            # burned). Either way the listing carries a real deadline -
+            # the countdown and the 2-day SMS read paid_until, never a
+            # switch - instead of "No expiry".
+            if (awaiting_fee
+                    or (not settings.listing_fees_enabled
+                        and listing.paid_until is None)) \
+                    and fee_applies(listing):
                 from api.domains.pricing import launch_offers
 
                 claim = await launch_offers.claim_listing_offer(
                     self.db, seller_id, listing.id)
                 if claim is not None:
                     listing.paid_until = claim.expires_at
+                    awaiting_fee = False
+                elif not settings.listing_fees_enabled:
+                    listing.paid_until = (
+                        datetime.utcnow()
+                        + timedelta(days=settings.free_listing_offer_days)
+                    )
                     awaiting_fee = False
             # An auction listing gets its lifecycle record here, at
             # creation, rather than being conjured by whatever places the

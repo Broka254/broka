@@ -77,6 +77,15 @@ class ListingFeeRepository {
       ListingFeePayment.fromJson(
           await _client.get('/pricing/listing-fee/payments/$paymentId') as Map<String, dynamic>));
 
+  /// Extends one owned listing's window by one launch window, free.
+  /// Only works while listing fees are off (the server refuses otherwise);
+  /// the way back for a window that ran out before billing started.
+  Future<Result<RenewFreeResult>> renewFree({required String listingId}) =>
+      _guard(() async => RenewFreeResult.fromJson(await _client.post(
+            '/pricing/listing-fee/renew-free',
+            {'listing_id': listingId},
+          ) as Map<String, dynamic>));
+
   /// The seller's listings buyers can't see until paid, or soon won't.
   Future<Result<List<ListingAwaitingFee>>> awaitingPayment() => _guard(() async {
         final data = await _client.get('/pricing/listing-fee/mine') as Map<String, dynamic>;

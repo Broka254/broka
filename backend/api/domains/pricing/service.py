@@ -241,9 +241,12 @@ async def listing_fee_quote(
 
     launch_eligible = bool(new_listing and await launch_offers.peek_listing_offer(db, user_id))
     result["launch_offer"] = {
+        # `limit` rides along so the sell screen's banner can say "only X
+        # of 50 left" from the quote alone, without a second round trip.
         "eligible": launch_eligible,
         "enabled": bool(settings.listing_fees_enabled
                         and settings.free_listing_offer_limit > 0),
+        "limit": settings.free_listing_offer_limit,
         "free_days": settings.free_listing_offer_days,
         "remaining": (await launch_offers.status(
             db, LaunchOfferType.LISTING_FREE)).remaining,

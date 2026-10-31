@@ -198,6 +198,32 @@ class ListingFeeQuote {
   bool get pricedOnOwnRecord => completedDeals > 0 && ownRecordShare >= 0.5;
 }
 
+/// A free renewal while listing fees are off
+/// (POST /pricing/listing-fee/renew-free): one more launch window, no money.
+class RenewFreeResult {
+  const RenewFreeResult({
+    required this.listingId,
+    this.paidUntil,
+    this.state,
+    this.timeLeft,
+  });
+
+  final String listingId;
+  final DateTime? paidUntil;
+  final FeeState? state;
+  final TimeLeft? timeLeft;
+
+  factory RenewFreeResult.fromJson(Map<String, dynamic> j) {
+    final until = j['paid_until'] as String?;
+    return RenewFreeResult(
+      listingId: j['listing_id'] as String? ?? '',
+      paidUntil: until == null ? null : DateTime.tryParse('${until}Z')?.toLocal(),
+      state: FeeState.fromJson(j['listing_fee']),
+      timeLeft: TimeLeft.fromPayload(j),
+    );
+  }
+}
+
 /// A payment's progress (GET /pricing/listing-fee/payments/{id}).
 class ListingFeePayment {
   const ListingFeePayment({

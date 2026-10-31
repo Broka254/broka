@@ -24,6 +24,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../widgets/motion_widgets.dart';
+import '../widgets/broka_image.dart';
 import '../widgets/collapsing_screen_header.dart';
 import '../widgets/constellation_background.dart';
 import '../widgets/axis_line_chart.dart';
@@ -2223,6 +2224,58 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     ]),
   );
 
+  /// The listing's actual photo, same 46dp tile the category icon filled -
+  /// like the inbox's listing image, not a replacement for it. The backend's
+  /// `cover` already encodes the card choice (the showcase when there is
+  /// one, else the first photo); stored asset photos, the showcase URL and
+  /// legacy base64 follow, in that order. Anything missing or unreadable
+  /// falls back to the category emoji, which is also what a listing with no
+  /// photo at all shows.
+  Widget _buildProductThumb(Listing l) {
+    String? primary;
+    final fallbacks = <String?>[];
+    final cover = l.cover;
+    if (cover != null) {
+      primary = cover.thumb;
+      fallbacks.addAll([cover.medium, cover.large]);
+    }
+    if (primary == null && l.photos.isNotEmpty) {
+      primary = l.photos.first.thumb;
+      fallbacks.addAll([l.photos.first.medium, l.photos.first.large]);
+    }
+    primary ??= l.showcaseImageUrl;
+    if (primary == null) {
+      final legacy = (l.verifiedPhotos ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (legacy.isNotEmpty) {
+        primary = legacy.first;
+        fallbacks.addAll(legacy.skip(1));
+      }
+    }
+    return Container(
+      key: Key('product-thumb-${l.id}'),
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+          color: BrokaColors.gold.withOpacity(0.11),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: BrokaColors.gold.withOpacity(0.20))),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(11),
+        child: BrokaImage(
+          primary,
+          fallbacks: fallbacks,
+          width: 46,
+          height: 46,
+          placeholder: Center(child: Text(l.emoji, style: const TextStyle(fontSize: 22))),
+        ),
+      ),
+    );
+  }
+
   Widget _buildProductCard(Listing l) {
     final isExpanded = _expanded[l.id] ?? false;
     final label      = _dealLabel(l);
@@ -2268,12 +2321,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
               child: Row(children: [
-                Container(width: 46, height: 46,
-                  decoration: BoxDecoration(
-                    color: BrokaColors.gold.withOpacity(0.11),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: BrokaColors.gold.withOpacity(0.20))),
-                  child: Center(child: Text(l.emoji, style: const TextStyle(fontSize: 22)))),
+                _buildProductThumb(l),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(l.name, style: const TextStyle(

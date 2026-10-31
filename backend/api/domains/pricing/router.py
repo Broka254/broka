@@ -2,6 +2,7 @@
 
   GET  /pricing/listing-fee/quote                    price a listing before it exists
   GET  /pricing/listing-fee/listings/{id}/quote      price one of your listings (pay or renew)
+  POST /pricing/listing-fee/renew-free               extend one window, free (fees off only)
   POST /pricing/listing-fee/pay                      send the M-Pesa prompt
   GET  /pricing/listing-fee/payments/{id}            how that payment stands
   GET  /pricing/listing-fee/mine                     your listings waiting for payment
@@ -126,6 +127,25 @@ async def listing_fee_payment_status(
     db: AsyncSession = Depends(get_db),
 ):
     return await payments.payment_status(db, current_user["id"], payment_id)
+
+
+class RenewFreeIn(BaseModel):
+    listing_id: str = Field(..., max_length=64)
+
+
+@router.post("/listing-fee/renew-free")
+async def renew_listing_free(
+    body: RenewFreeIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extend one owned listing's live window by one launch window, free.
+
+    Only while listing fees are off - the way back for a launch window
+    that ran out before billing started. With fees on, renewals go
+    through POST /pricing/listing-fee/pay.
+    """
+    return await payments.renew_free(db, current_user["id"], body.listing_id)
 
 
 @router.get("/listing-fee/mine")

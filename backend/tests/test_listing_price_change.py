@@ -215,11 +215,15 @@ class TestRaiseAndPaidTime:
         h = await _seller()
         listing = await _listing(client, h)
         await _shown_for_days(listing["id"])
+        window = (await _get(listing["id"])).paid_until
+        # Every listing carries a launch window now (never "No expiry"):
+        # the raise must cost nothing, i.e. leave that window alone.
+        assert window is not None
 
         r = await _price(client, h, listing["id"], 25000)
 
         assert r.status_code == 200, r.text
-        assert (await _get(listing["id"])).paid_until is None
+        assert (await _get(listing["id"])).paid_until == window
 
 
 class TestShortenedPaidUntil:

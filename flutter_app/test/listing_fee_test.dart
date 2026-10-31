@@ -349,6 +349,87 @@ void main() {
     });
   });
 
+  group('Free renewal while fees are off', () {
+    Map<String, dynamic> expiredQuote() {
+      final q = _quote(feesEnabled: false);
+      final past = DateTime.now().subtract(const Duration(days: 1)).toIso8601String();
+      q['listing_fee'] = {
+        'status': 'expired', 'live': false, 'paid_until': past, 'needs_payment': true};
+      return q;
+    }
+
+    ListingFeeRepository renewBackend({bool fail = false}) =>
+        ListingFeeRepository(client: ApiClient(client: MockClient((req) async {
+          final path = req.url.path;
+          if (path.endsWith('/quote')) return _json(expiredQuote());
+          if (path == '/pricing/listing-fee/renew-free') {
+            if (fail) return _json({'detail': 'Too early to renew'}, 409);
+            final future = DateTime.now().add(const Duration(days: 60)).toIso8601String();
+            return _json({
+              'listing_id': 'l1',
+              'paid_until': future,
+              'listing_fee': {'status': 'live', 'live': true,
+                'paid_until': future, 'needs_payment': false},
+              'time_left': {'status': 'live', 'label': '60d 0h left',
+                'seconds_left': 5184000, 'is_expiring_soon': false},
+            });
+          }
+          return _json({'detail': 'Not found'}, 404);
+        })));
+
+    Future<void> openRenew(WidgetTester tester, ListingFeeRepository repository,
+        {required void Function(bool? popped) onPop}) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(disableAnimations: true),
+          child: child!,
+        ),
+        home: Builder(
+            builder: (ctx) => ElevatedButton(
+                  onPressed: () async => onPop(await Navigator.of(ctx).push<bool>(
+                      MaterialPageRoute(
+                          builder: (_) => ListingFeeScreen(
+                              listingId: 'l1', listingName: 'Plot', repository: repository)))),
+                  child: const Text('go'),
+                )),
+      ));
+      await _tap(tester, find.text('go'));
+      await tester.pumpAndSettle();
+    }
+
+    test('renew-free parses the extended window', () async {
+      final r = await renewBackend().renewFree(listingId: 'l1');
+      expect(r.isSuccess, isTrue);
+      expect(r.data.paidUntil, isNotNull);
+      expect(r.data.state?.status, 'live');
+      expect(r.data.timeLeft?.label, '60d 0h left');
+    });
+
+    testWidgets('an expired window offers a free renewal that pops paid', (tester) async {
+      bool? popped;
+      await openRenew(tester, renewBackend(), onPop: (p) => popped = p);
+      expect(find.text('Your listing is offline'), findsOneWidget);
+      expect(find.byKey(const Key('fee-renew-free')), findsOneWidget);
+      await _tap(tester, find.text('Renew free'));
+      await tester.pumpAndSettle();
+      expect(popped, isTrue);
+      expect(find.text('go'), findsOneWidget);
+    });
+
+    testWidgets('a refused renewal says so and stays', (tester) async {
+      bool? popped;
+      await openRenew(tester, renewBackend(fail: true), onPop: (p) => popped = p);
+      await _tap(tester, find.text('Renew free'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(popped, isNull);
+      expect(find.byKey(const Key('fee-renew-free')), findsOneWidget);
+    });
+  });
+
   group('Waiting for payment', () {
     Map<String, dynamic> awaiting(String id, String status) => {
           'id': id, 'name': 'Calculator $id', 'price': 1500,

@@ -11,10 +11,18 @@ Eligibility, beyond the global limit:
     first is deleted (the per-user unique index, checked here for a clean
     answer instead of an IntegrityError);
   * personal listings only - a store listing is already covered by its
-    store's plan and must not burn a launch slot (listings/paid.fee_applies);
-  * only while the matching billing switch is on. With listing fees off
-    every listing is free anyway; consuming slots then would spend the
-    launch offer on a period when nobody needed it.
+    store's plan and must not burn a launch slot (listings/paid.fee_applies).
+
+Claims are NOT gated on the billing switches. While fees are off every
+listing is free anyway, but the claim still matters: it stamps the
+listing's/store's 60-day live window (paid_until), which is what the
+countdown, the "goes offline" date and the 2-day SMS all read. Gating on
+the switches left the offer inert until billing day - counts frozen at
+50/10, every listing on "No expiry", no SMS ever firing - which is exactly
+the dead launch this module exists to prevent. A claim made while billing
+is off buys visibility window, not a fee waiver; when billing turns on,
+unclaimed listings keep their grandfathered free status and claimed ones
+renew normally.
 
 `peek_*` answers "would this qualify?" for quotes and badges without
 consuming anything. `claim_*` is the only writer, called by the creation
@@ -103,9 +111,9 @@ async def status(db: AsyncSession, offer_type: str,
     return OfferStatus(offer_type, limit, await _claimed_count(db, offer_type), days)
 
 
-async def _peek(db: AsyncSession, offer_type: str, user_id: str, enabled: bool) -> bool:
+async def _peek(db: AsyncSession, offer_type: str, user_id: str) -> bool:
     limit, _ = _limit_and_days(offer_type)
-    if not enabled or limit <= 0:
+    if limit <= 0:
         return False
     if await _user_claim(db, offer_type, user_id) is not None:
         return False
@@ -113,21 +121,19 @@ async def _peek(db: AsyncSession, offer_type: str, user_id: str, enabled: bool) 
 
 
 async def peek_listing_offer(db: AsyncSession, user_id: str) -> bool:
-    """Would this seller's next PERSONAL listing post free? Never claims."""
-    return await _peek(db, LaunchOfferType.LISTING_FREE, user_id,
-                       settings.listing_fees_enabled)
+    """Would this seller's next PERSONAL listing take a launch slot? Never claims."""
+    return await _peek(db, LaunchOfferType.LISTING_FREE, user_id)
 
 
 async def peek_store_offer(db: AsyncSession, user_id: str) -> bool:
-    return await _peek(db, LaunchOfferType.STORE_FREE, user_id,
-                       settings.store_billing_enabled)
+    return await _peek(db, LaunchOfferType.STORE_FREE, user_id)
 
 
 async def _claim(db: AsyncSession, offer_type: str, user_id: str,
-                 entity_id: str, enabled: bool,
+                 entity_id: str,
                  now: datetime) -> Optional[LaunchOfferClaim]:
     limit, days = _limit_and_days(offer_type)
-    if not enabled or limit <= 0:
+    if limit <= 0:
         return None
     if await _user_claim(db, offer_type, user_id) is not None:
         return None
@@ -158,13 +164,13 @@ async def claim_listing_offer(db: AsyncSession, user_id: str, listing_id: str,
                               now: Optional[datetime] = None) -> Optional[LaunchOfferClaim]:
     """Take a free-listing slot for `listing_id`, in the caller's transaction."""
     return await _claim(db, LaunchOfferType.LISTING_FREE, user_id, listing_id,
-                        settings.listing_fees_enabled, now or datetime.utcnow())
+                        now or datetime.utcnow())
 
 
 async def claim_store_offer(db: AsyncSession, user_id: str, store_id: str,
                             now: Optional[datetime] = None) -> Optional[LaunchOfferClaim]:
     return await _claim(db, LaunchOfferType.STORE_FREE, user_id, store_id,
-                        settings.store_billing_enabled, now or datetime.utcnow())
+                        now or datetime.utcnow())
 
 
 async def claim_for_entity(db: AsyncSession, offer_type: str,

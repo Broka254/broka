@@ -3,6 +3,14 @@ import os
 
 import pytest
 
+# The suite is the "test" environment, wherever it runs: CI sets ENV=test
+# in the workflow, and this setdefault covers every other runner (a dev
+# shell almost never exports ENV). Without it the settings load as
+# development, the production rate limits apply (3 OTP requests per 5 min
+# from one loopback IP across hundreds of tests), and most of the suite
+# 429s - surfacing as missing debug_code fields, not as rate limiting.
+# An explicitly exported ENV still wins over this default.
+os.environ.setdefault("ENV", "test")
 # Production runs with IN_APP_PAYMENTS_ENABLED off for now, but the escrow
 # machinery it pauses is what most of this suite tests - and what comes back
 # when an escrow provider works. Set before any test imports the settings;

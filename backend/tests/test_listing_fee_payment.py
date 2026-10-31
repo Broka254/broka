@@ -8,7 +8,8 @@ What must hold:
   * a payment is applied once, however many times Safaricom calls back or
     the app polls;
   * renewing extends from the end of the paid time, never past six months;
-  * with fees off, nothing changes for anyone.
+  * with fees off, a new listing goes live on a launch window instead of
+    "No expiry" - visible and announced, still with nothing to pay.
 """
 import dataclasses
 import uuid
@@ -54,9 +55,15 @@ async def client():
 
 
 def _settings(monkeypatch, **changes):
+    # Fee mechanics in isolation: the launch offer is off here (its
+    # interplay with paying lives in test_launch_offers.py). Every module
+    # must see the same world, launch_offers included.
+    changes.setdefault("free_listing_offer_limit", 0)
+    changes.setdefault("free_store_offer_limit", 0)
     patched = dataclasses.replace(settings, **changes)
     for module in ("api.domains.listings.service", "api.domains.pricing.payments",
-                   "api.domains.pricing.service", "api.domains.pricing.router"):
+                   "api.domains.pricing.service", "api.domains.pricing.router",
+                   "api.domains.pricing.launch_offers"):
         monkeypatch.setattr(f"{module}.settings", patched)
 
 
@@ -164,7 +171,10 @@ class TestFeesOff:
     async def test_a_listing_goes_live_as_it_always_has(self, client, announced):
         _, h = await _user()
         listing = await _listing(client, h)
-        assert listing["listing_fee"]["status"] == "free"
+        # On a launch window now (claimed or plain), never "No expiry" -
+        # but still live, visible and announced, with nothing charged.
+        assert listing["listing_fee"]["status"] in ("live", "ending")
+        assert listing["paid_until"] is not None
         assert await _in_feed(client, listing["id"])
         assert [e.listing_id for e in announced] == [listing["id"]]
 

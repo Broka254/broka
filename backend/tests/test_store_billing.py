@@ -69,11 +69,19 @@ async def client():
 
 
 def _patch_billing(monkeypatch, **overrides):
+    # Store billing mechanics in isolation: the launch offer is off here
+    # (its interplay with stores lives in test_launch_offers.py). Every
+    # module must see the same world, launch_offers included - otherwise
+    # store creation claims real slots and opens on free periods where
+    # these tests expect unpaid, dark stores.
+    overrides.setdefault("free_listing_offer_limit", 0)
+    overrides.setdefault("free_store_offer_limit", 0)
     patched = dataclasses.replace(
         settings, store_billing_enabled=True, mpesa_callback_secret=SECRET, **overrides)
     for module in ("api.domains.stores.billing", "api.domains.stores.router",
                    "api.domains.stores.service", "api.domains.listings.paid",
-                   "api.domains.listings.service"):
+                   "api.domains.listings.service",
+                   "api.domains.pricing.launch_offers"):
         monkeypatch.setattr(f"{module}.settings", patched)
     return patched
 
@@ -523,6 +531,12 @@ class TestGrace:
     async def test_stores_that_predate_billing_get_grace_but_owe_the_opening(
             self, client, monkeypatch, mpesa):
         await _forget_grace_round()
+        # Grace is for stores with no paid time at all: this one must open
+        # rowless, so the launch offer stays off for its creation (a
+        # claimed free period would already be paid time needing no grace).
+        monkeypatch.setattr(
+            "api.domains.pricing.launch_offers.settings",
+            dataclasses.replace(settings, free_store_offer_limit=0))
         _, h = await _register(client)
         sid = (await _store(client, h))["id"]  # created while billing was off
 

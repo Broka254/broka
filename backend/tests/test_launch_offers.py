@@ -359,6 +359,142 @@ async def test_expiry_sms_no_phone_claims_period_without_sending(client, monkeyp
     assert fake.sent == [] and len(rows) == 1
 
 
+# ── Launch windows while billing is off (the production state) ─────────────
+
+def _fees_off(monkeypatch):
+    """Billing switches off, generous offer limits: the launch as shipped."""
+    return _patch(monkeypatch, listing_fees_enabled=False, store_billing_enabled=False,
+                  in_app_payments_enabled=False, free_listings_per_seller=0,
+                  founding_seller_tiers=(), free_listing_offer_limit=99,
+                  free_store_offer_limit=99, free_listing_offer_days=60,
+                  free_store_offer_days=60)
+
+
+@pytest.mark.asyncio
+async def test_fees_off_listings_get_windows_and_claims_still_move(client, monkeypatch):
+    _fees_off(monkeypatch)
+    _, headers = await _user()
+    before = (await client.get("/pricing/launch-offers", headers=headers)).json()
+    assert before["listing_free"]["enabled"] is False  # billing off, honestly reported
+
+    first = await _listing(client, headers)
+    # A launch slot was claimed even with fees off: a real 60-day window,
+    # not "No expiry".
+    assert first["listing_fee"]["status"] in ("live", "ending")
+    assert first["paid_until"] is not None
+    assert abs((datetime.fromisoformat(first["paid_until"])
+                - datetime.utcnow()).days - 60) <= 1
+    assert first["time_left_label"].endswith("left")
+    after = (await client.get("/pricing/launch-offers", headers=headers)).json()
+    assert after["listing_free"]["remaining"] == before["listing_free"]["remaining"] - 1
+
+    # One per user: the second listing burns no slot, but still goes live
+    # on a plain window instead of "No expiry".
+    second = await _listing(client, headers)
+    assert second["listing_fee"]["status"] in ("live", "ending")
+    assert second["paid_until"] is not None
+    same = (await client.get("/pricing/launch-offers", headers=headers)).json()
+    assert same["listing_free"]["remaining"] == after["listing_free"]["remaining"]
+    async with AsyncSessionLocal() as db:
+        mine = (await db.execute(select(LaunchOfferClaim).where(
+            LaunchOfferClaim.offer_type == LaunchOfferType.LISTING_FREE,
+            LaunchOfferClaim.entity_id.in_([first["id"], second["id"]])))).scalars().all()
+    assert [c.entity_id for c in mine] == [first["id"]]
+
+
+@pytest.mark.asyncio
+async def test_store_claim_opens_a_window_with_billing_off(client, monkeypatch):
+    _fees_off(monkeypatch)
+    _, headers = await _register_store_owner(client)
+    before = (await client.get("/pricing/launch-offers", headers=headers)).json()
+    store = (await client.post("/stores", headers=headers, json={
+        "name": f"Shop {next(_n)}", "store_type": "virtual",
+        "slug": f"shop-{uuid.uuid4().hex[:8]}"})).json()
+    # `billing` stays null while billing is off (its screens are hidden);
+    # the store itself is open and its countdown is real.
+    assert store["billing"] is None
+    assert store["is_active"] is True
+    assert store["time_left_label"].endswith("left")
+    assert abs((datetime.fromisoformat(store["paid_until"])
+                - datetime.utcnow()).days - 60) <= 1
+    after = (await client.get("/pricing/launch-offers", headers=headers)).json()
+    assert after["store_free"]["remaining"] == before["store_free"]["remaining"] - 1
+
+
+@pytest.mark.asyncio
+async def test_renew_free_extends_ending_or_expired_windows(client, monkeypatch):
+    _fees_off(monkeypatch)
+    _, headers = await _user()
+    listing = await _listing(client, headers)
+    lid = listing["id"]
+
+    # Still ~60 days left: nothing to renew.
+    early = await client.post("/pricing/listing-fee/renew-free",
+                              headers=headers, json={"listing_id": lid})
+    assert early.status_code == 409
+
+    # Ending soon: extended from the window's end by one more window.
+    async with AsyncSessionLocal() as db:
+        row = await db.get(Listing, lid)
+        row.paid_until = datetime.utcnow() + timedelta(days=1)
+        await db.commit()
+    r = await client.post("/pricing/listing-fee/renew-free",
+                          headers=headers, json={"listing_id": lid})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert abs((datetime.fromisoformat(body["paid_until"])
+                - datetime.utcnow()).days - 61) <= 1
+    assert body["time_left_label"].endswith("left")
+    assert body["listing_fee"]["needs_payment"] is False
+
+    # Expired: extended from now, not from the lapsed date.
+    async with AsyncSessionLocal() as db:
+        row = await db.get(Listing, lid)
+        row.paid_until = datetime.utcnow() - timedelta(days=1)
+        await db.commit()
+    r = await client.post("/pricing/listing-fee/renew-free",
+                          headers=headers, json={"listing_id": lid})
+    assert r.status_code == 200, r.text
+    assert abs((datetime.fromisoformat(r.json()["paid_until"])
+                - datetime.utcnow()).days - 60) <= 1
+
+
+@pytest.mark.asyncio
+async def test_renew_free_refuses(client, monkeypatch):
+    _fees_off(monkeypatch)
+    owner_id, headers = await _register_store_owner(client)
+    store = (await client.post("/stores", headers=headers, json={
+        "name": f"Shop {next(_n)}", "store_type": "virtual",
+        "slug": f"shop-{uuid.uuid4().hex[:8]}"})).json()
+    covered = await _listing(client, headers, store_id=store["id"])
+    # A store listing's clock is the store's: renew the store, not this.
+    r = await client.post("/pricing/listing-fee/renew-free",
+                          headers=headers, json={"listing_id": covered["id"]})
+    assert r.status_code == 409
+
+    # No deadline (a listing from before windows existed): stays live.
+    async with AsyncSessionLocal() as db:
+        row = Listing(seller_id=owner_id, name="Legacy", category="Electronics",
+                      price=5000, lat=-1.0, lng=36.0, paid_until=None,
+                      created_at=datetime.utcnow() - timedelta(days=90))
+        db.add(row)
+        await db.commit()
+        legacy_id = row.id
+    r = await client.post("/pricing/listing-fee/renew-free",
+                          headers=headers, json={"listing_id": legacy_id})
+    assert r.status_code == 409
+
+    # With fees on, renewals go through pay/.
+    _patch(monkeypatch, listing_fees_enabled=True, store_billing_enabled=False,
+           in_app_payments_enabled=False, free_listings_per_seller=0,
+           founding_seller_tiers=(), free_listing_offer_limit=99,
+           free_store_offer_limit=99)
+    personal = await _listing(client, headers)
+    r = await client.post("/pricing/listing-fee/renew-free",
+                          headers=headers, json={"listing_id": personal["id"]})
+    assert r.status_code == 409
+
+
 @pytest.mark.asyncio
 async def test_expiry_sms_for_store_and_quiet_hours_defer(client, monkeypatch):
     from api.domains.pricing import expiry_alerts

@@ -69,6 +69,7 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
   ListingFeeQuote? _quote;
   int _months = 2;
   String? _error;
+  bool _renewing = false;
 
   @override
   void initState() {
@@ -99,6 +100,36 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
   }
 
   int get _total => _quote?.option(_months)?.total ?? 0;
+
+  /// One more launch window, free: the way back for a window that ran out
+  /// while listing fees are off. The server refuses once fees turn on, and
+  /// then renewals go through pay/ instead.
+  Future<void> _renewFree() async {
+    HapticFeedback.selectionClick();
+    setState(() => _renewing = true);
+    final r = await _repo.renewFree(listingId: widget.listingId);
+    if (!mounted) return;
+    switch (r) {
+      case Success():
+        Navigator.of(context).pop(true);
+      case Failure(:final message):
+        setState(() => _renewing = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BrokaColors.danger,
+        ));
+    }
+  }
+
+  /// A deadline exists and it is ending soon or past: with fees off the
+  /// answer is a free renewal, not Done.
+  bool _needsFreeRenew(ListingFeeQuote q) {
+    if (q.storeCovered || q.state?.isStoreCovered == true) return false;
+    final until = q.state?.paidUntil;
+    if (until == null) return false;
+    return until.difference(DateTime.now()) <= const Duration(days: 7);
+  }
 
   void _choose(int months) {
     HapticFeedback.selectionClick();
@@ -215,6 +246,26 @@ class _ListingFeeScreenState extends State<ListingFeeScreen> {
     }
     if (!q.feesEnabled) {
       final offer = q.launchOffer;
+      if (_needsFreeRenew(q)) {
+        final expired = (q.state?.status == 'expired') ||
+            (q.state?.paidUntil?.isBefore(DateTime.now()) ?? false);
+        return CheckoutMessage(
+          icon: Icons.schedule_rounded,
+          iconColor: expired ? BrokaColors.danger : BrokaColors.warning,
+          title: expired ? 'Your listing is offline' : 'Your window is running out',
+          body: expired
+              ? 'Buyers can\'t see "${widget.listingName}" until it is renewed. '
+                  'Renewing is free while BROKA launches - one tap brings it back '
+                  'for another ${offer?.freeDays ?? 60} days.'
+              : '"${widget.listingName}" goes offline ${_date(q.state!.paidUntil!)}. '
+                  'Renew now, free - another ${offer?.freeDays ?? 60} days, no M-Pesa needed. '
+                  'We text you 2 days before every deadline.',
+          action: 'Renew free',
+          key: const Key('fee-renew-free'),
+          onAction: _renewing ? null : _renewFree,
+          busy: _renewing,
+        );
+      }
       return CheckoutMessage(
         icon: Icons.celebration_rounded,
         title: q.freeListing ? 'This listing is free' : 'Listing is free right now',

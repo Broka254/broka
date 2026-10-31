@@ -84,9 +84,14 @@ class LaunchOfferBanner extends StatelessWidget {
 }
 
 /// Both launch offers on one card, with the way in. This is the card a
-/// seller sees without starting anything: on the Seller Dashboard, above
-/// their numbers. Each offer keeps its own remaining count and state;
-/// a taken or exhausted offer says so instead of offering a dead button.
+/// seller sees without starting anything: first on the Seller Dashboard's
+/// Overview, again above the Products list. It is deliberately loud - a
+/// claimed-so-far bar and big remaining counts per offer, turning amber
+/// with an "Almost gone" pill at five or fewer left - because a new seller
+/// must never scroll past it wondering where the free offer is.
+/// Each offer keeps its own remaining count and state: a taken or exhausted
+/// offer says so instead of offering a dead button, and five or fewer left
+/// turns the card urgent (amber) instead of calm (green).
 class LaunchOffersCard extends StatelessWidget {
   const LaunchOffersCard({
     super.key,
@@ -106,23 +111,39 @@ class LaunchOffersCard extends StatelessWidget {
     final showListing = offers.listingFree.shouldShow;
     final showStore = offers.storeFree.shouldShow;
     if (!showListing && !showStore) return const SizedBox.shrink();
+    final urgent = _isLow(offers.listingFree) || _isLow(offers.storeFree);
+    final accent = urgent ? BrokaColors.warning : BrokaColors.success;
     return Container(
       key: const Key('launch-offers-card'),
       margin: margin,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: BrokaColors.success.withOpacity(0.09),
+        color: accent.withOpacity(0.09),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrokaColors.success.withOpacity(0.5)),
+        border: Border.all(color: accent.withOpacity(urgent ? 0.7 : 0.5), width: urgent ? 1.5 : 1),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
-          Icon(Icons.celebration_rounded, color: BrokaColors.success, size: 22),
-          SizedBox(width: 10),
-          Expanded(
+        Row(children: [
+          Icon(urgent ? Icons.local_fire_department_rounded : Icons.celebration_rounded,
+              color: accent, size: 22),
+          const SizedBox(width: 10),
+          const Expanded(
             child: Text('Launch offers — free to start',
                 style: TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w800)),
           ),
+          if (urgent)
+            Container(
+              key: const Key('launch-offers-urgent-pill'),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: BrokaColors.warning.withOpacity(0.16),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: BrokaColors.warning.withOpacity(0.5)),
+              ),
+              child: const Text('Almost gone',
+                  style: TextStyle(
+                      color: BrokaColors.warning, fontSize: 11, fontWeight: FontWeight.w800)),
+            ),
         ]),
         const SizedBox(height: 4),
         const Text('BROKA is launching. The first listings and stores are free — one of each per person.',
@@ -131,12 +152,14 @@ class LaunchOffersCard extends StatelessWidget {
           const SizedBox(height: 14),
           _OfferRow(
             icon: Icons.sell_rounded,
+            offer: offers.listingFree,
             title: offers.listingFree.alreadyClaimed == true
                 ? 'Your free listing — claimed'
                 : 'First ${offers.listingFree.limit} listings free',
             detail: offers.listingFree.alreadyClaimed == true
                 ? 'You have used your one free listing. It stays live for its free period.'
                 : '${offers.listingFree.freeDays} days free · ${offers.listingFree.remaining} of ${offers.listingFree.limit} left · one per person',
+            scarcityUnit: 'posting',
             actionLabel: offers.listingFree.alreadyClaimed == true ? null : 'Post free',
             onAction: onPostListing,
             key: const Key('launch-offers-listing-row'),
@@ -146,12 +169,14 @@ class LaunchOffersCard extends StatelessWidget {
           const SizedBox(height: 12),
           _OfferRow(
             icon: Icons.storefront_rounded,
+            offer: offers.storeFree,
             title: offers.storeFree.alreadyClaimed == true
                 ? 'Your free store — claimed'
                 : 'First ${offers.storeFree.limit} online stores free',
             detail: offers.storeFree.alreadyClaimed == true
                 ? 'You have used your one free store setup.'
                 : 'Free setup + ${offers.storeFree.freeDays} days · ${offers.storeFree.remaining} of ${offers.storeFree.limit} left · one per person · listings in a store never pay a listing fee',
+            scarcityUnit: 'store setup',
             actionLabel: offers.storeFree.alreadyClaimed == true ? null : 'Open free',
             onAction: onOpenStore,
             key: const Key('launch-offers-store-row'),
@@ -162,44 +187,93 @@ class LaunchOffersCard extends StatelessWidget {
   }
 }
 
+/// Five or fewer slots left and still claimable by someone: scarce enough
+/// to say so loudly.
+bool _isLow(LaunchOffer o) =>
+    o.alreadyClaimed != true && o.remaining > 0 && o.remaining <= 5;
+
 class _OfferRow extends StatelessWidget {
   const _OfferRow({
     super.key,
     required this.icon,
+    required this.offer,
     required this.title,
     required this.detail,
+    required this.scarcityUnit,
     this.actionLabel,
     this.onAction,
   });
 
   final IconData icon;
+  final LaunchOffer offer;
   final String title;
   final String detail;
+
+  /// "posting" / "store setup": what turns paid once the slots run out.
+  final String scarcityUnit;
   final String? actionLabel;
   final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Icon(icon, color: BrokaColors.success, size: 20),
-      const SizedBox(width: 10),
-      Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 2),
-          Text(detail, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4)),
-        ]),
-      ),
-      if (actionLabel != null) ...[
-        const SizedBox(width: 8),
-        TextButton(
-          onPressed: onAction,
-          style: TextButton.styleFrom(
-            backgroundColor: BrokaColors.success.withOpacity(0.16),
-            foregroundColor: BrokaColors.success,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    final taken = offer.alreadyClaimed == true;
+    final low = _isLow(offer);
+    final last = !taken && offer.remaining == 1;
+    final fraction = offer.limit <= 0
+        ? 0.0
+        : (offer.claimed / offer.limit).clamp(0.0, 1.0);
+    final accent = low ? BrokaColors.warning : BrokaColors.success;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, color: accent, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title,
+                style:
+                    const TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            Text(detail, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4)),
+          ]),
+        ),
+        if (actionLabel != null) ...[
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onAction,
+            style: TextButton.styleFrom(
+              backgroundColor: accent.withOpacity(0.16),
+              foregroundColor: accent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: Text(actionLabel!, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
-          child: Text(actionLabel!, style: const TextStyle(fontWeight: FontWeight.w800)),
+        ],
+      ]),
+      if (!taken) ...[
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            key: Key('launch-offers-progress-${scarcityUnit == 'posting' ? 'listing' : 'store'}'),
+            value: fraction,
+            minHeight: 6,
+            backgroundColor: BrokaColors.textHigh.withOpacity(0.10),
+            valueColor: AlwaysStoppedAnimation<Color>(accent),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          last
+              ? 'Last free slot — after this, $scarcityUnit is paid.'
+              : low
+                  ? 'Only ${offer.remaining} left — when they run out, $scarcityUnit is paid.'
+                  : '${offer.claimed} of ${offer.limit} claimed',
+          key: Key('launch-offers-scarcity-${scarcityUnit == 'posting' ? 'listing' : 'store'}'),
+          style: TextStyle(
+              color: low ? BrokaColors.warning : BrokaColors.textMid,
+              fontSize: 11.5,
+              fontWeight: low ? FontWeight.w800 : FontWeight.w600,
+              height: 1.3),
         ),
       ],
     ]);

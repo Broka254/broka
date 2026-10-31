@@ -150,7 +150,10 @@ class _AwaitingPaymentPanelState extends State<AwaitingPaymentPanel> {
           ),
         ]),
         const SizedBox(height: 4),
-        const Text('Pay to publish or renew - they go live as soon as M-Pesa confirms. '
+        // Worded for both worlds: with fees on this is an M-Pesa payment,
+        // with fees off a free renewal of the launch window - either way
+        // the listing screen it opens says exactly what happens next.
+        const Text('Tap one to publish or renew it and bring it back. '
             'Changed your mind? Remove the ones you no longer want.',
             style: TextStyle(color: BrokaColors.textMid, fontSize: 12)),
         const SizedBox(height: 10),

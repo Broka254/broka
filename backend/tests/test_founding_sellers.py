@@ -48,17 +48,25 @@ async def client():
         yield ac
 
 
-@pytest.fixture(autouse=True)
-def founding_on(monkeypatch):
+def _patched(monkeypatch):
     """First seller free, second 80% off, then full price; fees on, payments off."""
     patched = dataclasses.replace(
         settings, listing_fees_enabled=True, in_app_payments_enabled=False,
         free_listings_per_seller=0, founding_seller_tiers=((1, 100), (1, 80)),
         founding_discount_days=30,
+        # Founding bands in isolation: the launch offer is off here (its
+        # interplay with paying lives in test_launch_offers.py).
+        free_listing_offer_limit=0, free_store_offer_limit=0,
     )
     for module in ("api.domains.listings.service", "api.domains.pricing.payments",
-                   "api.domains.pricing.service", "api.domains.pricing.router"):
+                   "api.domains.pricing.service", "api.domains.pricing.router",
+                   "api.domains.pricing.launch_offers"):
         monkeypatch.setattr(f"{module}.settings", patched)
+
+
+@pytest.fixture(autouse=True)
+def founding_on(monkeypatch):
+    _patched(monkeypatch)
 
 
 async def _user() -> tuple[str, dict]:

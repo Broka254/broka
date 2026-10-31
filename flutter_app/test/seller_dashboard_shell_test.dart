@@ -245,6 +245,51 @@ void main() {
     expect(find.textContaining('text you 2 days before'), findsWidgets);
   });
 
+  testWidgets('product rows show the listing photo, emoji only without one', (tester) async {
+    const tinyPng =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    setFakeRoute((uri) {
+      if (uri.path == '/auth/user/seller-1') return {'id': 'seller-1', 'name': 'Grace Akinyi'};
+      if (uri.path == '/pricing/launch-offers') {
+        return {
+          'listing_free': {'limit': 0, 'claimed': 0, 'remaining': 0, 'free_days': 60},
+          'store_free': {'limit': 0, 'claimed': 0, 'remaining': 0, 'free_days': 60},
+        };
+      }
+      if (uri.path == '/listings/') {
+        return [
+          {
+            'id': 'listing-photo', 'name': 'Samsung A54', 'category': 'Electronics',
+            'price': 32000, 'listing_type': 'direct', 'status': 'active',
+            'seller_id': 'seller-1', 'views': 4, 'verified_photos': tinyPng,
+          },
+          {
+            'id': 'listing-bare', 'name': 'JBL Flip 6', 'category': 'Electronics',
+            'price': 15000, 'listing_type': 'direct', 'status': 'active',
+            'seller_id': 'seller-1', 'views': 1,
+          },
+        ];
+      }
+      if (uri.path == '/stores/mine') return const FakeResponse(null);
+      return null;
+    });
+    await tester.pumpWidget(const MaterialApp(home: SellerDashboardScreen(animateBackground: false)));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('dashboard-tab-1')));
+    await _settle(tester);
+
+    // The actual photo where there is one (decoded in memory, no category icon)...
+    final photoThumb = find.byKey(const Key('product-thumb-listing-photo'));
+    expect(photoThumb, findsOneWidget);
+    expect(find.descendant(of: photoThumb, matching: find.byType(Image)), findsOneWidget);
+    expect(find.descendant(of: photoThumb, matching: find.text('📱')), findsNothing);
+
+    // ...and only the category emoji where there is none.
+    final bareThumb = find.byKey(const Key('product-thumb-listing-bare'));
+    expect(bareThumb, findsOneWidget);
+    expect(find.descendant(of: bareThumb, matching: find.text('📱')), findsOneWidget);
+  });
+
   group('deleting a product', () {
     Map<String, dynamic> listing(String id, String name) => {
           'id': id, 'name': name, 'category': 'Electronics', 'price': 32000,

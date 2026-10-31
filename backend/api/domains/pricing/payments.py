@@ -95,7 +95,8 @@ async def _owned_listing(db: AsyncSession, user_id: str, listing_id: str) -> Lis
 
 def _refuse_unless_payable(listing: Listing) -> None:
     if not settings.listing_fees_enabled:
-        raise HTTPException(status_code=409, detail="Listing on BROKA is free right now.")
+        raise HTTPException(status_code=409, detail=(
+            "Listing on BROKA is free right now - renew it free instead."))
     if not fee_applies(listing):
         if getattr(listing, "store_id", None):
             # fee_applies always excludes store listings (PRICING.md §5);
@@ -441,6 +442,60 @@ async def payment_status(db: AsyncSession, user_id: str, payment_id: str) -> dic
 
     listing = await db.get(Listing, payment.listing_id, populate_existing=True)
     return _payment_dict(payment, listing)
+
+
+async def renew_free(db: AsyncSession, user_id: str, listing_id: str) -> dict:
+    """Extend one owned listing's live window by one launch window, free.
+
+    Only while listing fees are off: every listing then carries a launch
+    window (service.create_listing stamps one), and an expired window must
+    have a way back that is not an M-Pesa prompt the switches refuse to
+    send. Once fees turn on this refuses and renewals go through pay/.
+
+    Rules mirror start_payment's, minus money: owned, active, fee-applying
+    listings only (a store listing's clock is its store's - renew the store;
+    auctions pay through plans, not listing time), a deadline must exist,
+    and only when it is ending soon or past - renewing a listing with
+    months left would mint free time on top of free time. Never past
+    MAX_AHEAD, same ceiling as paid time.
+    """
+    from api.domains.listings.time_left import time_left as _time_left
+
+    if settings.listing_fees_enabled:
+        raise HTTPException(status_code=409, detail=(
+            "Listing fees are on - renew this listing on the listing fee screen."))
+    listing = await _owned_listing(db, user_id, listing_id)
+    if not fee_applies(listing):
+        if getattr(listing, "store_id", None):
+            raise HTTPException(status_code=409, detail=(
+                "This listing is covered by its store's plan - its deadline "
+                "is the store's, renewed on the store's billing screen."))
+        raise HTTPException(status_code=409, detail="Auctions don't pay a listing fee.")
+    if listing.status != ListingStatus.active:
+        raise HTTPException(status_code=409, detail="This listing is no longer for sale.")
+    if listing.paid_until is None:
+        raise HTTPException(status_code=409, detail=(
+            "This listing has no deadline - it stays live."))
+    now = datetime.utcnow()
+    if listing.paid_until > now + ENDING_SOON:
+        raise HTTPException(status_code=409, detail=(
+            "This listing is still live - renew it when its time runs low."))
+    window = timedelta(days=settings.free_listing_offer_days)
+    start = max(now, listing.paid_until)
+    if start + window - now > MAX_AHEAD:
+        raise HTTPException(status_code=409, detail=(
+            "A listing can be live for up to 6 months ahead. This one already is."))
+    listing.paid_until = start + window
+    await db.commit()
+    countdown = _time_left(listing.paid_until, created_at=listing.created_at)
+    return {
+        "listing_id": listing.id,
+        "paid_until": listing.paid_until.isoformat(),
+        "listing_fee": fee_state(listing),
+        "time_left": countdown,
+        "time_left_label": countdown["label"],
+        "goes_offline_at": countdown["goes_offline_at"],
+    }
 
 
 async def listings_needing_payment(db: AsyncSession, user_id: str) -> list[dict]:
