@@ -36,8 +36,15 @@ class LaunchOfferHomeHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final showListing = offers.listingFree.shouldShow;
-    final showStore = offers.storeFree.shouldShow;
+    // Home is the front door, not the dashboard: a claimed offer with no
+    // CTA is noise here. The hero shows while at least one offer still has
+    // something the viewer can take; a claimed row only ever appears next
+    // to a live one, as context for the remaining CTA.
+    final takeListing = _takeable(offers.listingFree);
+    final takeStore = _takeable(offers.storeFree);
+    if (!takeListing && !takeStore) return const SizedBox.shrink();
+    final showListing = takeListing || offers.listingFree.shouldShow;
+    final showStore = takeStore || offers.storeFree.shouldShow;
     if (!showListing && !showStore) return const SizedBox.shrink();
     final urgent = _isLow(offers.listingFree) || _isLow(offers.storeFree);
     final accent = urgent ? BrokaColors.warning : BrokaColors.success;
@@ -347,6 +354,11 @@ class LaunchOffersCard extends StatelessWidget {
 bool _isLow(LaunchOffer o) =>
     o.alreadyClaimed != true && o.remaining > 0 && o.remaining <= 5;
 
+/// Something the viewer can still take: slots remain and they have not
+/// taken theirs. The Home hero's visibility rule.
+bool _takeable(LaunchOffer o) =>
+    o.hasSlots && o.alreadyClaimed != true;
+
 class _OfferRow extends StatelessWidget {
   const _OfferRow({
     super.key,
@@ -471,17 +483,17 @@ class ListingTimeLeftRow extends StatelessWidget {
       TimeLeft(isOffline: true) => (
           Icons.visibility_off_rounded,
           BrokaColors.danger,
-          'Offline${t!.offlineDateLabel != null ? ' since ${t.offlineDateLabel}' : ''} — buyers can\'t see it',
+          'Offline${t.offlineDateLabel != null ? ' since ${t.offlineDateLabel}' : ''} — buyers can\'t see it',
         ),
       TimeLeft(isExpiringSoon: true) => (
           Icons.schedule_rounded,
           BrokaColors.warning,
-          '${t!.label} · goes offline ${t.offlineDateLabel ?? ''} · we text you 2 days before',
+          '${t.label} · goes offline ${t.offlineDateLabel ?? ''} · we text you 2 days before',
         ),
       _ => (
           Icons.schedule_rounded,
           BrokaColors.success,
-          '${t!.label} · goes offline ${t.offlineDateLabel ?? ''}',
+          '${t.label} · goes offline ${t.offlineDateLabel ?? ''}',
         ),
     };
     return Container(

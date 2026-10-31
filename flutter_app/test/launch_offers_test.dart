@@ -478,6 +478,23 @@ void main() {
       expect(find.text('Almost gone'), findsOneWidget);
     });
 
+    testWidgets('one claimed, one live: live CTA plus claimed context', (tester) async {
+      await tester.pumpWidget(_host(LaunchOfferHomeHero(
+        offers: const LaunchOffers(
+          listingFree: LaunchOffer(
+              limit: 50, claimed: 1, remaining: 49, freeDays: 60, alreadyClaimed: true),
+          storeFree: LaunchOffer(
+              limit: 10, claimed: 1, remaining: 9, freeDays: 60, alreadyClaimed: false),
+        ),
+        onPostListing: () {},
+        onOpenStore: () {},
+      )));
+      expect(find.byKey(const Key('launch-home-hero')), findsOneWidget);
+      expect(find.text('Your free listing is claimed'), findsOneWidget);
+      expect(find.byKey(const Key('launch-home-open')), findsOneWidget);
+      expect(find.byKey(const Key('launch-home-post')), findsNothing);
+    });
+
     testWidgets('hides once both offers are gone or claimed', (tester) async {
       await tester.pumpWidget(_host(LaunchOfferHomeHero(
         offers: const LaunchOffers(
