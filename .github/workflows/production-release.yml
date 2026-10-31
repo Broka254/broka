@@ -36,6 +36,8 @@ jobs:
       ENV: production
       BROKA_NATIVE: "off"
 
+    outputs:
+      release_commit: ${{ steps.guard.outputs.release_commit }}
     steps:
       - name: Check out the exact commit that passed CI
         uses: actions/checkout@v4
@@ -51,17 +53,28 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Reject stale CI runs
+        id: guard
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          tested_sha="${GITHUB_SHA}"
+          tested_sha="${{ github.event.workflow_run.head_sha }}"
           current_main="$(git rev-parse origin/main)"
           if [ "$tested_sha" != "$current_main" ]; then
-            echo "Skipping stale release: tested $tested_sha, current main is $current_main."
-            exit 1
+            # The existing CI workflow may append a graphify.md-only commit
+            # using GITHUB_TOKEN after tests finish. That generated map does
+            # not change application code. Any other newer change makes this
+            # release stale and it must not migrate or deploy.
+            changed_files="$(git diff --name-only "$tested_sha" origin/main)"
+            if [ -z "$changed_files" ] || [ "$changed_files" != "graphify.md" ]; then
+              echo "Skipping stale release: tested $tested_sha, current main is $current_main."
+              printf 'Changes since tested commit:\n%s\n' "$changed_files"
+              exit 1
+            fi
+            echo "Only the generated graphify.md changed after the tested commit; proceeding with tested code."
           fi
-          echo "The tested commit is the current main head: $tested_sha"
+          echo "The tested application commit is current: $tested_sha"
+          echo "release_commit=$tested_sha" >> "$GITHUB_OUTPUT"
 
       - name: Validate production secrets and Render target
         shell: bash
