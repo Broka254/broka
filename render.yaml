@@ -80,14 +80,28 @@ services:
       - key: RESEND_FROM
         sync: false          # Must be on a domain verified in the Resend
                              # dashboard, or Resend refuses every send
+      - key: TEXIN_API_KEY
+        sync: false          # Texin BulkSMS — PRIMARY SMS provider (https://sms.texin.co.ke/api).
+                             # Required for OTP + SMS nudges to actually send. Backend-only secret:
+                             # never in the app, the storefront, logs, or build output.
+      - key: TEXIN_BASE_URL
+        value: "https://sms.texin.co.ke/api"   # Texin API base URL (must stay https)
+      - key: TEXIN_SENDER_ID
+        sync: false          # Optional: registered Texin sender ID. Leave BLANK to use
+                             # the account default ("Texin") — no custom registration needed
+      - key: TEXIN_TIMEOUT_SECONDS
+        value: "15"          # Per-request timeout (timeouts are never retried)
+      - key: TEXIN_WEBHOOK_SECRET
+        sync: false          # Signs Texin delivery webhooks (POST /sms/texin/dlr).
+                             # Backend-only secret, separate from TEXIN_API_KEY (rotate separately)
       - key: AT_USERNAME
-        sync: false          # Africa's Talking — "sandbox" for testing, your live username in prod
+        sync: false          # Africa's Talking — OPTIONAL fallback ("sandbox" for testing, your live username in prod)
       - key: AT_API_KEY
-        sync: false          # Africa's Talking API key — required for OTP + SMS nudges to actually send
+        sync: false          # Africa's Talking API key — only used when TEXIN_API_KEY is blank
       - key: AT_SENDER_ID
         sync: false          # Optional: registered AT sender ID, else uses the shared AT number
-      - key: SMS_COST_MINOR_MOBITECH
-        value: "35"          # Cost ledger: Mobitech KES 0.35/message (billed rate, PRICING.md)
+      - key: SMS_COST_MINOR_TEXIN
+        value: "29"          # Cost ledger: Texin KES 0.29/SMS unit (confirmed billing, PRICING.md)
       - key: SMS_COST_MINOR_AT
         value: "80"          # Cost ledger: AT rate unconfirmed — top of Kenya's bulk band;
                              # rows stay estimated until the real rate is set

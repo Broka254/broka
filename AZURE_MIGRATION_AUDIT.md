@@ -160,13 +160,16 @@ and therefore signup fail in production.
 
 | Variable | Service | Where | Required | Secret | Notes |
 |---|---|---|---|---|---|
-| `MOBITECH_API_KEY` | Mobitech | `config.py:157` → `core/sms.py` | functional (with the sender name) | **yes** | Tried first. |
-| `MOBITECH_SENDER_NAME` | Mobitech | `config.py:158` | functional | no | |
-| `MOBITECH_BASE_URL` | Mobitech | `config.py:159` | optional | no | Domain only, no path (a startup warning checks this). |
-| `MOBITECH_SEND_ENDPOINT` | Mobitech | `config.py:176` | optional (`/sms/sendsms`) | no | |
-| `AT_USERNAME` | Africa's Talking | `config.py:179` → `core/sms.py` | fallback provider | no | |
-| `AT_API_KEY` | Africa's Talking | `config.py:180` | fallback provider | **yes** | |
-| `AT_SENDER_ID` | Africa's Talking | `config.py:181` | optional | no | |
+| `TEXIN_API_KEY` | Texin BulkSMS | `config.py` → `core/sms.py` | functional (primary; the key alone selects it) | **yes** | Tried first. Never in the app, logs or Git. |
+| `TEXIN_BASE_URL` | Texin BulkSMS | `config.py` | optional (`https://sms.texin.co.ke/api`) | no | Must stay an https URL (startup validates this). |
+| `TEXIN_SENDER_ID` | Texin BulkSMS | `config.py` | optional (blank = account default "Texin") | no | |
+| `TEXIN_TIMEOUT_SECONDS` | Texin BulkSMS | `config.py` | optional (`15`) | no | Timeouts are never retried. |
+| `TEXIN_WEBHOOK_SECRET` | Texin BulkSMS | `config.py` → `routers/sms.py` (`/sms/texin/dlr`) | needed for delivery webhooks | **yes** | Verifies `X-Texin-Signature`; rejects unsigned reports. |
+| `SMS_COST_MINOR_TEXIN` | Cost ledger | `config.py` | optional (`29`) | no | Per-unit fallback; rows carry Texin's confirmed charge. |
+| `MOBITECH_API_KEY` / `MOBITECH_SENDER_NAME` / `MOBITECH_BASE_URL` / `MOBITECH_SEND_ENDPOINT` | Mobitech | `config.py` (deprecated) | ignored | — | Replaced by Texin; parsed but never selected. Remove. |
+| `AT_USERNAME` | Africa's Talking | `config.py` → `core/sms.py` | fallback provider (only when `TEXIN_API_KEY` is blank) | no | |
+| `AT_API_KEY` | Africa's Talking | `config.py` | fallback provider | **yes** | |
+| `AT_SENDER_ID` | Africa's Talking | `config.py` | optional | no | |
 
 ### Payments: M-Pesa (Daraja)
 
@@ -297,7 +300,7 @@ no keys.
 
 - **`render.yaml` doesn't list many variables production needs**:
   `ZAC_SECRET`, `ECONFIRM_API_KEY`, every `MPESA_*` except the secret and the
-  two optional callback URLs, `MOBITECH_*`, `FAL_KEY` and `OPENAI_API_KEY`.
+  two optional callback URLs, `TEXIN_*` (SMS), `FAL_KEY` and `OPENAI_API_KEY`.
   They must be set by hand in the Render dashboard. **Copy from the Render
   dashboard, not from `render.yaml`.**
 - **`.env.example` omits** `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`,
@@ -315,8 +318,9 @@ no keys.
 - `REDIS_URL`: shared state and rate limits.
 - M-Pesa: `MPESA_ENV`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`,
   `MPESA_SHORTCODE`, `MPESA_PASSKEY`.
-- One SMS pair: `MOBITECH_API_KEY` with `MOBITECH_SENDER_NAME`, or
-  `AT_USERNAME` with `AT_API_KEY`. Without one, signup fails.
+- One SMS credential: `TEXIN_API_KEY` (primary), or `AT_USERNAME` with
+  `AT_API_KEY` (fallback, only when the Texin key is blank). Without one,
+  signup fails. `MOBITECH_*` is deprecated and ignored.
 - `GEMINI_API_KEY` and/or `OPENROUTER_API_KEY`: Zeno.
 - `FIREBASE_SERVICE_ACCOUNT_JSON`: push and call rings.
 - All five R2 variables: images.
@@ -338,8 +342,9 @@ suit Render only:
 `DB_MAX_OVERFLOW`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS`,
 `PHONE_VERIFY_TOKEN_EXPIRE_MINUTES`, `CALL_TOKEN_EXPIRE_MINUTES`,
 `OTP_LENGTH`, `OTP_EXPIRY_SECONDS`, `OTP_MAX_ATTEMPTS`,
-`ADMIN_BOOTSTRAP_EMAIL`, `RESEND_REPLY_TO`, `MOBITECH_BASE_URL`,
-`MOBITECH_SEND_ENDPOINT`, `AT_SENDER_ID`, `MPESA_LISTING_FEE_CALLBACK_URL`,
+`ADMIN_BOOTSTRAP_EMAIL`, `RESEND_REPLY_TO`, `TEXIN_BASE_URL`,
+`TEXIN_SENDER_ID`, `TEXIN_TIMEOUT_SECONDS`, `TEXIN_WEBHOOK_SECRET`,
+`AT_SENDER_ID`, `MPESA_LISTING_FEE_CALLBACK_URL`,
 `MPESA_PREMIUM_CALLBACK_URL`, `MPESA_B2C_INITIATOR`, `MPESA_B2C_CREDENTIAL`
 (needed only for legacy refunds), `ECONFIRM_BASE_URL`, `ECONFIRM_*_SECONDS`,
 `LISTING_FEES_ENABLED`, `PREMIUM_ENABLED`, `DEEPSEEK_*`, `OPENROUTER_MODEL`,
@@ -362,7 +367,7 @@ applies to the switches and tuning values.
   embeds the secret (`MPESA_CALLBACK_URL`, `MPESA_VERIFY_CALLBACK_URL`,
   `MPESA_FEATURED_CALLBACK_URL`, and `MPESA_LISTING_FEE_CALLBACK_URL` and
   `MPESA_PREMIUM_CALLBACK_URL` if set).
-- **Providers:** `MOBITECH_API_KEY`, `AT_API_KEY`, `RESEND_API_KEY`,
+- **Providers:** `TEXIN_API_KEY`, `TEXIN_WEBHOOK_SECRET`, `AT_API_KEY`, `RESEND_API_KEY`,
   `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
   `FAL_KEY`, `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`,
   `FIREBASE_SERVICE_ACCOUNT_JSON`, `CLOUDFLARE_TURN_API_TOKEN`,

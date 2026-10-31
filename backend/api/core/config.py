@@ -195,10 +195,37 @@ class Settings:
     ))
 
     # ── SMS (phone OTP + nudges) ─────────────────────────────────────────────
-    # Two providers are supported behind api.core.sms.get_sms_provider();
-    # Mobitech takes priority when configured, Africa's Talking is the
-    # fallback, and ConsoleSMS (log-only) is the last resort in dev/CI.
+    # Providers behind api.core.sms.get_sms_provider(), in priority order:
+    # Texin BulkSMS (primary), Africa's Talking (optional fallback), and
+    # ConsoleSMS (log-only) as the last resort in dev/CI.
+    # Mobitech Technologies was the previous primary and is now deprecated:
+    # its settings below are kept so old environments still parse, but
+    # nothing selects Mobitech anymore — see api/core/sms.py.
     # See api/core/sms.py for the selection logic.
+    # ── Texin BulkSMS (primary SMS provider) ──────────────────────────────
+    # Credentials live in the environment only: never hardcoded, never
+    # logged, never sent to the Flutter/web clients, never committed.
+    # TEXIN_SENDER_ID empty means "use the account's default sender ID"
+    # (currently "Texin") — no custom sender registration required.
+    texin_api_key: str = field(repr=False, default_factory=lambda: os.getenv("TEXIN_API_KEY", "").strip())
+    texin_base_url: str = field(default_factory=lambda: os.getenv(
+        "TEXIN_BASE_URL", "https://sms.texin.co.ke/api"
+    ).strip().rstrip("/"))
+    texin_sender_id: str = field(default_factory=lambda: os.getenv("TEXIN_SENDER_ID", "").strip())
+    texin_timeout_seconds: float = field(default_factory=lambda: float(
+        os.getenv("TEXIN_TIMEOUT_SECONDS", "15")
+    ))
+    # Signs Texin's delivery webhooks: expected header is
+    # "X-Texin-Signature: sha256=<HMAC-SHA256 of the raw request body>".
+    # Separate from TEXIN_API_KEY on purpose (different rotation story).
+    # Backend-only: never in the app, the storefront, logs or Git.
+    texin_webhook_secret: str = field(repr=False, default_factory=lambda: os.getenv(
+        "TEXIN_WEBHOOK_SECRET", ""
+    ).strip())
+    # ── Mobitech Technologies (DEPRECATED — kept for parsing only) ────────
+    # Replaced by Texin (see above). These are read but never selected:
+    # get_sms_provider() no longer considers them, so stale MOBITECH_*
+    # values left in Railway/Render cannot accidentally override Texin.
     mobitech_api_key: str = field(default_factory=lambda: os.getenv("MOBITECH_API_KEY", ""))
     mobitech_sender_name: str = field(default_factory=lambda: os.getenv("MOBITECH_SENDER_NAME", ""))
     mobitech_base_url: str = field(default_factory=lambda: os.getenv(
@@ -225,11 +252,18 @@ class Settings:
     at_api_key: str = field(default_factory=lambda: os.getenv("AT_API_KEY", ""))
     at_sender_id: str = field(default_factory=lambda: os.getenv("AT_SENDER_ID", ""))
     # ── Platform cost ledger (api/core/cost_ledger.py) ────────────────────────
-    # Per-message SMS spend in minor units (KES cents: 35 = KES 0.35).
-    # Mobitech bills KES 0.35 a message whatever its length (PRICING.md §1).
+    # Per-message SMS spend in minor units (KES cents: 29 = KES 0.29).
+    # Texin bills KES 0.29 per SMS unit and reports the actual units_used
+    # per send, so rows use the provider's confirmed charge (estimated=False)
+    # with SMS_COST_MINOR_TEXIN only as the per-unit fallback when the
+    # response omits billing detail. Mobitech's key is deprecated alongside
+    # the provider (kept so old environments still parse).
     # The Africa's Talking rate was never confirmed against our account, so
     # its default sits at the top of Kenya's bulk band (KES 0.80) and every
     # such row is flagged estimated until the real rate is configured.
+    sms_cost_minor_texin: int = field(default_factory=lambda: int(
+        os.getenv("SMS_COST_MINOR_TEXIN", "29")
+    ))
     sms_cost_minor_mobitech: int = field(default_factory=lambda: int(
         os.getenv("SMS_COST_MINOR_MOBITECH", "35")
     ))
@@ -881,15 +915,50 @@ def validate_startup() -> None:
             "[startup] ⚠  SENTRY_DSN not set — no error tracking in production."
         )
 
-    # ── Warn if no SMS provider is configured in production ───────────────────
-    _has_mobitech = bool(s.mobitech_api_key and s.mobitech_sender_name)
-    _has_at       = bool(s.at_username and s.at_api_key)
-    if s.is_production and not (_has_mobitech or _has_at):
+    # ── Validate Texin SMS configuration ──────────────────────────────────────
+    # TEXIN_API_KEY is the only credential Texin needs to send; the sender
+    # ID is optional (empty = account default "Texin"). A bad base URL or a
+    # non-positive timeout breaks every OTP send, so both are checked here.
+    if s.texin_api_key:
+        _texin_url = urlparse(s.texin_base_url)
+        if _texin_url.scheme != "https" or not _texin_url.netloc:
+            logger.warning(
+                "[startup] ⚠  TEXIN_BASE_URL (%r) must be an https URL "
+                "(e.g. https://sms.texin.co.ke/api) — Texin sends may fail.",
+                s.texin_base_url,
+            )
+        if not (s.texin_timeout_seconds and s.texin_timeout_seconds > 0):
+            logger.warning(
+                "[startup] ⚠  TEXIN_TIMEOUT_SECONDS (%r) must be positive — "
+                "falling back to 15s for Texin sends.",
+                s.texin_timeout_seconds,
+            )
+            object.__setattr__(s, "texin_timeout_seconds", 15.0)
+    if s.is_production and s.texin_api_key and not s.texin_webhook_secret:
         logger.warning(
-            "[startup] ⚠  No SMS provider configured (MOBITECH_API_KEY/"
-            "MOBITECH_SENDER_NAME or AT_USERNAME/AT_API_KEY) — phone OTPs "
-            "and SMS nudges will FAIL (never logged, never sent). Phone "
-            "verification is unavailable until one of these is set."
+            "[startup] ⚠  TEXIN_API_KEY is set without TEXIN_WEBHOOK_SECRET — "
+            "the /sms/texin/dlr delivery webhook will reject every report "
+            "until the signing secret is configured."
+        )
+
+    # ── Warn if no SMS provider is configured in production ───────────────────
+    # Mobitech is deprecated and deliberately NOT counted here: stale
+    # MOBITECH_* values left in Railway/Render must never satisfy this
+    # check (or get_sms_provider()) on their own.
+    _has_texin     = bool(s.texin_api_key)
+    _has_at        = bool(s.at_username and s.at_api_key)
+    if s.is_production and not (_has_texin or _has_at):
+        logger.warning(
+            "[startup] ⚠  No SMS provider configured (TEXIN_API_KEY or "
+            "AT_USERNAME/AT_API_KEY) — phone OTPs and SMS nudges will FAIL "
+            "(never logged, never sent). Phone verification is unavailable "
+            "until one of these is set."
+        )
+    if s.mobitech_api_key or s.mobitech_sender_name:
+        logger.warning(
+            "[startup] ⚠  MOBITECH_* settings are deprecated (Texin is the "
+            "primary SMS provider) and are ignored by get_sms_provider() — "
+            "remove them from the environment to avoid confusion."
         )
 
     # ── Warn if HF_TOKEN not configured ────────────────────────────────────────

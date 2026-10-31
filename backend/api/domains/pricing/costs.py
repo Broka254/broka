@@ -92,9 +92,10 @@ AI_PRICE_CHECK = ai_call_cost(4_000, 300)
 
 
 # ── Messaging ────────────────────────────────────────────────────────────────
-# Mobitech, BROKA's SMS provider, charges KES 0.35 a message, whatever its
-# length. (Kenya's bulk market runs KES 0.25-0.80 a message.)
-SMS = 0.35
+# Texin, BROKA's SMS provider, charges KES 0.29 per SMS unit (multipart
+# messages bill per unit). Costed at one unit — the planning rate, not a
+# per-send figure. (Kenya's bulk market runs KES 0.25-0.80 a message.)
+SMS = 0.29
 # FCM push: free.
 PUSH = 0.0
 

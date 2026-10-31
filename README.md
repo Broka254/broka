@@ -379,7 +379,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 | `STOREFRONT_API_KEY` | Production | 32+ random characters, the same value in the API and the web project: lets the storefront pass on its visitors' addresses |
 | `SENTRY_DSN` | Production | Error tracking and reconciliation alerts |
 | `MPESA_*` | For M-Pesa | Safaricom Daraja |
-| `AT_*` or `MOBITECH_*` | For SMS | Phone OTP codes and SMS reminders |
+| `TEXIN_API_KEY` (+ optional `TEXIN_SENDER_ID`, `TEXIN_TIMEOUT_SECONDS`, `TEXIN_WEBHOOK_SECRET`) | For SMS | Phone OTP codes and SMS reminders via Texin BulkSMS (primary); `AT_*` stays as the optional fallback. Mobitech (`MOBITECH_*`) is deprecated and ignored |
 | `RESEND_API_KEY`, `RESEND_FROM` | Optional | Email verification codes (requests return 503 without them) |
 | `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY` | Optional | Zeno voice input. The app only ever receives short-lived tokens |
 | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Optional | Call relay for networks where a direct connection fails |

@@ -46,7 +46,7 @@ marked *assumption* are estimates until the app logs the real numbers (see
 | | | Zeno as assistant / Buying Agent: ~3,000 in, 250 out | 0.07 per turn |
 | | | Posting a listing: price help, description help, scam check | 0.21 per listing |
 | | | Auto-negotiating one seller for a buyer: ~10 exchanges | 1.92 each |
-| **SMS** | Mobitech: KES 0.35 a message, whatever its length (Kenya's bulk market runs KES 0.25-0.80) | Seller nudges, match alerts, OTPs | **0.35** |
+| **SMS** | Texin: KES 0.29 per SMS unit (confirmed per-send billing via `units_used`/`cost`; multipart messages bill per unit — Kenya's bulk market runs KES 0.25-0.80) | Seller nudges, match alerts, OTPs | **0.29** |
 | **Push (FCM)** | Free | Every routine notification | 0 |
 | **Speech to text** | Deepgram Nova-3 streaming $0.0077/min (a $0.0048 promotion is running); AssemblyAI Universal-Streaming $0.15/hour | Voice mode. Costed at Deepgram's regular rate so switching providers never makes a plan lose money | 1.00 per minute |
 | **Text to speech** | Microsoft Edge TTS: free, but an unofficial endpoint. A paid neural voice is ~$16 / 1M characters | Zeno speaking. A reserve is kept in case the free voice goes away | 0.93 per minute (reserve) |

@@ -696,11 +696,27 @@ async def service_health(
             else "ZetuPay is disabled or its secret key is not configured",
         ),
         (
+            # Mobitech is deprecated and deliberately not counted: stale
+            # MOBITECH_* values must never read as "SMS configured".
+            "sms_texin",
+            bool(settings.texin_api_key),
+            "Texin BulkSMS is configured (primary SMS provider)"
+            if settings.texin_api_key
+            else "Texin BulkSMS is not configured",
+        ),
+        (
+            "sms_africas_talking",
+            bool(settings.at_api_key and settings.at_username),
+            "Africa's Talking is configured (fallback SMS provider)"
+            if (settings.at_api_key and settings.at_username)
+            else "Africa's Talking is not configured",
+        ),
+        (
             "sms",
-            bool((settings.mobitech_api_key and settings.mobitech_sender_name)
+            bool(settings.texin_api_key
                  or (settings.at_api_key and settings.at_username)),
             "an SMS provider is configured" if (
-                (settings.mobitech_api_key and settings.mobitech_sender_name)
+                settings.texin_api_key
                 or (settings.at_api_key and settings.at_username)
             ) else "no SMS provider is configured",
         ),

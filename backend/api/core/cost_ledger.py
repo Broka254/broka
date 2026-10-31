@@ -101,20 +101,56 @@ async def record_cost_detached(
         return None
 
 
-async def record_sms_cost(*, provider: str) -> Optional[PlatformCost]:
+async def record_sms_cost(
+    *,
+    provider: str,
+    units: Optional[int] = None,
+    amount_minor: Optional[int] = None,
+    message_id: Optional[str] = None,
+) -> Optional[PlatformCost]:
     """One row per message actually handed to an SMS provider.
 
     Called by each provider's send() only after the provider accepted the
-    message, so a failed attempt costs nothing and a fallback chain that
-    hands the same text to two providers logs two rows — one per handoff,
-    which is what was billed. The dev/CI ConsoleSMS logs nothing: no
+    message, so a failed attempt costs nothing. Each chain hands the same
+    text to a second provider only via a second send() call, which logs its
+    own row — one per handoff, which is what was billed, never double-
+    counted within one call. The dev/CI ConsoleSMS logs nothing: no
     provider was handed anything, so nothing was spent.
+
+    Texin reports its confirmed billing per send (units_used + cost): pass
+    them through and the row carries the ACTUAL charge with
+    estimated=False (1 unit = KES 0.29, 2 units = KES 0.58, …). When the
+    provider omits billing detail, amount falls back to
+    units × SMS_COST_MINOR_TEXIN (or the flat setting when units are
+    unknown) and estimated stays False — the rate itself is confirmed,
+    only the unit count is derived.
     """
     try:
         from api.core.config import settings
 
-        if provider == "mobitech":
-            # PRICING.md: Mobitech bills KES 0.35 a message whatever its length.
+        meta: dict = {"rate_source": "settings"}
+        if message_id:
+            meta["message_id"] = str(message_id)
+        if provider == "texin":
+            per_unit = int(settings.sms_cost_minor_texin)
+            billed_units: Optional[int] = None
+            try:
+                billed_units = int(units) if units is not None else None
+                if billed_units is not None and billed_units <= 0:
+                    billed_units = None
+            except (TypeError, ValueError):
+                billed_units = None
+            if amount_minor is None:
+                amount = per_unit * (billed_units or 1)
+            else:
+                amount = int(amount_minor)
+            if billed_units is not None:
+                meta["units_used"] = billed_units
+                meta["per_unit_minor"] = per_unit
+            estimated = False
+        elif provider == "mobitech":
+            # Deprecated provider (kept for in-flight rows): PRICING.md —
+            # Mobitech bills KES 0.35 a message whatever its length.
             amount = int(settings.sms_cost_minor_mobitech)
             estimated = False
         else:
@@ -128,8 +164,10 @@ async def record_sms_cost(*, provider: str) -> Optional[PlatformCost]:
             kind=CostKind.SMS,
             amount_minor=amount,
             provider=provider,
+            ref_type="sms" if message_id else None,
+            ref_id=str(message_id) if message_id else None,
             estimated=estimated,
-            meta={"rate_source": "settings"},
+            meta=meta,
         )
     except Exception as exc:
         _log.warning("[costs] sms record failed (non-fatal): %s", exc)

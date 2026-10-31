@@ -1,5 +1,5 @@
 """
-BROKA v6.2 - SMS Provider (phone OTP delivery)
+BROKA v6.3 - SMS Provider (phone OTP delivery)
 ─────────────────────────────────────────────────────────────────────────────
 Sends the registration/login OTP by SMS. Follows the same
 external-dependency house style as api.core.circuit_breaker (used for
@@ -7,25 +7,32 @@ Gemini/Groq) - wrap the network call, fail soft, never let an SMS-provider
 outage take down registration.
 
 Providers, in priority order (see get_sms_provider):
-  1. Mobitech Technologies — Kenyan bulk SMS gateway. Configure via
-     MOBITECH_API_KEY / MOBITECH_SENDER_NAME. No sandbox mode; sends are
-     live and billed against the account's credit balance from the first
-     call, so this is only picked when both are actually set.
-  2. Africa's Talking — kept as a fallback (the same provider already
-     referenced for the logistics-layer station OTPs). Configure via
+  1. Texin BulkSMS — Kenyan bulk SMS gateway (https://sms.texin.co.ke/api).
+     Configure via TEXIN_API_KEY. No sandbox mode; sends are live and
+     billed (KES 0.29/unit) from the first call, so this is only picked
+     when the key is actually set.
+  2. Africa's Talking — optional fallback. Configure via
      AT_USERNAME / AT_API_KEY.
 
 Dev/CI fallback: if neither provider is configured, OTPs are logged
 instead of sent, so registration is fully testable without a live SMS
 account. This mirrors how GEMINI_API_KEY / GROQ_API_KEY being unset doesn't
 crash the AI broker - it degrades to the next thing in the chain.
+
+Mobitech Technologies was the primary before Texin and is now deprecated:
+MobitechSMS below still works (and its /sms/dlr webhook stays live for
+in-flight reports), but get_sms_provider() never selects it, so stale
+MOBITECH_* values left in Railway/Render cannot override Texin.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import logging
 import random
 import re
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import httpx
 
@@ -58,6 +65,174 @@ def _redact_result(value):
 
 _mobitech_breaker = CircuitBreaker("mobitech_sms", failure_threshold=5, recovery_timeout=30)
 _at_breaker       = CircuitBreaker("africas_talking_sms", failure_threshold=5, recovery_timeout=30)
+_texin_breaker    = CircuitBreaker("texin_sms", failure_threshold=5, recovery_timeout=30)
+
+
+# ── Kenyan phone-number normalization ─────────────────────────────────────────
+# BROKA hands every provider a number normalized here, so no provider (and no
+# caller) reformats phones its own way. Accepted inputs:
+#   "0706462869"   (local 0-prefixed)  -> "254706462869"
+#   "254706462869" (already normalized) -> unchanged
+#   "+254706462869"                    -> "254706462869"
+# Anything else Kenyan-shaped is rejected (None): a malformed recipient must
+# fail before a billed send, not after. Non-Kenyan international numbers are
+# preserved only as far as BROKA's existing validation goes — which is light
+# (auth/service.py only prepends "+"), so a "+"-prefixed 7-15 digit number is
+# passed through with the "+" stripped, and anything else is rejected.
+
+_KE_MOBILE_RE = re.compile(r"^254[17]\d{8}$")
+
+
+def normalize_ke_phone(phone: Optional[str]) -> Optional[str]:
+    """Normalize `phone` to Texin's expected digit format, or None.
+
+    Kenyan mobiles (07…/01… local, 254…/​+254… international) become
+    254…; anything Kenyan-shaped but invalid is rejected before a billed
+    send. Other digit strings are preserved as-is (existing BROKA
+    validation is light — see module comment) and only rejected when
+    they cannot be a phone number at all.
+    """
+    if not phone or not isinstance(phone, str):
+        return None
+    p = re.sub(r"[\s\-().]", "", phone.strip())
+    if p.startswith("+"):
+        p = p[1:]
+    # A second leading "+" (e.g. "++254...") is a typo, not a number.
+    if not p.isdigit():
+        return None
+    if len(p) == 10 and p.startswith("0"):
+        p = "254" + p[1:]
+    if p.startswith("0") or p.startswith("254"):
+        # Kenyan-shaped: valid KE mobile or nothing (a mistyped KE
+        # number must fail here, not as a billed provider rejection).
+        return p if _KE_MOBILE_RE.match(p) else None
+    if 7 <= len(p) <= 15:
+        return p
+    return None
+
+
+# ── GSM-7 message compatibility ───────────────────────────────────────────────
+# Texin's account documentation specifies GSM 03.38 (GSM-7) only — Unicode
+# (emoji, curly quotes, smart dashes) is not supported. OTP/notification
+# bodies are normalized to plain ASCII here, for the SMS copy only: the
+# original in-app notification text is never modified, and messages are
+# never truncated — a longer text simply bills as multiple units, which
+# Texin reports back as units_used (recorded by the cost ledger).
+
+_UNICODE_FALLBACKS = {
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
+    "\u00ab": '"', "\u00bb": '"',
+    "\u2013": "-", "\u2014": "-", "\u2212": "-",
+    "\u2026": "...", "\u2022": "*", "\u00b7": "*",
+    "\u00a0": " ", "\u2007": " ", "\u202f": " ",
+    "\u2713": "v", "\u2714": "v", "\u2717": "x", "\u2718": "x",
+}
+
+
+def sms_to_gsm7(text: str) -> str:
+    """Return a GSM-7-safe ASCII rendering of `text` for the SMS copy.
+
+    Curly quotes/dashes map to their ASCII counterparts; emoji and any
+    other non-ASCII characters are removed (not replaced, not truncated).
+    """
+    out: list[str] = []
+    for ch in text or "":
+        if ch in _UNICODE_FALLBACKS:
+            out.append(_UNICODE_FALLBACKS[ch])
+        elif ord(ch) < 128:
+            out.append(ch)
+        # else: unsupported character (emoji, accented letter, …) — dropped.
+    return "".join(out)
+
+
+# GSM-7 extension-table characters cost two septets each; everything else
+# ASCII costs one. A single SMS holds 160 septets, each concatenated part
+# 153 — so the segment count (and hence the billed units) follows from the
+# septet count, not the character count.
+_GSM7_EXTENSION = set("[]{}|^\\€~")
+
+
+def sms_gsm7_segments(text: str) -> int:
+    """Number of SMS segments a GSM-7-normalized `text` bills as."""
+    septets = sum(2 if ch in _GSM7_EXTENSION else 1 for ch in text or "")
+    if septets <= 160:
+        return 1
+    return -(-septets // 153)  # ceil without importing math
+
+
+# ── Texin delivery tracking ───────────────────────────────────────────────────
+# Texin reports per-message status ("sent" / "delivered" / "failed" /
+# "rejected") via /check_status and the /sms/texin/dlr webhook. "sent" only
+# means accepted by Texin — never treat it as "delivered". Entries land here
+# only from real provider responses, never fabricated; the admin dashboard
+# reads them via get_texin_delivery_status()/get_texin_metrics().
+
+TEXIN_DELIVERY_STATUSES = ("sent", "delivered", "failed", "rejected")
+
+TEXIN_DELIVERY_CACHE: dict[str, str] = {}
+
+_TEXIN_METRICS = {
+    "submitted": 0,   # provider accepted (HTTP ok + success + message_id)
+    "delivered": 0,   # a "delivered" report arrived
+    "failed": 0,      # a "failed"/"rejected" report arrived
+    "units": 0,       # total billed units from accepted sends
+    "amount_minor": 0,  # total confirmed spend (KES cents)
+}
+
+
+def record_texin_delivery(message_id: str, status: str, *, count: bool = True) -> Optional[str]:
+    """Record a real Texin delivery status; returns it normalized, or None
+    for an unrecognized status (never stored, never counted).
+
+    Counting is transition-based: a message moving into "delivered" (or
+    "failed"/"rejected") counts once, no matter how often the same status
+    is replayed by webhooks or re-polled via check_status. Counters only
+    ever reflect real provider responses — never fabricated."""
+    norm = (status or "").strip().lower()
+    if norm not in TEXIN_DELIVERY_STATUSES or not message_id:
+        return None
+    prev = TEXIN_DELIVERY_CACHE.get(str(message_id))
+    TEXIN_DELIVERY_CACHE[str(message_id)] = norm
+    if count and norm != prev:
+        if norm == "delivered":
+            _TEXIN_METRICS["delivered"] += 1
+        elif norm in ("failed", "rejected"):
+            _TEXIN_METRICS["failed"] += 1
+    return norm
+
+
+def get_texin_delivery_status(message_id: str) -> Optional[str]:
+    """Last known Texin status for `message_id`, or None if never reported."""
+    return TEXIN_DELIVERY_CACHE.get(str(message_id))
+
+
+def get_texin_metrics() -> dict:
+    """Process-local Texin counters (submissions, reports, units, spend) for
+    the admin dashboard. Delivery counts only cover reports actually
+    received — no reports means no delivery claims."""
+    return dict(_TEXIN_METRICS)
+
+
+def verify_texin_signature(raw_body: bytes, signature: str, secret: str) -> bool:
+    """Check Texin's `X-Texin-Signature` header value.
+
+    Expected format: "sha256=<HMAC-SHA256 hex of the raw request body>"
+    keyed with the webhook signing secret. Constant-time comparison; any
+    malformed input (or an unconfigured secret) fails closed.
+    """
+    if not raw_body and raw_body != b"":
+        return False
+    if not signature or not secret:
+        return False
+    sig = signature.strip()
+    if not sig.lower().startswith("sha256="):
+        return False
+    provided = sig.split("=", 1)[1].strip()
+    if not provided:
+        return False
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(provided.lower(), expected.lower())
 
 
 class SMSProvider(Protocol):
@@ -79,12 +254,12 @@ class ConsoleSMS:
         if settings.is_production:
             logger.error(
                 "[sms:console] no SMS provider configured in production — "
-                "message NOT sent (set MOBITECH_API_KEY/MOBITECH_SENDER_NAME "
+                "message NOT sent (set TEXIN_API_KEY "
                 "or AT_USERNAME/AT_API_KEY)"
             )
             return False
         logger.warning("[sms:console] no SMS provider configured (checked "
-                        "MOBITECH_API_KEY/MOBITECH_SENDER_NAME, then "
+                        "TEXIN_API_KEY, then "
                         "AT_USERNAME/AT_API_KEY) — logging instead of "
                         "sending. recipient and body redacted")
         return True
@@ -160,7 +335,12 @@ _MOBITECH_STATUS_DESCRIPTIONS = {
 
 
 class MobitechSMS:
-    """Primary provider — Mobitech Technologies bulk SMS API (Kenya).
+    """DEPRECATED — Mobitech Technologies bulk SMS API (Kenya).
+
+    Replaced by TexinSMS as BROKA's primary provider. Kept working (and
+    its /sms/dlr webhook stays live) for in-flight delivery reports only —
+    get_sms_provider() never selects it, so stale MOBITECH_* environment
+    values cannot override Texin. Do not add new call sites.
 
     Docs: https://textapi.mobitechtechnologies.com (account dashboard ->
     Developers / API Documentation). No sandbox environment — sends are
@@ -393,9 +573,295 @@ class MobitechSMS:
             return None
 
 
+class TexinSMS:
+    """Primary provider — Texin BulkSMS API (Kenya).
+
+    Sends BROKA's own OTP/notification text through Texin's /send_sms.
+    BROKA keeps its full OTP lifecycle (generation, storage, expiry,
+    attempt limits, verification) — Texin's /send_otp and /verify_otp
+    endpoints are deliberately NOT used, so there is exactly one OTP
+    lifecycle and authentication behavior is unchanged.
+
+    Acceptance contract (all required for True):
+      - HTTP request succeeds (2xx).
+      - JSON body parses with "success" true.
+      - "simulation_mode" is not true (a simulated send reached nobody).
+      - A non-empty message_id is present (kept for delivery tracking).
+
+    Anything else — provider errors, insufficient balance, auth failures,
+    4xx/5xx, timeouts, malformed JSON, missing message_id, simulation
+    mode — returns False. An HTTP 200 alone never counts as submitted.
+
+    Billing: Texin reports units_used/cost per send; the confirmed charge
+    is recorded (estimated=False) after acceptance. Accounting failures
+    never flip an accepted send to False. One cost row per provider
+    handoff, so a fallback chain hands the same text to two providers only
+    via two separate send() calls, each recorded once.
+
+    Retries: at most ONE retry, and only for an explicit transient
+    rejection (HTTP 429, or a 5xx carrying a JSON success=false body —
+    proof Texin did NOT accept). Timeouts and connection errors are NEVER
+    retried: after an ambiguous timeout Texin may already have accepted
+    and billed, and a retry would double-charge and (for OTPs) mint a
+    second valid code. Retries never resend automatically in a way that
+    produces duplicate charges — see send() callers, which surface False
+    and let the user request a new code instead.
+
+    Rate limits: no status/balance polling on the send path; balance and
+    sender IDs are on-demand admin helpers below.
+    """
+
+    def __init__(self) -> None:
+        self._base_url = (settings.texin_base_url or "https://sms.texin.co.ke/api").rstrip("/")
+        timeout = settings.texin_timeout_seconds or 15
+        self._timeout = float(timeout) if float(timeout) > 0 else 15.0
+        self.last_message_id: Optional[str] = None
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    @staticmethod
+    def _safe_json(resp: httpx.Response) -> Optional[dict]:
+        try:
+            parsed = resp.json()
+        except ValueError:  # httpx raises a ValueError subclass on bad JSON
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _send_payload(self, recipient: str, message: str) -> dict:
+        payload: dict[str, Any] = {
+            "api_key": settings.texin_api_key,
+            "recipient": recipient,
+            "message": message,
+        }
+        # Empty TEXIN_SENDER_ID means "use the account default" (currently
+        # "Texin") — the key is omitted entirely rather than sent empty.
+        if settings.texin_sender_id:
+            payload["sender_id"] = settings.texin_sender_id
+        return payload
+
+    @staticmethod
+    def _extract_billing(body: dict) -> tuple[Optional[int], Optional[float], Optional[str]]:
+        """(units_used, cost_kes, message_id) from a /send_sms body."""
+        units: Optional[int] = None
+        cost: Optional[float] = None
+        message_id: Optional[str] = None
+        try:
+            raw_units = body.get("units_used")
+            if raw_units is not None:
+                units = int(raw_units)
+                if units is not None and units <= 0:
+                    units = None
+        except (TypeError, ValueError):
+            units = None
+        try:
+            raw_cost = body.get("cost")
+            if raw_cost is not None:
+                cost = float(raw_cost)
+        except (TypeError, ValueError):
+            cost = None
+        raw_mid = body.get("message_id")
+        if raw_mid is not None and str(raw_mid).strip():
+            message_id = str(raw_mid).strip()
+        return units, cost, message_id
+
+    def _log_http_error(self, url: str, resp: httpx.Response) -> None:
+        content_type = resp.headers.get("content-type", "")
+        body_json = self._safe_json(resp)
+        raw_text = _redact_phone_text((resp.text or "")[:2000])
+        logger.error(
+            "[sms:texin] HTTP error — endpoint=%s http_status=%s "
+            "content_type=%r success=%r response_body=%s",
+            url, resp.status_code, content_type,
+            body_json.get("success") if body_json else None,
+            _redact_result(raw_text),
+        )
+
+    async def _post(self, path: str, payload: dict) -> httpx.Response:
+        url = f"{self._base_url}{path}"
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            return await client.post(url, headers=self._headers(), json=payload)
+
+    async def _attempt_send(self, recipient: str, gsm_text: str) -> Optional[dict]:
+        """One /send_sms attempt. Returns the billing dict on acceptance,
+        None on explicit rejection, and raises httpx.HTTPError on transport
+        failures or non-2xx responses (the breaker counts those)."""
+        resp = await self._post("/send_sms", self._send_payload(recipient, gsm_text))
+        if resp.status_code == 429:
+            # Explicit transient rejection (rate limited) — retryable.
+            self._log_http_error(f"{self._base_url}/send_sms", resp)
+            raise _TransientTexinError("rate limited (429)")
+        if resp.status_code >= 400:
+            body_json = self._safe_json(resp)
+            self._log_http_error(f"{self._base_url}/send_sms", resp)
+            # A 5xx carrying a JSON success=false body is proof Texin did
+            # NOT accept — retryable. Anything else (auth, balance,
+            # gateway HTML pages, ambiguous states) is final.
+            if resp.status_code >= 500 and isinstance(body_json, dict) \
+                    and body_json.get("success") is False:
+                raise _TransientTexinError(f"transient 5xx: {resp.status_code}")
+            resp.raise_for_status()
+            return None  # unreachable — raise_for_status() threw
+        body = self._safe_json(resp)
+        if not body:
+            logger.error("[sms:texin] send failed: non-JSON success response")
+            return None
+        if body.get("success") is not True:
+            logger.error(
+                "[sms:texin] send rejected success=%r response=%r",
+                body.get("success"), _redact_result(body),
+            )
+            return None
+        if body.get("simulation_mode") is True:
+            # Accepted by the simulator, delivered to nobody — not a send.
+            logger.error("[sms:texin] send failed: simulation_mode=true, message NOT delivered")
+            return None
+        units, cost, message_id = self._extract_billing(body)
+        if not message_id:
+            logger.error("[sms:texin] send failed: success=true but no message_id")
+            return None
+        return {"message_id": message_id, "units": units, "cost": cost}
+
+    async def _send_once(self, phone: str, message: str) -> Optional[dict]:
+        recipient = normalize_ke_phone(phone)
+        if not recipient:
+            logger.error("[sms:texin] send failed: malformed phone number")
+            return None
+        gsm_text = sms_to_gsm7(message)
+        if not gsm_text:
+            logger.error("[sms:texin] send failed: message has no GSM-7 content")
+            return None
+        try:
+            return await self._attempt_send(recipient, gsm_text)
+        except _TransientTexinError:
+            # Bounded: exactly one retry, only for explicit transient
+            # rejections (never for timeouts — see class docstring).
+            await asyncio.sleep(1)
+            return await self._attempt_send(recipient, gsm_text)
+
+    async def send(self, phone: str, message: str) -> bool:
+        try:
+            info = await _texin_breaker.call(self._send_once, phone, message)
+        except (CircuitOpenError, httpx.HTTPError, _TransientTexinError) as e:
+            # _TransientTexinError here means the single bounded retry also
+            # met an explicit transient rejection — still a soft False, and
+            # only one message was ever (possibly) submitted.
+            logger.error("[sms:texin] send failed err=%s", type(e).__name__)
+            return False
+        if not info:
+            return False
+        # Provider accepted the message — retain the ID for delivery
+        # tracking, then record the CONFIRMED charge. Accounting runs on a
+        # detached session and can never flip this accepted send to False.
+        self.last_message_id = info["message_id"]
+        TEXIN_DELIVERY_CACHE[info["message_id"]] = "sent"
+        units = info.get("units")
+        _TEXIN_METRICS["submitted"] += 1
+        if units:
+            _TEXIN_METRICS["units"] += units
+        try:
+            from api.core.cost_ledger import record_sms_cost
+            row = await record_sms_cost(
+                provider="texin",
+                units=units,
+                amount_minor=(
+                    int(round(float(info["cost"]) * 100))
+                    if info.get("cost") is not None else None
+                ),
+                message_id=info["message_id"],
+            )
+            if row is not None:
+                _TEXIN_METRICS["amount_minor"] += row.amount_minor
+        except Exception as exc:  # never fail the send on accounting
+            logger.warning("[sms:texin] cost record failed (non-fatal): %s", exc)
+        return True
+
+    # ── Extra, documented Texin endpoints ─────────────────────────────────
+    # Not part of the SMSProvider protocol — on-demand helpers for delivery
+    # tracking and admin checks, never polled on the send path.
+
+    async def check_status(self, message_id: str) -> Optional[str]:
+        """POST /check_status -> normalized status ("sent" / "delivered" /
+        "failed" / "rejected"), recorded in the delivery cache. None when
+        the lookup itself fails or the status is unrecognized."""
+        try:
+            resp = await self._post(
+                "/check_status",
+                {"api_key": settings.texin_api_key, "message_id": message_id},
+            )
+            resp.raise_for_status()
+            body = self._safe_json(resp)
+            if not body:
+                return None
+            # Documented shape carries the status under "status"; accept the
+            # common aliases defensively without inventing new semantics.
+            status = (
+                body.get("status") or body.get("delivery_status")
+                or body.get("dlrStatus") or body.get("state")
+            )
+            return record_texin_delivery(message_id, str(status) if status is not None else "")
+        except httpx.HTTPError as e:
+            logger.error("[sms:texin] check_status failed err=%s", type(e).__name__)
+            return None
+
+    async def get_balance(self) -> Optional[dict]:
+        """POST /get_balance -> balance body, or None on failure."""
+        try:
+            resp = await self._post("/get_balance", {"api_key": settings.texin_api_key})
+            resp.raise_for_status()
+            return self._safe_json(resp)
+        except httpx.HTTPError as e:
+            logger.error("[sms:texin] get_balance failed err=%s", type(e).__name__)
+            return None
+
+    async def get_sender_ids(self) -> Optional[Any]:
+        """POST /get_sender_ids -> sender-ID list/body, or None on failure."""
+        try:
+            resp = await self._post("/get_sender_ids", {"api_key": settings.texin_api_key})
+            resp.raise_for_status()
+            try:
+                return resp.json()
+            except ValueError:
+                return None
+        except httpx.HTTPError as e:
+            logger.error("[sms:texin] get_sender_ids failed err=%s", type(e).__name__)
+            return None
+
+    async def test_connection(self) -> bool:
+        """GET /test_connection -> True when the API answers 2xx."""
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.get(
+                    f"{self._base_url}/test_connection", headers=self._headers()
+                )
+                return 200 <= resp.status_code < 300
+        except httpx.HTTPError as e:
+            logger.error("[sms:texin] test_connection failed err=%s", type(e).__name__)
+            return False
+
+
+class _TransientTexinError(Exception):
+    """Internal: an explicit transient rejection worth exactly one retry."""
+
+
 def get_sms_provider() -> SMSProvider:
-    if settings.mobitech_api_key and settings.mobitech_sender_name:
-        return MobitechSMS()
+    # Texin is primary: TEXIN_API_KEY alone selects it — stale MOBITECH_*
+    # values are deliberately NOT consulted, so they can never override it.
+    if settings.texin_api_key:
+        return TexinSMS()
     if settings.at_username and settings.at_api_key:
         return AfricasTalkingSMS()
     return ConsoleSMS()
+
+
+def current_sms_provider_name() -> str:
+    """Machine-readable name of the provider get_sms_provider() would pick
+    right now — for the admin dashboard and diagnostics."""
+    if settings.texin_api_key:
+        return "texin"
+    if settings.at_username and settings.at_api_key:
+        return "africas_talking"
+    return "console"
