@@ -4,6 +4,7 @@ name: BROKA Production Release
 # successfully for a push to main. It then migrates Supabase and deploys the
 # exact tested commit to Render. PR CI runs never receive production secrets.
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["BROKA CI — Test + Build APK"]
     types: [completed]
@@ -20,9 +21,11 @@ jobs:
   release:
     name: Migrate Supabase, then deploy Render
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -40,7 +43,7 @@ jobs:
       - name: Check out the exact commit that passed CI
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Python 3.11
@@ -56,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          tested_sha="${{ github.event.workflow_run.head_sha }}"
+          tested_sha="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
           current_main="$(git rev-parse origin/main)"
           if [ "$tested_sha" != "$current_main" ]; then
             # The existing CI workflow may append a graphify.md-only commit
