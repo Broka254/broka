@@ -196,6 +196,55 @@ void main() {
         findsOneWidget);
   });
 
+  testWidgets('shows the launch offers card and each listing\'s time left', (tester) async {
+    setFakeRoute((uri) {
+      final p = uri.path;
+      if (p == '/auth/user/seller-1') return {'id': 'seller-1', 'name': 'Grace Akinyi'};
+      if (p == '/pricing/launch-offers') {
+        // The production state: billing off (eligible/enabled false),
+        // slots remaining. The card must still show.
+        return {
+          'listing_free': {
+            'limit': 50, 'claimed': 40, 'remaining': 10, 'free_days': 60,
+            'eligible': false, 'enabled': false, 'already_claimed': false,
+          },
+          'store_free': {
+            'limit': 10, 'claimed': 9, 'remaining': 1, 'free_days': 60,
+            'eligible': false, 'enabled': false, 'already_claimed': false,
+          },
+        };
+      }
+      if (p == '/listings/') {
+        return [
+          {
+            'id': 'listing-7', 'name': 'Samsung A54', 'category': 'Electronics',
+            'price': 32000, 'listing_type': 'direct', 'status': 'active',
+            'seller_id': 'seller-1', 'views': 4,
+            'paid_until': '2026-10-03T12:00:00',
+            'time_left': {
+              'status': 'ending', 'label': '2d 0h left', 'seconds_left': 172800,
+              'days_left': 2.0, 'goes_offline_at': '2026-10-03T12:00:00',
+              'is_expiring_soon': true,
+            },
+          },
+        ];
+      }
+      if (p == '/stores/mine') return const FakeResponse(null);
+      return null;
+    });
+    await tester.pumpWidget(const MaterialApp(home: SellerDashboardScreen(animateBackground: false)));
+    await _settle(tester);
+    expect(find.byKey(const Key('launch-offers-card')), findsOneWidget);
+    expect(find.text('First 50 listings free'), findsOneWidget);
+    expect(find.text('First 10 online stores free'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('dashboard-tab-1')));
+    await _settle(tester);
+    expect(find.byKey(const Key('listing-time-left-row')), findsOneWidget);
+    expect(find.textContaining('goes offline'), findsOneWidget);
+    expect(find.textContaining('text you 2 days before'), findsWidgets);
+  });
+
   group('deleting a product', () {
     Map<String, dynamic> listing(String id, String name) => {
           'id': id, 'name': name, 'category': 'Electronics', 'price': 32000,

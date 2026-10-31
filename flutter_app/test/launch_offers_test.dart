@@ -72,7 +72,10 @@ void main() {
       expect(offer.shouldShow, isTrue);
     });
 
-    test('paused (billing off) or exhausted offers stay silent', () {
+    test('billing off does not hide the promotion; exhausted/configured-off does', () {
+      // Production ships with listing/store billing off, so eligible and
+      // enabled read false for everyone. The card must still show while
+      // slots remain — gating on them made the offer invisible everywhere.
       const paused = LaunchOffer(
         limit: 50, claimed: 0, remaining: 50, freeDays: 60,
         eligible: false, enabled: false,
@@ -81,8 +84,12 @@ void main() {
         limit: 50, claimed: 50, remaining: 0, freeDays: 60,
         eligible: false, alreadyClaimed: false, enabled: true,
       );
-      expect(paused.shouldShow, isFalse);
+      const off = LaunchOffer(limit: 0, claimed: 0, remaining: 0, freeDays: 60);
+      expect(paused.shouldShow, isTrue);
+      expect(paused.hasSlots, isTrue);
+      expect(paused.isAvailableForUser, isFalse);
       expect(gone.shouldShow, isFalse);
+      expect(off.shouldShow, isFalse);
     });
 
     test('already claimed still shows, so the free period is explained', () {
@@ -225,6 +232,75 @@ void main() {
       expect(find.textContaining('text you 2 days before'), findsOneWidget);
       await tester.tap(find.byKey(const Key('time-left-renew')));
       expect(renewed, isTrue);
+    });
+
+    testWidgets('banner shows while slots remain even with billing off', (tester) async {
+      // The production state: fees off, nobody eligible yet, slots left.
+      await tester.pumpWidget(_host(const LaunchOfferBanner(
+        offer: LaunchOffer(
+          limit: 50, claimed: 0, remaining: 50, freeDays: 60,
+          eligible: false, enabled: false,
+        ),
+        kind: LaunchOfferKind.listing,
+      )));
+      expect(find.byKey(const Key('launch-offer-listing')), findsOneWidget);
+      expect(find.text('50 left'), findsOneWidget);
+    });
+
+    testWidgets('dashboard offers card shows both offers with CTAs', (tester) async {
+      var posted = false;
+      var opened = false;
+      await tester.pumpWidget(_host(LaunchOffersCard(
+        offers: const LaunchOffers(
+          listingFree: LaunchOffer(
+            limit: 50, claimed: 40, remaining: 10, freeDays: 60,
+            eligible: false, enabled: false,
+          ),
+          storeFree: LaunchOffer(
+            limit: 10, claimed: 9, remaining: 1, freeDays: 60,
+            eligible: false, enabled: false,
+          ),
+        ),
+        onPostListing: () => posted = true,
+        onOpenStore: () => opened = true,
+      )));
+      expect(find.byKey(const Key('launch-offers-card')), findsOneWidget);
+      expect(find.text('First 50 listings free'), findsOneWidget);
+      expect(find.text('First 10 online stores free'), findsOneWidget);
+      expect(find.textContaining('10 of 50 left'), findsOneWidget);
+      expect(find.textContaining('never pay a listing fee'), findsOneWidget);
+      await tester.tap(find.text('Post free'));
+      await tester.tap(find.text('Open free'));
+      expect(posted, isTrue);
+      expect(opened, isTrue);
+    });
+
+    testWidgets('listing time-left row always shows, including no expiry', (tester) async {
+      await tester.pumpWidget(_host(const ListingTimeLeftRow(
+        timeLeft: TimeLeft(status: 'unlimited', label: 'No expiry'),
+      )));
+      expect(find.byKey(const Key('listing-time-left-row')), findsOneWidget);
+      expect(find.textContaining('No expiry'), findsOneWidget);
+      expect(find.byKey(const Key('listing-time-left-renew')), findsNothing);
+
+      var renewed = false;
+      await tester.pumpWidget(_host(ListingTimeLeftRow(
+        timeLeft: TimeLeft(
+          status: 'ending', label: '1d 2h left', secondsLeft: 93600,
+          goesOfflineAt: DateTime.now().add(const Duration(days: 1)),
+          isExpiringSoon: true,
+        ),
+        onRenew: () => renewed = true,
+      )));
+      expect(find.textContaining('goes offline'), findsOneWidget);
+      expect(find.textContaining('text you 2 days before'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('listing-time-left-renew')));
+      expect(renewed, isTrue);
+
+      await tester.pumpWidget(_host(const ListingTimeLeftRow(
+        timeLeft: TimeLeft(status: 'store_covered', label: 'Live via store plan'),
+      )));
+      expect(find.textContaining('store plan'), findsOneWidget);
     });
 
     testWidgets('store-covered banner explains no fee', (tester) async {

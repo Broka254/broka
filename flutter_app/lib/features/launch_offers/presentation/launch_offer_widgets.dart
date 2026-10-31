@@ -83,6 +83,196 @@ class LaunchOfferBanner extends StatelessWidget {
   }
 }
 
+/// Both launch offers on one card, with the way in. This is the card a
+/// seller sees without starting anything: on the Seller Dashboard, above
+/// their numbers. Each offer keeps its own remaining count and state;
+/// a taken or exhausted offer says so instead of offering a dead button.
+class LaunchOffersCard extends StatelessWidget {
+  const LaunchOffersCard({
+    super.key,
+    required this.offers,
+    this.onPostListing,
+    this.onOpenStore,
+    this.margin = const EdgeInsets.fromLTRB(16, 12, 16, 4),
+  });
+
+  final LaunchOffers offers;
+  final VoidCallback? onPostListing;
+  final VoidCallback? onOpenStore;
+  final EdgeInsetsGeometry margin;
+
+  @override
+  Widget build(BuildContext context) {
+    final showListing = offers.listingFree.shouldShow;
+    final showStore = offers.storeFree.shouldShow;
+    if (!showListing && !showStore) return const SizedBox.shrink();
+    return Container(
+      key: const Key('launch-offers-card'),
+      margin: margin,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: BrokaColors.success.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: BrokaColors.success.withOpacity(0.5)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.celebration_rounded, color: BrokaColors.success, size: 22),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text('Launch offers — free to start',
+                style: TextStyle(color: BrokaColors.textHigh, fontSize: 16, fontWeight: FontWeight.w800)),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        const Text('BROKA is launching. The first listings and stores are free — one of each per person.',
+            style: TextStyle(color: BrokaColors.textMid, fontSize: 12.5, height: 1.4)),
+        if (showListing) ...[
+          const SizedBox(height: 14),
+          _OfferRow(
+            icon: Icons.sell_rounded,
+            title: offers.listingFree.alreadyClaimed == true
+                ? 'Your free listing — claimed'
+                : 'First ${offers.listingFree.limit} listings free',
+            detail: offers.listingFree.alreadyClaimed == true
+                ? 'You have used your one free listing. It stays live for its free period.'
+                : '${offers.listingFree.freeDays} days free · ${offers.listingFree.remaining} of ${offers.listingFree.limit} left · one per person',
+            actionLabel: offers.listingFree.alreadyClaimed == true ? null : 'Post free',
+            onAction: onPostListing,
+            key: const Key('launch-offers-listing-row'),
+          ),
+        ],
+        if (showStore) ...[
+          const SizedBox(height: 12),
+          _OfferRow(
+            icon: Icons.storefront_rounded,
+            title: offers.storeFree.alreadyClaimed == true
+                ? 'Your free store — claimed'
+                : 'First ${offers.storeFree.limit} online stores free',
+            detail: offers.storeFree.alreadyClaimed == true
+                ? 'You have used your one free store setup.'
+                : 'Free setup + ${offers.storeFree.freeDays} days · ${offers.storeFree.remaining} of ${offers.storeFree.limit} left · one per person · listings in a store never pay a listing fee',
+            actionLabel: offers.storeFree.alreadyClaimed == true ? null : 'Open free',
+            onAction: onOpenStore,
+            key: const Key('launch-offers-store-row'),
+          ),
+        ],
+      ]),
+    );
+  }
+}
+
+class _OfferRow extends StatelessWidget {
+  const _OfferRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: BrokaColors.success, size: 20),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(color: BrokaColors.textHigh, fontSize: 14, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 2),
+          Text(detail, style: const TextStyle(color: BrokaColors.textMid, fontSize: 12, height: 1.4)),
+        ]),
+      ),
+      if (actionLabel != null) ...[
+        const SizedBox(width: 8),
+        TextButton(
+          onPressed: onAction,
+          style: TextButton.styleFrom(
+            backgroundColor: BrokaColors.success.withOpacity(0.16),
+            foregroundColor: BrokaColors.success,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: Text(actionLabel!, style: const TextStyle(fontWeight: FontWeight.w800)),
+        ),
+      ],
+    ]);
+  }
+}
+
+/// One listing's time left, ALWAYS shown on owner surfaces — including
+/// "No expiry", so a seller can tell a listing with no deadline from one
+/// whose deadline simply was not rendered. [onRenew] appears only when
+/// the deadline needs one (ending/offline and not store-covered).
+class ListingTimeLeftRow extends StatelessWidget {
+  const ListingTimeLeftRow({super.key, required this.timeLeft, this.onRenew});
+
+  final TimeLeft? timeLeft;
+  final VoidCallback? onRenew;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = timeLeft;
+    final (icon, color, text) = switch (t) {
+      null => (Icons.schedule_rounded, BrokaColors.textMid, 'Time left: not available'),
+      TimeLeft(isStoreCovered: true) => (
+          Icons.storefront_rounded,
+          BrokaColors.success,
+          'Live via your store plan — no listing fee, no own deadline',
+        ),
+      TimeLeft(isUnlimited: true) => (
+          Icons.all_inclusive_rounded,
+          BrokaColors.success,
+          'No expiry — this listing stays live',
+        ),
+      TimeLeft(isOffline: true) => (
+          Icons.visibility_off_rounded,
+          BrokaColors.danger,
+          'Offline${t!.offlineDateLabel != null ? ' since ${t.offlineDateLabel}' : ''} — buyers can\'t see it',
+        ),
+      TimeLeft(isExpiringSoon: true) => (
+          Icons.schedule_rounded,
+          BrokaColors.warning,
+          '${t!.label} · goes offline ${t.offlineDateLabel ?? ''} · we text you 2 days before',
+        ),
+      _ => (
+          Icons.schedule_rounded,
+          BrokaColors.success,
+          '${t!.label} · goes offline ${t.offlineDateLabel ?? ''}',
+        ),
+    };
+    return Container(
+      key: const Key('listing-time-left-row'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w700, height: 1.3)),
+        ),
+        if (onRenew != null && t != null && t.needsAttention && !t.isStoreCovered)
+          TextButton(
+            key: const Key('listing-time-left-renew'),
+            onPressed: onRenew,
+            child: const Text('Renew', style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+      ]),
+    );
+  }
+}
+
 /// A listing posted through a store never pays a listing fee.
 class StoreCoveredBanner extends StatelessWidget {
   const StoreCoveredBanner({super.key, this.storeName});

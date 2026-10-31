@@ -117,15 +117,21 @@ class LaunchOffer {
   bool get isEnabled => enabled ?? limit > 0;
   bool get isExhausted => remaining <= 0;
 
-  /// This user can still take it right now.
+  /// This user can still claim it right now (billing on, slot left).
   bool get isAvailableForUser =>
       isEnabled && !isExhausted && eligible == true && alreadyClaimed != true;
 
-  /// Show the banner at all: live for someone, or already taken by this
-  /// user (so they know where their free period came from). A paused or
-  /// exhausted offer nobody took is not a promise to tease anyone with.
-  bool get shouldShow =>
-      isAvailableForUser || alreadyClaimed == true;
+  /// Slots are still on the table for someone. Independent of the billing
+  /// switches: while fees are off in production, `eligible`/`enabled`
+  /// read false for everyone, and gating the card on them made the launch
+  /// offer invisible on every screen — the offer existed only in the API.
+  bool get hasSlots => limit > 0 && remaining > 0;
+
+  /// Show the card at all: slots remain (a promotion users can act on by
+  /// posting/opening now), or this user already took it (so they know
+  /// where their free period came from). Only a configured-off offer
+  /// (limit 0) or an exhausted one nobody took stays silent.
+  bool get shouldShow => hasSlots || alreadyClaimed == true;
 
   factory LaunchOffer.fromJson(Map<String, dynamic> j) => LaunchOffer(
         limit: (j['limit'] as num?)?.toInt() ?? 0,

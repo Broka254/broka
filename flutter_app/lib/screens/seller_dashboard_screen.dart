@@ -36,7 +36,11 @@ import '../widgets/particle_field.dart';
 import '../models/listing.dart';
 import '../models/seller_standing.dart';
 import '../core/utils/result.dart';
+import '../features/launch_offers/data/launch_offers_repository.dart';
+import '../features/launch_offers/domain/launch_offers.dart';
+import '../features/launch_offers/presentation/launch_offer_widgets.dart';
 import '../features/listing_fee/presentation/awaiting_payment_panel.dart';
+import '../features/listing_fee/presentation/listing_fee_screen.dart';
 import '../features/listings/data/repositories/listings_repository.dart';
 import '../features/listings/presentation/change_price.dart';
 import '../features/listings/presentation/replace_photos.dart';
@@ -110,6 +114,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       if (mounted) setState(() {});
     });
     _load();
+    _loadOffers();
   }
 
   @override
@@ -122,7 +127,21 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
   // Bumped on every refresh, so the waiting-for-payment panel reloads too.
   int _feeReload = 0;
 
+  /// Launch offers for the Overview card. Null until loaded (and on any
+  /// failure): the dashboard must never depend on the promo loading.
+  LaunchOffers? _offers;
+
+  Future<void> _loadOffers() async {
+    final result = await launchOffersRepository.offers();
+    if (!mounted) return;
+    result.fold(
+      onSuccess: (offers) => setState(() => _offers = offers),
+      onFailure: (_, __) {},
+    );
+  }
+
   Future<void> _load() async {
+    _loadOffers();
     if (mounted) setState(() { _loading = true; _dealsTabLoaded = false; _feeReload++; });
     try {
       final uid = ApiService.currentUserId;
@@ -926,8 +945,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     // anyone waiting for it - the stagger caps at 8, so the tail of the page
     // is never held back behind an animation the user has not scrolled to.
     final sections = <Widget>[
-      // First: a listing buyers can't see is the one thing here that is
-      // costing the seller sales right now.
+      // The launch offers, first: free to start is the one thing here a
+      // new seller can act on before they have numbers to read.
+      if (_offers != null)
+        LaunchOffersCard(
+          offers: _offers!,
+          onPostListing: () => Navigator.pushNamed(context, '/sell'),
+          onOpenStore: () => StoreEntry.open(context),
+        ),
+      // A listing buyers can't see is the thing costing sales right now.
       AwaitingPaymentPanel(reloadSignal: _feeReload),
       _buildCommandHeader(),
       _buildStoreSection(),
@@ -2151,7 +2177,21 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
         itemCount: _listings.length + 1,
         itemBuilder: (_, i) {
-          if (i == 0) return FadeSlideIn(index: 0, child: _buildProductsHeader());
+          if (i == 0) {
+            return FadeSlideIn(
+              index: 0,
+              child: Column(children: [
+                _buildProductsHeader(),
+                if (_offers != null)
+                  LaunchOffersCard(
+                    offers: _offers!,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    onPostListing: () => Navigator.pushNamed(context, '/sell'),
+                    onOpenStore: () => StoreEntry.open(context),
+                  ),
+              ]),
+            );
+          }
           // index i, not i-1, so the header counts as the first beat and
           // the first card follows it rather than arriving alongside.
           return FadeSlideIn(index: i, child: _buildProductCard(_listings[i - 1]));
@@ -2299,6 +2339,17 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
                   style: const TextStyle(color: BrokaColors.textMid, fontSize: 10)),
             ]),
           ),
+          // ── Time left before it goes offline ───────────────────────────────
+          // Always shown (including "No expiry"), on the collapsed card:
+          // a seller scanning their products must see each deadline
+          // without expanding every card to find it.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            child: ListingTimeLeftRow(
+              timeLeft: l.timeLeft,
+              onRenew: () => _renewListing(l),
+            ),
+          ),
           // ── Per-listing insights ─────────────────────────────────────────────
           //
           // Its own labelled target rather than something buried in the
@@ -2431,6 +2482,15 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
     if (changed && mounted) await _load();
   }
 
+  /// Pay/renew this listing's time from its time-left row or banner.
+  Future<void> _renewListing(Listing l) async {
+    HapticFeedback.selectionClick();
+    final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => ListingFeeScreen(listingId: l.id, listingName: l.name),
+    ));
+    if (paid == true && mounted) await _load();
+  }
+
   /// The server's rules decide (change_price.dart); a change reloads the
   /// catalogue, since the paid time can move with the price.
   Future<void> _changePrice(Listing l) async {
@@ -2507,6 +2567,20 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen>
       Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _secLabel('TIME LEFT', color: BrokaColors.neonBlue),
+          const SizedBox(height: 10),
+          // Full detail behind the collapsed row: exact offline date,
+          // the 2-day SMS warning, and Renew when it is due. Unlimited
+          // and store-covered listings say why they have no deadline.
+          if (l.timeLeft?.isUnlimited == true)
+            ListingTimeLeftRow(timeLeft: l.timeLeft)
+          else
+            TimeLeftBanner(
+              timeLeft: l.timeLeft,
+              subject: 'Your listing',
+              onRenew: () => _renewListing(l),
+            ),
+          const SizedBox(height: 22),
           _secLabel('VIEWS', color: BrokaColors.neonBlue),
           const SizedBox(height: 10),
           Row(children: [
