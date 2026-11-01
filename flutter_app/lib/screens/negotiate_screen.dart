@@ -35,6 +35,23 @@ import '../features/safe_payment/payments_shown.dart';
 import '../features/safe_payment/safe_payment.dart' show openZenoEscrowGuide, zenoEscrowPrompt;
 import '../core/errors/user_facing_error.dart';
 
+/// Merge the server's Zeno AI thread over the local cache without
+/// duplicates. An empty server answer never wipes a non-empty local
+/// transcript; unsent local bubbles (no server id yet) are always kept.
+/// Only when both are confirmed empty should the caller start a greeting.
+List<Message> mergeZenoThreads(List<Message> server, List<Message> local) {
+  final seen = <String>{};
+  for (final m in server) {
+    if (m.id.isNotEmpty) seen.add(m.id);
+  }
+  final out = List<Message>.of(server);
+  for (final m in local) {
+    // Unsent local bubbles have no server id yet: keep them.
+    if (m.id.isEmpty || !seen.contains(m.id)) out.add(m);
+  }
+  return out;
+}
+
 class NegotiateScreen extends StatefulWidget {
   const NegotiateScreen({super.key, this.animateBackground = true});
 
@@ -398,15 +415,28 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   Future<void> _cacheMessages() => LocalChatStore.save(
       _threadScopeKey(), _messages.map((m) => m.toJson()).toList());
 
+  /// Merge the server's AI thread over the local cache without duplicates.
+  /// An empty server answer never wipes a non-empty local transcript - it
+  /// means "nothing stored yet" or "couldn't reach it", never "forget what
+  /// you knew". Only when both are confirmed empty does a greeting start a
+  /// genuinely new conversation.
+  List<Message> _mergeZenoThreads(List<Message> server, List<Message> local) =>
+      mergeZenoThreads(server, local);
+
   Future<void> _loadHistory() async {
     if (_listing == null) { _addGreeting(); return; }
     await _loadCachedMessages();
+    // The scope this request is for: a slow answer for another thread must
+    // not overwrite this one (two buyers, or another listing).
+    final scopeListing = _listing!.id;
+    final scopeKey = _threadScopeKey();
     try {
       // A seller's thread is the buyer's they opened. Without buyer_id the
       // server answers with the latest buyer's, so a seller who opened an
       // earlier buyer from the Inbox read someone else's room.
       final history = await ApiService.getNegotiationHistory(_listing!.id,
           buyerId: _role == 'seller' ? _buyerId : null);
+      if (!mounted || _listing?.id != scopeListing || _threadScopeKey() != scopeKey) return;
       // AI thread = Zeno's own replies + the human's own messages that were
       // actually sent to Zeno (via_ai=true). This used to only keep
       // role=='broker', which meant re-opening this screen silently dropped
@@ -417,23 +447,30 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
       _unreadTimer ??= Timer.periodic(
           const Duration(seconds: 30), (_) => _refreshDirectChatUnreadCount());
       if (mounted) {
-        if (aiThread.isEmpty) {
-          _addGreeting();
-        } else {
-          setState(() => _messages = aiThread);
+        final merged = _mergeZenoThreads(aiThread, List<Message>.of(_messages));
+        if (merged.isNotEmpty) {
+          setState(() => _messages = merged);
           _scrollDown();
+        } else {
+          // Both the correctly-scoped server thread and the local cache are
+          // empty: this is a genuinely new conversation.
+          _addGreeting();
+          return;
         }
         _sawZeno();
       }
       unawaited(_cacheMessages());
     } catch (_) {
-      // Offline - keep whatever the cache already showed rather than
-      // replacing it with a fresh greeting.
-      if (_messages.isEmpty) _addGreeting();
+      // A server error keeps the local conversation too - it says nothing
+      // about whether the transcript exists.
+      if (_messages.isEmpty && mounted) _addGreeting();
     }
   }
 
   Future<void> _addGreeting() async {
+    // Never replace an existing conversation with a greeting: only an empty
+    // screen may grow one.
+    if (_messages.isNotEmpty) return;
     setState(() => _typing = true);
     try {
       Message reply = const Message(role: 'broker', content: '');
@@ -444,13 +481,24 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           senderId:   ApiService.currentUserId ?? '',
           content:    '',
           intent:     'opening_greeting',
+          buyerIdForThread: _role == 'seller' ? _buyerId : null,
         );
+      }
+      if (!mounted || _messages.isNotEmpty) {
+        // Something arrived while the greeting was generating - keep it.
+        if (mounted) setState(() => _typing = false);
+        return;
       }
       if (mounted) {
         setState(() { _typing = false; _messages = [reply]; _fresh.add(reply); });
         if (_ttsEnabled) _speak(reply.content);
       }
+      unawaited(_cacheMessages());
     } catch (_) {
+      if (!mounted || _messages.isNotEmpty) {
+        if (mounted) setState(() => _typing = false);
+        return;
+      }
       final name = _listing?.name ?? 'this item';
       final fallback = _role == 'seller'
           ? "Welcome back, $_myFirst! 👋 I'm here for pricing, buyer risk, or anything about \"$name\"."
@@ -460,6 +508,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
         setState(() { _typing = false; _messages = [greeting]; _fresh.add(greeting); });
         if (_ttsEnabled) _speak(fallback);
       }
+      unawaited(_cacheMessages());
     }
   }
 
@@ -495,15 +544,26 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
   /// [photo]: a picture for Zeno to look at with this message. Only the
   /// sender's own reply is written with it in view; it is never passed to
   /// the other party (backend negotiate.send_message).
+  /// Stable client id for one Zeno turn: a retry after a lost response
+  /// reuses it, so the backend returns the stored row instead of a copy.
+  static String _newZenoClientId() =>
+      'z${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+      '${(DateTime.now().millisecond * 1000 + _zenoClientSeq++).toRadixString(36)}';
+  static int _zenoClientSeq = 0;
+
   Future<void> _send([String? quickText, List<int>? photo]) async {
     final text = (quickText ?? _msgCtrl.text).trim();
     if (text.isEmpty) return;
+    // Optimistic bubble first: the user's words survive a slow or failed
+    // AI call, and the cache keeps them across a restart.
+    final clientId = _newZenoClientId();
     setState(() {
-      _messages.add(Message(role: _role, content: photo != null ? '📷 $text' : text));
+      _messages.add(Message(role: _role, content: photo != null ? '📷 $text' : text, clientMsgId: clientId));
       _typing = true;
     });
     if (quickText == null || photo != null) _msgCtrl.clear();
     _scrollDown();
+    unawaited(_cacheMessages());
 
     try {
       Message reply;
@@ -525,6 +585,7 @@ class _NegotiateScreenState extends State<NegotiateScreen> {
           // every buyer negotiating this listing and Zeno's context/deal
           // lookups for it would silently fail to find the right deal.
           buyerIdForThread: _role == 'seller' ? _buyerId : null,
+          clientMsgId: clientId,
         );
       } else {
         reply = await ApiService.freeChat(

@@ -554,6 +554,17 @@ class NegotiationMessage(Base):
     # which is exactly what a recipient who already saw it needs to know.
     edited_at      = Column(DateTime, nullable=True)
     deleted_at     = Column(DateTime, nullable=True)
+    # Reply reference for direct-chat quote-replies. NULL unless this message
+    # answers a specific earlier message in the same listing/buyer thread.
+    # A plain id, not a hard foreign key: the referenced row may be deleted
+    # (tombstoned) or predate the reply - validation lives in negotiate.py,
+    # which also refuses cross-thread and private via_ai references.
+    reply_to_message_id = Column(String, nullable=True, index=True)
+    # Compact snapshot of the referenced message at send time (JSON text).
+    # Lets a reply still render after the original is edited or unsent,
+    # without another lookup - and without exposing private Zeno contents,
+    # since only the already-visible direct-chat preview is stored here.
+    reply_snapshot = Column(Text, nullable=True)
 
     # (listing_id, buyer_id) is the thread-identity pair filtered on
     # throughout negotiate.py (history, inbox, deal-status) and
@@ -603,6 +614,55 @@ class ThreadReadState(Base):
 
     __table_args__ = (
         UniqueConstraint("listing_id", "buyer_id", "role", name="uq_thread_read_state"),
+    )
+
+
+class ZenoConversation(Base):
+    """Durable home for a general-assistant or Buying Agent conversation.
+
+    Separate from NegotiationMessage on purpose: listing-specific Zeno rooms
+    already persist in that table (via_ai rows scoped by listing/buyer), and
+    folding the account-level assistant into it would mix thread isolation
+    rules. One row per (owner, mode, listing) - the phone's ZenoChatStore
+    remains the fast offline cache, this is the cross-device recovery copy.
+    """
+
+    __tablename__ = "zeno_conversations"
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # "assistant" (Zeno tab) or "buying" (Buying Agent) - kept apart because
+    # they carry different gathered state and the app restores them into
+    # different screens.
+    mode       = Column(String, nullable=False)
+    # Nullable: a question asked about one listing stays with that listing.
+    listing_id = Column(String, ForeignKey("listings.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_zeno_conversations_owner_mode", "owner_id", "mode"),
+    )
+
+
+class ZenoTurn(Base):
+    """One ordered turn inside a ZenoConversation. Appended, never rewritten:
+    a retry with the same client_turn_id returns the stored row instead of
+    writing a second copy."""
+
+    __tablename__ = "zeno_turns"
+    id              = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String, ForeignKey("zeno_conversations.id"), nullable=False)
+    role            = Column(String, nullable=False)  # "user" | "assistant"
+    content         = Column(Text, nullable=False, default="")
+    # The phone's id for the turn, for idempotent retries after a timeout.
+    client_turn_id  = Column(String(64), nullable=True)
+    seq             = Column(Integer, nullable=False, default=0)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_zeno_turns_conversation_seq", "conversation_id", "seq"),
+        Index("uq_zeno_turns_conversation_client",
+              "conversation_id", "client_turn_id", unique=True),
     )
 
 
@@ -1906,6 +1966,11 @@ async def _init_db_impl():
             # Retry-safe direct-chat messages (NegotiationMessage.client_msg_id).
             # Its unique index is in index_patches below, after this has run.
             "ALTER TABLE negotiation_messages ADD COLUMN client_msg_id VARCHAR(64)",
+            # Quote-replies (reply_to_message_id + reply_snapshot). Plain ids
+            # validated in negotiate.py - no hard FK, so old rows and deleted
+            # originals never block the migration on either database.
+            "ALTER TABLE negotiation_messages ADD COLUMN reply_to_message_id VARCHAR",
+            "ALTER TABLE negotiation_messages ADD COLUMN reply_snapshot TEXT",
             # Selling terms (Listing.price_unit ... sms_alerts). The two
             # booleans default to what BROKA did before it asked: offers
             # were welcome and the availability SMS was sent.
@@ -2104,6 +2169,9 @@ async def _init_db_impl():
             # NegotiationMessage.client_msg_id.
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_negotiation_messages_sender_client_msg "
             "ON negotiation_messages (sender_id, client_msg_id)",
+            # Quote-reply lookups by referenced message.
+            "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_reply_to "
+            "ON negotiation_messages (reply_to_message_id)",
             # One review per (deal, reviewer) - see Review.__table_args__.
             # Fails harmlessly, and leaves the service's own check as the
             # only guard, on a database already holding a duplicate.

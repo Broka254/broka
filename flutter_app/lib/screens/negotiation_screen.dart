@@ -38,6 +38,7 @@ import '../models/listing.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
+import '../services/counterparty_profile_cache.dart';
 import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
 import '../utils/backend_time.dart';
@@ -67,6 +68,10 @@ class ChatMessage {
   final DateTime? editedAt;
   /// Unsend tombstone: content and media are gone, the row stays in place.
   final bool    deleted;
+  /// Quote-reply reference: the id of the message being answered, if any.
+  final String? replyToMessageId;
+  /// Compact preview of the referenced message, from the server or snapshot.
+  final Map<String, dynamic>? replyPreview;
 
   const ChatMessage({
     required this.role,
@@ -82,6 +87,8 @@ class ChatMessage {
     this.failed = false,
     this.editedAt,
     this.deleted = false,
+    this.replyToMessageId,
+    this.replyPreview,
     String? id,
   }) : id = id ?? '';
 
@@ -100,6 +107,8 @@ class ChatMessage {
     id:           j['id'] as String? ?? '',
     clientId:     j['client_msg_id'] as String?,
     failed:       j['failed'] as bool? ?? false,
+    replyToMessageId: j['reply_to_message_id'] as String?,
+    replyPreview: (j['reply_preview'] as Map?)?.cast<String, dynamic>(),
     editedAt:     (j['edited_at'] is String && (j['edited_at'] as String).isNotEmpty)
         ? DateTime.tryParse(j['edited_at'] as String)
         : null,
@@ -125,6 +134,8 @@ class ChatMessage {
     createdAt:    m.createdAt,
     editedAt:     m.editedAt,
     deleted:      m.deleted,
+    replyToMessageId: m.replyToMessageId,
+    replyPreview: m.replyPreview,
   );
 
   ChatMessage withFailed(bool value) => ChatMessage(
@@ -132,6 +143,7 @@ class ChatMessage {
     durationSecs: durationSecs, callType: callType, viaAi: viaAi,
     isBroker: isBroker, createdAt: createdAt, clientId: clientId,
     failed: value, id: id, editedAt: editedAt, deleted: deleted,
+    replyToMessageId: replyToMessageId, replyPreview: replyPreview,
   );
 
   Map<String, dynamic> toJson() => {
@@ -147,8 +159,24 @@ class ChatMessage {
     'client_msg_id': clientId,
     'edited_at': editedAt?.toIso8601String(),
     'deleted': deleted,
+    if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
+    if (replyPreview != null) 'reply_preview': replyPreview,
     if (failed) 'failed': true,
   };
+
+  /// Compact quote label for a reply preview: text clipped, media labelled,
+  /// deleted rendered safely. Shared by the composer preview and bubbles.
+  static String replyLabel(Map<String, dynamic>? preview, {String fallback = 'Message'}) {
+    if (preview == null) return fallback;
+    if (preview['deleted'] == true) return 'Message deleted';
+    final msgType = preview['msg_type'] as String?;
+    if (msgType == 'image') return 'Photo';
+    if (msgType == 'voice' || msgType == 'audio') return 'Voice message';
+    if (msgType == 'call') return 'Call';
+    final text = (preview['preview'] ?? preview['label'] ?? '').toString();
+    if (text.isEmpty) return fallback;
+    return text.length > 80 ? '${text.substring(0, 77)}…' : text;
+  }
 }
 
 /// A voice note or photo still to be (re)sent, kept in memory so "Try
@@ -157,12 +185,103 @@ class _PendingUpload {
   const _PendingUpload({
     required this.bytes, required this.contentType, required this.fileName,
     required this.mimeType, this.durationSecs,
+    this.replyToMessageId, this.replyPreview, this.caption,
   });
   final Uint8List bytes;
   final String contentType; // "audio" | "image"
   final String fileName;
   final String mimeType;
   final int? durationSecs;
+  final String? replyToMessageId;
+  final Map<String, dynamic>? replyPreview;
+  final String? caption;
+}
+
+/// Durable image outbox: one file per unsent photo under the app documents
+/// directory, plus a tiny metadata sidecar. SharedPreferences only ever
+/// holds the file path and caption - never the image bytes, which would
+/// bloat the JSON cache and duplicate large payloads on every save.
+class _ChatMediaOutbox {
+  static Future<Directory> _dir() async {
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docs.path}/chat_outbox');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
+  static String _safeId(String clientId) =>
+      clientId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+
+  static Future<({String path, String localUri})?> storeImage(
+      String clientId, Uint8List bytes) async {
+    try {
+      final dir = await _dir();
+      final id = _safeId(clientId);
+      final path = '${dir.path}/$id.jpg';
+      await File(path).writeAsBytes(bytes, flush: true);
+      return (path: path, localUri: 'file://$path');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> writeMeta(String clientId,
+      {String? replyToMessageId, String? caption}) async {
+    try {
+      final dir = await _dir();
+      await File('${dir.path}/${_safeId(clientId)}.json').writeAsString(jsonEncode({
+        'reply_to_message_id': replyToMessageId,
+        'caption': caption,
+      }));
+    } catch (_) {}
+  }
+
+  static Future<void> remove(String clientId) async {
+    try {
+      final dir = await _dir();
+      final id = _safeId(clientId);
+      final img = File('${dir.path}/$id.jpg');
+      final meta = File('${dir.path}/$id.json');
+      if (await img.exists()) await img.delete();
+      if (await meta.exists()) await meta.delete();
+    } catch (_) {}
+  }
+
+  static Future<String?> pathFor(String clientId) async {
+    try {
+      final dir = await _dir();
+      final path = '${dir.path}/${_safeId(clientId)}.jpg';
+      return await File(path).exists() ? path : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<List<({String clientId, String path, String? replyToMessageId, String? caption})>> list() async {
+    try {
+      final dir = await _dir();
+      if (!await dir.exists()) return [];
+      final out = <({String clientId, String path, String? replyToMessageId, String? caption})>[];
+      await for (final e in dir.list()) {
+        if (e is! File || !e.path.endsWith('.jpg')) continue;
+        final id = e.path.split('/').last.replaceAll('.jpg', '');
+        String? replyTo;
+        String? caption;
+        try {
+          final meta = File('${dir.path}/$id.json');
+          if (await meta.exists()) {
+            final m = jsonDecode(await meta.readAsString()) as Map;
+            replyTo = m['reply_to_message_id'] as String?;
+            caption = m['caption'] as String?;
+          }
+        } catch (_) {}
+        out.add((clientId: id, path: e.path, replyToMessageId: replyTo, caption: caption));
+      }
+      return out;
+    } catch (_) {
+      return [];
+    }
+  }
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -228,6 +347,22 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   Timer? _pollTimer;
   Timer? _heartbeatTimer;
 
+  // Typing presence. Outgoing events are debounced (one "typing", then
+  // silence until the text goes quiet or is sent); the remote indicator
+  // expires on its own so a dropped connection can't leave it stuck on.
+  Timer? _typingDebounce;
+  Timer? _remoteTypingExpiry;
+  bool _typingSent = false;
+  bool _remoteTyping = false;
+  static const _typingIdle = Duration(seconds: 3);
+  static const _typingTtl = Duration(seconds: 6);
+
+  // Quote-reply composer state: the message being answered, if any.
+  ChatMessage? _replyTo;
+  // Jump-to-original highlight: the message id flashed after tapping a quote.
+  String? _highlightId;
+  Timer? _highlightTimer;
+
   // Read receipts: when the counterpart last read this thread - a message
   // I sent is "seen" once this is at/after that message's createdAt.
   DateTime? _counterpartLastRead;
@@ -274,6 +409,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     _msgCtrl.addListener(() {
       final has = _msgCtrl.text.trim().isNotEmpty;
       if (has != _hasDraft && mounted) setState(() => _hasDraft = has);
+      _onComposerText(_msgCtrl.text);
     });
     _composerFocus.addListener(() {
       if (mounted && _composerFocus.hasFocus != _composerFocused) {
@@ -330,6 +466,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // (ChatScreenMemory).
     unawaited(ChatScreenMemory.remember(_listing!.id, _buyerId, ChatScreen.direct));
     _loadCachedMessages();
+    unawaited(_restoreMediaOutbox());
     _loadHistory();
     _connectWebSocket();
     _loadCounterpartyInfo();
@@ -362,6 +499,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     final visible = state == AppLifecycleState.resumed;
     if (visible == _appVisible) return;
     _appVisible = visible;
+    // Leaving the chat or backgrounding must not leave the other side
+    // seeing "typing..." forever; returning clears our stale flag anyway.
+    if (!visible) {
+      _sendStopTyping();
+      _clearRemoteTyping();
+    }
     if (!visible || _listing == null) return;
     // Back on screen: what arrived meanwhile has now been seen, and the
     // socket the OS may have closed in the background is reopened.
@@ -410,10 +553,28 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (_listing == null) return;
     final counterpartyId = _counterpartyId;
     if (counterpartyId == null) return;
+    // Render the cached profile immediately so the header keeps the known
+    // name and photo while offline; the network only ever refreshes it.
+    try {
+      final cached = await CounterpartyProfileCache.load(
+          ApiService.currentUserId, counterpartyId);
+      if (cached != null && mounted && _counterpartyInfo == null) {
+        // Cached presence is never trusted: only a fresh fetch may report
+        // online, so an old "online" can't linger offline.
+        setState(() => _counterpartyInfo =
+            CounterpartyProfileCache.headerFromCache(cached));
+      }
+    } catch (_) {}
     try {
       final info = await ApiService.getUserProfile(counterpartyId);
-      if (mounted) setState(() => _counterpartyInfo = info);
-    } catch (_) {}
+      if (!mounted) return;
+      setState(() => _counterpartyInfo = info);
+      unawaited(CounterpartyProfileCache.save(ApiService.currentUserId,
+          CounterpartyProfile.fromLive(counterpartyId, info)));
+    } catch (_) {
+      // Offline or failed: keep the cached identity rather than falling
+      // back to a generic "Buyer"/"Seller" label.
+    }
   }
 
   bool get _counterpartyOnline => (_counterpartyInfo?['is_online'] as bool?) ?? false;
@@ -530,9 +691,61 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     });
   }
 
+  // ── Typing presence ────────────────────────────────────────────────────
+  // One "typing" per burst of input, then quiet until the text settles or
+  // is sent: the socket must not carry an event per character.
+  void _onComposerText(String text) {
+    if (!_wsConnected) return;
+    if (text.trim().isEmpty) {
+      _sendStopTyping();
+      return;
+    }
+    if (_typingSent) {
+      _typingDebounce?.cancel();
+      _typingDebounce = Timer(_typingIdle, _sendStopTyping);
+      return;
+    }
+    _typingSent = true;
+    try {
+      _ws?.sink.add(jsonEncode({'type': 'typing'}));
+    } catch (_) {}
+    _typingDebounce?.cancel();
+    _typingDebounce = Timer(_typingIdle, _sendStopTyping);
+  }
+
+  void _sendStopTyping() {
+    _typingDebounce?.cancel();
+    if (!_typingSent) return;
+    _typingSent = false;
+    if (!_wsConnected) return;
+    try {
+      _ws?.sink.add(jsonEncode({'type': 'stop_typing'}));
+    } catch (_) {}
+  }
+
+  void _clearRemoteTyping() {
+    _remoteTypingExpiry?.cancel();
+    if (_remoteTyping && mounted) setState(() => _remoteTyping = false);
+  }
+
+  void _handleRemoteTyping(bool typing) {
+    _remoteTypingExpiry?.cancel();
+    if (!typing) {
+      if (_remoteTyping && mounted) setState(() => _remoteTyping = false);
+      return;
+    }
+    if (mounted && !_remoteTyping) setState(() => _remoteTyping = true);
+    // A device that loses connectivity sends no stop_typing: expire the
+    // indicator rather than leaving the other side "typing" forever.
+    _remoteTypingExpiry = Timer(_typingTtl, () {
+      if (mounted && _remoteTyping) setState(() => _remoteTyping = false);
+    });
+  }
+
   void _onSocketClosed(WebSocketChannel ws) {
     if (!identical(_ws, ws)) return;
     _wsPingTimer?.cancel();
+    _clearRemoteTyping();
     if (!mounted) return;
     setState(() => _wsConnected = false);
     // Refused for good - no such thread (4003) or listing (4004): asking
@@ -582,11 +795,22 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       case 'message_deleted':
         _applyMessageChange(data, deleted: true);
         return;
+      case 'typing':
+      case 'stop_typing':
+        // Only the other participant's indicator matters here; our own
+        // devices are excluded server-side, so anything arriving is theirs.
+        // Typing is presence, never a message: nothing is stored or cached.
+        final other = _role == 'buyer' ? 'seller' : 'buyer';
+        final senderRole = data['role'] as String?;
+        if (senderRole != null && senderRole != other) return;
+        _handleRemoteTyping(data['type'] == 'typing');
+        return;
       case 'message':
         final cm = ChatMessage.fromJson(data);
         // Direct chat never shows Zeno (broker) messages - same rule as
         // _loadHistory/_pollNewMessages (_absorb).
         if (!_absorb(cm)) return;
+        if (cm.role != _role) _handleRemoteTyping(false);
         setState(() {});
         _scrollDown();
         unawaited(_cacheMessages());
@@ -630,6 +854,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         viaAi: old.viaAi, isBroker: old.isBroker,
         id: old.id, clientId: old.clientId, createdAt: old.createdAt,
         editedAt: old.editedAt, deleted: true,
+        replyToMessageId: old.replyToMessageId, replyPreview: old.replyPreview,
       );
     } else {
       final content = data['content'] as String?;
@@ -644,6 +869,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
             ? DateTime.tryParse(data['edited_at'] as String)?.toLocal()
             : DateTime.now(),
         deleted: old.deleted,
+        replyToMessageId: old.replyToMessageId, replyPreview: old.replyPreview,
       );
     }
     setState(() {});
@@ -666,7 +892,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         old.msgType != m.msgType ||
         old.deleted != m.deleted ||
         editedChanged ||
-        old.mediaUrl != m.mediaUrl;
+        old.mediaUrl != m.mediaUrl ||
+        old.replyToMessageId != m.replyToMessageId;
     if (changed) _messages[i] = m;
     return changed;
   }
@@ -882,12 +1109,29 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         _loading = false;
       });
       _markSeen(_messages);
-      _scrollDown();
+      _scrollToLatestAfterLayout();
     } catch (_) {}
   }
 
-  Future<void> _cacheMessages() => LocalChatStore.save(
-      _threadScopeKey(), _messages.map((m) => m.toJson()).toList());
+  /// Persist the thread for instant offline open. Image bytes are never
+  /// duplicated here: a data URI over ~50KB is stored as an empty
+  /// placeholder in the cache (the full image re-fetches with history),
+  /// while pending outbox photos keep their small file:// reference.
+  static const _cacheMediaBudget = 50 * 1024;
+
+  Future<void> _cacheMessages() {
+    final slimmed = _messages.map((m) {
+      final j = m.toJson();
+      final url = j['media_url'] as String?;
+      if (url != null &&
+          url.length > _cacheMediaBudget &&
+          !url.startsWith('file://')) {
+        j['media_url'] = '';
+      }
+      return j;
+    }).toList();
+    return LocalChatStore.save(_threadScopeKey(), slimmed);
+  }
 
   /// Tells the backend this side has the thread - read if the chat is on
   /// screen, only delivered if the app is in the background - and refreshes
@@ -941,7 +1185,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       });
       _seenMsgIds.clear();
       _markSeen(server);
-      _scrollDown();
+      _scrollToLatestAfterLayout();
       unawaited(_cacheMessages());
       unawaited(_syncReadState());
     } catch (_) {
@@ -999,21 +1243,49 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     });
   }
 
+  /// Snapshot the reply being answered for the optimistic bubble, so the
+  /// quote renders instantly and survives a restart via the message cache.
+  static Map<String, dynamic>? _replySnapshotOf(ChatMessage m) {
+    if (m.deleted) return {'message_id': m.id, 'sender_role': m.role, 'deleted': true, 'label': 'Message deleted'};
+    if (m.msgType == 'image') {
+      return {'message_id': m.id, 'sender_role': m.role, 'msg_type': 'image', 'preview': 'Photo', 'deleted': false};
+    }
+    if (m.msgType == 'voice') {
+      return {'message_id': m.id, 'sender_role': m.role, 'msg_type': 'voice', 'preview': 'Voice message', 'deleted': false};
+    }
+    final text = m.content.trim();
+    return {
+      'message_id': m.id,
+      'sender_role': m.role,
+      'msg_type': m.msgType,
+      'preview': text.length > 140 ? '${text.substring(0, 137)}…' : text,
+      'deleted': false,
+    };
+  }
+
   Future<void> _send() async {
     final text = _msgCtrl.text.trim();
     if (text.isEmpty || _listing == null) return;
+    _sendStopTyping();
     final clientId = _newClientId();
-    setState(() => _messages.add(ChatMessage(
-      role: _role, content: text, msgType: 'text',
-      clientId: clientId, createdAt: DateTime.now().toUtc(),
-    )));
+    final reply = _replyTo;
+    setState(() {
+      _messages.add(ChatMessage(
+        role: _role, content: text, msgType: 'text',
+        clientId: clientId, createdAt: DateTime.now().toUtc(),
+        replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
+        replyPreview: reply == null ? null : _replySnapshotOf(reply),
+      ));
+      _replyTo = null;
+    });
     _msgCtrl.clear();
     _scrollDown();
     unawaited(_cacheMessages());
-    _enqueue(() => _deliverText(clientId, text));
+    _enqueue(() => _deliverText(clientId, text,
+        replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id));
   }
 
-  Future<void> _deliverText(String clientId, String text) async {
+  Future<void> _deliverText(String clientId, String text, {String? replyToMessageId}) async {
     final listing = _listing;
     if (listing == null) return;
     try {
@@ -1024,6 +1296,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         content:     text,
         buyerId:     _buyerId,
         clientMsgId: clientId,
+        replyToMessageId: replyToMessageId,
       );
       if (saved != null && ((saved['id'] as String?) ?? '').isNotEmpty) {
         _confirm(clientId, ChatMessage.fromJson({'role': _role, ...saved}));
@@ -1054,6 +1327,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         buyerId:      _buyerId,
         durationSecs: upload.durationSecs,
         clientMsgId:  clientId,
+        // Voice notes ride the same reply/caption contract as photos.
+        replyToMessageId: upload.replyToMessageId,
+        caption: upload.caption,
       );
       _confirm(clientId, ChatMessage.fromJson({'role': _role, ...saved}));
     } catch (e) {
@@ -1101,6 +1377,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (choice == 'delete') {
       setState(() => _messages.removeAt(i));
       _uploads.remove(clientId);
+      if (m.msgType == 'image') unawaited(_ChatMediaOutbox.remove(clientId));
       unawaited(_cacheMessages());
       return;
     }
@@ -1108,7 +1385,18 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // The same client id: if the first attempt did arrive after all, the
     // server answers with that copy instead of storing a second.
     if (m.msgType == 'text') {
-      _enqueue(() => _deliverText(clientId, m.content));
+      _enqueue(() => _deliverText(clientId, m.content,
+          replyToMessageId: m.replyToMessageId));
+    } else if (m.msgType == 'image') {
+      _enqueue(() async {
+        final path = await _ChatMediaOutbox.pathFor(clientId);
+        if (path == null) {
+          _markFailed(clientId);
+          _notSent('Photo file is gone. Send it again from the gallery.');
+          return;
+        }
+        await _deliverOutboxUpload(clientId, path);
+      });
     } else {
       _enqueue(() => _deliverUpload(clientId));
     }
@@ -1121,16 +1409,18 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     return DateTime.now().toUtc().difference(at.toUtc()) <= window;
   }
 
-  /// Long-press on one of your own direct messages. Nothing here applies to
-  /// Zeno's private notes or to the other person's messages: the server
-  /// checks the same ownership and window, this only decides which actions
-  /// are worth offering.
+  /// Long-press on a direct message. Reply is offered on any settled,
+  /// visible direct message from either side; edit/unsend stay restricted
+  /// to the sender's own messages inside their windows (server-enforced).
   Future<void> _onMessageLongPress(ChatMessage m) async {
-    if (m.isBroker || m.viaAi || m.isPending || m.deleted || m.id.isEmpty) return;
-    if (m.role != _role) return;
-    final canEdit = m.msgType == 'text' && _withinWindow(m.createdAt, const Duration(minutes: 15));
-    final canDelete = _withinWindow(m.createdAt, const Duration(hours: 48));
-    if (!canEdit && !canDelete) return;
+    if (m.isBroker || m.viaAi || m.isPending || m.id.isEmpty) return;
+    final own = m.role == _role;
+    final canEdit = own && !m.deleted && m.msgType == 'text' &&
+        _withinWindow(m.createdAt, const Duration(minutes: 15));
+    final canDelete = own && !m.deleted &&
+        _withinWindow(m.createdAt, const Duration(hours: 48));
+    final canReply = !m.deleted && m.msgType != 'deleted';
+    if (!canEdit && !canDelete && !canReply) return;
 
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -1139,11 +1429,21 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         ListTile(
           dense: true,
           title: Text(
-            m.content.length > 60 ? '${m.content.substring(0, 57)}...' : m.content,
+            m.msgType == 'image'
+                ? 'Photo${m.content.trim().isEmpty ? '' : ' · ${m.content.trim()}'}'
+                : m.msgType == 'voice'
+                    ? 'Voice message'
+                    : (m.content.length > 60 ? '${m.content.substring(0, 57)}...' : m.content),
             maxLines: 2, overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: BrokaColors.textMid, fontSize: 12),
           ),
         ),
+        if (canReply)
+          ListTile(
+            leading: const Icon(Icons.reply_rounded, color: BrokaColors.neonBlue),
+            title: const Text('Reply', style: TextStyle(color: BrokaColors.textHigh)),
+            onTap: () => Navigator.pop(ctx, 'reply'),
+          ),
         if (canEdit)
           ListTile(
             leading: const Icon(Icons.edit_rounded, color: BrokaColors.neonGreen),
@@ -1161,11 +1461,47 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       ])),
     );
     if (!mounted || choice == null) return;
-    if (choice == 'edit') {
+    if (choice == 'reply') {
+      setState(() => _replyTo = m);
+      _composerFocus.requestFocus();
+    } else if (choice == 'edit') {
       await _editMessage(m);
     } else if (choice == 'delete') {
       await _deleteMessage(m);
     }
+  }
+
+  /// Jump to the quoted message and flash it briefly. Messages outside the
+  /// loaded viewport can't be scrolled to: show where the quote points
+  /// without pretending to move.
+  void _jumpToReply(ChatMessage m) {
+    final target = m.replyToMessageId;
+    if (target == null || target.isEmpty) return;
+    final i = _messages.indexWhere((x) => x.id == target);
+    if (i < 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Original message is not in this view.')));
+      }
+      return;
+    }
+    _highlightTimer?.cancel();
+    setState(() => _highlightId = target);
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _highlightId = null);
+    });
+    // Chronological list: index 0 is the oldest.
+    try {
+      final extent = _scrollCtrl.position.maxScrollExtent;
+      final offset = _messages.length <= 1
+          ? extent
+          : (extent * i / (_messages.length - 1)).clamp(0.0, extent);
+      _scrollCtrl.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    } catch (_) {}
   }
 
   Future<void> _editMessage(ChatMessage m) async {
@@ -1320,16 +1656,24 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (!mounted) return;
 
     final clientId = _newClientId();
+    final reply = _replyTo;
     _uploads[clientId] = _PendingUpload(
       bytes: bytes, contentType: 'audio', fileName: 'voice.m4a',
       mimeType: 'audio/mp4', durationSecs: duration,
+      replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
+      replyPreview: reply == null ? null : _replySnapshotOf(reply),
     );
-    setState(() => _messages.add(ChatMessage(
-      role: _role, msgType: 'voice',
-      mediaUrl: 'file://$path',
-      durationSecs: duration,
-      clientId: clientId, createdAt: DateTime.now().toUtc(),
-    )));
+    setState(() {
+      _messages.add(ChatMessage(
+        role: _role, msgType: 'voice',
+        mediaUrl: 'file://$path',
+        durationSecs: duration,
+        clientId: clientId, createdAt: DateTime.now().toUtc(),
+        replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
+        replyPreview: reply == null ? null : _replySnapshotOf(reply),
+      ));
+      _replyTo = null;
+    });
     _scrollDown();
     _enqueue(() => _deliverUpload(clientId));
   }
@@ -1345,12 +1689,97 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   // ── Image sharing ──────────────────────────────────────────────────────────
+  //
+  // Chat-specific flow: pick a source from this screen's own sheet, preview
+  // the photo with an optional caption, then send. Nothing uploads until
+  // Send is tapped - selecting a photo is not sending it. The bytes live in
+  // the app-owned media outbox (a real file, not SharedPreferences), so a
+  // failed upload retries without re-picking, even after a restart.
 
-  /// A photo into the chat, taken with BROKA's own camera or picked from the
-  /// gallery the way listing photos are (services/photo_capture.dart). This
-  /// used to open the phone's camera app, which Android could kill BROKA
-  /// behind, dropping the user out of the conversation.
-  Future<void> _pickAndSendImage(PhotoSource source) async {
+  /// This screen's own attachment picker - not PhotoCapture.askSource, which
+  /// other screens share. Bigger targets, explicit labels, BROKA styling.
+  Future<void> _showImageSourceSheet() async {
+    final source = await showModalBottomSheet<PhotoSource>(
+      context: context,
+      backgroundColor: BrokaColors.bgMid,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+                color: BrokaColors.border, borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(height: 12),
+          const Padding(
+            padding: EdgeInsets.only(bottom: 4),
+            child: Text('Share a photo',
+                style: TextStyle(color: BrokaColors.textHigh,
+                    fontWeight: FontWeight.w800, fontSize: 16)),
+          ),
+          _chatSourceOption(sheet, PhotoSource.camera,
+              Icons.photo_camera_rounded, 'Take a photo',
+              'Use the camera to capture it now', BrokaColors.gold),
+          _chatSourceOption(sheet, PhotoSource.gallery,
+              Icons.photo_library_rounded, 'Choose from gallery',
+              'Pick a photo already on this phone', BrokaColors.neonBlue),
+          const SizedBox(height: 12),
+        ]),
+      ),
+    );
+    if (source != null && mounted) await _pickAndPreviewImage(source);
+  }
+
+  Widget _chatSourceOption(BuildContext sheet, PhotoSource source, IconData icon,
+      String title, String subtitle, Color color) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+      child: Material(
+        color: BrokaColors.bgCard,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.pop(sheet, source),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: color.withOpacity(0.35)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(color: BrokaColors.textHigh,
+                          fontWeight: FontWeight.w700, fontSize: 15)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style: const TextStyle(color: BrokaColors.textMid, fontSize: 12)),
+                ],
+              )),
+              const Icon(Icons.chevron_right_rounded, color: BrokaColors.textLow),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Pick, then preview with an optional caption - the upload starts only
+  /// when the preview's Send is tapped.
+  Future<void> _pickAndPreviewImage(PhotoSource source) async {
     try {
       final File? picked;
       if (source == PhotoSource.camera) {
@@ -1360,33 +1789,226 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         picked = await PhotoCapture.pickFromGallery(context);
       }
       if (picked == null || !mounted) return;
-      final bytes = await picked.readAsBytes();
-      final b64   = base64Encode(bytes);
-      final dataUri = 'data:image/jpeg;base64,$b64';
-      if (!mounted) return;
-
-      final clientId = _newClientId();
-      _uploads[clientId] = _PendingUpload(
-        bytes: bytes, contentType: 'image', fileName: 'image.jpg',
-        mimeType: 'image/jpeg',
-      );
-      setState(() => _messages.add(ChatMessage(
-        role: _role, msgType: 'image', mediaUrl: dataUri,
-        clientId: clientId, createdAt: DateTime.now().toUtc(),
-      )));
-      _scrollDown();
-      _enqueue(() => _deliverUpload(clientId));
+      await _showImagePreview(picked, source);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not send image. ${userFacingError(e)}')));
+            SnackBar(content: Text('Could not open image. ${userFacingError(e)}')));
       }
     }
   }
 
-  Future<void> _showImageSourceSheet() async {
-    final source = await PhotoCapture.askSource(context);
-    if (source != null && mounted) await _pickAndSendImage(source);
+  /// Preview composer: inspect, replace or remove, add a caption, then Send.
+  /// Cancel/close never uploads - the bytes stay on the phone unsent.
+  Future<void> _showImagePreview(File file, PhotoSource source) async {
+    final captionCtrl = TextEditingController();
+    File current = file;
+    bool? send;
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: BrokaColors.bgMid,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (sheet) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const SizedBox(height: 8),
+              Container(width: 40, height: 4,
+                decoration: BoxDecoration(
+                    color: BrokaColors.border,
+                    borderRadius: BorderRadius.circular(2))),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(children: [
+                  IconButton(
+                    tooltip: 'Close without sending',
+                    onPressed: () => Navigator.pop(sheet, false),
+                    icon: const Icon(Icons.close_rounded,
+                        color: BrokaColors.textHigh),
+                  ),
+                  const Expanded(child: Text('Preview',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: BrokaColors.textHigh,
+                          fontWeight: FontWeight.w800, fontSize: 16))),
+                  TextButton(
+                    onPressed: () => Navigator.pop(sheet, true),
+                    child: const Text('Send',
+                        style: TextStyle(color: BrokaColors.neonGreen,
+                            fontWeight: FontWeight.w800, fontSize: 15)),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 320),
+                    child: Image.file(current, fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => Container(
+                        height: 160, color: BrokaColors.bgCard,
+                        alignment: Alignment.center,
+                        child: const Icon(Icons.broken_image_outlined,
+                            color: BrokaColors.textLow, size: 40))),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  controller: captionCtrl,
+                  style: const TextStyle(color: BrokaColors.textHigh),
+                  maxLines: 3,
+                  minLines: 1,
+                  maxLength: 1000,
+                  decoration: const InputDecoration(
+                    hintText: 'Add a caption (optional)',
+                    hintStyle: TextStyle(color: BrokaColors.textLow),
+                    filled: true,
+                    fillColor: BrokaColors.bgCard,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Row(children: [
+                  TextButton.icon(
+                    onPressed: () async {
+                      final replacement = await (source == PhotoSource.camera
+                          ? PhotoCapture.takePhoto(context)
+                          : PhotoCapture.pickFromGallery(context));
+                      if (replacement != null) {
+                        setSheet(() => current = replacement);
+                      }
+                    },
+                    icon: const Icon(Icons.swap_horiz_rounded,
+                        color: BrokaColors.neonBlue, size: 18),
+                    label: const Text('Replace',
+                        style: TextStyle(color: BrokaColors.neonBlue)),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => Navigator.pop(sheet, false),
+                    icon: const Icon(Icons.delete_outline_rounded,
+                        color: BrokaColors.danger, size: 18),
+                    label: const Text('Remove',
+                        style: TextStyle(color: BrokaColors.danger)),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    ).then((v) => send = v);
+    final caption = captionCtrl.text.trim();
+    captionCtrl.dispose();
+    if (send != true || !mounted) return; // cancelled or removed: send nothing
+    await _stageImageUpload(current, caption.isEmpty ? null : caption);
+  }
+
+  /// Persist the photo to the app-owned outbox, render the optimistic bubble
+  /// with an uploading state, then upload. Retries reuse the stored file -
+  /// never the in-memory bytes - so they survive a restart.
+  Future<void> _stageImageUpload(File picked, String? caption) async {
+    try {
+      final bytes = await picked.readAsBytes();
+      final clientId = _newClientId();
+      final reply = _replyTo;
+      final stored = await _ChatMediaOutbox.storeImage(clientId, bytes);
+      if (stored == null || !mounted) return;
+      await _ChatMediaOutbox.writeMeta(clientId,
+          replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
+          caption: caption);
+      final previewBytes = bytes.length > 400 * 1024 ? null : bytes;
+      _uploads[clientId] = _PendingUpload(
+        bytes: previewBytes ?? bytes,
+        contentType: 'image', fileName: 'image.jpg', mimeType: 'image/jpeg',
+        replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
+        replyPreview: reply == null ? null : _replySnapshotOf(reply),
+        caption: caption,
+      );
+      setState(() {
+        _messages.add(ChatMessage(
+          role: _role, msgType: 'image',
+          // Tiny thumbnails render from memory; the durable file is what the
+          // upload reads, so evicting this cache never breaks a retry.
+          mediaUrl: stored.localUri,
+          content: caption ?? '',
+          clientId: clientId, createdAt: DateTime.now().toUtc(),
+          replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
+          replyPreview: reply == null ? null : _replySnapshotOf(reply),
+        ));
+        _replyTo = null;
+      });
+      _scrollDown();
+      unawaited(_cacheMessages());
+      _enqueue(() => _deliverOutboxUpload(clientId, stored.path));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not send image. ${userFacingError(e)}')));
+      }
+    }
+  }
+
+  /// Upload from the outbox file (not the in-memory bytes). Cleans the
+  /// temporary file once the server has the image or the bubble is dropped.
+  Future<void> _deliverOutboxUpload(String clientId, String storedPath) async {
+    final listing = _listing;
+    if (listing == null) return;
+    try {
+      final bytes = await File(storedPath).readAsBytes();
+      final saved = await ApiService.uploadMedia(
+        listingId: listing.id,
+        senderRole: _role,
+        senderId: ApiService.currentUserId ?? 'anon',
+        contentType: 'image',
+        fileBytes: bytes,
+        fileName: 'image.jpg',
+        mimeType: 'image/jpeg',
+        buyerId: _buyerId,
+        clientMsgId: clientId,
+        replyToMessageId: _uploads[clientId]?.replyToMessageId,
+        caption: _uploads[clientId]?.caption,
+      );
+      await _ChatMediaOutbox.remove(clientId);
+      _confirm(clientId, ChatMessage.fromJson({'role': _role, ...saved}));
+    } catch (e) {
+      debugPrint('[DirectChat] photo upload failed: $e');
+      _markFailed(clientId);
+      _notSent('Photo not sent. Tap it to try again.');
+    }
+  }
+
+  /// Restore outbox uploads from an earlier run: failed bubbles can retry
+  /// without re-picking, because the file outlived the process.
+  Future<void> _restoreMediaOutbox() async {
+    try {
+      final entries = await _ChatMediaOutbox.list();
+      for (final entry in entries) {
+        if (_uploads.containsKey(entry.clientId)) continue;
+        try {
+          final bytes = await File(entry.path).readAsBytes();
+          _uploads[entry.clientId] = _PendingUpload(
+            bytes: bytes, contentType: 'image', fileName: 'image.jpg',
+            mimeType: 'image/jpeg',
+            replyToMessageId: entry.replyToMessageId,
+            caption: entry.caption,
+          );
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   // ── Voice playback ─────────────────────────────────────────────────────────
@@ -1532,15 +2154,28 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Utility ────────────────────────────────────────────────────────────────
 
+  /// Latest messages stay in view. The list is chronological (oldest at the
+  /// top), so the newest end is the bottom - the opposite of the reversed
+  /// list this screen used to build, which parked one message at the bottom
+  /// of a tall empty viewport.
   void _scrollDown() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
-        // The list is reversed (_buildMessages): its newest end is 0.
         _scrollCtrl.animateTo(
-          0,
+          _scrollCtrl.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
+      }
+    });
+  }
+
+  /// After a restore, land on the latest message without animating through
+  /// the whole thread: jump once the first layout has a viewport.
+  void _scrollToLatestAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
       }
     });
   }
@@ -1559,6 +2194,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _sendStopTyping();
+    _typingDebounce?.cancel();
+    _remoteTypingExpiry?.cancel();
+    _highlightTimer?.cancel();
     if (_listing != null) {
       GlobalPollerService.instance.markScreenInactive(_listing!.id, buyerId: _buyerId);
     }
@@ -1619,6 +2258,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
             : _buildMessages()),
+        _buildTypingIndicator(),
+        _buildReplyPreview(),
         // REMOVED: the language chip row.
         //
         // It set a _selectedLang field and ApiService.currentUserLanguage, and
@@ -1700,7 +2341,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                 color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textLow),
             ),
             Flexible(child: Text(
-              _counterpartyLastSeen ?? (_counterpartyOnline ? 'Active now' : 'Direct chat'),
+              _counterpartyLastSeen ??
+                  (_counterpartyOnline ? 'Active now' : 'Last seen unavailable'),
               style: TextStyle(
                   color: _counterpartyOnline ? BrokaColors.neonGreen : BrokaColors.textMid,
                   fontSize: 11.5, fontWeight: _counterpartyOnline ? FontWeight.w600 : FontWeight.w400),
@@ -1806,17 +2448,19 @@ class _NegotiationScreenState extends State<NegotiationScreen>
 
   // ── Messages list ──────────────────────────────────────────────────────────
 
+  /// Chronological, top-oriented thread: a new or short conversation starts
+  /// near the top of the message area instead of parking one bubble at the
+  /// bottom of a tall empty viewport. Restores land on the latest message
+  /// (see _scrollToLatestAfterLayout); the keyboard never covers it because
+  /// new arrivals keep scrolling the bottom into view.
   Widget _buildMessages() {
     if (_messages.isEmpty) {
-      // Reworked to sit ON the constellation rather than float in a void.
-      // The previous version was a bare emoji over two grey lines centred in
-      // pure black, which read as an error state more than an invitation.
-      // A haloed emblem plus an explicit privacy line — the single most
-      // useful thing to tell someone opening a marketplace chat — does more
-      // work in the same space.
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 40),
+      // Aligned to the top, not centred: the empty state must not invent a
+      // huge gap above a conversation that has barely started.
+      return Align(
+        alignment: Alignment.topCenter,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(40, 24, 40, 16),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Container(
               width: 96, height: 96,
@@ -1858,10 +2502,6 @@ class _NegotiationScreenState extends State<NegotiationScreen>
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: BrokaColors.neonGreen.withOpacity(0.25)),
               ),
-              // Was "Keep payments on BROKA to stay protected": there is no
-              // paying on BROKA while payments are paused, and "pay through
-              // BROKA" is what a fraudster's fake escrow number leans on.
-              // Each side gets its own half of a safe handover.
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.visibility_outlined, size: 13, color: BrokaColors.neonGreen),
                 const SizedBox(width: 6),
@@ -1881,19 +2521,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         ),
       );
     }
-    // Reversed, so the list is anchored at its newest message: opening the
-    // keyboard shrinks the list from the top and the latest messages stay in
-    // view. Anchored at the top, the keyboard and composer slid up over the
-    // last bubbles and hid what was being answered while typing.
-    final n = _messages.length;
     return ListView.builder(
       controller: _scrollCtrl,
-      reverse: true,
+      reverse: false,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      itemCount: n,
-      itemBuilder: (_, j) {
-        final i = n - 1 - j;
+      itemCount: _messages.length,
+      itemBuilder: (_, i) {
         return _ChatBubble(
         message:    _messages[i],
         userRole:   _role,
@@ -1902,10 +2536,91 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         onCallBack: _callBack,
         onUnsentTap: _onUnsentTap,
         onLongPress: _onMessageLongPress,
+        onQuoteTap: _jumpToReply,
+        highlighted: _highlightId != null && _highlightId == _messages[i].id,
         counterpartLastRead: _counterpartLastRead,
         counterpartLastDelivered: _counterpartLastDelivered,
       );
       },
+    );
+  }
+
+  /// The other participant's live typing state, above the composer - never
+  /// inside the message list, so it can't shift bubbles around, and never
+  /// confused with Zeno's thinking animation: it names the human.
+  Widget _buildTypingIndicator() {
+    if (!_remoteTyping) return const SizedBox.shrink();
+    final who = _counterpartyName;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 2, 20, 4),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: BrokaColors.bgCard.withOpacity(0.92),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: BrokaColors.border.withOpacity(0.6)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const _TypingDots(),
+            const SizedBox(width: 8),
+            Flexible(child: Text('$who is typing…',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: BrokaColors.textMid, fontSize: 12))),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  /// The reply being composed, pinned above the composer with a clear X.
+  /// Kept short on purpose: it must not make the composer tall.
+  Widget _buildReplyPreview() {
+    final reply = _replyTo;
+    if (reply == null) return const SizedBox.shrink();
+    final sender = reply.role == _role ? 'You' : _counterpartyName;
+    final label = ChatMessage.replyLabel(reply.replyPreview ?? _replySnapshotOf(reply));
+    final isPhoto = reply.msgType == 'image';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard.withOpacity(0.95),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: BrokaColors.neonBlue.withOpacity(0.4)),
+        ),
+        child: Row(children: [
+          Container(width: 3, height: 34,
+            decoration: BoxDecoration(
+                color: BrokaColors.neonBlue,
+                borderRadius: BorderRadius.circular(2))),
+          const SizedBox(width: 8),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(sender,
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrokaColors.neonBlue,
+                      fontSize: 11, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 1),
+              Text(isPhoto && label == 'Photo' ? '📷 Photo' : label,
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: BrokaColors.textMid, fontSize: 12)),
+            ],
+          )),
+          IconButton(
+            tooltip: 'Cancel reply',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => setState(() => _replyTo = null),
+            icon: const Icon(Icons.close_rounded,
+                color: BrokaColors.textMid, size: 18),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -2078,6 +2793,8 @@ class _ChatBubble extends StatelessWidget {
   final ValueChanged<ChatMessage>? onLongPress;
   final DateTime? counterpartLastRead;
   final DateTime? counterpartLastDelivered;
+  final void Function(ChatMessage)? onQuoteTap;
+  final bool highlighted;
 
   const _ChatBubble({
     required this.message,
@@ -2087,6 +2804,8 @@ class _ChatBubble extends StatelessWidget {
     required this.onCallBack,
     this.onUnsentTap,
     this.onLongPress,
+    this.onQuoteTap,
+    this.highlighted = false,
     this.counterpartLastRead,
     this.counterpartLastDelivered,
   });
@@ -2169,28 +2888,129 @@ class _ChatBubble extends StatelessWidget {
       );
     }
 
+    // Quoted reply, above the content: who said it and a short preview.
+    // Tapping jumps to the original; a deleted original renders safely.
+    Widget quoteBlock() {
+      final target = message.replyToMessageId;
+      if (target == null || target.isEmpty) return const SizedBox.shrink();
+      final preview = message.replyPreview;
+      final deleted = preview?['deleted'] == true;
+      final senderRole = (preview?['sender_role'] ?? '') as String;
+      final who = senderRole == message.role
+          ? (isMe ? 'You' : (message.role == 'buyer' ? 'Buyer' : 'Seller'))
+          : (senderRole == 'buyer' ? 'Buyer' : 'Seller');
+      final label = ChatMessage.replyLabel(preview);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: GestureDetector(
+          onTap: onQuoteTap == null ? null : () => onQuoteTap!(message),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.22),
+              borderRadius: BorderRadius.circular(8),
+              border: Border(
+                  left: BorderSide(
+                      color: isMe ? Colors.white70 : BrokaColors.neonBlue,
+                      width: 3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(who,
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: isMe ? Colors.white : BrokaColors.neonBlue,
+                        fontSize: 11, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 1),
+                Text(deleted ? 'Message deleted' : label,
+                    maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: isMe
+                            ? Colors.white.withOpacity(0.85)
+                            : BrokaColors.textMid,
+                        fontSize: 12,
+                        fontStyle:
+                            deleted ? FontStyle.italic : FontStyle.normal)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final hasQuote = (message.replyToMessageId ?? '').isNotEmpty;
+
+    /// Quote above a media bubble: same block, wrapped in the chat's card
+    /// styling so it reads as part of the bubble, not floating text. Also
+    /// carries the jump-to-original highlight for media jump targets.
+    Widget quotedMedia(Widget media) {
+      if (!hasQuote && !highlighted) return media;
+      return Container(
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+        decoration: (isMe ? myBubbleDecoration() : theirBubbleDecoration()).copyWith(
+          border: highlighted ? Border.all(color: BrokaColors.gold, width: 1.5) : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [if (hasQuote) quoteBlock(), media],
+        ),
+      );
+    }
+
     // Regular bubble
     Widget bubbleContent;
     if (message.msgType == 'voice' && message.mediaUrl != null) {
-      bubbleContent = _VoiceBubble(
+      bubbleContent = quotedMedia(_VoiceBubble(
         url: message.mediaUrl!,
         duration: message.durationSecs,
         isPlaying: isPlaying,
         onTap: () => onPlayTap(message.mediaUrl!),
         isMe: isMe,
-      );
+      ));
     } else if (message.msgType == 'image' && message.mediaUrl != null) {
-      bubbleContent = _ImageBubble(url: message.mediaUrl!);
+      bubbleContent = quotedMedia(_ImageBubble(
+        url: message.mediaUrl!,
+        caption: message.content,
+        isMe: isMe,
+        createdAt: message.createdAt,
+        receipt: isMe
+            ? receiptFor(
+                sentAt: message.createdAt,
+                counterpartDeliveredAt: counterpartLastDelivered,
+                counterpartReadAt: counterpartLastRead,
+                viaAi: message.viaAi,
+                pending: message.isPending,
+                failed: message.failed,
+              )
+            : null,
+        pending: message.isPending,
+        failed: message.failed,
+      ));
     } else {
       // Yours on the brand gradient, theirs on a card - as on Zeno's screen
       // - rather than a role-coloured blue or green.
       bubbleContent = Container(
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: isMe ? myBubbleDecoration() : theirBubbleDecoration(),
-        child: Text(message.content,
-            style: TextStyle(color: isMe ? Colors.white : BrokaColors.textHigh,
-                fontSize: 14.5, height: 1.4)),
+        decoration: (isMe ? myBubbleDecoration() : theirBubbleDecoration()).copyWith(
+          border: highlighted
+              ? Border.all(color: BrokaColors.gold, width: 1.5)
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasQuote) quoteBlock(),
+            Text(message.content,
+                style: TextStyle(color: isMe ? Colors.white : BrokaColors.textHigh,
+                    fontSize: 14.5, height: 1.4)),
+          ],
+        ),
       );
     }
 
@@ -2242,7 +3062,11 @@ class _ChatBubble extends StatelessWidget {
                   // time at all. Their messages get the time; mine get
                   // time + the receipt word, so sent / delivered / seen /
                   // not-sent can be told apart without reading ticks.
-                  if (formatMessageTime(message.createdAt).isNotEmpty) ...[
+                  // Image bubbles already carry their own time and receipt
+                  // inside the photo card - repeating them underneath would
+                  // draw every photo's state twice.
+                  if (message.msgType != 'image' &&
+                      formatMessageTime(message.createdAt).isNotEmpty) ...[
                     const SizedBox(width: 5),
                     const Text('·', style: TextStyle(color: BrokaColors.textLow, fontSize: 10)),
                     const SizedBox(width: 5),
@@ -2253,7 +3077,7 @@ class _ChatBubble extends StatelessWidget {
                     const Text('edited', style: TextStyle(color: BrokaColors.textLow,
                         fontSize: 9, fontStyle: FontStyle.italic)),
                   ],
-                  if (seenTick() != null) ...[
+                  if (message.msgType != 'image' && seenTick() != null) ...[
                     const SizedBox(width: 5),
                     seenTick()!,
                   ],
@@ -2362,46 +3186,255 @@ class _VoiceBubble extends StatelessWidget {
 }
 
 // ── Image bubble ───────────────────────────────────────────────────────────────
+// WhatsApp-style: the photo keeps its aspect ratio inside a bounded bubble,
+// with an optional caption, a timestamp and the delivery state. Tapping
+// opens a dedicated viewer with pinch-to-zoom and a clear close control.
 
 class _ImageBubble extends StatelessWidget {
   final String url;
-  const _ImageBubble({required this.url});
+  final String? caption;
+  final bool isMe;
+  final DateTime? createdAt;
+  final MessageReceipt? receipt;
+  final bool pending;
+  final bool failed;
+  const _ImageBubble({
+    required this.url,
+    this.caption,
+    this.isMe = false,
+    this.createdAt,
+    this.receipt,
+    this.pending = false,
+    this.failed = false,
+  });
+
+  ImageProvider? _provider() {
+    try {
+      if (url.startsWith('data:')) {
+        final commaIdx = url.indexOf(',');
+        if (commaIdx < 0) return null;
+        return MemoryImage(base64Decode(url.substring(commaIdx + 1)));
+      }
+      if (url.startsWith('file://')) return FileImage(File(url.replaceFirst('file://', '')));
+      if (url.isEmpty) return null;
+      return NetworkImage(url);
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    ImageProvider provider;
-    if (url.startsWith('data:')) {
-      final commaIdx = url.indexOf(',');
-      if (commaIdx >= 0) {
-        final bytes = base64Decode(url.substring(commaIdx + 1));
-        provider = MemoryImage(bytes);
-      } else {
-        provider = const AssetImage('assets/placeholder.png') as ImageProvider;
-      }
-    } else {
-      provider = NetworkImage(url);
-    }
-
+    final provider = _provider();
+    final captionText = (caption ?? '').trim();
     return GestureDetector(
-      onTap: () => showDialog(
-        context: context,
-        builder: (_) => Dialog(
-          backgroundColor: Colors.transparent,
-          child: InteractiveViewer(child: Image(image: provider)),
+      onTap: provider == null
+          ? null
+          : () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => _FullScreenImageViewer(
+                    url: url, caption: captionText.isEmpty ? null : captionText),
+              )),
+      child: Container(
+        constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.68,
+            maxHeight: 340),
+        decoration: BoxDecoration(
+          color: BrokaColors.bgCard,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: BrokaColors.border.withOpacity(0.7)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (provider == null)
+              Container(
+                height: 120,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image_outlined,
+                    color: BrokaColors.textLow, size: 36),
+              )
+            else
+              AspectRatio(
+                // Bounded, not cropped: the photo keeps its shape.
+                aspectRatio: 4 / 3,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image(
+                      image: provider,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: BrokaColors.bgCard,
+                        alignment: Alignment.center,
+                        child: const Icon(Icons.broken_image_outlined,
+                            color: BrokaColors.textLow, size: 36)),
+                      loadingBuilder: (ctx, child, progress) =>
+                          progress == null
+                              ? child
+                              : Container(
+                                  color: BrokaColors.bgCard,
+                                  alignment: Alignment.center,
+                                  child: const SizedBox(
+                                      width: 24, height: 24,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: BrokaColors.gold))),
+                    ),
+                    if (pending || failed)
+                      Container(
+                        color: Colors.black.withOpacity(0.45),
+                        alignment: Alignment.center,
+                        child: pending
+                            ? const SizedBox(
+                                width: 26, height: 26,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2.5, color: Colors.white))
+                            : const Icon(Icons.error_outline_rounded,
+                                color: Colors.white, size: 30),
+                      ),
+                  ],
+                ),
+              ),
+            if (captionText.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 2),
+                child: Text(captionText,
+                    style: TextStyle(
+                        color: isMe ? Colors.white : BrokaColors.textHigh,
+                        fontSize: 13.5, height: 1.35)),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  MessageTimeLabel(sentAt: createdAt),
+                  if (receipt != null) ...[
+                    const SizedBox(width: 5),
+                    MessageReceiptIcon(receipt: receipt!),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Image(
-          image: provider,
-          width: 200, height: 200,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
-            width: 200, height: 80, color: BrokaColors.bgCard,
-            child: const Center(child: Icon(Icons.broken_image_rounded,
-                color: BrokaColors.textLow))),
+    );
+  }
+}
+
+/// Dedicated full-screen photo viewer: pinch-to-zoom, caption, close.
+class _FullScreenImageViewer extends StatelessWidget {
+  final String url;
+  final String? caption;
+  const _FullScreenImageViewer({required this.url, this.caption});
+
+  ImageProvider? _provider() {
+    try {
+      if (url.startsWith('data:')) {
+        final commaIdx = url.indexOf(',');
+        if (commaIdx < 0) return null;
+        return MemoryImage(base64Decode(url.substring(commaIdx + 1)));
+      }
+      if (url.startsWith('file://')) return FileImage(File(url.replaceFirst('file://', '')));
+      if (url.isEmpty) return null;
+      return NetworkImage(url);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = _provider();
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        leading: IconButton(
+          tooltip: 'Close',
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () => Navigator.pop(context),
         ),
       ),
+      body: Column(children: [
+        Expanded(
+          child: Center(
+            child: provider == null
+                ? const Icon(Icons.broken_image_outlined,
+                    color: Colors.white54, size: 48)
+                : InteractiveViewer(
+                    minScale: 1.0,
+                    maxScale: 4.0,
+                    child: Image(
+                      image: provider,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const Icon(
+                          Icons.broken_image_outlined,
+                          color: Colors.white54, size: 48),
+                    ),
+                  ),
+          ),
+        ),
+        if ((caption ?? '').trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+            child: Text((caption ?? '').trim(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 14)),
+          ),
+      ]),
+    );
+  }
+}
+
+/// Three-dot typing animation in BROKA's chat styling.
+class _TypingDots extends StatefulWidget {
+  const _TypingDots();
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Row(mainAxisSize: MainAxisSize.min, children: [
+        for (var i = 0; i < 3; i++)
+          Container(
+            width: 6, height: 6,
+            margin: EdgeInsets.only(right: i == 2 ? 0 : 3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: BrokaColors.textMid.withOpacity(
+                  0.35 + 0.65 * ((i / 3 + _ctrl.value) % 1.0)),
+            ),
+          ),
+      ]),
     );
   }
 }

@@ -1085,6 +1085,9 @@ class ApiService {
     // null for a normal conversation message. See backend MessageIn docs.
     String? intent,
     String? imageBase64,
+    // Stable id for the outgoing message: a retry after a lost response
+    // returns the stored row instead of writing a duplicate.
+    String? clientMsgId,
   }) async {
     final response = await http.post(
       Uri.parse('$baseUrl/negotiate/message'),
@@ -1103,6 +1106,7 @@ class ApiService {
         if (buyerIdForThread != null) 'buyer_id':    buyerIdForThread,
         if (intent           != null) 'intent':      intent,
         if (imageBase64      != null) 'image_base64': imageBase64,
+        if (clientMsgId      != null) 'client_msg_id': clientMsgId,
         'language': currentUserLanguage,
       }),
     ).timeout(const Duration(seconds: 60));
@@ -1492,6 +1496,7 @@ class ApiService {
     String? buyerIdForThread,
     String? buyerId,
     String? clientMsgId,
+    String? replyToMessageId,
   }) async {
     final body = jsonEncode({
       'listing_id':  listingId,
@@ -1501,6 +1506,7 @@ class ApiService {
       if (buyerIdForThread != null) 'buyer_id': buyerIdForThread,
       if (buyerId          != null) 'buyer_id': buyerId,
       if (clientMsgId      != null) 'client_msg_id': clientMsgId,
+      if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
     });
     final response = await _sendAuthed(() => http.post(
       Uri.parse('$baseUrl/negotiate/direct-message'),
@@ -1570,6 +1576,8 @@ class ApiService {
     int?     durationSecs,
     // The chat's own id for this voice note or photo - see sendDirectMessage.
     String?  clientMsgId,
+    String?  replyToMessageId,
+    String?  caption,
   }) async {
     final uri = Uri.parse('$baseUrl/media/upload');
     // A request can be sent once, so the retry after a renewal builds anew.
@@ -1586,6 +1594,10 @@ class ApiService {
       if (buyerId      != null) request.fields['buyer_id']      = buyerId;
       if (durationSecs != null) request.fields['duration_secs'] = durationSecs.toString();
       if (clientMsgId  != null) request.fields['client_msg_id'] = clientMsgId;
+      if (replyToMessageId != null) request.fields['reply_to_message_id'] = replyToMessageId;
+      if (caption != null && caption.trim().isNotEmpty) {
+        request.fields['caption'] = caption.trim();
+      }
       final streamed = await request.send().timeout(const Duration(seconds: 60));
       return http.Response.fromStream(streamed);
     }
@@ -1593,6 +1605,60 @@ class ApiService {
     final res = await _sendAuthed(send);
     if (res.statusCode != 200) throw Exception(_extractError(res.body));
     return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // ── General Zeno memory (durable assistant / Buying Agent) ─────────────
+  // The listing-specific Zeno room restores through getNegotiationHistory;
+  // these two cover the account-level conversations so a reinstall or a
+  // second device restores them too. Local cache stays the fast path.
+  static Future<List<Map<String, dynamic>>> getAssistantConversation({
+    required String mode,
+    String? listingId,
+    int limit = 200,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/zeno/assistant/conversation').replace(
+        queryParameters: {
+          'mode': mode,
+          if (listingId != null) 'listing_id': listingId,
+          'limit': limit.toString(),
+        },
+      );
+      final response = await _sendAuthed(() => http.get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 20)));
+      if (response.statusCode != 200) return [];
+      final data = jsonDecode(response.body);
+      final turns = data is Map ? data['turns'] : null;
+      if (turns is! List) return [];
+      return [for (final t in turns) Map<String, dynamic>.from(t as Map)];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<bool> appendAssistantTurn({
+    required String mode,
+    String? listingId,
+    required String role,
+    required String content,
+    String? clientTurnId,
+  }) async {
+    try {
+      final response = await _sendAuthed(() => http.post(
+        Uri.parse('$baseUrl/zeno/assistant/conversation/append'),
+        headers: _headers,
+        body: jsonEncode({
+          'mode': mode,
+          if (listingId != null) 'listing_id': listingId,
+          'role': role,
+          'content': content,
+          if (clientTurnId != null) 'client_turn_id': clientTurnId,
+        }),
+      ).timeout(const Duration(seconds: 20)));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ── Online presence ────────────────────────────────────────────────────────

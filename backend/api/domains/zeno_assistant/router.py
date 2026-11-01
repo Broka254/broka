@@ -17,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import Query
+
 from api.core.rate_limit import zeno_chat_limiter
 from api.core.vision import ImageRejected, prepare_for_model
 from api.database import get_db
@@ -68,6 +70,14 @@ class AssistantTurnIn(BaseModel):
     # A photo for Zeno to look at with this message (raw base64). Checked
     # and shrunk before any model sees it - see core/vision.py.
     image_base64: Optional[str] = Field(default=None, max_length=_IMAGE_MAX_B64_CHARS)
+    # Durable assistant memory: which account-level conversation this turn
+    # belongs to ("assistant" or "buying"). When set, the server stores the
+    # user turn before answering and the assistant turn after, so a reinstall
+    # restores from GET /zeno/assistant/conversation instead of the phone.
+    conversation_mode: Optional[str] = Field(default=None, max_length=16)
+    # Idempotency for the user turn: a retry with the same key returns the
+    # stored reply instead of appending a duplicate turn.
+    client_turn_id: Optional[str] = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _something_to_answer(self):
@@ -113,7 +123,26 @@ async def assistant_turn(
         # what the plan's voice requests count. Typed turns stay free.
         from api.domains.premium import entitlements
         await entitlements.consume(db, current_user["id"], entitlements.Feature.VOICE)
-    return await service.assistant_turn(
+    sticky_mode = (body.conversation_mode or "").strip().lower() or None
+    if sticky_mode not in (None, "assistant", "buying"):
+        raise HTTPException(status_code=400, detail="conversation_mode must be 'assistant' or 'buying'")
+    sticky_client_id = (body.client_turn_id or "").strip() or None
+    if sticky_mode and sticky_client_id:
+        # Retry of a turn whose reply was lost: the assistant answer stored
+        # after the user turn is the durable result to hand back.
+        from . import persistence as _persistence
+
+        replay = await _persistence.replay_turn(db, current_user["id"], sticky_mode,
+                                                body.listing_id, sticky_client_id)
+        if replay is not None:
+            return replay
+    if sticky_mode:
+        from . import persistence as _persistence
+
+        await _persistence.append_turn(db, current_user["id"], sticky_mode,
+                                       body.listing_id, "user", body.message,
+                                       sticky_client_id)
+    turn = await service.assistant_turn(
         db=db,
         user_id=current_user["id"],
         message=body.message,
@@ -123,6 +152,87 @@ async def assistant_turn(
         listing_id=body.listing_id,
         image_base64=image,
     )
+    if sticky_mode:
+        from . import persistence as _persistence
+
+        reply_text = ""
+        try:
+            reply_text = str(turn.get("reply", ""))
+        except Exception:
+            reply_text = ""
+        await _persistence.append_turn(db, current_user["id"], sticky_mode,
+                                       body.listing_id, "assistant", reply_text,
+                                       None)
+    return turn
+
+
+class ZenoConversationAppendIn(BaseModel):
+    mode: str = Field(max_length=16)
+    listing_id: Optional[str] = Field(default=None, max_length=64)
+    role: str = Field(max_length=16)
+    content: str = Field(max_length=8000)
+    client_turn_id: Optional[str] = Field(default=None, max_length=64)
+
+
+@router.get("/assistant/conversation")
+async def get_assistant_conversation(
+    mode: str = Query(default="assistant"),
+    listing_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Restore an account-level Zeno conversation after login or reinstall.
+
+    Listing-specific Zeno rooms are NOT here - those persist in
+    NegotiationMessage and restore through GET /negotiate/{id}/history.
+    """
+    from . import persistence as _persistence
+
+    try:
+        turns = await _persistence.get_turns(
+            db, current_user["id"], mode, listing_id, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "turns": [
+            {
+                "role": t.role,
+                "content": t.content or "",
+                "client_turn_id": t.client_turn_id,
+                "seq": t.seq,
+                "created_at": t.created_at.isoformat() + "Z" if t.created_at else None,
+            }
+            for t in turns
+        ]
+    }
+
+
+@router.post("/assistant/conversation/append")
+async def append_assistant_conversation(
+    body: ZenoConversationAppendIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store one turn explicitly (offline-first clients syncing a turn that
+    never went through POST /assistant/turn). Idempotent on client_turn_id."""
+    from . import persistence as _persistence
+
+    role = (body.role or "").strip().lower()
+    if role not in ("user", "assistant"):
+        raise HTTPException(status_code=400, detail="role must be 'user' or 'assistant'")
+    try:
+        turn = await _persistence.append_turn(
+            db, current_user["id"], body.mode, body.listing_id, role,
+            body.content, body.client_turn_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "seq": turn.seq,
+        "role": turn.role,
+        "content": turn.content or "",
+        "client_turn_id": turn.client_turn_id,
+    }
 
 
 # ── Zeno helping a seller write a listing (selling.py) ───────────────────────

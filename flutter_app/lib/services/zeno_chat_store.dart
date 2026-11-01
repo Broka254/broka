@@ -186,4 +186,77 @@ class ZenoChatStore {
       await prefs.remove(_key(mode));
     } catch (_) {}
   }
+
+  /// Merge the server's durable turns over the local cache: server rows win
+  /// for their sequence positions, local-only turns are kept. Returns the
+  /// merged conversation, or null when the server has nothing and the cache
+  /// is also empty.
+  static Future<ZenoConversation?> restoreFromServer(
+    String mode, {
+    String? listingId,
+  }) async {
+    final local = await load(mode);
+    List<Map<String, dynamic>> remote;
+    try {
+      remote = await ApiService.getAssistantConversation(
+          mode: mode, listingId: listingId ?? local?.aboutListing);
+    } catch (_) {
+      return local;
+    }
+    if (remote.isEmpty) return local;
+    final seen = <String>{};
+    final turns = <ZenoStoredTurn>[];
+    for (final t in remote) {
+      final content = (t['content'] ?? '').toString();
+      final key = "${t['role']}|$content|${t['client_turn_id'] ?? ''}";
+      if (!seen.add(key)) continue; // idempotent: a retried sync adds nothing
+      turns.add(ZenoStoredTurn(
+        role: t['role'] == 'user' ? 'user' : 'broker',
+        content: content,
+      ));
+    }
+    if (local != null) {
+      for (final t in local.turns) {
+        final key = '${t.role}|${t.content}|';
+        if (seen.add(key)) turns.add(t);
+      }
+    }
+    if (turns.isEmpty) return local;
+    final merged = ZenoConversation(
+      turns: turns.length > maxTurns ? turns.sublist(turns.length - maxTurns) : turns,
+      history: [
+        for (final t in turns)
+          {'role': t.role == 'user' ? 'user' : 'assistant', 'content': t.content},
+      ],
+      slots: local?.slots ?? const {},
+      questionsAsked: local?.questionsAsked ?? 0,
+      lastVerdict: local?.lastVerdict,
+      watching: local?.watching ?? false,
+      negotiationOpened: local?.negotiationOpened ?? {},
+      aboutListing: listingId ?? local?.aboutListing,
+      savedAt: DateTime.now().toUtc(),
+    );
+    await save(mode, merged);
+    return merged;
+  }
+
+  /// Best-effort sync of one turn to the server. Local save always happens
+  /// first (callers do that); a failed sync keeps the local copy.
+  static Future<void> syncTurn(
+    String mode, {
+    String? listingId,
+    required String role,
+    required String content,
+    String? clientTurnId,
+  }) async {
+    try {
+      await ApiService.appendAssistantTurn(
+        mode: mode,
+        listingId: listingId,
+        role: role,
+        content: content,
+        clientTurnId: clientTurnId,
+      );
+    } catch (_) {}
+  }
 }

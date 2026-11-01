@@ -66,6 +66,36 @@ CHAT_WS_PING_SECONDS = 25
 CHAT_WS_STALE_SECONDS = CHAT_WS_PING_SECONDS * 4
 
 
+# Typing broadcasts are throttled per sender: a phone emits them while the
+# user types, but the thread only hears about it at most every 2 seconds -
+# otherwise every keystroke becomes a socket write to every other device.
+_typing_last: Dict[str, float] = {}
+TYPING_THROTTLE_SECONDS = 2.0
+
+
+async def _broadcast_typing(key: str, sender_uid: str, sender_role: str, *, typing: bool) -> None:
+    """Relay a typing state change to the other participant's devices only.
+
+    Never stored: typing is presence, not a message, so it shares the
+    receipt path's shape (role + thread) without touching the database."""
+    import time as _time
+
+    now = _time.monotonic()
+    throttle_key = f"{key}:{sender_uid}"
+    if typing:
+        last = _typing_last.get(throttle_key, 0.0)
+        if now - last < TYPING_THROTTLE_SECONDS:
+            return
+        _typing_last[throttle_key] = now
+    else:
+        _typing_last.pop(throttle_key, None)
+    await _broadcast(
+        key,
+        {"type": "typing" if typing else "stop_typing", "role": sender_role},
+        exclude_uid=sender_uid,
+    )
+
+
 async def _broadcast(key: str, payload: dict, exclude_uid: Optional[str] = None) -> None:
     """Broadcast a JSON message to WebSocket clients in a thread, skipping
     any connection owned by exclude_uid - normally the message's own sender,
@@ -242,6 +272,19 @@ async def negotiate_ws(
                 continue
             if isinstance(msg, dict) and msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
+                continue
+            # Typing presence: relayed to the other side's devices only, never
+            # stored. The sender's role comes from the authenticated socket,
+            # never from the payload, and unknown payloads are ignored.
+            if isinstance(msg, dict) and msg.get("type") in ("typing", "stop_typing"):
+                try:
+                    await _broadcast_typing(
+                        key, uid, "seller" if is_seller else "buyer",
+                        typing=(msg.get("type") == "typing"),
+                    )
+                except Exception:
+                    pass
+                continue
     except WebSocketDisconnect:
         logger.info("[media-ws] %s disconnected from thread=%s", uid, key)
     except Exception as exc:
@@ -252,6 +295,22 @@ async def negotiate_ws(
         _thread_connections.get(key, {}).pop(websocket, None)
         if not _thread_connections.get(key):
             _thread_connections.pop(key, None)
+
+
+def _reply_preview_dict(m: NegotiationMessage) -> Optional[dict]:
+    """Quote preview for socket/REST payloads. Only direct-chat rows carry a
+    reference, so this never serialises a private Zeno turn."""
+    import json as _json
+
+    raw = getattr(m, "reply_snapshot", None)
+    if raw:
+        try:
+            parsed = _json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return None
 
 
 def _msg_to_dict(m: NegotiationMessage, uid: str, is_seller: bool) -> dict:
@@ -274,6 +333,8 @@ def _msg_to_dict(m: NegotiationMessage, uid: str, is_seller: bool) -> dict:
         "edited_at":    (m.edited_at.isoformat() + "Z") if getattr(m, "edited_at", None) else None,
         "deleted_at":   (m.deleted_at.isoformat() + "Z") if getattr(m, "deleted_at", None) else None,
         "deleted":      getattr(m, "deleted_at", None) is not None,
+        "reply_to_message_id": getattr(m, "reply_to_message_id", None),
+        "reply_preview": _reply_preview_dict(m),
     }
 
 
@@ -294,6 +355,10 @@ async def upload_media(
     # The id the sender's app gave this voice note or photo before sending
     # it - see NegotiationMessage.client_msg_id.
     client_msg_id: Optional[str] = Form(default=None, max_length=64),
+    # Optional quote-reply reference (multipart field, same rules as text).
+    reply_to_message_id: Optional[str] = Form(default=None, max_length=64),
+    # Optional caption for an image message, shown under the photo.
+    caption: Optional[str] = Form(default=None, max_length=2000),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -376,19 +441,30 @@ async def upload_media(
             db, listing_id, authenticated_uid, seller_id=listing.seller_id,
         )
 
+    from api.routers.negotiate import (
+        _reply_snapshot_json,
+        _validate_reply_reference,
+    )
+
+    _ref, _preview = await _validate_reply_reference(
+        db, (reply_to_message_id or "").strip() or None,
+        listing_id=listing_id, buyer_id=effective_buyer_id,
+    )
     msg_type = "voice" if content_type == "audio" else "image"
     nm = NegotiationMessage(
         listing_id=listing_id,
         sender_id=authenticated_uid,
         role=actual_role,
         recipient_role="seller" if actual_role == "buyer" else "buyer",
-        content=None,
+        content=(caption or "").strip() or None if content_type == "image" else None,
         buyer_id=effective_buyer_id,
         via_ai=False,
         msg_type=msg_type,
         media_url=data_uri,
         duration_secs=duration_secs if content_type == "audio" else None,
         client_msg_id=client_msg_id,
+        reply_to_message_id=((reply_to_message_id or "").strip() or None),
+        reply_snapshot=_reply_snapshot_json(_preview),
     )
     db.add(nm)
     try:
@@ -430,6 +506,7 @@ def _upload_response(nm: NegotiationMessage) -> dict:
     return {
         "id":            nm.id,
         "role":          nm.role,
+        "content":       nm.content or "",
         "msg_type":      nm.msg_type,
         "media_url":     nm.media_url,
         "duration_secs": nm.duration_secs,
@@ -438,6 +515,8 @@ def _upload_response(nm: NegotiationMessage) -> dict:
         "edited_at":     (nm.edited_at.isoformat() + "Z") if getattr(nm, "edited_at", None) else None,
         "deleted_at":    (nm.deleted_at.isoformat() + "Z") if getattr(nm, "deleted_at", None) else None,
         "deleted":       getattr(nm, "deleted_at", None) is not None,
+        "reply_to_message_id": getattr(nm, "reply_to_message_id", None),
+        "reply_preview": _reply_preview_dict(nm),
     }
 
 

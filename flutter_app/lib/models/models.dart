@@ -81,6 +81,10 @@ class Message {
   // or media; the chat draws a tombstone in their place.
   final DateTime? editedAt;
   final bool deleted;
+  // Quote-reply: the id of the direct-chat message being answered, plus the
+  // compact preview the bubble renders from (safe fallback when deleted).
+  final String? replyToMessageId;
+  final Map<String, dynamic>? replyPreview;
 
   const Message({
     required this.role,
@@ -100,6 +104,8 @@ class Message {
     this.clientMsgId,
     this.editedAt,
     this.deleted = false,
+    this.replyToMessageId,
+    this.replyPreview,
   });
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -121,6 +127,8 @@ class Message {
         ? DateTime.tryParse(j['edited_at'] as String)
         : null,
     deleted:         (j['deleted'] as bool?) ?? j['msg_type'] == 'deleted',
+    replyToMessageId: j['reply_to_message_id'] as String?,
+    replyPreview: (j['reply_preview'] as Map?)?.cast<String, dynamic>(),
     createdAt:       j['created_at'] != null
         ? parseBackendUtc(j['created_at'] as String)
         : null,
@@ -147,6 +155,8 @@ class Message {
     'client_msg_id': clientMsgId,
     'edited_at': editedAt?.toIso8601String(),
     'deleted': deleted,
+    if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
+    if (replyPreview != null) 'reply_preview': replyPreview,
   };
 }
 

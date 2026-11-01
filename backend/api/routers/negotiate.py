@@ -318,6 +318,10 @@ class MessageIn(BaseModel):
     # Direct chat only: the id the sender's app gave the message before
     # sending it (NegotiationMessage.client_msg_id).
     client_msg_id: Optional[str] = Field(default=None, max_length=64)
+    # Quote-reply: the id of the direct-chat message being answered.
+    # Validated to the same listing/buyer thread; private via_ai rows and
+    # other threads are refused (see _validate_reply_reference).
+    reply_to_message_id: Optional[str] = Field(default=None, max_length=64)
 
 
 async def _econfirm_holds_funds(db: AsyncSession, deal: "Deal", action: str) -> bool:
@@ -410,6 +414,12 @@ class MessageOut(BaseModel):
     edited_at:        Optional[str] = None
     deleted_at:       Optional[str] = None
     deleted:          bool          = False
+    # Quote-reply reference and the compact preview the reply renders from.
+    # The preview is derived server-side from a message the viewer is
+    # entitled to see; a deleted/unavailable original renders as a safe
+    # fallback rather than leaking private Zeno contents.
+    reply_to_message_id: Optional[str] = None
+    reply_preview:    Optional[dict] = None
 
 
 # ── Individual AI callers ─────────────────────────────────────────────────────
@@ -1995,8 +2005,49 @@ async def send_message(
     lang = data.language
 
     # ── Opening greeting: role-aware, never contacts/relays to the other party ──
+    # Persisted per (listing, buyer, recipient) so reopening the same thread
+    # restores it from history instead of minting a new greeting each time.
+    # Retries sharing a client_msg_id return the stored row.
     if data.intent == "opening_greeting":
         effective_buyer_id = authenticated_uid if actual_role == "buyer" else data.buyer_id
+        _greet_client_id = (data.client_msg_id or "").strip() or None
+        if _greet_client_id:
+            # visibility-ok: idempotency lookup by the sender's own client key,
+            # no content returned to anyone but the retrying sender below
+            _prior = (await db.execute(
+                select(NegotiationMessage).where(
+                    NegotiationMessage.sender_id == "broker",
+                    NegotiationMessage.client_msg_id == _greet_client_id,
+                )
+            )).scalars().first()
+            if _prior is not None:
+                return MessageOut(
+                    id=_prior.id, role="broker", content=_prior.content or "",
+                    via_ai=True, msg_type=_prior.msg_type or "text",
+                    created_at=(_prior.created_at.isoformat() + "Z") if _prior.created_at else None,
+                    client_msg_id=_prior.client_msg_id,
+                )
+        if effective_buyer_id:
+            _existing_greet = (await db.execute(
+                select(NegotiationMessage)
+                .where(
+                    NegotiationMessage.listing_id == data.listing_id,
+                    NegotiationMessage.buyer_id == effective_buyer_id,
+                    NegotiationMessage.role == "broker",
+                    NegotiationMessage.recipient_role == actual_role,
+                )
+                .order_by(NegotiationMessage.created_at)
+                .limit(1)
+            )).scalars().first()
+            if _existing_greet is not None:
+                return MessageOut(
+                    id=_existing_greet.id, role="broker",
+                    content=_existing_greet.content or "", via_ai=True,
+                    msg_type=_existing_greet.msg_type or "text",
+                    created_at=(_existing_greet.created_at.isoformat() + "Z")
+                    if _existing_greet.created_at else None,
+                    client_msg_id=_existing_greet.client_msg_id,
+                )
         direct_chat_summary = ""
         silence_context = ""
         delivery_context = ""
@@ -2068,8 +2119,23 @@ async def send_message(
             direct_chat_summary + delivery_context + silence_context,
         )
         reply = await _call_ai(sys_prompt, [{"role": "user", "content": "Begin."}])
-        return MessageOut(role="broker", content=reply, via_ai=True,
-                           timer_offer=bool(silence_context))
+        _greet_row = NegotiationMessage(
+            listing_id=data.listing_id, sender_id="broker",
+            role="broker", recipient_role=actual_role,
+            content=reply, buyer_id=effective_buyer_id, msg_type="text",
+            via_ai=True, client_msg_id=_greet_client_id,
+        )
+        db.add(_greet_row)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+        await db.refresh(_greet_row)
+        return MessageOut(id=_greet_row.id, role="broker", content=reply, via_ai=True,
+                           timer_offer=bool(silence_context),
+                           client_msg_id=_greet_row.client_msg_id,
+                           created_at=(_greet_row.created_at.isoformat() + "Z")
+                           if _greet_row.created_at else None)
 
     # ── Buyer asked Zeno to check availability with the seller ──────────────
     # The one deliberate relay action Zeno performs - solves the case where
@@ -3045,19 +3111,69 @@ async def send_message(
     # outright, not half-sent.
     image = await _prepared_image(data.image_base64)
 
-    new_msg = NegotiationMessage(
-        listing_id=data.listing_id,
-        sender_id=data.sender_id,
-        role=data.sender_role,
-        recipient_role=None,
-        content=data.content,
-        buyer_id=effective_buyer_id,
-        via_ai=True,
-        msg_type="text",
-    )
-    db.add(new_msg)
-    await db.commit()
-    await db.refresh(new_msg)
+    # Idempotent retry: the first attempt's answer was lost after the row
+    # was stored - the same client id returns that row instead of a copy.
+    # The user's message is committed BEFORE the (slow, fallible) AI call,
+    # so a failed generation never loses what they typed. When the first
+    # attempt already produced Zeno's reply, the retry hands that back
+    # instead of generating (and storing) a second one.
+    _zeno_client_id = (data.client_msg_id or "").strip() or None
+    new_msg = None
+    if _zeno_client_id:
+        from api.routers.media import sent_with_client_id as _sent_with_client_id
+
+        # visibility-ok: the sender's own prior message, looked up by their own key
+        new_msg = await _sent_with_client_id(db, data.sender_id, _zeno_client_id)
+        if new_msg is not None:
+            # visibility-ok: the sender's own thread; the completed reply below
+            # is returned to its author only
+            _prior_reply = (await db.execute(
+                select(NegotiationMessage)
+                .where(
+                    NegotiationMessage.listing_id == data.listing_id,
+                    NegotiationMessage.buyer_id == effective_buyer_id,
+                    NegotiationMessage.role == "broker",
+                    NegotiationMessage.recipient_role == actual_role,
+                    NegotiationMessage.created_at >= new_msg.created_at,
+                )
+                .order_by(NegotiationMessage.created_at)
+                .limit(1)
+            )).scalars().first()
+            if _prior_reply is not None:
+                return MessageOut(
+                    id=_prior_reply.id, role="broker",
+                    content=_prior_reply.content or "", via_ai=True,
+                    msg_type=_prior_reply.msg_type or "text",
+                    created_at=(_prior_reply.created_at.isoformat() + "Z")
+                    if _prior_reply.created_at else None,
+                    client_msg_id=_prior_reply.client_msg_id,
+                )
+    if new_msg is None:
+        new_msg = NegotiationMessage(
+            listing_id=data.listing_id,
+            sender_id=data.sender_id,
+            role=data.sender_role,
+            recipient_role=None,
+            content=data.content,
+            buyer_id=effective_buyer_id,
+            via_ai=True,
+            msg_type="text",
+            client_msg_id=_zeno_client_id,
+        )
+        db.add(new_msg)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # A retry racing the first store: keep the row that won.
+            await db.rollback()
+            from api.routers.media import sent_with_client_id as _sent_with_client_id2
+
+            # visibility-ok: the sender's own prior message, looked up by their own key
+            new_msg = await _sent_with_client_id2(db, data.sender_id, _zeno_client_id) \
+                if _zeno_client_id else None
+            if new_msg is None:
+                raise
+        await db.refresh(new_msg)
 
     # ── Off-platform solicitation detection (Volume 2 §2.2) ──────────────────
     # Analytics only - logged for 3.1's leakage detection and 4.2's churn
@@ -3295,8 +3411,11 @@ async def send_message(
     )
 
     return MessageOut(
-        role="broker", content=reply_sender,
+        id=broker_msg_sender.id, role="broker", content=reply_sender,
         deal_probability=deal_probability, via_ai=True,
+        created_at=(broker_msg_sender.created_at.isoformat() + "Z")
+        if broker_msg_sender.created_at else None,
+        client_msg_id=broker_msg_sender.client_msg_id,
         # Preserved for existing clients, derived from the same decision so
         # the two can never disagree.
         suggest_direct_chat=(proposal.action == ZenoNegotiationAction.SWITCH_TO_DIRECT_CHAT),
@@ -3456,11 +3575,109 @@ async def seller_default_buyer(db: AsyncSession, listing_id: str) -> Optional[st
     return result.scalar_one_or_none()
 
 
+def _reply_preview_for(m: Optional[NegotiationMessage]) -> Optional[dict]:
+    """Compact quote preview for a referenced message. Never leaks private
+    Zeno contents: only genuine direct-chat rows reach here - callers refuse
+    via_ai/broker rows first - so the fallback below is the only thing an
+    entitled viewer cannot already see."""
+    import json as _json
+
+    if m is None:
+        return {"deleted": True, "label": "Message deleted"}
+    if getattr(m, "deleted_at", None) is not None:
+        return {
+            "message_id": m.id,
+            "sender_role": m.role,
+            "deleted": True,
+            "label": "Message deleted",
+        }
+    msg_type = (getattr(m, "msg_type", None) or "text")
+    if msg_type == "image":
+        label = "Photo"
+    elif msg_type in ("voice", "audio"):
+        label = "Voice message"
+    elif msg_type == "call":
+        label = "Call"
+    elif msg_type == "deleted":
+        return {
+            "message_id": m.id,
+            "sender_role": m.role,
+            "deleted": True,
+            "label": "Message deleted",
+        }
+    else:
+        label = (m.content or "")[:140]
+    return {
+        "message_id": m.id,
+        "sender_role": m.role,
+        "msg_type": msg_type,
+        "preview": label,
+        "deleted": False,
+    }
+
+
+def _reply_snapshot_json(preview: Optional[dict]) -> Optional[str]:
+    import json as _json
+
+    if not preview:
+        return None
+    try:
+        return _json.dumps(preview)[:2000]
+    except Exception:
+        return None
+
+
+async def _validate_reply_reference(
+    db,
+    reply_to_id: Optional[str],
+    *,
+    listing_id: str,
+    buyer_id: Optional[str],
+) -> tuple[Optional[NegotiationMessage], Optional[dict]]:
+    """Check a quote-reply points at a genuine direct-chat message in the
+    same listing/buyer thread. Refuses cross-listing, cross-thread, and
+    private via_ai/broker rows - replying must never become a way to read
+    the other party's private Zeno conversation."""
+    if not reply_to_id:
+        return None, None
+    # visibility-ok: reply validation by id; thread, listing and via_ai/broker
+    # audience are enforced in Python below before anything is returned
+    result = await db.execute(
+        select(NegotiationMessage).where(NegotiationMessage.id == reply_to_id)
+    )
+    ref = result.scalar_one_or_none()
+    if ref is None:
+        raise HTTPException(status_code=404, detail="Replied message not found")
+    if ref.listing_id != listing_id:
+        raise HTTPException(
+            status_code=403, detail="Cannot reply to a message from another listing")
+    ref_buyer = getattr(ref, "buyer_id", None)
+    if buyer_id is not None and ref_buyer is not None and ref_buyer != buyer_id:
+        raise HTTPException(
+            status_code=403, detail="Cannot reply to a message from another conversation")
+    if bool(getattr(ref, "via_ai", False)) or ref.role == "broker":
+        raise HTTPException(
+            status_code=403, detail="Cannot reply to a private Zeno message")
+    if ref.role not in ("buyer", "seller"):
+        raise HTTPException(
+            status_code=403, detail="Cannot reply to this message")
+    return ref, _reply_preview_for(ref)
+
+
 def _direct_message_out(m: NegotiationMessage) -> dict:
     """The stored message as the sender's app shows it - the same fields the
     chat socket and /history carry."""
+    import json as _json
+
     deleted_at = getattr(m, "deleted_at", None)
     edited_at  = getattr(m, "edited_at", None)
+    preview = None
+    try:
+        raw = getattr(m, "reply_snapshot", None)
+        if raw:
+            preview = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        preview = None
     return {
         "id":            m.id,
         "role":          m.role,
@@ -3472,6 +3689,8 @@ def _direct_message_out(m: NegotiationMessage) -> dict:
         "edited_at":     (edited_at.isoformat() + "Z") if edited_at else None,
         "deleted_at":    (deleted_at.isoformat() + "Z") if deleted_at else None,
         "deleted":       deleted_at is not None,
+        "reply_to_message_id": getattr(m, "reply_to_message_id", None),
+        "reply_preview": preview,
     }
 
 
@@ -3540,6 +3759,10 @@ async def direct_message(
         effective_buyer_id = await seller_default_buyer(db, data.listing_id)
         if not effective_buyer_id:
             raise HTTPException(status_code=400, detail="buyer_id required")
+    _ref, _preview = await _validate_reply_reference(
+        db, (data.reply_to_message_id or "").strip() or None,
+        listing_id=data.listing_id, buyer_id=effective_buyer_id,
+    )
     direct_msg = NegotiationMessage(
         listing_id=data.listing_id,
         sender_id=data.sender_id,
@@ -3550,6 +3773,8 @@ async def direct_message(
         via_ai=False,
         msg_type="text",
         client_msg_id=client_msg_id,
+        reply_to_message_id=((data.reply_to_message_id or "").strip() or None),
+        reply_snapshot=_reply_snapshot_json(_preview),
     )
     db.add(direct_msg)
     # Scanned here too, not only on the Zeno path: switching AI assist off
@@ -3868,6 +4093,53 @@ async def get_history(
                                    call_type=call_type, created_at=created_at,
                                    edited_at=edited_iso, deleted_at=deleted_iso, deleted=deleted)
                     )
+
+    # Attach quote-reply references without leaking private threads. The row
+    # map covers the whole listing so a reply's original is usually already
+    # in memory; a referenced row outside this thread (or a private via_ai
+    # row) renders as the safe deleted fallback instead of its contents.
+    try:
+        import json as _json
+
+        by_id = {m.id: m for m in all_msgs}
+        for out in filtered:
+            src = by_id.get(out.id)
+            reply_id = getattr(src, "reply_to_message_id", None) if src is not None else None
+            if not reply_id:
+                continue
+            out.reply_to_message_id = reply_id
+            # The live row wins over the send-time snapshot: when the original
+            # is later unsent, the quote honestly reads "Message deleted"
+            # instead of echoing words that no longer exist.
+            ref = by_id.get(reply_id)
+            if ref is not None and getattr(ref, "deleted_at", None) is not None:
+                out.reply_preview = _reply_preview_for(ref)
+                continue
+            preview = None
+            raw = getattr(src, "reply_snapshot", None) if src is not None else None
+            if raw:
+                try:
+                    preview = _json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:
+                    preview = None
+            if preview is None:
+                if ref is not None and ref.listing_id == listing_id:
+                    ref_buyer = getattr(ref, "buyer_id", None)
+                    same_thread = (
+                        effective_buyer_id is None
+                        or ref_buyer is None
+                        or ref_buyer == effective_buyer_id
+                    )
+                    private = (
+                        bool(getattr(ref, "via_ai", False))
+                        or ref.role == "broker"
+                        or ref.role not in ("buyer", "seller")
+                    )
+                    if same_thread and not private:
+                        preview = _reply_preview_for(ref)
+            out.reply_preview = preview or {"deleted": True, "label": "Message deleted"}
+    except Exception:
+        pass
 
     return filtered
 
