@@ -1307,7 +1307,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `otp_code_field.dart` — BROKA — 6-digit OTP entry.
 - `particle_field.dart` — BROKA Dark Matter — Particle Field Background + Hex Trust Badge
 - `product_card.dart` — Home-redesign brief (2026-08-16): listing card rebuilt around the product image, with a trader identity row, a single "View Deal" CTA, and…
-- `product_grid_view.dart` — Reusable 2-column paginated grid used by the home feed, category zones, search results, and Trending "See All" (Design Journal Volume 6, Ch…
+- `product_grid_view.dart` — Reusable paginated grid used by the home feed, category zones, search results, and Trending "See All" (Design Journal Volume 6, Ch.11).
 - `protection_badge.dart` — BROKA - Protection Badge (Volume 2 §2.1)
 - `rating_stars.dart` — The app's one five-star renderer.
 - `sell_step_scaffold.dart` — BROKA - Sell Wizard Step Scaffold
@@ -1413,6 +1413,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `store_directory_duplicates_test.dart` — The store directory must show each shop once.
 - `store_directory_test.dart` — The Stores directory is a single-column list of wide cards - the picture on the left of each row, the facts beside it.
 - `store_graphs_and_rating_test.dart` — Distinct store graphs (visits, product views, rating, reviews, response time — one graph each, like the seller dashboard) and the product c…
+- `store_redesign_test.dart` — Premium storefront redesign: the responsive catalogue, the calmer hero, and the upgraded product card.
 - `store_setup_test.dart` — Online Stores phase 2 on the phone: setting a store up, sharing it, and the owner's dashboard.
 - `storefront_test.dart` — Online Stores phase 3 in the app: the storefront screen, and store links opening it.
 - `stt_fallback_test.dart` — Covers the realtime STT layer below ZenoVoiceController: how each provider fails, how those failures are told apart, and what RealtimeSttMa…
