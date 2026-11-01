@@ -1234,6 +1234,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `broka_tts.dart` — BROKA TTS Service
 - `call_foreground_service.dart` — BROKA - Call Foreground Service (Dart bridge)
 - `callkit_service.dart` — BROKA - CallKit bridge (iOS)
+- `chat_media_vault.dart` — BROKA - On-device vault for settled chat photos.
 - `chat_screen_memory.dart` — Which of a thread's two screens the user was last on: Zeno's negotiation room (/negotiate) or the direct chat with the other person (/direc…
 - `counterparty_profile_cache.dart` — BROKA - Counterparty profile cache.
 - `deep_link_service.dart` — Store links opening in the app.
@@ -1350,6 +1351,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `call_history_screen_test.dart` — Calls (2026-10-02): every call with a buyer or seller, newest first, on Home's visual system.
 - `category_visual_test.dart` — Covers the one thing this whole category pass is about: the UI's category visuals are resolved by NAME from a single registry, and that reg…
 - `category_zone_test.dart` — Covers the Category Zone screen after the alignment pass: that it uses the same visual system and scroll architecture as Home, that its vis…
+- `chat_media_vault_test.dart` — Chat media vault + receipt watermarks, against the real filesystem.
 - `chat_polish_test.dart` — Chat polish reported from a phone (2026-10-27): the Direct/Zeno switch ate a full-width row (and the Zeno orb clipped its label) - now a co…
 - `chat_screen_memory_test.dart` — The Inbox opens the screen the user was using (2026-10-02).
 - `constellation_background_test.dart` — The constellation behind the screens (widgets/constellation_background.dart) must not move when the keyboard opens.
