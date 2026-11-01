@@ -167,6 +167,58 @@ async def test_registering_a_new_phone_announces_what_is_already_unread(client):
 
 
 @pytest.mark.asyncio
+async def test_a_register_time_repush_does_not_repeat_a_message_already_announced(client):
+    """CI (Backend Tests, PostgreSQL 16): test_a_photo_is_announced_as_a_photo
+    found two pushes for one photo. The phone registered, the photo landed
+    before the registration's re-push read the thread, and the re-push then
+    announced it a second time on top of the photo's own debounced push.
+    A phone already told about a message must not be told again."""
+    async with AsyncSessionLocal() as db:
+        seller = User(name="Sam Seller", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        buyer = User(name="Bea Buyer", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        db.add_all([seller, buyer])
+        await db.flush()
+        listing = Listing(seller_id=seller.id, name="Samsung A54", category="Electronics",
+                          price=25000, lat=-1.28, lng=36.82)
+        db.add(listing)
+        await db.commit()
+        listing_id, seller_id, buyer_id = listing.id, seller.id, buyer.id
+    sent = []
+
+    async def _send(**kwargs):
+        sent.append(kwargs)
+        return calls.FcmResult(True)
+
+    with patch.object(calls, "_get_fcm", lambda: object()), \
+         patch.object(calls, "_send_fcm", new=_send), \
+         patch.object(message_push, "PUSH_DEBOUNCE_SECONDS", 0):
+        r = await client.post(
+            "/calls/register-token", headers=_auth(buyer_id),
+            json={"fcm_token": f"tok-{uuid.uuid4().hex}", "token_type": "fcm",
+                  "platform": "android"})
+        assert r.status_code == 200, r.text
+        # The registration alone has nothing to announce: no threads yet.
+        await message_push.drain()
+        assert sent == []
+
+        async with AsyncSessionLocal() as db:
+            db.add(NegotiationMessage(
+                listing_id=listing_id, sender_id=seller_id, role="seller",
+                recipient_role="buyer", content="data:image/webp;base64,AAAA",
+                buyer_id=buyer_id, via_ai=False, msg_type="image"))
+            await db.commit()
+        # The photo's own push goes out...
+        await message_push.drain()
+        assert len(sent) == 1, f"the photo's push must go out, got {len(sent)}"
+        # ...and the registration's re-push arrives afterwards, as it did in CI.
+        await message_push.push_unread_for_user(buyer_id)
+
+    pushes = [p for p in sent if p["data"].get("type") == "new_message"]
+    assert len(pushes) == 1, (
+        f"one photo must be announced once, got {len(pushes)} pushes")
+
+
+@pytest.mark.asyncio
 async def test_inbox_carries_the_listing_photo(client):
     photo = "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
     listing_id, seller_id, buyer_id = await _thread(photo=photo)

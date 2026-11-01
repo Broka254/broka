@@ -229,29 +229,35 @@ async def push_user(
     user_id: str, *, title: str, body: str, data: dict,
     send: Optional[Callable[..., Awaitable]] = None,
     db: Optional[AsyncSession] = None,
+    tokens: Optional[list[str]] = None,
     **send_kwargs,
 ) -> int:
     """Send one FCM notification to every phone `user_id` is signed in on.
     Returns how many accepted it. Never raises.
+
+    `tokens` narrows the send to phones the caller has already chosen: a
+    message push tells only the phones that have not been told about that
+    message yet. None looks them up, which is what every other caller wants.
 
     The phones are pushed concurrently: a call rings on all of them at
     once, and one slow FCM round trip doesn't hold up the next phone.
     """
     if not user_id:
         return 0
-    try:
-        if db is not None:
-            tokens = await tokens_for(db, user_id)
-        else:
-            async with AsyncSessionLocal() as own:
-                tokens = await tokens_for(own, user_id)
-    except Exception as exc:
-        # The exception string from a push path can quote a token or the
-        # notification body; the type is enough to tell a lookup bug from an
-        # outage.
-        logger.warning("[push] could not load devices for user=%s: %s",
-                       user_id, type(exc).__name__)
-        return 0
+    if tokens is None:
+        try:
+            if db is not None:
+                tokens = await tokens_for(db, user_id)
+            else:
+                async with AsyncSessionLocal() as own:
+                    tokens = await tokens_for(own, user_id)
+        except Exception as exc:
+            # The exception string from a push path can quote a token or the
+            # notification body; the type is enough to tell a lookup bug from
+            # an outage.
+            logger.warning("[push] could not load devices for user=%s: %s",
+                           user_id, type(exc).__name__)
+            return 0
     route = str(data.get("type") or "generic")
     room = str(data.get("roomId") or "-")
     if not tokens:

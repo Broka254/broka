@@ -58,9 +58,11 @@ _pending_tasks: dict = {}
 # Every push task until it has finished sending. The loop holds tasks only
 # weakly; this also keeps them alive.
 _inflight: set = set()
-# (listing_id, buyer_id, role) -> id of the message last announced, so the
-# same newest message is never announced twice. Bounded.
-_last_pushed: "OrderedDict[tuple, str]" = OrderedDict()
+# (listing_id, buyer_id, role) -> the id of the message last announced and
+# the phones it reached, so the same newest message is never announced twice
+# - and so a phone that registered afterwards is told about it without the
+# phones that already were buzzing again. Bounded.
+_last_pushed: "OrderedDict[tuple, tuple]" = OrderedDict()
 _LAST_PUSHED_MAX = 20000
 # (listing_id, buyer_id) -> how many times the thread was scheduled. Every
 # schedule() bumps it, so a send built from an older read can tell a newer
@@ -316,9 +318,14 @@ async def push_thread(
     first send from landing after - and overwriting, by tag - the fresh
     notification.
 
-    `force` skips the already-pushed check: a phone that has just
-    registered has not seen this thread's news even when another phone
-    of the same account was pushed to earlier (see push_unread_for_user).
+    `force` re-checks a thread whose newest message was already announced,
+    for phones that were not told: a phone that has just registered has not
+    seen this thread's news even when another phone of the same account was
+    pushed to earlier (see push_unread_for_user). The phones already told
+    about that same message are left out: the register-time re-push and the
+    message's own debounced push race for the same thread, and both
+    announcing it buzzed the phone twice (CI, Backend Tests PostgreSQL 16:
+    test_a_photo_is_announced_as_a_photo found two pushes for one photo).
 
     The guard-and-send below runs under a per-thread lock: checking
     _last_pushed, sending, and recording are one atomic step, so two
@@ -337,12 +344,26 @@ async def push_thread(
     async with lock:
         if generation is not None and _generations.get((listing_id, buyer_id), 0) != generation:
             return 0
-        if not force and _last_pushed.get(dedupe_key) == note["message_id"]:
+        announced = _last_pushed.get(dedupe_key)
+        repeat = announced is not None and announced[0] == note["message_id"]
+        if repeat and not force:
             return 0
+        told = frozenset()
+        phones = await _phones_for(note["user_id"])
+        if repeat:
+            told = announced[1]
+            phones = [phone for phone in phones if phone not in told]
+            if not phones:
+                return 0  # every phone that could be reached was already told
+        # Exactly the phones being told, so the record below is the truth.
+        # None when the account has no phone registered: push_user resolves
+        # the phones itself then, as it always has.
+        tokens = phones or None
 
         tag = thread_tag(listing_id, buyer_id)
         sent = await push_devices.push_user(
             note["user_id"], title=note["title"], body=note["body"], data=note["data"],
+            tokens=tokens,
             android_tag=tag, android_channel_id=MESSAGES_CHANNEL_ID,
             apns_thread_id=tag,
         )
@@ -352,13 +373,29 @@ async def push_thread(
             # no phone at all - recipient offline, token not registered yet,
             # a transient FCM failure - was marked pushed and could never be
             # announced again for that thread, however long it stayed unread.
-            _last_pushed[dedupe_key] = note["message_id"]
+            _last_pushed[dedupe_key] = (note["message_id"], told | frozenset(tokens or ()))
             _last_pushed.move_to_end(dedupe_key)
             while len(_last_pushed) > _LAST_PUSHED_MAX:
                 _last_pushed.popitem(last=False)
         logger.info("[message_push] MESSAGE_PUSHED thread=%s:%s role=%s phones=%d",
                     listing_id, buyer_id, role, sent)
         return sent
+
+
+async def _phones_for(user_id: str) -> list:
+    """Every phone `user_id` is signed in on, so a send can skip the ones
+    already told about this message. Empty on a lookup failure: push_user
+    then tries the lookup itself, and nothing is lost but the skip."""
+    from api.core import push_devices
+
+    try:
+        async with AsyncSessionLocal() as db:
+            return await push_devices.tokens_for(db, user_id)
+    except Exception as exc:
+        # The type only: the message itself never belongs in a push log line.
+        logger.warning("[message_push] no phones for user=%s: %s",
+                       user_id, type(exc).__name__)
+        return []
 
 
 async def push_unread_for_user(user_id: str) -> int:
