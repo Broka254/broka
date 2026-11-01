@@ -50,10 +50,16 @@ enum MessageReceipt {
 class MessageReceiptIcon extends StatelessWidget {
   final MessageReceipt receipt;
 
+  /// White glyphs for riding on a photo (with the scrim behind them the
+  /// muted ticks would sink into a bright picture). The seen state keeps
+  /// its violet ticks - the one colour in this ladder that must survive
+  /// every background - with a white word beside them.
+  final bool light;
+
   /// Receipts are only ever shown on your OWN messages - showing a tick on
   /// someone else's bubble is meaningless, and on a marketplace it would
   /// also tell them when you read things, which isn't theirs to know.
-  const MessageReceiptIcon({super.key, required this.receipt});
+  const MessageReceiptIcon({super.key, required this.receipt, this.light = false});
 
   // ── Legibility ────────────────────────────────────────────────────────────
   //
@@ -71,11 +77,14 @@ class MessageReceiptIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final onPhoto = light;
+    final base = onPhoto ? Colors.white : _muted;
     switch (receipt) {
       case MessageReceipt.sending:
-        return const _Labelled(
+        return _Labelled(
           icon: Icons.schedule_rounded,
-          color: _muted,
+          color: base,
+          labelColor: onPhoto ? Colors.white : null,
           size: 13,
           label: 'Sending',
           semantics: 'Sending',
@@ -85,9 +94,10 @@ class MessageReceiptIcon extends StatelessWidget {
         // The one state that costs the user something if they miss it.
         // A bare 12px icon asked them to notice an absence of progress;
         // this states the problem and what to do about it.
-        return const _Labelled(
+        return _Labelled(
           icon: Icons.error_outline_rounded,
           color: BrokaColors.danger,
+          labelColor: onPhoto ? Colors.white : null,
           size: 15,
           // Short, so it fits beside the role label on a narrow phone. The
           // bubble itself is what is tapped to try again or delete it
@@ -103,15 +113,15 @@ class MessageReceiptIcon extends StatelessWidget {
         // tick vs two in the same grey - indistinguishable at a glance on
         // a phone, which is exactly what people reported. The tick stays
         // for the familiar grammar; the word makes it unmissable.
-        return const _Labelled(
-          icon: Icons.check_rounded, color: _muted, size: _iconPx,
+        return _Labelled(
+          icon: Icons.check_rounded, color: base, size: _iconPx,
           label: 'Sent', semantics: 'Sent',
         );
 
       case MessageReceipt.delivered:
-        return const _Labelled(
-          custom: _DoubleTick(color: _muted, semantics: 'Delivered'),
-          color: _muted,
+        return _Labelled(
+          custom: _DoubleTick(color: base, semantics: 'Delivered'),
+          color: base,
           label: 'Delivered', semantics: 'Delivered',
         );
 
@@ -124,10 +134,11 @@ class MessageReceiptIcon extends StatelessWidget {
         // looking for. Named neonPurple rather than the gold alias (today
         // the same value) so the read tick stays purple whatever happens
         // to the accent palette.
-        return const _Labelled(
-          custom: _DoubleTick(
+        return _Labelled(
+          custom: const _DoubleTick(
               color: BrokaColors.neonPurple, semantics: 'Seen', emphasised: true),
           color: BrokaColors.neonPurple,
+          labelColor: onPhoto ? Colors.white : null,
           label: 'Seen', semantics: 'Seen', bold: true,
         );
 
@@ -150,12 +161,13 @@ class _Labelled extends StatelessWidget {
   final IconData? icon;
   final Widget? custom;
   final Color color;
+  final Color? labelColor;
   final double size;
   final String label;
   final String semantics;
   final bool bold;
   const _Labelled({
-    this.icon, this.custom, required this.color, this.size = 15,
+    this.icon, this.custom, required this.color, this.labelColor, this.size = 15,
     required this.label, required this.semantics, this.bold = false,
   }) : assert(icon != null || custom != null);
 
@@ -169,7 +181,7 @@ class _Labelled extends StatelessWidget {
               style: TextStyle(
                   fontSize: 10,
                   height: 1.0,
-                  color: color,
+                  color: labelColor ?? color,
                   fontWeight: bold ? FontWeight.w700 : FontWeight.w600)),
         ]),
       );
@@ -203,10 +215,13 @@ String formatMessageTime(DateTime? dt, {DateTime? now}) {
 /// Empty when the message has no time (a local bubble in its first
 /// instant), so callers can drop it in unconditionally.
 class MessageTimeLabel extends StatelessWidget {
-  const MessageTimeLabel({super.key, required this.sentAt, this.now});
+  const MessageTimeLabel({super.key, required this.sentAt, this.now, this.light = false});
 
   final DateTime? sentAt;
   final DateTime? now;
+
+  /// White text for riding on a photo with the scrim behind it.
+  final bool light;
 
   @override
   Widget build(BuildContext context) {
@@ -214,8 +229,9 @@ class MessageTimeLabel extends StatelessWidget {
     if (label.isEmpty) return const SizedBox.shrink();
     return Text(label,
         key: const Key('message-time'),
-        style: const TextStyle(
-            color: BrokaColors.textMid, fontSize: 10, fontWeight: FontWeight.w500));
+        style: TextStyle(
+            color: light ? Colors.white : BrokaColors.textMid,
+            fontSize: 10, fontWeight: FontWeight.w500));
   }
 }
 

@@ -228,6 +228,51 @@ void main() {
         reason: 'the same id, so the server keeps one copy if the first did arrive');
   });
 
+  testWidgets('seen and delivered ticks survive an offline reopen', (tester) async {
+    // Online: one message they read, one their device received but they
+    // have not opened. The ladder reads seen, then delivered.
+    final first = DateTime.now().subtract(const Duration(minutes: 10));
+    final second = DateTime.now().subtract(const Duration(minutes: 5));
+    setFakeRoute((uri) {
+      final p = uri.path;
+      if (p == '/negotiate/listing-1/history') {
+        return [
+          {'role': 'buyer', 'content': 'Umeiona?', 'id': 'm1', 'created_at': _iso(first)},
+          {'role': 'buyer', 'content': 'Na hii?', 'id': 'm2', 'created_at': _iso(second)},
+        ];
+      }
+      if (p.endsWith('/read-status')) {
+        return {
+          'seller_last_delivered': _iso(second.add(const Duration(minutes: 1))),
+          'seller_last_read': _iso(first.add(const Duration(minutes: 1))),
+        };
+      }
+      return null;
+    });
+
+    await tester.pumpWidget(chat());
+    await _settle(tester);
+    await tester.pump(const Duration(seconds: 1));
+    await _settle(tester);
+    expect(receipts(tester), [MessageReceipt.read, MessageReceipt.delivered]);
+
+    // Same phone after a restart with no connection: history and
+    // read-status both fail. The last known states must stand - dropping
+    // everything back to "Sent" would claim the ticks never happened.
+    // (Unmount first: pumping the same route twice keeps the old State
+    // alive, which would prove nothing about a restart.)
+    setFakeRoute((_) => const FakeResponse.error(statusCode: 503));
+    await tester.pumpWidget(MaterialApp(key: UniqueKey(), home: const SizedBox()));
+    await _settle(tester);
+    await tester.pumpWidget(chat());
+    await _settle(tester);
+    await tester.pump(const Duration(seconds: 1));
+    await _settle(tester);
+    expect(find.text('Umeiona?'), findsOneWidget);
+    expect(find.text('Na hii?'), findsOneWidget);
+    expect(receipts(tester), [MessageReceipt.read, MessageReceipt.delivered]);
+  });
+
   testWidgets('a message typed while the history loads is not lost', (tester) async {
     setFakeRoute((uri) {
       final p = uri.path;

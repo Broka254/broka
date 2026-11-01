@@ -76,6 +76,52 @@ class LocalChatStore {
     } catch (_) {}
   }
 
+  // ── Receipt watermarks: the other side's last delivered/read instants ────
+  // Kept separately from the message list because they arrive on their own
+  // channel (read-status polls, receipt frames) and the message cache is
+  // rewritten on every history load - folding them into it would lose them
+  // on every save that doesn't carry them. Without this, a restart or an
+  // offline open reset every tick to "Sent", claiming seen messages were
+  // never seen. A failed fetch changes nothing: the last known states
+  // stand until a newer one arrives (forward-only, like the in-memory
+  // merge in negotiation_screen).
+  static String _receiptsKey(String scope) => 'chat_receipts_v1_$scope';
+
+  static Future<({DateTime? read, DateTime? delivered})> loadReceipts(
+      String scope) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_receiptsKey(scope));
+      if (raw == null || raw.isEmpty) return (read: null, delivered: null);
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      DateTime? at(String key) {
+        final v = m[key];
+        return v is String ? DateTime.tryParse(v) : null;
+      }
+      return (
+        read: at('counterpart_read'),
+        delivered: at('counterpart_delivered'),
+      );
+    } catch (_) {
+      return (read: null, delivered: null);
+    }
+  }
+
+  static Future<void> saveReceipts(String scope,
+      {DateTime? read, DateTime? delivered}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          _receiptsKey(scope),
+          jsonEncode({
+            'counterpart_read':
+                read?.toUtc().toIso8601String(),
+            'counterpart_delivered':
+                delivered?.toUtc().toIso8601String(),
+          }));
+    } catch (_) {}
+  }
+
   // ── Outbox: messages typed while offline / that failed to send ──────────
   // Kept separately from the main cache so a failed send is never silently
   // dropped, and so screens can show a clear "not sent yet" affordance and

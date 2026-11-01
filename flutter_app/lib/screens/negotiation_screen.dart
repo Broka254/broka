@@ -40,6 +40,7 @@ import '../models/listing.dart';
 import '../services/last_screen_tracker.dart';
 import '../services/global_poller_service.dart';
 import '../services/local_chat_store.dart';
+import '../services/chat_media_vault.dart';
 import '../services/counterparty_profile_cache.dart';
 import '../services/zeno_voice_controller.dart';
 import '../core/errors/user_facing_error.dart';
@@ -269,6 +270,18 @@ class _ChatMediaOutbox {
     }
   }
 
+  /// The staged file for [clientId], moved into the vault. Used on confirm:
+  /// the outbox copy is deleted right after, so without this the sent photo
+  /// would have no on-device bytes left for offline opens.
+  static Future<File?> takeStaged(String clientId) async {
+    try {
+      final path = await pathFor(clientId);
+      return path == null ? null : File(path);
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<List<({String clientId, String path, String? replyToMessageId, String? caption})>> list() async {
     try {
       final dir = await _dir();
@@ -396,6 +409,33 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   // earlier than or equal to _counterpartLastRead; the gap between the
   // two is what single-tick vs double-tick expresses.
   DateTime? _counterpartLastDelivered;
+  // Watermarks live in memory AND in LocalChatStore (per thread scope):
+  // without the on-device copy, a restart or an offline open forgot every
+  // seen/delivered state and showed plain "Sent" for all of them.
+  bool _receiptsRestored = false;
+
+  /// Last known watermarks, before the cached messages render - so the
+  /// first offline frame already shows the honest ticks, not "Sent".
+  /// Idempotent per thread scope; safe to call from every load path.
+  Future<void> _restoreReceiptWatermarks() async {
+    if (_receiptsRestored || _listing == null) return;
+    _receiptsRestored = true;
+    final saved = await LocalChatStore.loadReceipts(_threadScopeKey());
+    if (!mounted) return;
+    if (saved.read == null && saved.delivered == null) return;
+    setState(() {
+      _counterpartLastRead = _later(_counterpartLastRead, saved.read);
+      _counterpartLastDelivered =
+          _later(_counterpartLastDelivered, saved.delivered);
+    });
+  }
+
+  /// Remember the watermarks on the phone. Forward-only like the in-memory
+  /// merge: only ever called with the max-known pair.
+  void _persistReceipts() {
+    unawaited(LocalChatStore.saveReceipts(_threadScopeKey(),
+        read: _counterpartLastRead, delivered: _counterpartLastDelivered));
+  }
 
   // M-Pesa
   Map<String, dynamic>? _dealInfo;
@@ -494,6 +534,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // A new thread scope: drop the previous thread's bubble keys so a stale
     // key can never reveal the wrong bubble.
     _bubbleKeys.clear();
+    _receiptsRestored = false;
     _loadCachedMessages();
     unawaited(_restoreMediaOutbox());
     _loadHistory();
@@ -900,6 +941,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _counterpartLastDelivered = _later(_counterpartLastDelivered, at('last_delivered'));
       _counterpartLastRead      = _later(_counterpartLastRead, at('last_read'));
     });
+    _persistReceipts();
   }
 
   /// The sender edited or unsent a message (backend media.broadcast_
@@ -914,6 +956,13 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     final old = _messages[i];
     if (deleted) {
       if (old.deleted) return;
+      // An unsent photo's bytes die with the bubble - the vault must not
+      // keep rendering a picture the thread agreed to forget.
+      if (old.msgType == 'image') {
+        unawaited(ChatMediaVault.remove(
+            messageId: old.id.isEmpty ? null : old.id,
+            clientId: old.clientId));
+      }
       _messages[i] = ChatMessage(
         role: old.role, content: '', msgType: 'deleted',
         viaAi: old.viaAi, isBroker: old.isBroker,
@@ -1151,6 +1200,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   /// into its history rather than a blank/loading screen.
   Future<void> _loadCachedMessages() async {
     if (_listing == null) return;
+    // Watermarks first: the cached bubbles render their ticks from these,
+    // so the offline frame must not show "Sent" for already-seen messages.
+    await _restoreReceiptWatermarks();
+    if (!mounted || _listing == null) return;
     final cached = await LocalChatStore.load(_threadScopeKey());
     if (cached.isEmpty || !mounted || _messages.isNotEmpty) return;
     try {
@@ -1178,23 +1231,29 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } catch (_) {}
   }
 
-  /// Persist the thread for instant offline open. Image bytes are never
-  /// duplicated here: a data URI over ~50KB is stored as an empty
-  /// placeholder in the cache (the full image re-fetches with history),
-  /// while pending outbox photos keep their small file:// reference.
-  static const _cacheMediaBudget = 50 * 1024;
-
-  Future<void> _cacheMessages() {
-    final slimmed = _messages.map((m) {
+  /// Persist the thread for instant offline open. Photos are never kept as
+  /// text here: [ChatMediaVault.cacheMediaUrl] materialises data URIs into
+  /// the on-device vault and the cache keeps only the small file://
+  /// reference, so the picture still renders with no connection.
+  /// Previously a data URI over ~50KB was slimmed to an empty placeholder
+  /// and the bubble opened offline as a broken-image icon.
+  Future<void> _cacheMessages() async {
+    final slimmed = <Map<String, dynamic>>[];
+    for (final m in _messages) {
       final j = m.toJson();
       final url = j['media_url'] as String?;
-      if (url != null &&
-          url.length > _cacheMediaBudget &&
+      if (m.msgType == 'image' && url != null && url.isNotEmpty) {
+        j['media_url'] = await ChatMediaVault.cacheMediaUrl(
+            url: url,
+            messageId: m.id.isEmpty ? null : m.id,
+            clientId: m.clientId);
+      } else if (url != null &&
+          url.length > 50 * 1024 &&
           !url.startsWith('file://')) {
         j['media_url'] = '';
       }
-      return j;
-    }).toList();
+      slimmed.add(j);
+    }
     return LocalChatStore.save(_threadScopeKey(), slimmed);
   }
 
@@ -1227,6 +1286,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _counterpartLastRead      = _later(_counterpartLastRead, status['${other}_last_read']);
       _counterpartLastDelivered = _later(_counterpartLastDelivered, status['${other}_last_delivered']);
     });
+    _persistReceipts();
   }
 
   // ── Polling fallback ───────────────────────────────────────────────────────
@@ -1457,7 +1517,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (choice == 'delete') {
       setState(() => _messages.removeAt(i));
       _uploads.remove(clientId);
-      if (m.msgType == 'image') unawaited(_ChatMediaOutbox.remove(clientId));
+      if (m.msgType == 'image') {
+        unawaited(_ChatMediaOutbox.remove(clientId));
+        unawaited(ChatMediaVault.remove(clientId: clientId));
+      }
       unawaited(_cacheMessages());
       return;
     }
@@ -2189,8 +2252,17 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         caption: staged?.caption,
         onProgress: (sent, total) => _reportUploadProgress(clientId, sent, total),
       );
+      final serverMsg = ChatMessage.fromJson({'role': _role, ...saved});
+      // Keep the sent photo on the phone under its settled id BEFORE the
+      // staged copy is deleted - otherwise offline opens lose it.
+      final stagedFile = await _ChatMediaOutbox.takeStaged(clientId);
+      if (stagedFile != null) {
+        await ChatMediaVault.adoptFile(stagedFile,
+            messageId: serverMsg.id.isEmpty ? null : serverMsg.id,
+            clientId: clientId);
+      }
       await _ChatMediaOutbox.remove(clientId);
-      _confirm(clientId, ChatMessage.fromJson({'role': _role, ...saved}));
+      _confirm(clientId, serverMsg);
     } catch (e) {
       debugPrint('[DirectChat] photo upload failed: $e');
       _markFailed(clientId);
@@ -3193,6 +3265,8 @@ class _ChatBubble extends StatelessWidget {
     } else if (message.msgType == 'image' && message.mediaUrl != null) {
       bubbleContent = quotedMedia(_ImageBubble(
         url: message.mediaUrl!,
+        messageId: message.id.isEmpty ? null : message.id,
+        clientId: message.clientId,
         caption: message.content,
         isMe: isMe,
         createdAt: message.createdAt,
@@ -3410,8 +3484,36 @@ class _VoiceBubble extends StatelessWidget {
 // with an optional caption, a timestamp and the delivery state. Tapping
 // opens a dedicated viewer with pinch-to-zoom and a clear close control.
 
-class _ImageBubble extends StatelessWidget {
+/// Resolve a chat photo to an image provider. The on-device vault copy
+/// wins whenever one exists, so settled photos keep rendering after the
+/// server copy is unreachable (offline) - a data URI or remote URL is only
+/// the fallback. Shared by the bubble and the full-screen viewer so both
+/// show the same bytes.
+ImageProvider? _chatImageProvider(String url,
+    {String? messageId, String? clientId}) {
+  try {
+    final vault =
+        ChatMediaVault.fileForSync(messageId: messageId, clientId: clientId);
+    if (vault != null) return FileImage(vault);
+    if (url.startsWith('data:')) {
+      final commaIdx = url.indexOf(',');
+      if (commaIdx < 0) return null;
+      return MemoryImage(base64Decode(url.substring(commaIdx + 1)));
+    }
+    if (url.startsWith('file://')) {
+      return FileImage(File(url.replaceFirst('file://', '')));
+    }
+    if (url.isEmpty) return null;
+    return NetworkImage(url);
+  } catch (_) {
+    return null;
+  }
+}
+
+class _ImageBubble extends StatefulWidget {
   final String url;
+  final String? messageId;
+  final String? clientId;
   final String? caption;
   final bool isMe;
   final DateTime? createdAt;
@@ -3424,6 +3526,8 @@ class _ImageBubble extends StatelessWidget {
   final double? progress;
   const _ImageBubble({
     required this.url,
+    this.messageId,
+    this.clientId,
     this.caption,
     this.isMe = false,
     this.createdAt,
@@ -3433,39 +3537,66 @@ class _ImageBubble extends StatelessWidget {
     this.progress,
   });
 
-  ImageProvider? _provider() {
-    try {
-      if (url.startsWith('data:')) {
-        final commaIdx = url.indexOf(',');
-        if (commaIdx < 0) return null;
-        return MemoryImage(base64Decode(url.substring(commaIdx + 1)));
-      }
-      if (url.startsWith('file://')) return FileImage(File(url.replaceFirst('file://', '')));
-      if (url.isEmpty) return null;
-      return NetworkImage(url);
-    } catch (_) {
-      return null;
+  @override
+  State<_ImageBubble> createState() => _ImageBubbleState();
+}
+
+class _ImageBubbleState extends State<_ImageBubble> {
+  // Resolved once per (url, message id, client id): a fresh FileImage per
+  // build would look unequal to AspectImage on every parent rebuild and
+  // re-resolve (flickering the photo through its placeholder), so the
+  // provider instance is pinned here for the bubble's lifetime.
+  late ImageProvider? _provider;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(_ImageBubble old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url ||
+        old.messageId != widget.messageId ||
+        old.clientId != widget.clientId) {
+      _resolve();
+      setState(() {});
     }
+  }
+
+  void _resolve() {
+    _provider = _chatImageProvider(widget.url,
+        messageId: widget.messageId, clientId: widget.clientId);
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = _provider();
-    final captionText = (caption ?? '').trim();
+    final provider = _provider;
+    final captionText = (widget.caption ?? '').trim();
+    final pending = widget.pending;
+    final failed = widget.failed;
+    final bubbleWidth = MediaQuery.of(context).size.width * 0.68;
     return GestureDetector(
       onTap: provider == null
           ? null
           : () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => _FullScreenImageViewer(
-                    url: url, caption: captionText.isEmpty ? null : captionText),
+                    url: widget.url,
+                    messageId: widget.messageId,
+                    clientId: widget.clientId,
+                    caption: captionText.isEmpty ? null : captionText),
               )),
+      // WhatsApp-style photo frame: the picture fills the bubble edge to
+      // edge at its own ratio (never centre-cropped), the timestamp and
+      // delivery state ride ON the photo bottom-right over a scrim - not
+      // in a footer row beneath it - and an optional caption sits below
+      // the picture inside the same bubble.
       child: Container(
-        constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.68,
-            maxHeight: 340),
+        constraints: BoxConstraints(maxWidth: bubbleWidth),
         decoration: BoxDecoration(
           color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: BrokaColors.border.withOpacity(0.7)),
         ),
         clipBehavior: Clip.antiAlias,
@@ -3481,14 +3612,37 @@ class _ImageBubble extends StatelessWidget {
                     color: BrokaColors.textLow, size: 36),
               )
             else
-              // The photo's own ratio drives the frame: portrait, landscape
-              // and square all render whole, never centre-cropped.
               Stack(
                 children: [
                   AspectImage(
                     provider: provider,
-                    maxWidth: MediaQuery.of(context).size.width * 0.68,
+                    maxWidth: bubbleWidth,
                     maxHeight: 340,
+                  ),
+                  Positioned(
+                    key: const Key('photo-meta-overlay'),
+                    right: 6,
+                    bottom: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.55),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          MessageTimeLabel(
+                              sentAt: widget.createdAt, light: true),
+                          if (widget.receipt != null) ...[
+                            const SizedBox(width: 5),
+                            MessageReceiptIcon(
+                                receipt: widget.receipt!, light: true),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
                   if (pending || failed)
                     Positioned.fill(
@@ -3496,7 +3650,7 @@ class _ImageBubble extends StatelessWidget {
                         color: Colors.black.withOpacity(0.45),
                         alignment: Alignment.center,
                         child: pending
-                            ? _UploadProgressRing(progress: progress)
+                            ? _UploadProgressRing(progress: widget.progress)
                             : const Icon(Icons.error_outline_rounded,
                                 color: Colors.white, size: 30),
                       ),
@@ -3505,26 +3659,14 @@ class _ImageBubble extends StatelessWidget {
               ),
             if (captionText.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 2),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
                 child: Text(captionText,
                     style: TextStyle(
-                        color: isMe ? Colors.white : BrokaColors.textHigh,
+                        color: widget.isMe
+                            ? Colors.white
+                            : BrokaColors.textHigh,
                         fontSize: 13.5, height: 1.35)),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  MessageTimeLabel(sentAt: createdAt),
-                  if (receipt != null) ...[
-                    const SizedBox(width: 5),
-                    MessageReceiptIcon(receipt: receipt!),
-                  ],
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -3575,23 +3717,14 @@ class _UploadProgressRing extends StatelessWidget {
 /// Dedicated full-screen photo viewer: pinch-to-zoom, caption, close.
 class _FullScreenImageViewer extends StatelessWidget {
   final String url;
+  final String? messageId;
+  final String? clientId;
   final String? caption;
-  const _FullScreenImageViewer({required this.url, this.caption});
+  const _FullScreenImageViewer(
+      {required this.url, this.messageId, this.clientId, this.caption});
 
-  ImageProvider? _provider() {
-    try {
-      if (url.startsWith('data:')) {
-        final commaIdx = url.indexOf(',');
-        if (commaIdx < 0) return null;
-        return MemoryImage(base64Decode(url.substring(commaIdx + 1)));
-      }
-      if (url.startsWith('file://')) return FileImage(File(url.replaceFirst('file://', '')));
-      if (url.isEmpty) return null;
-      return NetworkImage(url);
-    } catch (_) {
-      return null;
-    }
-  }
+  ImageProvider? _provider() =>
+      _chatImageProvider(url, messageId: messageId, clientId: clientId);
 
   @override
   Widget build(BuildContext context) {

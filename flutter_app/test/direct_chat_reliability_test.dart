@@ -6,6 +6,8 @@
 // (inbound socket frames, reconnect flush) that stand in for a live
 // WebSocket no test can open.
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -17,6 +19,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:broka/models/listing.dart';
 import 'package:broka/screens/negotiation_screen.dart';
 import 'package:broka/services/api_service.dart';
+import 'package:broka/services/chat_media_vault.dart';
+import 'package:broka/services/local_chat_store.dart';
 import 'package:broka/services/zeno_chat_store.dart';
 import 'package:broka/widgets/aspect_image.dart';
 import 'package:broka/widgets/message_receipt.dart';
@@ -42,6 +46,10 @@ void main() {
     ]) {
       messenger.setMockMethodCallHandler(MethodChannel(name), (_) async => null);
     }
+    // The media vault and outbox live under the app documents directory.
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (_) async => Directory.systemTemp.path);
   });
 
   setUp(() {
@@ -409,6 +417,109 @@ void main() {
       });
       final again = await ZenoChatStore.restoreFromServer('assistant');
       expect(again!.turns.map((t) => t.content).toList(), contents);
+    });
+  });
+
+  group('offline photo durability', () {
+    /// A valid PNG big enough that the old cache slimming (>50KB data URIs
+    /// were stored as an empty placeholder) would have thrown it away.
+    Uint8List bigPhotoBytes() {
+      final r = Random(7);
+      final image = img.Image(width: 320, height: 320);
+      for (var y = 0; y < image.height; y++) {
+        for (var x = 0; x < image.width; x++) {
+          image.setPixel(x, y,
+              img.ColorRgb8(r.nextInt(256), r.nextInt(256), r.nextInt(256)));
+        }
+      }
+      final bytes = Uint8List.fromList(img.encodePng(image));
+      expect(bytes.length, greaterThan(50 * 1024));
+      return bytes;
+    }
+
+    testWidgets('a sent photo stays on the phone and renders with no connection',
+        (tester) async {
+      final at = DateTime.now().subtract(const Duration(minutes: 2));
+      // Seed exactly what the production write path leaves behind: the
+      // vault file plus the slim cache row pointing at it. Seeding runs
+      // inside runAsync - vault writes are real file IO, which never
+      // completes in the widget test's fake-async zone.
+      await tester.runAsync(() async {
+        final ref = await ChatMediaVault.storeBytes(
+            messageId: 'photo-offline-1',
+            bytes: bigPhotoBytes(),
+            ext: 'png');
+        expect(ref, startsWith('file://'));
+        await LocalChatStore.save('direct_listing-1_buyer-1', [
+          {
+            'role': 'seller',
+            'content': 'tazama hii',
+            'msg_type': 'image',
+            'media_url': ref,
+            'id': 'photo-offline-1',
+            'created_at': _iso(at),
+          },
+        ]);
+      });
+
+      // Same phone after a restart with no connection: history and
+      // read-status fail, so the server copy is unreachable - but the
+      // photo must still render from the on-device copy, not as a
+      // broken-image placeholder. (Unmount first: pumping the same route
+      // twice keeps the old State alive.)
+      setFakeRoute((_) => const FakeResponse.error(statusCode: 503));
+      await tester.pumpWidget(MaterialApp(key: UniqueKey(), home: const SizedBox()));
+      await settle(tester);
+      await tester.pumpWidget(chat());
+      await settle(tester);
+      await tester.pump(const Duration(seconds: 1));
+      await settle(tester);
+      expect(find.byIcon(Icons.broken_image_outlined), findsNothing);
+      final aspect = tester.widget<AspectImage>(find.byType(AspectImage));
+      expect(aspect.provider, isA<FileImage>());
+    });
+  });
+
+  group('photo frame', () {
+    testWidgets('time and receipt sit on the photo, WhatsApp-style',
+        (tester) async {
+      final at = DateTime.now().subtract(const Duration(minutes: 2));
+      setFakeRoute((uri) {
+        final p = uri.path;
+        if (p == '/negotiate/listing-1/history') {
+          return [
+            {
+              'role': 'buyer',
+              'content': 'tazama picha',
+              'msg_type': 'image',
+              'media_url':
+                  'data:image/png;base64,${base64Encode(_png(120, 90))}',
+              'id': 'photo-frame-1',
+              'created_at': _iso(at),
+            },
+          ];
+        }
+        if (p.endsWith('/read-status')) return <String, dynamic>{};
+        return null;
+      });
+      await tester.pumpWidget(chat());
+      await settle(tester);
+
+      // The photo carries its time in an overlay pinned to the picture -
+      // WhatsApp puts the timestamp on the photo, not in a footer row
+      // beneath it.
+      final overlay = find.byKey(const Key('photo-meta-overlay'));
+      expect(overlay, findsOneWidget);
+      expect(
+        find.descendant(
+            of: overlay, matching: find.byKey(const Key('message-time'))),
+        findsOneWidget,
+      );
+
+      // And the picture still opens into a zoomable full-screen viewer.
+      await tester.tap(find.byType(AspectImage));
+      await settle(tester);
+      expect(find.byType(InteractiveViewer), findsOneWidget);
     });
   });
 }
