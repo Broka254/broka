@@ -1,7 +1,10 @@
-// Reusable 2-column paginated grid used by the home feed, category zones,
+// Reusable paginated grid used by the home feed, category zones,
 // search results, and Trending "See All" (Design Journal Volume 6, Ch.11).
 // Owns pagination, pull-to-refresh, skeleton loading, and the empty state;
-// callers only supply a page fetcher.
+// callers only supply a page fetcher. Fixed two columns everywhere by
+// default; a store catalogue opts into the responsive layout with
+// `adaptToItemCount: true` (one product owns the row, wider screens gain
+// columns) while every other caller keeps the exact grid it always had.
 //
 // Home collapsing-scroll pass (2026-09-18, brief §3): this can now render
 // either as a self-contained scrollable (the original behaviour, unchanged
@@ -91,6 +94,25 @@ class ProductGridView extends StatefulWidget {
   /// products a taller photo.
   final double? itemImageShare;
 
+  /// Opt into the responsive store-catalogue layout. False (the default)
+  /// keeps the exact historical behaviour: a fixed two-column grid on every
+  /// screen, so every existing marketplace caller is unaffected.
+  ///
+  /// True: one item renders full-width (capped at [singleItemMaxWidth] and
+  /// centred on wide screens) instead of leaving half the catalogue empty;
+  /// two or more items use two columns on phones and step up to
+  /// [maxCrossAxisCount] on larger screens.
+  final bool adaptToItemCount;
+
+  /// Widest a lone item may grow before it centres. Full-bleed on phones,
+  /// a calm centred card on tablets.
+  final double singleItemMaxWidth;
+
+  /// Column ceiling for the responsive layout. The floor is always 2 for
+  /// two or more items (the marketplace's familiar density); wide screens
+  /// add columns up to this. Ignored unless [adaptToItemCount] is true.
+  final int maxCrossAxisCount;
+
   const ProductGridView({
     super.key,
     required this.fetchPage,
@@ -103,6 +125,9 @@ class ProductGridView extends StatefulWidget {
     this.itemBuilder,
     this.itemTextBlock,
     this.itemImageShare,
+    this.adaptToItemCount = false,
+    this.singleItemMaxWidth = 560,
+    this.maxCrossAxisCount = 4,
   });
 
   @override
@@ -253,7 +278,8 @@ class _ProductGridViewState extends State<ProductGridView> {
   static const double _cardImageShare = 0.85;
 
   // Two columns on every device (brief §4/§6: keep the existing two-column
-  // marketplace layout). The RATIO, though, is computed from the real card
+  // marketplace layout) — unless a caller opts into [adaptToItemCount].
+  // The RATIO, though, is computed from the real card
   // width and the real text-block height rather than picked off a ladder of
   // screen-width guesses. A fixed ratio means the text panel eats the photo
   // as the screen narrows - at 320dp the old 0.68 left the image almost
@@ -261,11 +287,35 @@ class _ProductGridViewState extends State<ProductGridView> {
   // ladder every time the card's contents change. This derives the tile
   // height instead: photo + text, so a narrow phone gets a taller tile and
   // the extra height goes where §7 says it should, into the image.
-  double _childAspectRatio(BuildContext context) {
+  //
+  // Columns for the current content. Fixed at 2 unless the responsive
+  // store layout is opted in: a lone product gets the whole row, and
+  // wider screens add columns up to [maxCrossAxisCount]. Columns never
+  // exceed the loaded items, so a two-product store never shows a row of
+  // two plus a hole.
+  int _crossAxisCount(BuildContext context, int itemCount) {
+    if (!widget.adaptToItemCount) return 2;
+    if (itemCount <= 1) return 1;
+    final width = MediaQuery.sizeOf(context).width - widget.padding.horizontal;
+    final ceiling = widget.maxCrossAxisCount < 2 ? 2 : widget.maxCrossAxisCount;
+    final roomy = width >= 1024 && ceiling >= 4
+        ? 4
+        : width >= 700 && ceiling >= 3
+            ? 3
+            : 2;
+    return roomy > itemCount ? itemCount : roomy;
+  }
+
+  double _childAspectRatio(BuildContext context, int columns) {
     final width = MediaQuery.sizeOf(context).width;
     final textScale = MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.35);
-    final cardWidth =
-        (width - widget.padding.horizontal - _crossAxisSpacing) / 2;
+    var cardWidth =
+        (width - widget.padding.horizontal - _crossAxisSpacing * (columns - 1)) / columns;
+    // A lone card is capped and centred; size its tile from the capped
+    // width so the photo keeps its proportions on tablets.
+    if (columns == 1 && widget.adaptToItemCount && cardWidth > widget.singleItemMaxWidth) {
+      cardWidth = widget.singleItemMaxWidth;
+    }
     if (cardWidth <= 0) return 0.68;
     final textBlock = widget.itemTextBlock ?? _cardTextBlock;
     final imageShare = widget.itemImageShare ?? _cardImageShare;
@@ -273,12 +323,31 @@ class _ProductGridViewState extends State<ProductGridView> {
     return cardWidth / tileHeight;
   }
 
-  SliverGridDelegate _gridDelegate(BuildContext context) {
+  SliverGridDelegate _gridDelegate(BuildContext context, int columns) {
     return SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: 2,
+      crossAxisCount: columns,
       mainAxisSpacing: _mainAxisSpacing,
       crossAxisSpacing: _crossAxisSpacing,
-      childAspectRatio: _childAspectRatio(context),
+      childAspectRatio: _childAspectRatio(context, columns),
+    );
+  }
+
+  /// A lone product owns the row: full-bleed on phones, capped and centred
+  /// on tablets — never half a row beside empty space. The card lays out
+  /// with an [Expanded] photo, so it needs a bounded height: the tile
+  /// ratio gives it one, exactly as the grid would.
+  Widget _singleCard(BuildContext context) {
+    return SliverToBoxAdapter(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: widget.singleItemMaxWidth),
+          child: AspectRatio(
+            aspectRatio: _childAspectRatio(context, 1),
+            child: _card(0),
+          ),
+        ),
+      ),
     );
   }
 
@@ -333,13 +402,14 @@ class _ProductGridViewState extends State<ProductGridView> {
 
   Widget _buildSliver(BuildContext context) {
     if (_items.isEmpty && _isLoading) {
+      final columns = _crossAxisCount(context, 0);
       return SliverPadding(
         padding: widget.padding,
         sliver: SliverGrid(
-          gridDelegate: _gridDelegate(context),
+          gridDelegate: _gridDelegate(context, columns),
           delegate: SliverChildBuilderDelegate(
             (_, __) => const ProductCardSkeleton(),
-            childCount: 6,
+            childCount: columns == 1 ? 3 : 6,
           ),
         ),
       );
@@ -359,12 +429,31 @@ class _ProductGridViewState extends State<ProductGridView> {
         child: Center(child: _emptyState(context)),
       );
     }
+    // A lone product owns the row instead of rattling around in half of
+    // one; everything else flows through the column-aware grid below.
+    if (widget.adaptToItemCount && _items.length == 1) {
+      return SliverPadding(
+        padding: widget.padding,
+        sliver: SliverMainAxisGroup(
+          slivers: [
+            _singleCard(context),
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, _) => _footer(),
+                childCount: 1,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final columns = _crossAxisCount(context, _items.length);
     return SliverPadding(
       padding: widget.padding,
       sliver: SliverMainAxisGroup(
         slivers: [
           SliverGrid(
-            gridDelegate: _gridDelegate(context),
+            gridDelegate: _gridDelegate(context, columns),
             delegate: SliverChildBuilderDelegate(
               (context, index) => _card(index),
               childCount: _items.length,
@@ -413,7 +502,7 @@ class _ProductGridViewState extends State<ProductGridView> {
     if (_items.isEmpty && _isLoading) {
       return GridView.builder(
         padding: widget.padding,
-        gridDelegate: _gridDelegate(context),
+        gridDelegate: _gridDelegate(context, _crossAxisCount(context, 0)),
         itemCount: 6,
         itemBuilder: (_, __) => const ProductCardSkeleton(),
       );
@@ -430,7 +519,7 @@ class _ProductGridViewState extends State<ProductGridView> {
       child: GridView.builder(
         controller: _scrollController,
         padding: widget.padding,
-        gridDelegate: _gridDelegate(context),
+        gridDelegate: _gridDelegate(context, _crossAxisCount(context, _items.length)),
         // Unchanged from before the sliver split: a trailing cell only
         // while there is more to load (or something to retry), never a
         // permanent end-of-list tile in the middle of a grid row.

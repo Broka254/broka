@@ -104,6 +104,7 @@ class ConstellationBackground extends StatefulWidget {
     super.key,
     required this.child,
     this.animate = true,
+    this.intensity = 1.0,
   });
 
   final Widget child;
@@ -111,6 +112,12 @@ class ConstellationBackground extends StatefulWidget {
   /// Set false to render a single static frame. Useful for tests and for
   /// honouring a reduced-motion preference.
   final bool animate;
+
+  /// How strongly the sky shows through, 0..1. Full (1) around brand
+  /// moments; calmer (~0.35) behind dense catalogue content so the stars
+  /// don't compete with product photography. No extra controller: it only
+  /// scales paint alpha on the existing layers.
+  final double intensity;
 
   @override
   State<ConstellationBackground> createState() => _ConstellationBackgroundState();
@@ -201,6 +208,9 @@ class _ConstellationBackgroundState extends State<ConstellationBackground>
   }
 
   Widget _sky() {
+    // Calmed skies (catalogue surfaces) dim both painted layers. Clamped so
+    // an out-of-range value can only mute the sky, never blow it out.
+    final intensity = widget.intensity.clamp(0.0, 1.0);
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -216,9 +226,11 @@ class _ConstellationBackgroundState extends State<ConstellationBackground>
                   gradient: RadialGradient(
                     center: Alignment(sin(a) * 0.35, cos(a) * 0.22 - 0.35),
                     radius: 1.25,
-                    colors: const [
-                      Color(0xFF140B2E), // violet core
-                      Color(0xFF080618),
+                    colors: [
+                      // The violet core fades with intensity; at the default
+                      // 1.0 this is the exact opaque colour it always was.
+                      const Color(0xFF140B2E).withOpacity(0.25 + 0.75 * intensity),
+                      const Color(0xFF080618),
                       BrokaColors.bg,
                     ],
                     stops: const [0.0, 0.45, 1.0],
@@ -230,7 +242,10 @@ class _ConstellationBackgroundState extends State<ConstellationBackground>
         ),
 
         // Layer 2 — the constellation itself, on its own repaint boundary so
-        // form rebuilds above it never force the mesh to redraw.
+        // form rebuilds above it never force the mesh to redraw. `reveal`
+        // doubles as the intensity ramp: the painter already multiplies
+        // every edge and node alpha by it, so a calm sky costs no extra
+        // layer or controller.
         RepaintBoundary(
           child: AnimatedBuilder(
             animation: _t,
@@ -239,7 +254,7 @@ class _ConstellationBackgroundState extends State<ConstellationBackground>
                 // The painter reads `t` inside sin(), so feeding it the raw
                 // 0..1 loop value keeps the shimmer continuous across wraps.
                 t: _t.value * 24,
-                reveal: 1.0,
+                reveal: intensity,
                 nodes: AuthConstellationField.nodes,
                 edges: AuthConstellationField.edges,
               ),

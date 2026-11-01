@@ -357,7 +357,9 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
             const SliverToBoxAdapter(child: _Perks()),
             SliverToBoxAdapter(child: _searchRow(store)),
             if (_filtersOpen) SliverToBoxAdapter(child: _filterPanel()),
-            if (_categories.isNotEmpty)
+            // One rail entry plus All is not navigation — hide the rail
+            // until the store sells across at least two categories.
+            if (_categories.length > 1)
               SliverToBoxAdapter(child: _CategoryPills(
                 categories: _categories,
                 total: store.listingCount,
@@ -378,6 +380,10 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
                   '${_price?.name ?? ''}'),
               sliver: true,
               controller: _grid,
+              // The catalogue owns the row when it holds one product, and
+              // gains columns on tablets and desktops. Other screens keep
+              // the fixed two-column marketplace grid.
+              adaptToItemCount: true,
               fetchPage: _fetchPage,
               // More of the screen to the products: 8dp sides instead of
               // 12, and a taller photo per card (StoreProductCard.imageShare).
@@ -408,6 +414,10 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
       backgroundColor: BrokaColors.bg,
       body: ConstellationBackground(
         animate: widget.animateBackground,
+        // A calmed sky behind the catalogue: the constellation stays
+        // strongest around the store's identity (the hero keeps its own
+        // aurora) instead of competing with product photography.
+        intensity: 0.35,
         child: store == null
             ? SafeArea(child: Stack(children: [
                 body,
@@ -474,11 +484,13 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
                     ? BrokaColors.gold.withOpacity(0.2)
                     : BrokaColors.bgCard.withOpacity(0.92),
                 borderRadius: BorderRadius.circular(height / 2),
+                // Quiet at rest, violet while open or filtering — the gold
+                // dot beside it says a filter is actually applied.
                 border: Border.all(
                   color: _filtersOpen || _filtersActive
                       ? BrokaColors.gold
-                      : BrokaColors.neonBlue.withOpacity(0.45),
-                  width: 1.2,
+                      : BrokaColors.border,
+                  width: 1,
                 ),
               ),
               child: Stack(clipBehavior: Clip.none, children: [
@@ -662,10 +674,10 @@ class _StoreBar extends StatelessWidget {
 // violet reads at 7:1.
 const _accent = Color(0xFFB69CFF);
 
-/// The top of the store: its name, large, on moving aurora colours with a
-/// shimmer running through the letters - the store's sign over the door.
-/// Under it what and where, whether the owner is online, the seller's
-/// record, and More.
+/// The top of the store: its sign beside its name in solid white over a
+/// calmed moving aurora - the store's sign over the door. Under it what
+/// and where, one facts row (presence, the seller's record, deals), and
+/// More.
 class _StoreHero extends StatefulWidget {
   const _StoreHero({required this.store, required this.animate, required this.onMore});
   final Store store;
@@ -724,20 +736,21 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
 
     return Padding(
       key: const Key('store-identity'),
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         DecoratedBox(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(26),
+            borderRadius: BorderRadius.circular(20),
+            // One soft drop shadow: the card sits on the surface instead of
+            // glowing over it, so the products below stay the brightest
+            // thing on screen.
             boxShadow: [
-              BoxShadow(color: BrokaColors.neonBlue.withOpacity(0.30), blurRadius: 30,
-                  spreadRadius: -4),
-              BoxShadow(color: BrokaColors.gold.withOpacity(0.28), blurRadius: 40,
-                  offset: const Offset(0, 12), spreadRadius: -10),
+              BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18,
+                  offset: const Offset(0, 8)),
             ],
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(26),
+            borderRadius: BorderRadius.circular(20),
             child: Stack(children: [
               Positioned.fill(
                 child: RepaintBoundary(
@@ -752,74 +765,76 @@ class _StoreHeroState extends State<_StoreHero> with SingleTickerProviderStateMi
               Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(26),
-                    border: Border.all(color: Colors.white.withOpacity(0.12)),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withOpacity(0.10)),
                   ),
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
+                padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  // The shop's sign, top-left: its own logo, or BROKA's mark
-                  // when the owner uploaded none - the same sign the store
-                  // card hangs over its picture. Round and in BROKA's ring,
-                  // not the old rounded square that read as a profile photo.
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _HeroLogo(store: store, size: 54),
+                  // The shop's sign beside its name: its own logo, or
+                  // BROKA's mark when the owner uploaded none - the same
+                  // sign the store card hangs over its picture. Round and
+                  // in BROKA's ring, not the old rounded square that read
+                  // as a profile photo. The name sits next to it in solid
+                  // white (the old shimmer ran through the letters and
+                  // competed with the aurora behind them); verification is
+                  // a tick on the name, and presence, rating and deals
+                  // share one facts row below.
+                  Row(children: [
+                    _HeroLogo(store: store, size: 60),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Wrap(spacing: 6, runSpacing: 6, children: [
-                        _GlassChip(
-                          icon: verified ? Icons.verified_rounded : Icons.storefront_rounded,
-                          iconColor: verified ? BrokaColors.success : _accent,
-                          label: verified ? 'Verified store' : 'BROKA store',
-                          semantics: verified ? 'Verified seller' : null,
-                        ),
-                        if (owner != null && (owner.online || owner.lastActive != null))
-                          _PresenceChip(online: owner.online, label: owner.lastActive),
-                      ]),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(children: [
+                              Flexible(
+                                child: Text(
+                                  store.name,
+                                  key: const Key('store-hero-name'),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: store.name.length > 18 ? 22 : 26,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1.1,
+                                    letterSpacing: -0.4,
+                                    shadows: [
+                                      Shadow(color: Colors.black.withOpacity(0.5),
+                                          blurRadius: 6),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (verified) ...[
+                                const SizedBox(width: 6),
+                                const Icon(Icons.verified_rounded,
+                                    color: BrokaColors.success, size: 18),
+                              ],
+                            ]),
+                            if (place.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(place,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: Colors.white.withOpacity(0.75),
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w500)),
+                            ],
+                          ]),
                     ),
                   ]),
                   const SizedBox(height: 10),
-                  AnimatedBuilder(
-                    animation: _t,
-                    builder: (_, child) => ShaderMask(
-                      blendMode: BlendMode.srcIn,
-                      shaderCallback: (rect) => LinearGradient(
-                        begin: Alignment(-3 + 4 * _t.value, -0.2),
-                        end: Alignment(-1 + 4 * _t.value, 0.2),
-                        tileMode: TileMode.mirror,
-                        colors: const [
-                          Colors.white, Color(0xFFE2D4FF), Color(0xFF9ED8FF), Colors.white,
-                        ],
-                      ).createShader(rect),
-                      child: child,
-                    ),
-                    child: Text(
-                      store.name,
-                      key: const Key('store-hero-name'),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: store.name.length > 18 ? 28 : 34,
-                        fontWeight: FontWeight.w900,
-                        height: 1.05,
-                        letterSpacing: -0.6,
-                        shadows: [Shadow(color: BrokaColors.gold.withOpacity(0.7), blurRadius: 22)],
-                      ),
-                    ),
-                  ),
-                  if (place.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(place, maxLines: 2, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 13.5,
-                            fontWeight: FontWeight.w500)),
-                  ],
-                  const SizedBox(height: 12),
                   Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                     Expanded(
                       child: Wrap(spacing: 6, runSpacing: 6, children: [
+                        if (owner != null && (owner.online || owner.lastActive != null))
+                          _PresenceChip(online: owner.online, label: owner.lastActive),
                         _GlassChip(
                           key: const Key('hero-rating'),
                           icon: Icons.star_rounded,
@@ -921,7 +936,7 @@ class _AuroraPainter extends CustomPainter {
       final radius = r * math.max(w, h) * 0.55 * (0.9 + 0.1 * math.sin(phase * 2));
       final paint = Paint()
         ..shader = RadialGradient(colors: [
-          color.withOpacity(i == 4 ? 0.38 : 0.72),
+          color.withOpacity(i == 4 ? 0.22 : 0.42),
           color.withOpacity(0),
         ]).createShader(Rect.fromCircle(center: center, radius: radius));
       canvas.drawCircle(center, radius, paint);
@@ -941,7 +956,7 @@ class _AuroraPainter extends CustomPainter {
           ..strokeWidth = 1.2
           ..shader = SweepGradient(colors: [
             Colors.white.withOpacity(0),
-            (i.isEven ? BrokaColors.neonCyan : BrokaColors.neonBlue).withOpacity(0.55),
+            (i.isEven ? BrokaColors.neonCyan : BrokaColors.neonBlue).withOpacity(0.28),
             Colors.white.withOpacity(0),
           ], transform: GradientRotation(a * 2)).createShader(ring),
       );
@@ -960,16 +975,16 @@ class _AuroraPainter extends CustomPainter {
     final star = Paint();
     for (final s in _stars) {
       final twinkle = 0.5 + 0.5 * math.sin(2 * math.pi * (t * 3 + s.phase));
-      star.color = Colors.white.withOpacity(0.15 + 0.6 * twinkle);
+      star.color = Colors.white.withOpacity(0.08 + 0.35 * twinkle);
       canvas.drawCircle(Offset(s.x * w, s.y * h), s.r, star);
     }
-    // The sheen: a bright diagonal band crossing once per loop.
+    // The sheen: a faint diagonal band crossing once per loop.
     final x = (t * 2.4 - 0.7) * w;
     canvas.drawRect(
       Offset.zero & size,
       Paint()
         ..shader = LinearGradient(
-          colors: [Colors.transparent, Colors.white.withOpacity(0.07), Colors.transparent],
+          colors: [Colors.transparent, Colors.white.withOpacity(0.04), Colors.transparent],
           stops: const [0.0, 0.5, 1.0],
           transform: const GradientRotation(-0.5),
         ).createShader(Rect.fromLTWH(x, 0, w * 0.35, h)),
@@ -1031,18 +1046,18 @@ class _GlassChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.35),
+          color: Colors.black.withOpacity(0.30),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.16)),
+          border: Border.all(color: Colors.white.withOpacity(0.14)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 14, color: iconColor, semanticLabel: semantics),
+          Icon(icon, size: 13, color: iconColor, semanticLabel: semantics),
           const SizedBox(width: 5),
           Flexible(
             child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontSize: 12,
+                style: const TextStyle(color: Colors.white, fontSize: 11.5,
                     fontWeight: FontWeight.w700)),
           ),
         ]),
@@ -1088,8 +1103,9 @@ class _PresenceChip extends StatelessWidget {
 }
 
 /// The way to everything else about the store, where the eye lands after
-/// the name: a glowing pill at the hero's bottom right, always on the
-/// first screen.
+/// the facts: a quiet pill at the hero's bottom right, always on the
+/// first screen. A hairline brand ring, no glow — the products below it
+/// are what should shine.
 class _MoreButton extends StatelessWidget {
   const _MoreButton({required this.onTap});
   final VoidCallback onTap;
@@ -1103,24 +1119,23 @@ class _MoreButton extends StatelessWidget {
           key: const Key('store-more-details'),
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.all(1.5),
+            padding: const EdgeInsets.all(1),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(18),
               gradient: const LinearGradient(colors: BrokaColors.brandGradient),
-              boxShadow: [BoxShadow(color: BrokaColors.gold.withOpacity(0.55), blurRadius: 16)],
             ),
             child: Container(
-              padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
               decoration: BoxDecoration(
-                color: BrokaColors.bgMid.withOpacity(0.92),
-                borderRadius: BorderRadius.circular(21),
+                color: BrokaColors.bgMid.withOpacity(0.94),
+                borderRadius: BorderRadius.circular(17),
               ),
               child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.grid_view_rounded, size: 15, color: _accent),
-                SizedBox(width: 6),
-                Text('More', style: TextStyle(color: Colors.white, fontSize: 13.5,
+                Icon(Icons.grid_view_rounded, size: 14, color: _accent),
+                SizedBox(width: 5),
+                Text('More', style: TextStyle(color: Colors.white, fontSize: 13,
                     fontWeight: FontWeight.w800)),
-                Icon(Icons.chevron_right_rounded, size: 18, color: _accent),
+                Icon(Icons.chevron_right_rounded, size: 17, color: _accent),
               ]),
             ),
           ),
@@ -1368,8 +1383,8 @@ class _CategoryPills extends StatelessWidget {
                         gradient: LinearGradient(colors: colors),
                         shape: BoxShape.circle,
                         boxShadow: [BoxShadow(
-                            color: colors.first.withOpacity(isSelected ? 0.6 : 0.3),
-                            blurRadius: isSelected ? 14 : 8)],
+                            color: colors.first.withOpacity(isSelected ? 0.35 : 0.18),
+                            blurRadius: isSelected ? 8 : 6)],
                       ),
                       child: Container(
                         decoration: BoxDecoration(
