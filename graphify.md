@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-299 endpoints served by `backend/main.py`. **Auth** is read from each
+300 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 58, optional 5, public 62, token 4, user 170.
+Counts: admin 58, optional 5, public 62, token 4, user 171.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -352,14 +352,15 @@ Counts: admin 58, optional 5, public 62, token 4, user 170.
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:564) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:150) |
 | GET | `/zeno/assistant/conversation` | user | `get_assistant_conversation` (backend/api/domains/zeno_assistant/router.py:178) |
+| DELETE | `/zeno/assistant/conversation` | user | `delete_assistant_conversation` (backend/api/domains/zeno_assistant/router.py:239) |
 | POST | `/zeno/assistant/conversation/append` | user | `append_assistant_conversation` (backend/api/domains/zeno_assistant/router.py:212) |
 | POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:95) |
-| POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:410) |
-| POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:473) |
-| POST | `/zeno/listing-draft/autolist/turn` | user | `autolist_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:451) |
-| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:290) |
-| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:339) |
-| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:380) |
+| POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:433) |
+| POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:496) |
+| POST | `/zeno/listing-draft/autolist/turn` | user | `autolist_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:474) |
+| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:313) |
+| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:362) |
+| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:403) |
 
 ## Backend modules
 
@@ -670,49 +671,49 @@ Counts: admin 58, optional 5, public 62, token 4, user 170.
 | Table | Model | Defined at |
 |---|---|---|
 | `admin_alerts` | `AdminAlert` | backend/api/models/admin_alert.py:32 |
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:680 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1319 |
-| `bids` | `Bid` | backend/api/database.py:669 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:827 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:685 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1324 |
+| `bids` | `Bid` | backend/api/database.py:674 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:832 |
 | `categories` | `Category` | backend/api/database.py:332 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:340 |
-| `deals` | `Deal` | backend/api/database.py:879 |
+| `deals` | `Deal` | backend/api/database.py:884 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1218 |
+| `disputes` | `Dispute` | backend/api/database.py:1223 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `expiry_notifications` | `ExpiryNotification` | backend/api/models/expiry_notification.py:34 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1267 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1338 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1272 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1343 |
 | `interests` | `Interest` | backend/api/database.py:485 |
 | `launch_offer_claims` | `LaunchOfferClaim` | backend/api/models/launch_offer.py:38 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:797 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1113 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:802 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1118 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1089 |
-| `listing_views` | `ListingView` | backend/api/database.py:767 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1094 |
+| `listing_views` | `ListingView` | backend/api/database.py:772 |
 | `listings` | `Listing` | backend/api/database.py:349 |
 | `marketing_campaign_events` | `MarketingCampaignEvent` | backend/api/models/marketing.py:138 |
 | `marketing_campaigns` | `MarketingCampaign` | backend/api/models/marketing.py:51 |
 | `marketing_creatives` | `MarketingCreative` | backend/api/models/marketing.py:100 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1148 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1153 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:513 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:290 |
 | `platform_costs` | `PlatformCost` | backend/api/models/platform_cost.py:28 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1188 |
-| `reviews` | `Review` | backend/api/database.py:1233 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1039 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1018 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1193 |
+| `reviews` | `Review` | backend/api/database.py:1238 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1044 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1023 |
 | `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:175 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
 | `service_communication_versions` | `ServiceCommunicationVersion` | backend/api/models/service_communication.py:93 |
@@ -729,10 +730,10 @@ Counts: admin 58, optional 5, public 62, token 4, user 170.
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
 | `thread_read_state` | `ThreadReadState` | backend/api/database.py:585 |
 | `user_feedback` | `UserFeedback` | backend/api/models/feedback.py:35 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:812 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:817 |
 | `users` | `User` | backend/api/database.py:195 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1287 |
-| `wishlists` | `Wishlist` | backend/api/database.py:785 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1292 |
+| `wishlists` | `Wishlist` | backend/api/database.py:790 |
 | `zeno_conversations` | `ZenoConversation` | backend/api/database.py:620 |
 | `zeno_turns` | `ZenoTurn` | backend/api/database.py:647 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
@@ -1282,6 +1283,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 ### `flutter_app/lib/widgets/`
 
 - `artwork_hero_header.dart` — lib/widgets/artwork_hero_header.dart
+- `aspect_image.dart` — A photo at its own aspect ratio: the provider's real dimensions drive an exact AspectRatio, so portrait, landscape and square photos all re…
 - `axis_line_chart.dart` — BROKA — line chart with axes
 - `broka_image.dart` — One widget for every image the backend sends, whatever shape it is in.
 - `broka_search_field.dart` — The search box inside a screen: the Category Zones ("Electronics Zone"), Traders and Stores.
@@ -1355,6 +1357,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `direct_chat_call_cards_test.dart` — The direct chat's call cards and header, as reported from a seller's phone (2026-10-06):
 - `direct_chat_delivery_test.dart` — The one-on-one chat, as reported from a phone (2026-10-02): the last two messages showed twice until the chat was reopened, a message the o…
 - `direct_chat_improvements_test.dart` — Direct-chat and Zeno reliability: replies, cached identity, merge.
+- `direct_chat_reliability_test.dart` — Direct-chat reliability: typing presence, auto-flush, reply navigation, natural image aspect, and Zeno server restore.
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `escrow_actions_test.dart` — Buyer protection dialogs (2026-10-02): paying in parts, releasing with the delivery check first, asking for a refund.
 - `feedback_and_announcement_time_test.dart` — Announcement date/time wording and feedback model parsing.
