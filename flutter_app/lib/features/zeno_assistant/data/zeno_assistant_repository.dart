@@ -30,6 +30,14 @@ class ZenoAssistantRepository {
     bool voice = false,
     String? listingId,
     String? imageBase64,
+    // Durable assistant memory: the account-level conversation this turn
+    // belongs to ('assistant' or 'buying'). When set, the server stores the
+    // user turn before answering and the assistant turn after, so a second
+    // device or a reinstall restores them.
+    String? conversationMode,
+    // Idempotency for the user turn: a retry after a lost response replays
+    // the stored reply instead of appending a duplicate turn.
+    String? clientTurnId,
   }) async {
     try {
       final res = await _client.post('/zeno/assistant/turn', {
@@ -39,6 +47,8 @@ class ZenoAssistantRepository {
         'mode': voice ? 'voice' : 'text',
         if (listingId != null) 'listing_id': listingId,
         if (imageBase64 != null) 'image_base64': imageBase64,
+        if (conversationMode != null) 'conversation_mode': conversationMode,
+        if (clientTurnId != null) 'client_turn_id': clientTurnId,
       });
       if (res is! Map) return const Failure('Zeno sent back nothing usable.');
       return Success(ZenoTurnResult.fromJson(res.cast<String, dynamic>()));

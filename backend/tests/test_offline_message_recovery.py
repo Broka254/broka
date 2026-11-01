@@ -227,3 +227,52 @@ async def test_inbox_carries_the_listing_photo(client):
     threads = [t for t in r.json() if t["listing_id"] == listing_id]
     assert threads, "the seller's thread is in their inbox"
     assert threads[0].get("listing_image") == photo
+
+
+@pytest.mark.asyncio
+async def test_two_devices_sending_with_one_client_id_store_one_message(client):
+    """A phone and a tablet flushing the same queued message: the second
+    arrival is recognised by client_msg_id, not stored twice."""
+    listing_id, seller_id, buyer_id = await _thread()
+    body = {"listing_id": listing_id, "sender_role": "buyer",
+            "sender_id": buyer_id, "content": "Still there?",
+            "client_msg_id": "two-devices-one-id"}
+    first = await client.post("/negotiate/direct-message", json=body,
+                              headers=_auth(buyer_id))
+    second = await client.post("/negotiate/direct-message", json=body,
+                               headers=_auth(buyer_id))
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["message"]["id"] == second.json()["message"]["id"]
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import select as _select
+        rows = (await db.execute(_select(NegotiationMessage).where(
+            NegotiationMessage.client_msg_id == "two-devices-one-id"))).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_history_orders_messages_despite_out_of_order_arrival(client):
+    """Three sends racing each other still read back oldest-first: the
+    thread never shows a shuffled conversation."""
+    import asyncio as _asyncio
+    listing_id, seller_id, buyer_id = await _thread()
+
+    async def send(i: int):
+        body = {"listing_id": listing_id, "sender_role": "buyer",
+                "sender_id": buyer_id, "content": f"msg {i}",
+                "client_msg_id": f"ooo-{uuid.uuid4().hex[:8]}"}
+        r = await client.post("/negotiate/direct-message", json=body,
+                              headers=_auth(buyer_id))
+        assert r.status_code == 200
+
+    await _asyncio.gather(*[send(i) for i in range(3)])
+    history = (await client.get(f"/negotiate/{listing_id}/history",
+                                headers=_auth(buyer_id))).json()
+    mine = [m for m in history if m["content"].startswith("msg ")]
+    # Each arrival stored exactly once, and the thread reads back in
+    # created_at order: racing sends share a timestamp down to the
+    # microsecond, so request order is not a contract - stable
+    # oldest-first display is (the phone sorts the same way).
+    assert sorted(m["content"] for m in mine) == [f"msg {i}" for i in range(3)]
+    stamps = [m["created_at"] for m in history]
+    assert stamps == sorted(stamps)

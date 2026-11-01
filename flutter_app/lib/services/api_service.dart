@@ -1564,6 +1564,18 @@ class ApiService {
   }
 
   // ── Media upload (voice notes + images) ────────────────────────────────────
+  /// The file bytes as a chunked stream that reports cumulative progress.
+  /// It measures handoff to the OS socket, not the server round-trip.
+  static Stream<List<int>> _countingStream(
+      Uint8List bytes, void Function(int sent, int total)? onProgress) async* {
+    const chunk = 64 * 1024;
+    for (var i = 0; i < bytes.length; i += chunk) {
+      final end = (i + chunk).clamp(0, bytes.length);
+      onProgress?.call(end, bytes.length);
+      yield bytes.sublist(i, end);
+    }
+  }
+
   static Future<Map<String, dynamic>> uploadMedia({
     required String listingId,
     required String senderRole,
@@ -1578,6 +1590,10 @@ class ApiService {
     String?  clientMsgId,
     String?  replyToMessageId,
     String?  caption,
+    // Bytes handed to the socket so far and the total, for the upload
+    // progress indicator. Reports delivery to the OS, not the server's
+    // acknowledgement - the receipt still comes from the response.
+    void Function(int sent, int total)? onProgress,
   }) async {
     final uri = Uri.parse('$baseUrl/media/upload');
     // A request can be sent once, so the retry after a renewal builds anew.
@@ -1588,7 +1604,10 @@ class ApiService {
         ..fields['sender_role']  = senderRole
         ..fields['sender_id']    = senderId
         ..fields['content_type'] = contentType
-        ..files.add(http.MultipartFile.fromBytes('file', fileBytes,
+        ..files.add(http.MultipartFile(
+            'file',
+            _countingStream(fileBytes, onProgress),
+            fileBytes.length,
             filename: fileName,
             contentType: MediaType.parse(mimeType)));
       if (buyerId      != null) request.fields['buyer_id']      = buyerId;
@@ -1633,6 +1652,25 @@ class ApiService {
       return [for (final t in turns) Map<String, dynamic>.from(t as Map)];
     } catch (_) {
       return [];
+    }
+  }
+
+  static Future<bool> deleteAssistantConversation({
+    required String mode,
+    String? listingId,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/zeno/assistant/conversation').replace(
+        queryParameters: {
+          'mode': mode,
+          if (listingId != null) 'listing_id': listingId,
+        },
+      );
+      final response = await _sendAuthed(
+          () => http.delete(uri, headers: _headers).timeout(const Duration(seconds: 20)));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
     }
   }
 

@@ -538,6 +538,10 @@ class ZenoSession extends ChangeNotifier implements ZenoTourHost {
       history: history,
       language: ApiService.currentUserLanguage,
       voice: listening,
+      // The voice session is the general assistant. The server stores the
+      // turn before answering and the reply after, under this attempt's id.
+      conversationMode: 'assistant',
+      clientTurnId: newClientTurnId(),
     );
 
     switch (result) {

@@ -235,6 +235,29 @@ async def append_assistant_conversation(
     }
 
 
+@router.delete("/assistant/conversation")
+async def delete_assistant_conversation(
+    mode: str = Query(default="assistant"),
+    listing_id: Optional[str] = Query(default=None),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Start over: remove one account-level conversation and its turns.
+
+    Scoped to the caller - "new chat" on one phone can never clear another
+    user's history. Logout and reinstall deliberately do NOT call this, so
+    the transcript survives them.
+    """
+    from . import persistence as _persistence
+
+    try:
+        removed = await _persistence.delete_conversation(
+            db, current_user["id"], mode, listing_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"deleted": removed}
+
+
 # ── Zeno helping a seller write a listing (selling.py) ───────────────────────
 
 _ATTR_MAX = 20

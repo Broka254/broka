@@ -518,23 +518,35 @@ class _ZenoScreenState extends State<ZenoScreen>
     // Questions about another listing are another conversation.
     if (_about != null && saved?.aboutListing != _about!.id) saved = null;
     if (!mounted) return;
+    final epoch = _epoch;
     setState(() {
       if (saved != null && !saved.isEmpty) {
-        _turns.addAll(saved.turns.map((t) => _Turn(
-              Message(role: t.role, content: t.content),
-              matches: t.matches,
-            )));
-        _history.addAll(saved.history);
-        _slots = Map.of(saved.slots);
-        _questionsAsked = saved.questionsAsked;
-        _lastVerdict = saved.lastVerdict;
-        _watching = saved.watching;
+        _applyStored(saved);
       } else {
         _addWelcome();
       }
       _restoring = false;
     });
     _scrollDown(animate: false);
+    // Then the durable copy: the server wins ties, local-only turns are
+    // kept and uploaded, and a failed sync keeps this local transcript.
+    if (!fresh) {
+      final merged = await ZenoChatStore.restoreFromServer(
+        _serverMode,
+        listingId: _serverListing,
+      );
+      // Nothing durable (or a stale screen) is not a reason to stop: the
+      // initial question and voice entry below must still run.
+      if (mounted && epoch == _epoch && merged != null && !merged.isEmpty) {
+        setState(() {
+          _turns.clear();
+          _history.clear();
+          _applyStored(merged);
+        });
+        _persist();
+        _scrollDown(animate: false);
+      }
+    }
     if (_isBuying && _watching) _checkWatchStillOn();
     // A question tapped on the listing joins its conversation - and so
     // does one asked from elsewhere ("Let Zeno guide me" on the escrow
@@ -542,6 +554,21 @@ class _ZenoScreenState extends State<ZenoScreen>
     // listing's questions were ever sent.
     if (initial.isNotEmpty) _send(initial);
     if (widget.startInVoice && !_isBuying) _openVoice();
+  }
+
+  /// A stored conversation back onto the screen: bubbles, model history
+  /// and gathered Buying Agent state. Stored client turn ids ride along
+  /// so the next sync recognises what's already durable.
+  void _applyStored(ZenoConversation saved) {
+    _turns.addAll(saved.turns.map((t) => _Turn(
+          Message(role: t.role, content: t.content, clientMsgId: t.clientTurnId),
+          matches: t.matches,
+        )));
+    _history.addAll(saved.history);
+    _slots = Map.of(saved.slots);
+    _questionsAsked = saved.questionsAsked;
+    _lastVerdict = saved.lastVerdict;
+    _watching = saved.watching;
   }
 
   /// "Watching" is remembered on the phone, but the watch itself lives on
@@ -559,6 +586,14 @@ class _ZenoScreenState extends State<ZenoScreen>
     }
   }
 
+  /// The server conversation this screen syncs with: the assistant and the
+  /// Buying Agent are separate conversations, and questions about one
+  /// listing stay with that listing. 'listing' is a local-only key - on
+  /// the server those questions live in the assistant conversation for
+  /// that listing.
+  String get _serverMode => _isBuying ? 'buying' : 'assistant';
+  String? get _serverListing => _about?.id;
+
   /// Saves the conversation as it stands. Called after every turn.
   void _persist() {
     ZenoChatStore.save(
@@ -573,6 +608,7 @@ class _ZenoScreenState extends State<ZenoScreen>
                 for (final m in t.matches)
                   if (m is Map) m.cast<String, dynamic>(),
               ],
+              clientTurnId: t.message.clientMsgId,
             ),
         ],
         history: _history,
@@ -620,6 +656,13 @@ class _ZenoScreenState extends State<ZenoScreen>
     _epoch++;
     _setSearching(false);
     await ZenoChatStore.clear(_storeMode);
+    // "New chat" means new everywhere: the next open must greet instead of
+    // resurrecting this transcript. Logout and reinstall deliberately skip
+    // this, so only an explicit reset clears the durable copy.
+    unawaited(ApiService.deleteAssistantConversation(
+      mode: _serverMode,
+      listingId: _serverListing,
+    ));
     if (!mounted) return;
     setState(() {
       _turns.clear();
@@ -740,8 +783,11 @@ class _ZenoScreenState extends State<ZenoScreen>
       session.startTour();
       return;
     }
+    // One attempt, one id: a retry after a lost response replays the
+    // stored server reply instead of appending a duplicate turn.
+    final turnId = newClientTurnId();
     setState(() {
-      _addArriving(_Turn(Message(role: 'user', content: text), photo: photo));
+      _addArriving(_Turn(Message(role: 'user', content: text, clientMsgId: turnId), photo: photo));
       _typing = true;
     });
     _scrollDown();
@@ -755,7 +801,7 @@ class _ZenoScreenState extends State<ZenoScreen>
     final epoch = _epoch;
 
     if (_isBuying) {
-      await _sendBuyingTurn(text, context40, epoch);
+      await _sendBuyingTurn(text, context40, epoch, turnId);
       return;
     }
 
@@ -770,6 +816,10 @@ class _ZenoScreenState extends State<ZenoScreen>
       voice: _voice.isOpen,
       listingId: _about?.id,
       imageBase64: photo != null ? base64Encode(photo) : null,
+      // Durable memory: the server stores this turn before answering and
+      // its reply after, so a second device or a reinstall restores both.
+      conversationMode: _serverMode,
+      clientTurnId: turnId,
     );
     if (!mounted || epoch != _epoch) return;
     switch (result) {
@@ -999,7 +1049,8 @@ class _ZenoScreenState extends State<ZenoScreen>
   /// the server does, and returns whichever it ran. That keeps the question
   /// budget, the criteria and the honesty of the result in one place
   /// instead of split across a client that could drift out of step with it.
-  Future<void> _sendBuyingTurn(String text, List<Map<String, String>> history, int epoch) async {
+  Future<void> _sendBuyingTurn(
+      String text, List<Map<String, String>> history, int epoch, String turnId) async {
     // When the caption appears, and why it is a guess rather than a fact:
     // only the server knows whether this turn is a question or a search,
     // and it says so in the response - which arrives at the END. Two
@@ -1018,6 +1069,16 @@ class _ZenoScreenState extends State<ZenoScreen>
       });
     }
 
+    // The buying endpoint is stateless, so the durable copy is written
+    // around it: the user turn first (a lost response still leaves what
+    // was asked), the assistant turn once it arrives. Same id as the local
+    // bubble, so a restore recognises it instead of duplicating it.
+    unawaited(ZenoChatStore.syncTurn(
+      'buying',
+      role: 'user',
+      content: text,
+      clientTurnId: turnId,
+    ));
     final result = await buyAgentRepository.converse(
       message: text,
       history: history,
@@ -1037,7 +1098,15 @@ class _ZenoScreenState extends State<ZenoScreen>
         final reply = (data['reply'] as String?)?.trim() ?? '';
         final matches = (data['matches'] as List?) ?? const [];
         _history.add({'role': 'assistant', 'content': reply});
-        final turn = _Turn(Message(role: 'broker', content: reply), matches: matches);
+        // Durable under its own id so restores and second devices see it.
+        final replyId = newClientTurnId();
+        unawaited(ZenoChatStore.syncTurn(
+          'buying',
+          role: 'assistant',
+          content: reply,
+          clientTurnId: replyId,
+        ));
+        final turn = _Turn(Message(role: 'broker', content: reply, clientMsgId: replyId), matches: matches);
         setState(() {
           _slots = (data['slots'] as Map?)?.cast<String, dynamic>() ?? _slots;
           _questionsAsked = (data['questions_asked'] as num?)?.toInt() ?? _questionsAsked;

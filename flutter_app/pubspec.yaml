@@ -50,6 +50,7 @@ dependencies:
   # BROKA has no publishing permission, and copying a caption is not the
   # same as getting the image out.
   share_plus: ^10.1.4
+  image: ^4.12.0
 
 dev_dependencies:
   flutter_test:

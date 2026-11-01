@@ -17,6 +17,8 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:image/image.dart' as img;
+import '../widgets/aspect_image.dart';
 import '../main.dart';
 import '../services/api_service.dart';
 import '../features/escrow/presentation/escrow_actions.dart';
@@ -182,10 +184,11 @@ class ChatMessage {
 /// A voice note or photo still to be (re)sent, kept in memory so "Try
 /// again" doesn't mean recording or picking it again.
 class _PendingUpload {
-  const _PendingUpload({
+  _PendingUpload({
     required this.bytes, required this.contentType, required this.fileName,
     required this.mimeType, this.durationSecs,
     this.replyToMessageId, this.replyPreview, this.caption,
+    this.progress = 0,
   });
   final Uint8List bytes;
   final String contentType; // "audio" | "image"
@@ -195,6 +198,9 @@ class _PendingUpload {
   final String? replyToMessageId;
   final Map<String, dynamic>? replyPreview;
   final String? caption;
+  /// 0..1 bytes handed to the socket. Mutable on purpose: progress ticks
+  /// must not rebuild the message list's immutable snapshots.
+  double progress;
 }
 
 /// Durable image outbox: one file per unsent photo under the app documents
@@ -213,11 +219,12 @@ class _ChatMediaOutbox {
       clientId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
 
   static Future<({String path, String localUri})?> storeImage(
-      String clientId, Uint8List bytes) async {
+      String clientId, Uint8List bytes, {String ext = 'jpg'}) async {
+    final safeExt = ext == 'png' ? 'png' : 'jpg';
     try {
       final dir = await _dir();
       final id = _safeId(clientId);
-      final path = '${dir.path}/$id.jpg';
+      final path = '${dir.path}/$id.$safeExt';
       await File(path).writeAsBytes(bytes, flush: true);
       return (path: path, localUri: 'file://$path');
     } catch (_) {
@@ -240,9 +247,11 @@ class _ChatMediaOutbox {
     try {
       final dir = await _dir();
       final id = _safeId(clientId);
-      final img = File('${dir.path}/$id.jpg');
+      for (final ext in ['jpg', 'png']) {
+        final img = File('${dir.path}/$id.$ext');
+        if (await img.exists()) await img.delete();
+      }
       final meta = File('${dir.path}/$id.json');
-      if (await img.exists()) await img.delete();
       if (await meta.exists()) await meta.delete();
     } catch (_) {}
   }
@@ -250,8 +259,11 @@ class _ChatMediaOutbox {
   static Future<String?> pathFor(String clientId) async {
     try {
       final dir = await _dir();
-      final path = '${dir.path}/${_safeId(clientId)}.jpg';
-      return await File(path).exists() ? path : null;
+      for (final ext in ['jpg', 'png']) {
+        final path = '${dir.path}/${_safeId(clientId)}.$ext';
+        if (await File(path).exists()) return path;
+      }
+      return null;
     } catch (_) {
       return null;
     }
@@ -263,8 +275,13 @@ class _ChatMediaOutbox {
       if (!await dir.exists()) return [];
       final out = <({String clientId, String path, String? replyToMessageId, String? caption})>[];
       await for (final e in dir.list()) {
-        if (e is! File || !e.path.endsWith('.jpg')) continue;
-        final id = e.path.split('/').last.replaceAll('.jpg', '');
+        if (e is! File) continue;
+        final base = e.path.split('/').last;
+        final dot = base.lastIndexOf('.');
+        if (dot < 0) continue;
+        final ext = base.substring(dot + 1);
+        if (ext != 'jpg' && ext != 'png') continue;
+        final id = base.substring(0, dot);
         String? replyTo;
         String? caption;
         try {
@@ -356,12 +373,21 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   bool _remoteTyping = false;
   static const _typingIdle = Duration(seconds: 3);
   static const _typingTtl = Duration(seconds: 6);
+  // Beaten every 4s while typing continues: under the remote 6s expiry so
+  // the indicator never flickers, over the server's 2s throttle so the
+  // heartbeat is relayed, not swallowed.
+  static const _typingHeartbeatInterval = Duration(seconds: 4);
 
   // Quote-reply composer state: the message being answered, if any.
   ChatMessage? _replyTo;
   // Jump-to-original highlight: the message id flashed after tapping a quote.
   String? _highlightId;
   Timer? _highlightTimer;
+  // One GlobalKey per settled message id, so tap-to-quote can ask the exact
+  // bubble to reveal itself instead of guessing an offset from average
+  // heights. Lazily created in the builder; stale ids are dropped when the
+  // thread scope changes, and all keys die with the screen.
+  final Map<String, GlobalKey> _bubbleKeys = {};
 
   // Read receipts: when the counterpart last read this thread - a message
   // I sent is "seen" once this is at/after that message's createdAt.
@@ -465,6 +491,9 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     // The Inbox opens this thread here next time, not in Zeno's room
     // (ChatScreenMemory).
     unawaited(ChatScreenMemory.remember(_listing!.id, _buyerId, ChatScreen.direct));
+    // A new thread scope: drop the previous thread's bubble keys so a stale
+    // key can never reveal the wrong bubble.
+    _bubbleKeys.clear();
     _loadCachedMessages();
     unawaited(_restoreMediaOutbox());
     _loadHistory();
@@ -671,6 +700,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       if (!mounted || !identical(_ws, ws)) return;
       _wsReconnectAttempt = 0;
       setState(() => _wsConnected = true);
+      // Back online: anything typed while offline goes out on its own.
+      _flushFailed();
     }).catchError((_) {
       // The stream's onError/onDone below reports it and reconnects.
     });
@@ -692,8 +723,20 @@ class _NegotiationScreenState extends State<NegotiationScreen>
   }
 
   // ── Typing presence ────────────────────────────────────────────────────
-  // One "typing" per burst of input, then quiet until the text settles or
-  // is sent: the socket must not carry an event per character.
+  // One "typing" when input starts, a heartbeat while it continues, and
+  // "stop_typing" when it settles - never an event per character. The
+  // heartbeat (every few seconds) keeps the other side's indicator alive
+  // past its expiry while the user is still typing; the server throttles
+  // faster repeats, so a heartbeat can never flood the thread.
+  Timer? _typingHeartbeat;
+
+  void _sendTypingEvent() {
+    if (!_wsConnected) return;
+    try {
+      _ws?.sink.add(jsonEncode({'type': 'typing'}));
+    } catch (_) {}
+  }
+
   void _onComposerText(String text) {
     if (!_wsConnected) return;
     if (text.trim().isEmpty) {
@@ -706,21 +749,42 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       return;
     }
     _typingSent = true;
-    try {
-      _ws?.sink.add(jsonEncode({'type': 'typing'}));
-    } catch (_) {}
+    _sendTypingEvent();
     _typingDebounce?.cancel();
     _typingDebounce = Timer(_typingIdle, _sendStopTyping);
+    // While the composer holds text, re-announce before the other side's
+    // expiry can clear a user who never stopped typing.
+    _typingHeartbeat?.cancel();
+    _typingHeartbeat = Timer.periodic(_typingHeartbeatInterval, (_) {
+      if (!mounted || !_typingSent || !_wsConnected) {
+        _typingHeartbeat?.cancel();
+        return;
+      }
+      if (_msgCtrl.text.trim().isEmpty) {
+        _sendStopTyping();
+        return;
+      }
+      _sendTypingEvent();
+    });
   }
 
   void _sendStopTyping() {
     _typingDebounce?.cancel();
+    _typingHeartbeat?.cancel();
     if (!_typingSent) return;
     _typingSent = false;
     if (!_wsConnected) return;
     try {
       _ws?.sink.add(jsonEncode({'type': 'stop_typing'}));
     } catch (_) {}
+  }
+
+  /// Outgoing typing state died with the socket: the next keystroke after a
+  /// reconnect must announce afresh, not assume the other side remembers.
+  void _resetOutgoingTyping() {
+    _typingDebounce?.cancel();
+    _typingHeartbeat?.cancel();
+    _typingSent = false;
   }
 
   void _clearRemoteTyping() {
@@ -746,6 +810,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (!identical(_ws, ws)) return;
     _wsPingTimer?.cancel();
     _clearRemoteTyping();
+    _resetOutgoingTyping();
     if (!mounted) return;
     setState(() => _wsConnected = false);
     // Refused for good - no such thread (4003) or listing (4004): asking
@@ -1188,6 +1253,8 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       _scrollToLatestAfterLayout();
       unawaited(_cacheMessages());
       unawaited(_syncReadState());
+      // History proved the server reachable: flush anything still unsent.
+      _flushFailed();
     } catch (_) {
       // Offline or request failed - fall back to on-device cache instead of
       // leaving the screen blank. Only replaces _messages if nothing has
@@ -1311,6 +1378,18 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     }
   }
 
+  /// Progress ticks for one upload, repainted only when the percent visibly
+  /// moves: the byte stream fires per 64KB chunk, and a setState per chunk
+  /// would rebuild the whole chat sixty times per photo.
+  void _reportUploadProgress(String clientId, int sent, int total) {
+    final upload = _uploads[clientId];
+    if (upload == null || total <= 0 || !mounted) return;
+    final next = (sent / total).clamp(0.0, 1.0);
+    if (next < 1.0 && (next - upload.progress) < 0.05 && upload.progress > 0) return;
+    upload.progress = next;
+    setState(() {});
+  }
+
   Future<void> _deliverUpload(String clientId) async {
     final listing = _listing;
     final upload = _uploads[clientId];
@@ -1330,6 +1409,7 @@ class _NegotiationScreenState extends State<NegotiationScreen>
         // Voice notes ride the same reply/caption contract as photos.
         replyToMessageId: upload.replyToMessageId,
         caption: upload.caption,
+        onProgress: (sent, total) => _reportUploadProgress(clientId, sent, total),
       );
       _confirm(clientId, ChatMessage.fromJson({'role': _role, ...saved}));
     } catch (e) {
@@ -1381,9 +1461,21 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       unawaited(_cacheMessages());
       return;
     }
+    _retryMessage(clientId);
+  }
+
+  /// Resend one optimistic message under its original client id: the server
+  /// recognises an arrival that already landed instead of storing a second
+  /// copy. Shared by the manual "Try again" sheet and the automatic flush
+  /// that runs when connectivity returns.
+  void _retryMessage(String clientId) {
+    final i = _messages.indexWhere((x) => x.isPending && x.clientId == clientId);
+    if (i < 0) return; // confirmed meanwhile
+    final m = _messages[i];
+    if (m.msgType != 'text' && !_uploads.containsKey(clientId)) return;
+    final upload = _uploads[clientId];
+    if (upload != null) upload.progress = 0;
     setState(() => _messages[i] = _messages[i].withFailed(false));
-    // The same client id: if the first attempt did arrive after all, the
-    // server answers with that copy instead of storing a second.
     if (m.msgType == 'text') {
       _enqueue(() => _deliverText(clientId, m.content,
           replyToMessageId: m.replyToMessageId));
@@ -1400,6 +1492,29 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     } else {
       _enqueue(() => _deliverUpload(clientId));
     }
+  }
+
+  bool _flushing = false;
+
+  /// Automatic delivery after reconnecting: every still-failed optimistic
+  /// message goes again, oldest first, under its original client id. The
+  /// queue serialises them and the server dedupes arrivals, so a message
+  /// typed offline is delivered once, in order, without tapping anything.
+  /// A flush already running is never doubled up.
+  void _flushFailed() {
+    if (_flushing || !mounted) return;
+    final ids = [
+      for (final m in _messages)
+        if (m.failed && m.clientId != null) m.clientId!,
+    ];
+    if (ids.isEmpty) return;
+    _flushing = true;
+    for (final id in ids) {
+      _retryMessage(id);
+    }
+    _enqueue(() async {
+      _flushing = false;
+    });
   }
 
   // ── Edit / unsend ──────────────────────────────────────────────────────────
@@ -1471,38 +1586,83 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     }
   }
 
-  /// Jump to the quoted message and flash it briefly. Messages outside the
-  /// loaded viewport can't be scrolled to: show where the quote points
-  /// without pretending to move.
-  void _jumpToReply(ChatMessage m) {
+  /// Jump to the quoted message and flash it briefly. The bubble's own key
+  /// reveals it at its exact position - bubble heights vary (text, quotes,
+  /// photos, voice notes), so no averaged offset is ever estimated. A lazily
+  /// built list may not hold the bubble yet: one coarse nudge toward its
+  /// index lays it out, then the exact reveal runs. Deleted or unavailable
+  /// originals get a safe fallback instead of a jump.
+  Future<void> _jumpToReply(ChatMessage m) async {
     final target = m.replyToMessageId;
     if (target == null || target.isEmpty) return;
-    final i = _messages.indexWhere((x) => x.id == target);
-    if (i < 0) {
+    if (_messages.indexWhere((x) => x.id == target) < 0) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Original message is not in this view.')));
       }
       return;
     }
+    for (var attempt = 0; attempt < 4; attempt++) {
+      final ctx = _bubbleKeys[target]?.currentContext;
+      if (ctx != null) {
+        try {
+          await Scrollable.ensureVisible(
+            ctx,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        } catch (_) {}
+        _flashHighlight(target);
+        return;
+      }
+      // Not laid out yet: nudge toward its index so the builder creates it.
+      if (!_scrollCtrl.hasClients) return;
+      try {
+        final i = _messages.indexWhere((x) => x.id == target);
+        final extent = _scrollCtrl.position.maxScrollExtent;
+        final offset = _messages.length <= 1
+            ? extent
+            : (extent * i / (_messages.length - 1)).clamp(0.0, extent);
+        await _scrollCtrl.animateTo(
+          offset,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      } catch (_) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Original message is not in this view.')));
+    }
+  }
+
+  void _flashHighlight(String target) {
+    if (!mounted) return;
     _highlightTimer?.cancel();
     setState(() => _highlightId = target);
     _highlightTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _highlightId = null);
     });
-    // Chronological list: index 0 is the oldest.
-    try {
-      final extent = _scrollCtrl.position.maxScrollExtent;
-      final offset = _messages.length <= 1
-          ? extent
-          : (extent * i / (_messages.length - 1)).clamp(0.0, extent);
-      _scrollCtrl.animateTo(
-        offset,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    } catch (_) {}
   }
+
+  /// Test seams: drive one inbound socket frame, or run the reconnect
+  /// flush, without a live WebSocket. Production code never calls these.
+  @visibleForTesting
+  void debugSocketFrame(Map<String, dynamic> frame) =>
+      _onSocketFrame(jsonEncode(frame));
+
+  @visibleForTesting
+  void debugFlushFailed() => _flushFailed();
+
+  @visibleForTesting
+  bool get debugRemoteTyping => _remoteTyping;
+
+  @visibleForTesting
+  bool get debugTypingSent => _typingSent;
 
   Future<void> _editMessage(ChatMessage m) async {
     final controller = TextEditingController(text: m.content);
@@ -1917,23 +2077,66 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     await _stageImageUpload(current, caption.isEmpty ? null : caption);
   }
 
+  /// Shrink a picked photo for sending: longest side 1600px, JPEG quality
+  /// 85 (PNG when the source has transparency). A 12MP camera photo is ~4MB;
+  /// sending it raw would stall the thread on a slow connection and bloat
+  /// the server's data-URI store for no visible gain. Decoding failures
+  /// fall back to the raw bytes - a photo never fails to send because the
+  /// shrinker couldn't read it.
+  ({Uint8List bytes, String fileName, String mimeType}) _fitPhotoForUpload(
+      Uint8List raw) {
+    try {
+      final decoded = img.decodeImage(raw);
+      if (decoded == null) {
+        return (bytes: raw, fileName: 'image.jpg', mimeType: 'image/jpeg');
+      }
+      img.Image out = decoded;
+      const maxDim = 1600;
+      final w = decoded.width, h = decoded.height;
+      if ((w > maxDim || h > maxDim) && w > 0 && h > 0) {
+        final s = maxDim / (w >= h ? w : h);
+        out = img.copyResize(decoded, width: (w * s).round());
+      }
+      final isPng = raw.length >= 8 &&
+          raw[0] == 0x89 && raw[1] == 0x50 && raw[2] == 0x4E && raw[3] == 0x47 &&
+          raw[4] == 0x0D && raw[5] == 0x0A && raw[6] == 0x1A && raw[7] == 0x0A;
+      if (isPng) {
+        return (
+          bytes: Uint8List.fromList(img.encodePng(out)),
+          fileName: 'image.png',
+          mimeType: 'image/png'
+        );
+      }
+      return (
+        bytes: Uint8List.fromList(img.encodeJpg(out, quality: 85)),
+        fileName: 'image.jpg',
+        mimeType: 'image/jpeg'
+      );
+    } catch (_) {
+      return (bytes: raw, fileName: 'image.jpg', mimeType: 'image/jpeg');
+    }
+  }
+
   /// Persist the photo to the app-owned outbox, render the optimistic bubble
   /// with an uploading state, then upload. Retries reuse the stored file -
   /// never the in-memory bytes - so they survive a restart.
   Future<void> _stageImageUpload(File picked, String? caption) async {
     try {
-      final bytes = await picked.readAsBytes();
+      final raw = await picked.readAsBytes();
+      final fitted = _fitPhotoForUpload(raw);
       final clientId = _newClientId();
       final reply = _replyTo;
-      final stored = await _ChatMediaOutbox.storeImage(clientId, bytes);
+      final stored = await _ChatMediaOutbox.storeImage(
+          clientId, fitted.bytes, ext: fitted.mimeType == 'image/png' ? 'png' : 'jpg');
       if (stored == null || !mounted) return;
       await _ChatMediaOutbox.writeMeta(clientId,
           replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
           caption: caption);
-      final previewBytes = bytes.length > 400 * 1024 ? null : bytes;
       _uploads[clientId] = _PendingUpload(
-        bytes: previewBytes ?? bytes,
-        contentType: 'image', fileName: 'image.jpg', mimeType: 'image/jpeg',
+        bytes: fitted.bytes,
+        contentType: 'image',
+        fileName: fitted.fileName,
+        mimeType: fitted.mimeType,
         replyToMessageId: reply?.id.isEmpty == true ? null : reply?.id,
         replyPreview: reply == null ? null : _replySnapshotOf(reply),
         caption: caption,
@@ -1969,18 +2172,22 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     if (listing == null) return;
     try {
       final bytes = await File(storedPath).readAsBytes();
+      // A retry reuses the staged format, not the raw pick: the server
+      // must see the same file the idempotency key was first sent with.
+      final staged = _uploads[clientId];
       final saved = await ApiService.uploadMedia(
         listingId: listing.id,
         senderRole: _role,
         senderId: ApiService.currentUserId ?? 'anon',
         contentType: 'image',
         fileBytes: bytes,
-        fileName: 'image.jpg',
-        mimeType: 'image/jpeg',
+        fileName: staged?.fileName ?? 'image.jpg',
+        mimeType: staged?.mimeType ?? 'image/jpeg',
         buyerId: _buyerId,
         clientMsgId: clientId,
-        replyToMessageId: _uploads[clientId]?.replyToMessageId,
-        caption: _uploads[clientId]?.caption,
+        replyToMessageId: staged?.replyToMessageId,
+        caption: staged?.caption,
+        onProgress: (sent, total) => _reportUploadProgress(clientId, sent, total),
       );
       await _ChatMediaOutbox.remove(clientId);
       _confirm(clientId, ChatMessage.fromJson({'role': _role, ...saved}));
@@ -2196,8 +2403,10 @@ class _NegotiationScreenState extends State<NegotiationScreen>
     WidgetsBinding.instance.removeObserver(this);
     _sendStopTyping();
     _typingDebounce?.cancel();
+    _typingHeartbeat?.cancel();
     _remoteTypingExpiry?.cancel();
     _highlightTimer?.cancel();
+    _bubbleKeys.clear();
     if (_listing != null) {
       GlobalPollerService.instance.markScreenInactive(_listing!.id, buyerId: _buyerId);
     }
@@ -2528,7 +2737,12 @@ class _NegotiationScreenState extends State<NegotiationScreen>
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       itemCount: _messages.length,
       itemBuilder: (_, i) {
+        final id = _messages[i].id;
+        final key = id.isEmpty ? null : _bubbleKeys.putIfAbsent(id, () => GlobalKey());
+        final clientId = _messages[i].clientId;
         return _ChatBubble(
+        key: key,
+        uploadProgress: clientId == null ? null : _uploads[clientId]?.progress,
         message:    _messages[i],
         userRole:   _role,
         isPlaying:  _isPlaying && _playingUrl == _messages[i].mediaUrl,
@@ -2796,7 +3010,11 @@ class _ChatBubble extends StatelessWidget {
   final void Function(ChatMessage)? onQuoteTap;
   final bool highlighted;
 
+  /// 0..1 upload progress for a pending photo, if the outbox is tracking it.
+  final double? uploadProgress;
+
   const _ChatBubble({
+    super.key,
     required this.message,
     required this.userRole,
     required this.isPlaying,
@@ -2806,6 +3024,7 @@ class _ChatBubble extends StatelessWidget {
     this.onLongPress,
     this.onQuoteTap,
     this.highlighted = false,
+    this.uploadProgress,
     this.counterpartLastRead,
     this.counterpartLastDelivered,
   });
@@ -2989,6 +3208,7 @@ class _ChatBubble extends StatelessWidget {
             : null,
         pending: message.isPending,
         failed: message.failed,
+        progress: uploadProgress,
       ));
     } else {
       // Yours on the brand gradient, theirs on a card - as on Zeno's screen
@@ -3198,6 +3418,10 @@ class _ImageBubble extends StatelessWidget {
   final MessageReceipt? receipt;
   final bool pending;
   final bool failed;
+
+  /// 0..1 upload progress. Shown as a ring with a percent while uploading;
+  /// null (or 0) keeps the plain spinner for indeterminate stages.
+  final double? progress;
   const _ImageBubble({
     required this.url,
     this.caption,
@@ -3206,6 +3430,7 @@ class _ImageBubble extends StatelessWidget {
     this.receipt,
     this.pending = false,
     this.failed = false,
+    this.progress,
   });
 
   ImageProvider? _provider() {
@@ -3256,47 +3481,27 @@ class _ImageBubble extends StatelessWidget {
                     color: BrokaColors.textLow, size: 36),
               )
             else
-              AspectRatio(
-                // Bounded, not cropped: the photo keeps its shape.
-                aspectRatio: 4 / 3,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image(
-                      image: provider,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, __, ___) => Container(
-                        color: BrokaColors.bgCard,
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.broken_image_outlined,
-                            color: BrokaColors.textLow, size: 36)),
-                      loadingBuilder: (ctx, child, progress) =>
-                          progress == null
-                              ? child
-                              : Container(
-                                  color: BrokaColors.bgCard,
-                                  alignment: Alignment.center,
-                                  child: const SizedBox(
-                                      width: 24, height: 24,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: BrokaColors.gold))),
-                    ),
-                    if (pending || failed)
-                      Container(
+              // The photo's own ratio drives the frame: portrait, landscape
+              // and square all render whole, never centre-cropped.
+              Stack(
+                children: [
+                  AspectImage(
+                    provider: provider,
+                    maxWidth: MediaQuery.of(context).size.width * 0.68,
+                    maxHeight: 340,
+                  ),
+                  if (pending || failed)
+                    Positioned.fill(
+                      child: Container(
                         color: Colors.black.withOpacity(0.45),
                         alignment: Alignment.center,
                         child: pending
-                            ? const SizedBox(
-                                width: 26, height: 26,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2.5, color: Colors.white))
+                            ? _UploadProgressRing(progress: progress)
                             : const Icon(Icons.error_outline_rounded,
                                 color: Colors.white, size: 30),
                       ),
-                  ],
-                ),
+                    ),
+                ],
               ),
             if (captionText.isNotEmpty)
               Padding(
@@ -3323,6 +3528,46 @@ class _ImageBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Upload progress over a pending photo: a determinate ring with a percent
+/// once bytes are moving, the plain spinner before the first tick.
+class _UploadProgressRing extends StatelessWidget {
+  const _UploadProgressRing({this.progress});
+
+  final double? progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = progress;
+    if (p == null || p <= 0) {
+      return const SizedBox(
+        width: 26,
+        height: 26,
+        child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 44,
+          height: 44,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CircularProgressIndicator(
+                  value: p.clamp(0.0, 1.0), strokeWidth: 3, color: Colors.white,
+                  backgroundColor: Colors.white24),
+              Text('${(p.clamp(0.0, 1.0) * 100).round()}',
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

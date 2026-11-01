@@ -312,3 +312,122 @@ async def test_assistant_conversation_endpoints_restore_after_reinstall(client):
                                 headers=_auth(owner_id))
     assert restored.status_code == 200
     assert [t["content"] for t in restored.json()["turns"]] == ["remember this"]
+
+
+# ── Concurrent and cross-device durability ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_concurrent_appends_keep_unique_ordered_positions():
+    """Ten devices appending at once: one conversation, seqs 1..10 exactly
+    once each. Fails if the MAX(seq)+1 race can share a position."""
+    import asyncio as _asyncio
+    from api.database import User as _User
+    from api.domains.zeno_assistant import persistence as _p
+
+    async with AsyncSessionLocal() as db:
+        owner = _User(name="Racy", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        db.add(owner)
+        await db.commit()
+        owner_id = owner.id
+
+    async def one_turn(i: int):
+        # Each racing append needs its own session: sharing one across
+        # threads/loops is what the production server never does either.
+        from api.database import AsyncSessionLocal as _SL
+        async with _SL() as db:
+            return await _p.append_turn(
+                db, owner_id, "assistant", None, "user", f"turn {i}", f"race-{i}")
+
+    turns = await _asyncio.gather(*[one_turn(i) for i in range(10)])
+    seqs = sorted(t.seq for t in turns)
+    assert seqs == list(range(1, 11))
+    assert len({t.conversation_id for t in turns}) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_client_turn_id_from_two_devices_stores_one_turn(client):
+    """A phone and a tablet syncing the same queued turn: the second write
+    is a no-op, not a duplicate."""
+    from api.database import User as _User
+
+    async with AsyncSessionLocal() as db:
+        owner = _User(name="Two Devices", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        db.add(owner)
+        await db.commit()
+        owner_id = owner.id
+
+    body = {"mode": "assistant", "role": "user", "content": "from the phone",
+            "client_turn_id": "device-shared-1"}
+    first = await client.post("/zeno/assistant/conversation/append",
+                              json=body, headers=_auth(owner_id))
+    second = await client.post("/zeno/assistant/conversation/append",
+                               json=body, headers=_auth(owner_id))
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["seq"] == second.json()["seq"]
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(ZenoTurn).where(
+            ZenoTurn.client_turn_id == "device-shared-1"))).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_is_scoped_to_the_caller(client):
+    """New chat clears my conversation only: another user's transcript and
+    my other mode survive."""
+    from api.database import User as _User
+
+    async with AsyncSessionLocal() as db:
+        mine = _User(name="Mine", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        other = _User(name="Other", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        db.add_all([mine, other])
+        await db.commit()
+        mine_id, other_id = mine.id, other.id
+
+    for uid in (mine_id, other_id):
+        await client.post("/zeno/assistant/conversation/append",
+                          json={"mode": "assistant", "role": "user",
+                                "content": "hello", "client_turn_id": f"d-{uid[:8]}"},
+                          headers=_auth(uid))
+    await client.post("/zeno/assistant/conversation/append",
+                      json={"mode": "buying", "role": "user",
+                            "content": "buying hello", "client_turn_id": "d-buying"},
+                      headers=_auth(mine_id))
+
+    gone = await client.delete("/zeno/assistant/conversation",
+                               params={"mode": "assistant"},
+                               headers=_auth(mine_id))
+    assert gone.status_code == 200 and gone.json()["deleted"] is True
+
+    mine = await client.get("/zeno/assistant/conversation",
+                            params={"mode": "assistant"},
+                            headers=_auth(mine_id))
+    other = await client.get("/zeno/assistant/conversation",
+                             params={"mode": "assistant"},
+                             headers=_auth(other_id))
+    buying = await client.get("/zeno/assistant/conversation",
+                              params={"mode": "buying"},
+                              headers=_auth(mine_id))
+    assert mine.json()["turns"] == []
+    assert [t["content"] for t in other.json()["turns"]] == ["hello"]
+    assert [t["content"] for t in buying.json()["turns"]] == ["buying hello"]
+
+
+@pytest.mark.asyncio
+async def test_reading_an_empty_conversation_creates_nothing():
+    """Opening Zeno on a second device must not mint an empty row: reads are
+    reads, and only an append creates the conversation."""
+    from api.database import User as _User, ZenoConversation
+    from api.domains.zeno_assistant import persistence as _p
+
+    async with AsyncSessionLocal() as db:
+        owner = _User(name="Reader", phone=f"+2547{uuid.uuid4().hex[:8]}", password_hash="x")
+        db.add(owner)
+        await db.commit()
+        owner_id = owner.id
+
+    async with AsyncSessionLocal() as db:
+        assert await _p.get_turns(db, owner_id, "assistant") == []
+        assert await _p.replay_turn(db, owner_id, "assistant", None, "nope") is None
+        rows = (await db.execute(select(ZenoConversation).where(
+            ZenoConversation.owner_id == owner_id))).scalars().all()
+    assert rows == []

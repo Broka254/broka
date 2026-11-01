@@ -663,6 +663,11 @@ class ZenoTurn(Base):
         Index("ix_zeno_turns_conversation_seq", "conversation_id", "seq"),
         Index("uq_zeno_turns_conversation_client",
               "conversation_id", "client_turn_id", unique=True),
+        # Concurrent appends race on MAX(seq)+1: the loser hits this
+        # instead of writing a duplicate position, and persistence.py
+        # retries it onto the next free slot.
+        UniqueConstraint("conversation_id", "seq",
+                         name="uq_zeno_turns_conversation_seq"),
     )
 
 
@@ -1971,6 +1976,22 @@ async def _init_db_impl():
             # originals never block the migration on either database.
             "ALTER TABLE negotiation_messages ADD COLUMN reply_to_message_id VARCHAR",
             "ALTER TABLE negotiation_messages ADD COLUMN reply_snapshot TEXT",
+            # Zeno conversation durability (2026-11): one row per
+            # (owner, mode, listing). The expression unique index in
+            # index_patches enforces it - PostgreSQL treats NULL listing
+            # ids as distinct, so the constraint is on COALESCE. These
+            # two clean out duplicates first so the index build cannot
+            # fail on a database that already holds them: the tables are
+            # days old and tiny. Conversations that still hold turns are
+            # never deleted here (their turns reference them); only
+            # turn-less dupes go, keeping the earliest row.
+            "DELETE FROM zeno_conversations WHERE id NOT IN "
+            "(SELECT MIN(id) FROM zeno_conversations "
+            "GROUP BY owner_id, mode, COALESCE(listing_id, '')) "
+            "AND id NOT IN (SELECT DISTINCT conversation_id FROM zeno_turns)",
+            "DELETE FROM zeno_turns WHERE client_turn_id IS NOT NULL AND id NOT IN "
+            "(SELECT MIN(id) FROM zeno_turns WHERE client_turn_id IS NOT NULL "
+            "GROUP BY conversation_id, client_turn_id)",
             # Selling terms (Listing.price_unit ... sms_alerts). The two
             # booleans default to what BROKA did before it asked: offers
             # were welcome and the availability SMS was sent.
@@ -2172,6 +2193,20 @@ async def _init_db_impl():
             # Quote-reply lookups by referenced message.
             "CREATE INDEX IF NOT EXISTS ix_negotiation_messages_reply_to "
             "ON negotiation_messages (reply_to_message_id)",
+            # Zeno conversation durability (2026-11): one conversation per
+            # (owner, mode, listing). The COALESCE is load-bearing, not
+            # cleverness - PostgreSQL considers NULLs distinct, so without
+            # it two listing-less assistant conversations for one user
+            # could coexist and turns would split across them by device.
+            # Preceded by the dedupe DELETEs in migrations above.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_zeno_conversations_owner_mode_listing "
+            "ON zeno_conversations (owner_id, mode, COALESCE(listing_id, ''))",
+            # Zeno turn ordering (2026-11): concurrent appends race on
+            # MAX(seq)+1. The loser hits this instead of sharing a
+            # position, and persistence.py retries it onto the next slot.
+            # Matches ZenoTurn.__table_args__ for fresh create_all tables.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_zeno_turns_conversation_seq "
+            "ON zeno_turns (conversation_id, seq)",
             # One review per (deal, reviewer) - see Review.__table_args__.
             # Fails harmlessly, and leaves the service's own check as the
             # only guard, on a database already holding a duplicate.
