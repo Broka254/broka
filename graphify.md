@@ -53,10 +53,10 @@ Where things usually are:
 
 ## Backend endpoints
 
-297 endpoints served by `backend/main.py`. **Auth** is read from each
+299 endpoints served by `backend/main.py`. **Auth** is read from each
 handler's dependencies: `public` (none), `optional` (a token is used if sent),
 `user` (sign-in required), `admin`, `token` (WebSocket, checks its own token).
-Counts: admin 58, optional 5, public 62, token 4, user 168.
+Counts: admin 58, optional 5, public 62, token 4, user 170.
 
 | Method | Path | Auth | Handler |
 |---|---|---|---|
@@ -244,33 +244,33 @@ Counts: admin 58, optional 5, public 62, token 4, user 168.
 | GET | `/media/i/{key:path}` | public | `serve_image` (backend/api/domains/media/router.py:85) |
 | POST | `/media/images` | user | `upload_image` (backend/api/domains/media/router.py:52) |
 | GET | `/media/og/{asset_id}.jpg` | public | `link_preview_image` (backend/api/domains/media/router.py:144) |
-| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:287) |
-| WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:90) |
+| POST | `/media/upload` | user | `upload_media` (backend/api/routers/media.py:348) |
+| WS | `/media/ws/{listing_id}` | token | `negotiate_ws` (backend/api/routers/media.py:120) |
 | POST | `/mpesa/callback` | public | `mpesa_callback` (backend/api/routers/mpesa.py:421) |
 | POST | `/mpesa/callback/{secret}` | public | `mpesa_callback_secured` (backend/api/routers/mpesa.py:452) |
 | POST | `/mpesa/query` | user | `query_payment_status` (backend/api/routers/mpesa.py:348) |
 | GET | `/mpesa/status/{deal_id}` | user | `get_deal_payment_status` (backend/api/routers/mpesa.py:792) |
 | POST | `/mpesa/stk-push` | user | `initiate_stk_push` (backend/api/routers/mpesa.py:154) |
-| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:4742) |
-| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1848) |
+| POST | `/negotiate/cancel-timer/{deal_id}` | user | `cancel_deal_timer` (backend/api/routers/negotiate.py:5014) |
+| POST | `/negotiate/chat` | user | `free_chat` (backend/api/routers/negotiate.py:1858) |
 | POST | `/negotiate/chat` | user | `broker_chat` (backend/api/domains/ai_broker/router.py:44) **shadowed: never reached** |
-| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4639) |
-| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3479) |
+| GET | `/negotiate/deal-status/{listing_id}` | user | `get_deal_status` (backend/api/routers/negotiate.py:4911) |
+| POST | `/negotiate/direct-message` | user | `direct_message` (backend/api/routers/negotiate.py:3698) |
 | POST | `/negotiate/dispute-analysis` | user | `dispute_analysis` (backend/api/domains/ai_broker/router.py:85) |
-| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4284) |
-| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1924) |
-| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3633) |
-| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3681) |
+| GET | `/negotiate/inbox/{user_id}` | user | `get_inbox` (backend/api/routers/negotiate.py:4556) |
+| POST | `/negotiate/message` | user | `send_message` (backend/api/routers/negotiate.py:1934) |
+| PATCH | `/negotiate/message/{message_id}` | user | `edit_message` (backend/api/routers/negotiate.py:3858) |
+| DELETE | `/negotiate/message/{message_id}` | user | `unsend_message` (backend/api/routers/negotiate.py:3906) |
 | POST | `/negotiate/price-recommend` | user | `price_recommend` (backend/api/domains/ai_broker/router.py:69) |
 | POST | `/negotiate/scam-check` | user | `scam_check` (backend/api/domains/ai_broker/router.py:60) |
 | POST | `/negotiate/shopping-advisor` | user | `shopping_advisor` (backend/api/domains/ai_broker/router.py:104) |
-| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4706) |
-| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3319) |
-| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3722) |
-| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4121) |
-| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4165) |
-| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4212) |
-| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4189) |
+| POST | `/negotiate/start-timer` | user | `start_deal_timer` (backend/api/routers/negotiate.py:4978) |
+| POST | `/negotiate/zeno-action/draft-sms` | user | `zeno_draft_sms` (backend/api/routers/negotiate.py:3438) |
+| GET | `/negotiate/{listing_id}/history` | user | `get_history` (backend/api/routers/negotiate.py:3947) |
+| POST | `/negotiate/{listing_id}/mark-delivered` | user | `mark_thread_delivered` (backend/api/routers/negotiate.py:4393) |
+| POST | `/negotiate/{listing_id}/mark-read` | user | `mark_thread_read` (backend/api/routers/negotiate.py:4437) |
+| GET | `/negotiate/{listing_id}/read-status` | user | `get_read_status` (backend/api/routers/negotiate.py:4484) |
+| POST | `/negotiate/{listing_id}/zeno-read` | user | `mark_zeno_read` (backend/api/routers/negotiate.py:4461) |
 | GET | `/payments/zetupay/payments/{reference}` | admin | `zetupay_payment_status` (backend/api/domains/payments/router.py:108) |
 | POST | `/payments/zetupay/test-charge` | admin | `zetupay_test_charge` (backend/api/domains/payments/router.py:77) |
 | POST | `/payments/zetupay/webhook` | public | `zetupay_webhook` (backend/api/domains/payments/router.py:35) |
@@ -351,13 +351,15 @@ Counts: admin 58, optional 5, public 62, token 4, user 168.
 | POST | `/verify/purchase` | user | `purchase_verification` (backend/api/routers/verify.py:156) |
 | GET | `/verify/status` | user | `check_status` (backend/api/routers/verify.py:564) |
 | GET | `/verify/tiers` | public | `list_tiers` (backend/api/routers/verify.py:150) |
-| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:85) |
-| POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:300) |
-| POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:363) |
-| POST | `/zeno/listing-draft/autolist/turn` | user | `autolist_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:341) |
-| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:180) |
-| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:229) |
-| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:270) |
+| GET | `/zeno/assistant/conversation` | user | `get_assistant_conversation` (backend/api/domains/zeno_assistant/router.py:178) |
+| POST | `/zeno/assistant/conversation/append` | user | `append_assistant_conversation` (backend/api/domains/zeno_assistant/router.py:212) |
+| POST | `/zeno/assistant/turn` | user | `assistant_turn` (backend/api/domains/zeno_assistant/router.py:95) |
+| POST | `/zeno/listing-draft/autolist` | user | `autolist_listing_draft` (backend/api/domains/zeno_assistant/router.py:410) |
+| POST | `/zeno/listing-draft/autolist/price` | user | `autolist_listing_draft_price` (backend/api/domains/zeno_assistant/router.py:473) |
+| POST | `/zeno/listing-draft/autolist/turn` | user | `autolist_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:451) |
+| POST | `/zeno/listing-draft/describe` | user | `describe_listing_draft` (backend/api/domains/zeno_assistant/router.py:290) |
+| POST | `/zeno/listing-draft/describe/turn` | user | `describe_listing_draft_turn` (backend/api/domains/zeno_assistant/router.py:339) |
+| POST | `/zeno/listing-draft/price/turn` | user | `price_listing_draft` (backend/api/domains/zeno_assistant/router.py:380) |
 
 ## Backend modules
 
@@ -543,6 +545,7 @@ Counts: admin 58, optional 5, public 62, token 4, user 168.
 - `intents.py` — What Zeno, the assistant, may do - and the commands it understands without asking a model.
 - `knowledge.py` — What Zeno knows about the user it is talking to - fetched only when a question needs it.
 - `listing_context.py` — The listing a user is asking Zeno about, when they opened Zeno from it.
+- `persistence.py` — Durable store for the account-level Zeno conversations.
 - `router.py` — Zeno as the user's assistant - POST /zeno/assistant/turn.
 - `selling.py` — Zeno helping a seller while they write a listing (2026-10-05).
 - `service.py` — One turn of Zeno as the user's assistant - text or voice, it is the same turn.
@@ -667,49 +670,49 @@ Counts: admin 58, optional 5, public 62, token 4, user 168.
 | Table | Model | Defined at |
 |---|---|---|
 | `admin_alerts` | `AdminAlert` | backend/api/models/admin_alert.py:32 |
-| `auction_meta` | `AuctionMeta` | backend/api/database.py:620 |
-| `audit_logs` | `AuditLog` | backend/api/database.py:1259 |
-| `bids` | `Bid` | backend/api/database.py:609 |
-| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:767 |
+| `auction_meta` | `AuctionMeta` | backend/api/database.py:680 |
+| `audit_logs` | `AuditLog` | backend/api/database.py:1319 |
+| `bids` | `Bid` | backend/api/database.py:669 |
+| `buy_agent_requests` | `BuyAgentRequest` | backend/api/database.py:827 |
 | `categories` | `Category` | backend/api/database.py:332 |
 | `category_filters` | `CategoryFilter` | backend/api/database.py:340 |
-| `deals` | `Deal` | backend/api/database.py:819 |
+| `deals` | `Deal` | backend/api/database.py:879 |
 | `dispute_cases` | `DisputeCase` | backend/api/models/dispute.py:282 |
 | `dispute_events` | `DisputeEvent` | backend/api/models/dispute.py:358 |
 | `dispute_evidence` | `DisputeEvidence` | backend/api/models/dispute.py:389 |
 | `dispute_timers` | `DisputeTimer` | backend/api/models/dispute.py:417 |
-| `disputes` | `Dispute` | backend/api/database.py:1158 |
+| `disputes` | `Dispute` | backend/api/database.py:1218 |
 | `email_otps` | `EmailOtp` | backend/api/database.py:309 |
 | `expiry_notifications` | `ExpiryNotification` | backend/api/models/expiry_notification.py:34 |
 | `external_escrows` | `ExternalEscrow` | backend/api/models/external_escrow.py:75 |
 | `feature_usage` | `FeatureUsage` | backend/api/models/subscription.py:86 |
-| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1207 |
-| `fraud_events` | `FraudEvent` | backend/api/database.py:1278 |
+| `featured_payments` | `FeaturedPayment` | backend/api/database.py:1267 |
+| `fraud_events` | `FraudEvent` | backend/api/database.py:1338 |
 | `interests` | `Interest` | backend/api/database.py:485 |
 | `launch_offer_claims` | `LaunchOfferClaim` | backend/api/models/launch_offer.py:38 |
 | `ledger_entries` | `LedgerEntry` | backend/api/models/escrow_ledger.py:20 |
 | `legal_acceptances` | `LegalAcceptance` | backend/api/models/legal.py:24 |
-| `listing_likes` | `ListingLike` | backend/api/database.py:737 |
-| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1053 |
+| `listing_likes` | `ListingLike` | backend/api/database.py:797 |
+| `listing_metric_snapshots` | `ListingMetricSnapshot` | backend/api/database.py:1113 |
 | `listing_payments` | `ListingPayment` | backend/api/models/listing_payment.py:33 |
-| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1029 |
-| `listing_views` | `ListingView` | backend/api/database.py:707 |
+| `listing_price_changes` | `ListingPriceChange` | backend/api/database.py:1089 |
+| `listing_views` | `ListingView` | backend/api/database.py:767 |
 | `listings` | `Listing` | backend/api/database.py:349 |
 | `marketing_campaign_events` | `MarketingCampaignEvent` | backend/api/models/marketing.py:138 |
 | `marketing_campaigns` | `MarketingCampaign` | backend/api/models/marketing.py:51 |
 | `marketing_creatives` | `MarketingCreative` | backend/api/models/marketing.py:100 |
 | `media_assets` | `MediaAsset` | backend/api/models/media.py:74 |
 | `media_blobs` | `MediaBlob` | backend/api/models/media.py:108 |
-| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1088 |
+| `mpesa_transactions` | `MpesaTransaction` | backend/api/database.py:1148 |
 | `negotiation_messages` | `NegotiationMessage` | backend/api/database.py:513 |
 | `payment_callbacks` | `PaymentCallback` | backend/api/models/payment_callback.py:30 |
 | `phone_otps` | `PhoneOtp` | backend/api/database.py:290 |
 | `platform_costs` | `PlatformCost` | backend/api/models/platform_cost.py:28 |
 | `push_devices` | `PushDevice` | backend/api/models/push_device.py:28 |
-| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1128 |
-| `reviews` | `Review` | backend/api/database.py:1173 |
-| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:979 |
-| `seller_metrics` | `SellerMetrics` | backend/api/database.py:958 |
+| `refresh_tokens` | `RefreshToken` | backend/api/database.py:1188 |
+| `reviews` | `Review` | backend/api/database.py:1233 |
+| `seller_metric_snapshots` | `SellerMetricSnapshot` | backend/api/database.py:1039 |
+| `seller_metrics` | `SellerMetrics` | backend/api/database.py:1018 |
 | `service_communication_device_deliveries` | `ServiceCommunicationDeviceDelivery` | backend/api/models/service_communication.py:175 |
 | `service_communication_recipients` | `ServiceCommunicationRecipient` | backend/api/models/service_communication.py:123 |
 | `service_communication_versions` | `ServiceCommunicationVersion` | backend/api/models/service_communication.py:93 |
@@ -724,12 +727,14 @@ Counts: admin 58, optional 5, public 62, token 4, user 168.
 | `stores` | `Store` | backend/api/models/store.py:75 |
 | `subscription_payments` | `SubscriptionPayment` | backend/api/models/subscription.py:53 |
 | `subscriptions` | `Subscription` | backend/api/models/subscription.py:35 |
-| `thread_read_state` | `ThreadReadState` | backend/api/database.py:574 |
+| `thread_read_state` | `ThreadReadState` | backend/api/database.py:585 |
 | `user_feedback` | `UserFeedback` | backend/api/models/feedback.py:35 |
-| `user_specializations` | `UserSpecialization` | backend/api/database.py:752 |
+| `user_specializations` | `UserSpecialization` | backend/api/database.py:812 |
 | `users` | `User` | backend/api/database.py:195 |
-| `verification_payments` | `VerificationPayment` | backend/api/database.py:1227 |
-| `wishlists` | `Wishlist` | backend/api/database.py:725 |
+| `verification_payments` | `VerificationPayment` | backend/api/database.py:1287 |
+| `wishlists` | `Wishlist` | backend/api/database.py:785 |
+| `zeno_conversations` | `ZenoConversation` | backend/api/database.py:620 |
+| `zeno_turns` | `ZenoTurn` | backend/api/database.py:647 |
 | `zetupay_payments` | `ZetuPayPayment` | backend/api/models/zetupay.py:52 |
 | `zetupay_transactions` | `ZetuPayTransaction` | backend/api/models/zetupay.py:81 |
 
@@ -809,7 +814,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 
 ## Backend tests
 
-137 files in `backend/tests/`.
+138 files in `backend/tests/`.
 
 - `test_admin_additions.py` — Admin additions: SMS cost hook, timeseries, detail reads, users search.
 - `test_admin_alerts.py` — Admin alerts: event-driven creation, dedup, transitions, SSE smoke.
@@ -845,6 +850,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `test_chat_delivery.py` — Direct chat: one bubble per message, ticks that move, missed calls that tell someone (2026-10-02).
 - `test_chat_media_images.py` — Photos sent in a negotiation chat (POST /media/upload, content_type=image) go through the same processing as listing photos (api/core/image…
 - `test_chat_settlement_econfirm.py` — Chat-intent settlement ("Yes, all good" / "I want a refund") must not settle an E-Confirm deal as if BROKA held the money.
+- `test_chat_zeno_replies.py` — Quote-replies, persisted Zeno greetings, typing presence and durable assistant memory.
 - `test_circuit_breaker.py` — Tests for the circuit breaker (new in v4.0).
 - `test_cleanup_photoless_stores.py` — cleanup_photoless_stores.py must only ever target physical shops.
 - `test_client_invariants.py` — Static guards on the Flutter client, run by the suite that actually executes.
@@ -1228,6 +1234,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `call_foreground_service.dart` — BROKA - Call Foreground Service (Dart bridge)
 - `callkit_service.dart` — BROKA - CallKit bridge (iOS)
 - `chat_screen_memory.dart` — Which of a thread's two screens the user was last on: Zeno's negotiation room (/negotiate) or the direct chat with the other person (/direc…
+- `counterparty_profile_cache.dart` — BROKA - Counterparty profile cache.
 - `deep_link_service.dart` — Store links opening in the app.
 - `deepgram_stt_service.dart` — lib/services/deepgram_stt_service.dart
 - `delivery_access.dart` — Can BROKA reach this phone while the app is closed? (2026-10-09)
@@ -1347,6 +1354,7 @@ Read by `backend/api/core/config.py`; documented in `.env.example` and
 - `delivery_nudge_test.dart` — Getting people to let BROKA reach them (2026-10-09).
 - `direct_chat_call_cards_test.dart` — The direct chat's call cards and header, as reported from a seller's phone (2026-10-06):
 - `direct_chat_delivery_test.dart` — The one-on-one chat, as reported from a phone (2026-10-02): the last two messages showed twice until the chat was reopened, a message the o…
+- `direct_chat_improvements_test.dart` — Direct-chat and Zeno reliability: replies, cached identity, merge.
 - `discovery_destinations_test.dart` — Covers the four non-category destinations on Home's discovery rail Trending, the Auction House, Traders and Stores - after the alignment pa…
 - `escrow_actions_test.dart` — Buyer protection dialogs (2026-10-02): paying in parts, releasing with the delivery check first, asking for a refund.
 - `feedback_and_announcement_time_test.dart` — Announcement date/time wording and feedback model parsing.
