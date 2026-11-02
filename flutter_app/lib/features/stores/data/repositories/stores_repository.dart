@@ -132,6 +132,7 @@ class StoresRepository {
     int offset = 0,
     String? search,
     String? category,
+    String? subcategoryId,
     StoreSort sort = StoreSort.featured,
     String? condition,
     StorePriceBand? price,
@@ -142,6 +143,7 @@ class StoresRepository {
           'offset': offset.toString(),
           if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
           if (category != null) 'category': category,
+          if (subcategoryId != null) 'subcategory_id': subcategoryId,
           if (sort != StoreSort.featured) 'sort': sort.value,
           if (condition != null) 'condition': condition,
           if (price?.min != null) 'min_price': price!.min!.toStringAsFixed(0),
@@ -250,6 +252,18 @@ class StoresRepository {
       await _client.post('/stores/$storeId/share', {'channel': channel});
     } catch (_) {}
   }
+
+  /// Follows a store, or takes the follow back. Returns the button's new
+  /// state and the count beside it, from the one response - the screen
+  /// never re-reads the store to learn what it just did.
+  Future<Result<StoreFollowState>> followStore(String storeId) =>
+      _guard(() async => StoreFollowState.fromJson(
+          await _client.post('/stores/$storeId/follow', const {})
+              as Map<String, dynamic>));
+
+  Future<Result<StoreFollowState>> unfollowStore(String storeId) =>
+      _guard(() async => StoreFollowState.fromJson(
+          await _client.delete('/stores/$storeId/follow') as Map<String, dynamic>));
 
   /// The signed-in seller, for the setup wizard.
   Future<Result<StoreOwnerProfile>> getOwnerProfile() => _guard(() async =>

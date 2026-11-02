@@ -184,6 +184,9 @@ void main() {
       );
       await _pumpStore(tester, backend);
 
+      // The catalogue sits below the hero: bring the card on screen.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
+      await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsOneWidget);
       // The single card is not squeezed into a two-column cell...
       expect(find.byType(SliverGrid), findsNothing);
@@ -192,7 +195,7 @@ void main() {
       expect(cardWidth, greaterThan(390 * 0.8));
       expect(cardWidth, closeTo(390 - 16, 2));
       // A lone category is not navigation: no rail.
-      expect(find.byKey(const Key('category-pill-all')), findsNothing);
+      expect(find.text('Shop by Category'), findsNothing);
       // And the catalogue sky stays calm behind the product.
       expect(
           tester
@@ -229,7 +232,7 @@ void main() {
     // materialise the visible rows.
     testWidgets('several products keep the two-column phone grid',
         (tester) async {
-      await _pumpStore(tester, _Backend(), size: const Size(390, 1250));
+      await _pumpStore(tester, _Backend(), size: const Size(390, 1600));
 
       expect(find.byType(StoreProductCard), findsNWidgets(3));
       final grid = tester.widget<SliverGrid>(find.byType(SliverGrid));
@@ -266,6 +269,10 @@ void main() {
       await _pumpStore(tester, _Backend(), size: const Size(360, 640));
 
       expect(find.byKey(const Key('store-hero-name')), findsOneWidget);
+      // Scroll through the whole page: lazily-built rows only exist
+      // once visible, and every row must lay out cleanly.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -2000));
+      await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsWidgets);
       expect(tester.takeException(), isNull);
     });
@@ -289,6 +296,8 @@ void main() {
       await _pumpStore(tester, backend, size: const Size(360, 640));
 
       expect(find.byKey(const Key('store-hero-name')), findsOneWidget);
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -2000));
+      await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
@@ -296,12 +305,18 @@ void main() {
     testWidgets('Add to cart and the stepper still work', (tester) async {
       await _pumpStore(tester, _Backend());
 
+      // The catalogue sits below the hero and the rails: bring the
+      // first row fully on screen before tapping it.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.byKey(const Key('add-to-cart-l1')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('add-to-cart-l1')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('store-cart-bar')), findsOneWidget);
 
       await tester.ensureVisible(find.byKey(const Key('card-l1-plus')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('card-l1-plus')));
       await tester.pump();
       expect(
@@ -312,7 +327,7 @@ void main() {
     testWidgets('search, filters and categories still work', (tester) async {
       final backend = _Backend();
       // Tall enough that the full catalogue is built after each filter.
-      await _pumpStore(tester, backend, size: const Size(390, 1250));
+      await _pumpStore(tester, backend, size: const Size(390, 1600));
 
       // Search narrows the catalogue...
       await tester.enterText(find.byKey(const Key('store-search')), 'tecno');
@@ -329,12 +344,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsNWidgets(3));
 
-      // Category pills filter too.
+      // The rail's tiles filter too - and tapping the selected tile
+      // again clears it.
       await tester.tap(find.byKey(const Key('category-pill-Gaming')));
       await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsOneWidget);
       expect(find.text('PS5 Controller'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('category-pill-all')));
+      await tester.tap(find.byKey(const Key('category-pill-Gaming')));
       await tester.pumpAndSettle();
       expect(find.byType(StoreProductCard), findsNWidgets(3));
 
@@ -356,9 +372,12 @@ void main() {
       await _pumpStore(tester, _Backend(), size: const Size(360, 640));
 
       expect(find.byKey(const Key('store-hero-name')), findsOneWidget);
-      expect(find.byType(StoreProductCard), findsWidgets);
       // Key actions keep their labels at large text.
-      expect(find.bySemanticsLabel('More about this store'), findsOneWidget);
+      expect(find.bySemanticsLabel('Message Store'), findsOneWidget);
+      expect(find.bySemanticsLabel('Follow'), findsOneWidget);
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -2000));
+      await tester.pumpAndSettle();
+      expect(find.byType(StoreProductCard), findsWidgets);
       expect(tester.takeException(), isNull);
       semantics.dispose();
     });

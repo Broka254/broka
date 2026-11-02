@@ -702,3 +702,130 @@ class TestHardeningPass:
         assert all(r.status_code == 201 for r in results)
         slugs = [r.json()["slug"] for r in results]
         assert len(slugs) == len(set(slugs)), f"duplicate slugs allocated under concurrency: {slugs}"
+
+
+async def _subcategory_id(parent_name: str, name: str) -> str:
+    """The seeded id of one type of item (init_db seeds the canonical
+    taxonomy into every test module's db)."""
+    from sqlalchemy import select
+    from api.database import AsyncSessionLocal, Category
+    async with AsyncSessionLocal() as db:
+        parent = (await db.execute(select(Category).where(
+            Category.name == parent_name, Category.parent_id.is_(None)))).scalars().first()
+        assert parent is not None, f"no seeded category {parent_name!r}"
+        child = (await db.execute(select(Category).where(
+            Category.parent_id == parent.id, Category.name == name))).scalars().first()
+        assert child is not None, f"no seeded subcategory {name!r} under {parent_name!r}"
+        return child.id
+
+
+async def _store_listing(client, token, store_id, name, category="electronics",
+                         subcategory_id=None):
+    body = {"description": "Well kept, works perfectly - selling because I upgraded.",
+            "name": name, "category": category, "price": 1000,
+            "lat": -1.0, "lng": 36.0, "store_id": store_id}
+    if subcategory_id is not None:
+        body["subcategory_id"] = subcategory_id
+    resp = await client.post("/listings/", json=body, headers=_auth(token))
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+class TestStoreSubcategories:
+    @pytest.mark.asyncio
+    async def test_categories_carry_subcategory_tiles(self, client, owner):
+        _, token = owner
+        store_id = (await client.post("/stores", json={"name": "Subcategory Rail Store"},
+                                      headers=_auth(token))).json()["id"]
+        phones = await _subcategory_id("Electronics", "Phones")
+        laptops = await _subcategory_id("Electronics", "Laptops & Computers")
+        await _store_listing(client, token, store_id, "Phone A", subcategory_id=phones)
+        await _store_listing(client, token, store_id, "Phone B", subcategory_id=phones)
+        await _store_listing(client, token, store_id, "Laptop A", subcategory_id=laptops)
+        await _store_listing(client, token, store_id, "Unfiled Gadget")
+        resp = await client.get(f"/stores/{store_id}/categories")
+        assert resp.status_code == 200
+        rail = resp.json()
+        assert len(rail) == 1
+        assert rail[0]["name"] == "Electronics"
+        # All four count toward the category, filed or not.
+        assert rail[0]["count"] == 4
+        tiles = {t["name"]: t for t in rail[0]["subcategories"]}
+        assert tiles["Phones"]["count"] == 2
+        assert tiles["Phones"]["id"] == phones
+        assert tiles["Laptops & Computers"]["count"] == 1
+        # Biggest shelf first.
+        assert [t["name"] for t in rail[0]["subcategories"]] == ["Phones", "Laptops & Computers"]
+
+    @pytest.mark.asyncio
+    async def test_listings_filter_by_subcategory(self, client, owner):
+        _, token = owner
+        store_id = (await client.post("/stores", json={"name": "Subcategory Shelf Store"},
+                                      headers=_auth(token))).json()["id"]
+        phones = await _subcategory_id("Electronics", "Phones")
+        networking = await _subcategory_id("Electronics", "Networking")
+        phone = await _store_listing(client, token, store_id, "Shelf Phone", subcategory_id=phones)
+        await _store_listing(client, token, store_id, "Shelf Router", subcategory_id=networking)
+        resp = await client.get(f"/stores/{store_id}/listings",
+                                params={"subcategory_id": phones})
+        assert resp.status_code == 200
+        assert [l["id"] for l in resp.json()] == [phone["id"]]
+
+    @pytest.mark.asyncio
+    async def test_listings_reject_unknown_subcategory(self, client, owner):
+        _, token = owner
+        store_id = (await client.post("/stores", json={"name": "Bad Shelf Store"},
+                                      headers=_auth(token))).json()["id"]
+        resp = await client.get(f"/stores/{store_id}/listings",
+                                params={"subcategory_id": "no-such-type"})
+        assert resp.status_code == 400
+
+
+class TestStoreFollow:
+    @pytest.mark.asyncio
+    async def test_follow_unfollow_round_trip(self, client, owner, other_user):
+        _, owner_token = owner
+        _, buyer_token = other_user
+        store_id = (await client.post("/stores", json={"name": "Followable Store"},
+                                      headers=_auth(owner_token))).json()["id"]
+        # A new store has no followers, and a visitor follows nothing.
+        fresh = await client.get(f"/stores/{store_id}")
+        assert fresh.json()["follower_count"] == 0
+        assert fresh.json()["viewer_following"] is False
+        # Following needs a signed-in buyer.
+        assert (await client.post(f"/stores/{store_id}/follow")).status_code == 401
+        resp = await client.post(f"/stores/{store_id}/follow", headers=_auth(buyer_token))
+        assert resp.status_code == 200
+        assert resp.json() == {"following": True, "follower_count": 1}
+        # Following twice is the same row, not a second follower.
+        again = await client.post(f"/stores/{store_id}/follow", headers=_auth(buyer_token))
+        assert again.json() == {"following": True, "follower_count": 1}
+        mine = await client.get(f"/stores/{store_id}", headers=_auth(buyer_token))
+        assert mine.json()["follower_count"] == 1
+        assert mine.json()["viewer_following"] is True
+        # The owner's own read carries the count but never Following.
+        owned = await client.get(f"/stores/{store_id}", headers=_auth(owner_token))
+        assert owned.json()["follower_count"] == 1
+        assert owned.json()["viewer_following"] is False
+        left = await client.delete(f"/stores/{store_id}/follow", headers=_auth(buyer_token))
+        assert left.json() == {"following": False, "follower_count": 0}
+        gone = await client.get(f"/stores/{store_id}", headers=_auth(buyer_token))
+        assert gone.json()["follower_count"] == 0
+        assert gone.json()["viewer_following"] is False
+
+    @pytest.mark.asyncio
+    async def test_owner_cannot_follow_own_store(self, client, owner):
+        _, owner_token = owner
+        store_id = (await client.post("/stores", json={"name": "Self Follow Store"},
+                                      headers=_auth(owner_token))).json()["id"]
+        resp = await client.post(f"/stores/{store_id}/follow", headers=_auth(owner_token))
+        assert resp.status_code == 400
+        assert (await client.get(f"/stores/{store_id}")).json()["follower_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_follow_unknown_store_is_404(self, client, other_user):
+        _, token = other_user
+        assert (await client.post("/stores/no-such-store/follow",
+                                  headers=_auth(token))).status_code == 404
+        assert (await client.delete("/stores/no-such-store/follow",
+                                    headers=_auth(token))).status_code == 404

@@ -162,7 +162,7 @@ class _Backend {
 Future<void> _pumpStore(WidgetTester tester, _Backend backend,
     {String? storeId = 's1', String? slug, String? via}) async {
   // A tall phone: the whole first page of products is on screen.
-  tester.view.physicalSize = const Size(1080, 3000);
+  tester.view.physicalSize = const Size(1080, 4000);
   tester.view.devicePixelRatio = 2.75;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
@@ -208,8 +208,10 @@ void main() {
           matching: find.text('4.8/5 · 4 reviews')), findsOneWidget);
       expect(find.descendant(of: find.byKey(const Key('hero-deals')),
           matching: find.text('12 deals')), findsOneWidget);
-      // The rest is under More, not crowding the header.
-      expect(find.byKey(const Key('store-more-details')), findsOneWidget);
+      // What to do next: message the store, or follow it. The rest is
+      // under the bar's More, not crowding the header.
+      expect(find.byKey(const Key('store-message-button')), findsOneWidget);
+      expect(find.byKey(const Key('store-follow-button')), findsOneWidget);
       expect(find.byKey(const Key('store-details-button')), findsOneWidget);
       for (final text in ['Since 2025', 'Genuine phones and accessories.']) {
         expect(find.text(text), findsNothing, reason: text);
@@ -220,8 +222,12 @@ void main() {
       expect(find.descendant(of: find.byKey(const Key('store-perks')),
           matching: find.text('See, then pay')), findsOneWidget);
       expect(find.text('Escrow'), findsNothing);
-      expect(find.byKey(const Key('category-pill-all')), findsOneWidget);
+      // Shop by Category: this backend files nothing under a type of
+      // item, so the rail is one tile per category - and a selected
+      // tile clears by tapping it again, not through an All tile.
       expect(find.byKey(const Key('category-pill-Gaming')), findsOneWidget);
+      expect(find.byKey(const Key('category-pill-all')), findsNothing);
+      expect(find.text('Shop by Category'), findsOneWidget);
       expect(find.byType(StoreProductCard), findsNWidgets(3));
       // A shop's card: condition on the photo, Add to cart under the price.
       expect(find.descendant(of: find.byKey(const Key('store-product-l1')),
@@ -284,16 +290,16 @@ void main() {
       expect(find.text('Online now'), findsNothing);
     });
 
-    testWidgets('the store photo is not behind the name, but under Store details',
+    testWidgets('the shop photo stands behind the name, and lives under Store details',
         (tester) async {
       final backend = _Backend(photos: true);
       await _pumpStore(tester, backend);
       final photo = find.byWidgetPredicate((w) => w is BrokaImage && w.source == _pixel);
-      // The header is the name and the facts, on colour - not the photo.
-      expect(photo, findsNothing);
+      // The header is the name and the facts over the shop's own photo.
+      expect(find.byKey(const Key('store-hero-photo')), findsOneWidget);
       expect(find.byType(StoreProductCard), findsNWidgets(3));
 
-      await tester.tap(find.byKey(const Key('store-more-details')));
+      await tester.tap(find.byKey(const Key('store-details-button')));
       await tester.pumpAndSettle();
       expect(find.byType(StoreDetailsScreen), findsOneWidget);
       // The cover and both shop photos.
@@ -549,8 +555,10 @@ void main() {
       expect(find.byType(StoreProductCard), findsOneWidget);
       expect(backend.listingQueries().last['category'], 'Gaming');
 
-      await tester.tap(find.byKey(const Key('category-pill-all')));
+      // Tapping the selected tile again clears it.
+      await tester.tap(find.byKey(const Key('category-pill-Gaming')));
       await tester.pumpAndSettle();
+      expect(find.byType(StoreProductCard), findsNWidgets(3));
       await tester.enterText(find.byKey(const Key('store-search')), 'tecno');
       await tester.pump(const Duration(milliseconds: 450));
       await tester.pumpAndSettle();
@@ -680,7 +688,9 @@ void main() {
     });
 
     testWidgets('a failed catalogue load can be retried, not shown as empty', (tester) async {
-      final backend = _Backend(failListingsTimes: 1);
+      // Both the catalogue and the Featured rail read the listings; both
+      // fail, the catalogue shows its retry, and the rail stays hidden.
+      final backend = _Backend(failListingsTimes: 2);
       await _pumpStore(tester, backend);
       expect(find.byType(StoreProductCard), findsNothing);
       expect(find.text('Nothing listed yet'), findsNothing);
@@ -693,7 +703,7 @@ void main() {
 
     testWidgets("a cart link fills this store's cart and opens it", (tester) async {
       final backend = _Backend();
-      tester.view.physicalSize = const Size(1080, 3000);
+      tester.view.physicalSize = const Size(1080, 4000);
       tester.view.devicePixelRatio = 2.75;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(MaterialApp(
