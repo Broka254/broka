@@ -23,6 +23,8 @@ import shop from '@/components/shop.module.css'
 import styles from '@/components/store.module.css'
 import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
 import { filtersQuery, readFilters, toProductCard } from '@/lib/catalogue'
+import { categoryVisual } from '@/lib/categories'
+import { monthYearOf } from '@/lib/format'
 import { campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
 import { jsonLdScript, storeDescription, storeJsonLd, storePreviewImage, storeView } from '@/lib/storefront'
@@ -152,9 +154,55 @@ export default async function StorePage({ params, searchParams }: Props) {
                 <span className={shop.emptyCartIcon}>
                   <Icon name="bag" size={34} />
                 </span>
-                <h2>Nothing listed yet</h2>
-                <p>Check back soon: this store is just getting started.</p>
+                <h2>New store — shelves are being stocked</h2>
+                <p>
+                  {store.name} hasn&apos;t listed products yet. Browse what it sells below, or read more about the
+                  business.
+                </p>
+                <Link href={`${view.path}/about`} className="button button--ghost">
+                  About {store.name}
+                </Link>
               </div>
+            )}
+            {view.sellCategories.length > 0 && (
+              <section aria-labelledby="sell-title" className={shop.homeSection}>
+                <div className={shop.sectionHead}>
+                  <h2 id="sell-title">What we sell</h2>
+                  <Link href={shopPath} className={shop.seeAll}>
+                    Visit the shop <Icon name="chevron" size={14} />
+                  </Link>
+                </div>
+                <ul className={shop.sellGrid}>
+                  {view.sellCategories.map((c) => (
+                    <li key={c}>
+                      <Link href={`${shopPath}${filtersQuery({ category: c })}`} className={shop.sellTile}>
+                        <span className={shop.sellEmoji} aria-hidden="true">
+                          {categoryVisual(c).emoji}
+                        </span>
+                        <span className={shop.sellName}>{c}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {store.owner && (
+              <section aria-labelledby="seller-title" className={shop.aboutTeaser}>
+                <div className={`card ${styles.detailsCard} ${shop.aboutTeaserCard}`}>
+                  <h2 id="seller-title">Meet the seller</h2>
+                  <p>
+                    {store.owner.name?.trim() || `The owner of ${store.name}`}
+                    {store.owner.verified ? ' · Verified seller' : ''}
+                    {store.owner.completed_deals > 0
+                      ? ` · ${store.owner.completed_deals} deal${store.owner.completed_deals === 1 ? '' : 's'} completed`
+                      : ''}
+                    {monthYearOf(store.owner.member_since) ? ` · On BROKA since ${monthYearOf(store.owner.member_since)}` : ''}
+                  </p>
+                  <Link href={`${view.path}/about`} className={shop.seeAll}>
+                    Seller profile and reviews <Icon name="chevron" size={14} />
+                  </Link>
+                </div>
+              </section>
             )}
             {view.description && (
               <section aria-labelledby="intro-title" className={shop.aboutTeaser}>

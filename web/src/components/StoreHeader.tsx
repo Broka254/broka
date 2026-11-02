@@ -8,9 +8,9 @@
 // for.
 import Link from 'next/link'
 
-import type { CatalogueFilters } from '@/lib/catalogue'
+import { type CatalogueFilters, filtersQuery } from '@/lib/catalogue'
 import { APP_DOWNLOAD_URL } from '@/lib/config'
-import { storeDetailsPath, storeShopPath } from '@/lib/links'
+import { asset, storeDetailsPath, storeShopPath } from '@/lib/links'
 import { PAY_RULE } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
 
@@ -38,9 +38,17 @@ export function StoreHeader({
 }) {
   const { store } = view
   const shopPath = storeShopPath(store.slug)
+  // A shop's departments in the bar, as a store's site has them: the
+  // sections first, then what it sells. Departments link into the shop
+  // filtered, so the bar is useful, not decoration.
   const links = [
     { key: 'home', label: 'Home', href: view.path },
     { key: 'shop', label: 'Shop', href: shopPath },
+    ...view.sellCategories.slice(0, 4).map((c) => ({
+      key: `cat-${c}`,
+      label: c,
+      href: `${shopPath}${filtersQuery({ category: c })}`,
+    })),
     { key: 'about', label: 'About', href: storeDetailsPath(store.slug) },
   ]
   return (
@@ -58,8 +66,12 @@ export function StoreHeader({
       <header className={styles.header}>
         <div className={styles.headerInner}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
-            <span className={styles.brandName}>{store.name}</span>
-            <span className={styles.brandTag}>Store on BROKA</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={view.logo ?? asset('/logo.png')} alt="" className={styles.brandLogo} />
+            <span className={styles.brandText}>
+              <span className={styles.brandName}>{store.name}</span>
+              <span className={styles.brandTag}>Store on BROKA</span>
+            </span>
           </Link>
           <div className={styles.headerSearch}>
             <CatalogueControls

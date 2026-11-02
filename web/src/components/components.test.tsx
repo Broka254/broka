@@ -147,11 +147,12 @@ describe('StoreHero', () => {
     expect(screen.queryByTestId('presence')).toBeNull()
   })
 
-  it('fans out the first product photos beside the name', () => {
+  it('shows the cover photo and fans out the first product photos', () => {
     const { container } = render(
       <StoreHero view={storeView(shop())} showcase={[{ ...card('a'), image: 'https://cdn/a.webp' }, card('b')]} />,
     )
     expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
+      'https://media.broka.co.ke/img/c1/large.webp',
       '/store-assets/logo.png',
       'https://cdn/a.webp',
     ])

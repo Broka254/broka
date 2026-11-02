@@ -38,6 +38,10 @@ export interface Store {
   slug: string
   url: string
   category: string | null
+  /** Every department the store trades in (the API's `categories`). */
+  categories?: string[] | null
+  /** The store's speciality line, when it gave one. */
+  specialization?: string | null
   description: string | null
   country: string
   county: string | null

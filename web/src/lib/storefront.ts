@@ -33,6 +33,9 @@ export interface StoreView {
   /** "Open now · closes 18:00" or "Opening hours unavailable" - never a guess. */
   openLabel: string
   openNow: boolean
+  /** Departments the store trades in: its `categories`, else its one
+   *  `category`. Never a department it only listed products under. */
+  sellCategories: string[]
 }
 
 export function storeView(store: Store): StoreView {
@@ -58,9 +61,12 @@ export function storeView(store: Store): StoreView {
     : areas.length === 1 && areas[0]?.toLowerCase() === 'nationwide'
       ? 'Delivers nationwide'
       : `Delivers to ${areas.join(', ')}`
+  const sellCategories = [...new Set((store.categories ?? []).map((c) => c.trim()).filter(Boolean))]
+  if (!sellCategories.length && store.category?.trim()) sellCategories.push(store.category.trim())
   return {
     store,
     path,
+    sellCategories,
     isVirtual: store.store_type === 'virtual',
     delivery,
     deliveryNote: store.delivery_note?.trim() || null,
