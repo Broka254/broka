@@ -271,16 +271,16 @@ void main() {
       expect(find.byType(StoreProductCard), findsNWidgets(3));
     });
 
-    testWidgets('the catalogue gets more of the screen than Home gives a card', (tester) async {
+    testWidgets('the catalogue shows the same tile as Home', (tester) async {
       await _pumpStore(tester, _Backend());
       final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
       final card = tester.getSize(find.byType(StoreProductCard).first);
-      // 8dp sides (was 12) and 12dp between the two columns...
-      expect(card.width, closeTo((width - 16 - 12) / 2, 0.5));
-      // ...and a photo 0.95 of the card's width tall (Home's cards: 0.85).
+      // 12dp sides like Home's feed, and 12dp between the two columns...
+      expect(card.width, closeTo((width - 24 - 12) / 2, 0.5));
+      // ...and Home's own photo share and text block.
       expect(card.height,
           closeTo(card.width * StoreProductCard.imageShare + StoreProductCard.textBlock, 0.5));
-      expect(StoreProductCard.imageShare, greaterThan(0.85));
+      expect(StoreProductCard.imageShare, 0.85);
     });
 
     testWidgets('an owner who is away shows when they were last active', (tester) async {

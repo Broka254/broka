@@ -39,7 +39,6 @@ import '../../../services/api_service.dart';
 import '../../../theme/motion.dart';
 import '../../../utils/auth_gate.dart';
 import '../../../utils/price_format.dart';
-import '../../../widgets/broka_image.dart';
 import '../../../widgets/broka_search_field.dart';
 import '../../../widgets/constellation_background.dart';
 import '../../../widgets/product_grid_view.dart';
@@ -369,13 +368,14 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
       storeId: store.id, storeName: store.name, animateBackground: widget.animateBackground);
 
   /// Message the store: straight into a direct chat with the seller, no
-  /// Zeno in between. A chat is always about one product (the thread
-  /// the inbox, receipts and nudges all hang off), so with more than
-  /// one product the buyer picks which one they're asking about first.
+  /// Zeno in between, and no picker in between either: one tap lands in
+  /// the chat. A chat is always about one product (the thread the inbox,
+  /// receipts and nudges all hang off), so the thread quietly anchors to
+  /// the store's first listing - the buyer just talks to the shop.
   Future<void> _messageStore(Store store) async {
     if (!await requireAuth(context, reason: 'to message this store')) return;
     if (!mounted) return;
-    final result = await _repo.getStoreListings(store.id, limit: 50);
+    final result = await _repo.getStoreListings(store.id, limit: 1);
     if (!mounted) return;
     switch (result) {
       case Failure(:final message):
@@ -387,22 +387,7 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
               content: Text('This store has nothing to ask about yet.')));
           return;
         }
-        if (data.length == 1) {
-          _openDirectChat(data.first.id);
-          return;
-        }
-        final picked = await showModalBottomSheet<BrokaListing>(
-          context: context,
-          backgroundColor: Colors.transparent,
-          barrierColor: Colors.black.withOpacity(0.62),
-          isScrollControlled: true,
-          builder: (_) => _MessageSheet(
-            store: store,
-            listings: data,
-            repository: _repo,
-          ),
-        );
-        if (picked != null && mounted) _openDirectChat(picked.id);
+        _openDirectChat(data.first.id);
     }
   }
 
@@ -618,9 +603,9 @@ class _StoreHomeScreenState extends State<StoreHomeScreen> {
               // Other screens keep the fixed two-column marketplace grid.
               adaptToItemCount: _unfiltered,
               fetchPage: _fetchPage,
-              // More of the screen to the products: 8dp sides instead of
-              // 12, and a taller photo per card (StoreProductCard.imageShare).
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+              // The same 12dp sides as Home's feed: a store's shelf shows
+              // the same tile as the marketplace.
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
               itemTextBlock: StoreProductCard.textBlock,
               itemImageShare: StoreProductCard.imageShare,
               itemBuilder: (_, item) => StoreProductCard(
@@ -1855,8 +1840,9 @@ class _FeaturedRail extends StatelessWidget {
     // A card is as wide as a catalogue column is narrow: the rail shows
     // one and a peek of the next, inviting the sideways scroll.
     final width = math.min(MediaQuery.sizeOf(context).width * 0.52, 240.0);
-    // The photo is square (imageShare 1.0) over the card's text block.
-    final height = width + StoreProductCard.textBlock + 8;
+    // The photo over the card's text block, as the catalogue sizes it.
+    final height =
+        width * StoreProductCard.imageShare + StoreProductCard.textBlock + 8;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
@@ -1907,194 +1893,6 @@ class _FeaturedRail extends StatelessWidget {
         ),
       ),
     ]);
-  }
-}
-
-/// "Which product are you asking about?": the Message Store picker. A
-/// chat is always about one product, so the buyer picks the shelf the
-/// question belongs to - searching the store when it holds more than
-/// the first shelf-load. The choice returns the listing; the sheet
-/// itself opens nothing.
-class _MessageSheet extends StatefulWidget {
-  const _MessageSheet({required this.store, required this.listings, required this.repository});
-  final Store store;
-  final List<BrokaListing> listings;
-  final StoresRepository repository;
-
-  @override
-  State<_MessageSheet> createState() => _MessageSheetState();
-}
-
-class _MessageSheetState extends State<_MessageSheet> {
-  final _searchCtrl = TextEditingController();
-  Timer? _debounce;
-  List<BrokaListing>? _results;
-  bool _searching = false;
-
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _searchCtrl.dispose();
-    super.dispose();
-  }
-
-  void _onSearchChanged(String value) {
-    _debounce?.cancel();
-    final query = value.trim();
-    if (query.isEmpty) {
-      setState(() {
-        _results = null;
-        _searching = false;
-      });
-      return;
-    }
-    setState(() => _searching = true);
-    _debounce = Timer(const Duration(milliseconds: 400), () async {
-      final result = await widget.repository
-          .getStoreListings(widget.store.id, search: query, limit: 20);
-      if (!mounted) return;
-      switch (result) {
-        case Success(:final data):
-          setState(() {
-            _results = data;
-            _searching = false;
-          });
-        case Failure():
-          // The first shelf-load stays: a failed search narrows to
-          // nothing, it never empties the sheet.
-          setState(() => _searching = false);
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final shown = _results ?? widget.listings;
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.7,
-      minChildSize: 0.4,
-      maxChildSize: 0.92,
-      builder: (_, controller) => Container(
-        decoration: const BoxDecoration(
-          color: BrokaColors.bgCard,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const SizedBox(height: 8),
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: BrokaColors.textMid.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-            child: Text('Message ${widget.store.name}',
-                style: const TextStyle(color: BrokaColors.textHigh, fontSize: 17,
-                    fontWeight: FontWeight.w800)),
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-            child: Text('Which product are you asking about?',
-                style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: BrokaSearchField(
-              controller: _searchCtrl,
-              hintText: 'Search this store',
-              onChanged: _onSearchChanged,
-            ),
-          ),
-          Expanded(
-            child: _searching && _results == null
-                ? const Center(child: CircularProgressIndicator(color: BrokaColors.gold))
-                : shown.isEmpty
-                    ? const Center(
-                        child: Text('No products match that search.',
-                            style: TextStyle(color: BrokaColors.textMid, fontSize: 13)),
-                      )
-                    : ListView.builder(
-                        controller: controller,
-                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-                        itemCount: shown.length,
-                        itemBuilder: (_, i) {
-                          final listing = shown[i];
-                          return _MessageRow(
-                            listing: listing,
-                            onTap: () => Navigator.of(context).pop(listing),
-                          );
-                        },
-                      ),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-/// One product row of the Message Store picker: its photo (else its
-/// category's face), its name and its price.
-class _MessageRow extends StatelessWidget {
-  const _MessageRow({required this.listing, required this.onTap});
-  final BrokaListing listing;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final visual = CategoryVisuals.resolve(listing.category);
-    final photo = listing.cover?.thumb ??
-        (listing.photos.isNotEmpty ? listing.photos.first.thumb : null);
-    return Semantics(
-      button: true,
-      label: 'Ask about ${listing.name}',
-      child: GestureDetector(
-        key: Key('message-product-${listing.id}'),
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: Row(children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: SizedBox(
-                width: 48,
-                height: 48,
-                child: photo != null && photo.isNotEmpty
-                    ? BrokaImage(photo, fit: BoxFit.cover)
-                    : Container(
-                        decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: visual.gradient)),
-                        alignment: Alignment.center,
-                        child: Text(visual.emoji,
-                            style: const TextStyle(fontSize: 22)),
-                      ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(listing.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: BrokaColors.textHigh,
-                            fontSize: 14, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    Text(listing.priceFormatted,
-                        style: const TextStyle(color: _accent, fontSize: 13,
-                            fontWeight: FontWeight.w800)),
-                  ]),
-            ),
-            const Icon(Icons.chevron_right_rounded, color: BrokaColors.textMid),
-          ]),
-        ),
-      ),
-    );
   }
 }
 

@@ -221,12 +221,12 @@ void main() {
       await _pumpStore(tester, _Backend());
       await tester.tap(find.byKey(const Key('store-message-button')));
       await tester.pumpAndSettle();
-      // The account sheet, not the product picker.
+      // The account sheet, not the chat.
       expect(find.textContaining('Create a free account'), findsOneWidget);
-      expect(find.text('Which product are you asking about?'), findsNothing);
+      expect(find.text('direct chat'), findsNothing);
     });
 
-    testWidgets('picks a product, then opens its direct chat',
+    testWidgets('one tap lands straight in the direct chat',
         (tester) async {
       await _signIn();
       final backend = _Backend();
@@ -235,15 +235,13 @@ void main() {
       await _pumpStore(tester, backend, observers: [observer]);
       await tester.tap(find.byKey(const Key('store-message-button')));
       await tester.pumpAndSettle();
-      expect(
-          find.text('Which product are you asking about?'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('message-product-l2')));
-      await tester.pumpAndSettle();
+      // No picker: the tap itself opens the chat, anchored to the
+      // store's first listing (what the thread hangs off).
       final chat =
           pushed.where((r) => r.name == '/direct-chat').singleOrNull;
       expect(chat, isNotNull, reason: 'no direct chat was opened');
       expect(
-          chat!.arguments, {'listingId': 'l2', 'role': 'buyer'});
+          chat!.arguments, {'listingId': 'l1', 'role': 'buyer'});
     });
   });
 
