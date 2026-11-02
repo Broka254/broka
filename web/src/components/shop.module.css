@@ -3147,3 +3147,48 @@
   }
   .storefront .perks li { padding-block: 7px; }
 }
+
+
+/* Landing-page header: keep the merchant's actual name legible and use a neutral monogram when they have no logo. */
+.homeBrandName {
+  background: none;
+  color: #f7f7fc;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: currentColor;
+}
+.homeBrandMark {
+  display: grid;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgb(139 117 255 / 52%);
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgb(139 117 255 / 24%), rgb(84 215 233 / 10%));
+  color: #ded8ff;
+  font-family: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.homeHeaderInner {
+  display: flex;
+  justify-content: flex-start;
+  padding-block: 11px;
+}
+.homeHeaderInner .brand {
+  flex-direction: row;
+  align-items: center;
+  gap: 11px;
+  max-width: min(100%, 420px);
+}
+.homeHeaderInner .brandLogo {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+}
+.homeHeaderInner .brandText { min-width: 0; }
+.homeHeaderInner .brandName { font-size: 18px; }
+.homeHeaderInner .brandTag { font-size: 9px; }

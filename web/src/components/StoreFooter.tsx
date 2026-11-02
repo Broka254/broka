@@ -55,6 +55,9 @@ export function StoreFooter({ view, categories = [] }: { view: StoreView; catego
             <li>
               <HomeLink>About BROKA</HomeLink>
             </li>
+            <li>
+              <Link href="/download">Get the BROKA app</Link>
+            </li>
           </ul>
         </nav>
         <div>

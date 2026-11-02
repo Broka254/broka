@@ -7,24 +7,16 @@
 // store data is cached for a minute. Filtered views live on /shop, so a
 // catalogue link shared into the homepage lands there instead.
 import type { Metadata } from 'next'
-import Link from 'next/link'
 import { notFound, permanentRedirect } from 'next/navigation'
 
 import { CartDrawer } from '@/components/CartDrawer'
-import { CategoryPills, hasStoreCategoryTiles } from '@/components/CategoryPills'
-import { Icon } from '@/components/Icon'
-import { Perks } from '@/components/Perks'
-import { ProductCard } from '@/components/ProductCard'
+import { StoreLanding } from '@/components/StoreLanding'
 import { StoreFooter } from '@/components/StoreFooter'
 import { StoreHeader } from '@/components/StoreHeader'
-import { StoreHero } from '@/components/StoreHero'
 import { StorefrontShell } from '@/components/StorefrontShell'
 import { VisitBeacon } from '@/components/VisitBeacon'
-import shop from '@/components/shop.module.css'
-import styles from '@/components/store.module.css'
 import { getStore, getStoreCategories, getStoreListings } from '@/lib/api'
 import { filtersQuery, readFilters, toProductCard } from '@/lib/catalogue'
-import { monthYearOf } from '@/lib/format'
 import { campaignToken, storeCartPath, storeShopPath, viaTag } from '@/lib/links'
 import { API_URL } from '@/lib/server-config'
 import { jsonLdScript, storeDescription, storeJsonLd, storePreviewImage, storeView } from '@/lib/storefront'
@@ -91,129 +83,20 @@ export default async function StorePage({ params, searchParams }: Props) {
     : [[], [], []]
   const featuredCards = featured.map((l) => toProductCard(l, store.slug, API_URL))
   const featuredIds = new Set(featuredCards.map((p) => p.id))
-  // Newest earns its own shelf only when it isn't the same products again.
+  // Lead with a real catalogue photo, then show the distinct recent products.
   const newestCards = newest
     .map((l) => toProductCard(l, store.slug, API_URL))
     .filter((p) => !featuredIds.has(p.id))
-    .slice(0, 8)
-  const hasCatalogue = featuredCards.length > 0 || hasStoreCategoryTiles(categories)
+  const landingProducts = [...featuredCards, ...newestCards].slice(0, 9)
 
   return (
     <StorefrontShell>
       <StoreHeader view={view} active="home" searchBase={shopPath} />
-      <main className={`page ${shop.storePage}`}>
-        <StoreHero view={view} />
-        {store.is_active && (
-          <>
-            <Perks verified={Boolean(store.owner?.verified)} />
-            {hasStoreCategoryTiles(categories) && (
-              <section aria-labelledby="departments-title" className={shop.homeSection}>
-                <div className={shop.sectionHead}>
-                  <h2 id="departments-title">Shop by category</h2>
-                  <Link href={shopPath} className={shop.seeAll}>
-                    All products <Icon name="chevron" size={14} />
-                  </Link>
-                </div>
-                <CategoryPills basePath={shopPath} categories={categories} filters={filters} />
-              </section>
-            )}
-            {featuredCards.length > 0 && (
-              <section aria-labelledby="featured-title" className={shop.homeSection}>
-                <div className={shop.sectionHead}>
-                  <h2 id="featured-title">Featured products</h2>
-                  {store.listing_count > featuredCards.length && (
-                    <Link href={shopPath} className={shop.seeAll}>
-                      See all <Icon name="chevron" size={14} />
-                    </Link>
-                  )}
-                </div>
-                <div className={shop.grid}>
-                  {featuredCards.map((p) => (
-                    <ProductCard key={p.id} product={p} storeId={store.id} />
-                  ))}
-                </div>
-              </section>
-            )}
-            {newestCards.length > 0 && (
-              <section aria-labelledby="newest-title" className={shop.homeSection}>
-                <div className={shop.sectionHead}>
-                  <h2 id="newest-title">Newly added</h2>
-                  <Link href={`${shopPath}${filtersQuery({ sort: 'newest' })}`} className={shop.seeAll}>
-                    See all <Icon name="chevron" size={14} />
-                  </Link>
-                </div>
-                <div className={shop.grid}>
-                  {newestCards.map((p) => (
-                    <ProductCard key={p.id} product={p} storeId={store.id} />
-                  ))}
-                </div>
-              </section>
-            )}
-            {!hasCatalogue && (
-              <div className={`card ${styles.empty}`}>
-                <span className={shop.emptyCartIcon}>
-                  <Icon name="bag" size={34} />
-                </span>
-                <h2>New store — shelves are being stocked</h2>
-                <p>
-                  {store.name} hasn&apos;t listed products yet. Browse what it sells below, or read more about the
-                  business.
-                </p>
-                <Link href={`${view.path}/about`} className="button button--ghost">
-                  About {store.name}
-                </Link>
-              </div>
-            )}
-            {view.sellCategories.length > 1 && !hasStoreCategoryTiles(categories) && (
-              <section aria-labelledby="sell-title" className={shop.homeSection}>
-                <div className={shop.sectionHead}>
-                  <h2 id="sell-title">Shop by category</h2>
-                  <Link href={shopPath} className={shop.seeAll}>
-                    Visit the shop <Icon name="chevron" size={14} />
-                  </Link>
-                </div>
-                <CategoryPills
-                  basePath={shopPath}
-                  categories={view.sellCategories.map((name) => ({ name, count: 0 }))}
-                  filters={filters}
-                  showCounts={false}
-                />
-              </section>
-            )}
-            {store.owner && (
-              <section aria-labelledby="seller-title" className={shop.aboutTeaser}>
-                <div className={`card ${styles.detailsCard} ${shop.aboutTeaserCard}`}>
-                  <h2 id="seller-title">Meet the seller</h2>
-                  <p>
-                    {store.owner.name?.trim() || `The owner of ${store.name}`}
-                    {store.owner.verified ? ' · Verified seller' : ''}
-                    {store.owner.completed_deals > 0
-                      ? ` · ${store.owner.completed_deals} deal${store.owner.completed_deals === 1 ? '' : 's'} completed`
-                      : ''}
-                    {monthYearOf(store.owner.member_since) ? ` · On BROKA since ${monthYearOf(store.owner.member_since)}` : ''}
-                  </p>
-                  <Link href={`${view.path}/about`} className={shop.seeAll}>
-                    Seller profile and reviews <Icon name="chevron" size={14} />
-                  </Link>
-                </div>
-              </section>
-            )}
-            {view.description && (
-              <section aria-labelledby="intro-title" className={shop.aboutTeaser}>
-                <div className={`card ${styles.detailsCard} ${shop.aboutTeaserCard}`}>
-                  <h2 id="intro-title">About {store.name}</h2>
-                  <p>{view.description}</p>
-                  <Link href={`${view.path}/about`} className={shop.seeAll}>
-                    More about this business <Icon name="chevron" size={14} />
-                  </Link>
-                </div>
-              </section>
-            )}
-          </>
-        )}
+      <StoreLanding view={view} categories={categories} products={landingProducts} storeId={store.id} />
+      <div className="page">
         <VisitBeacon storeId={store.id} via={via} campaign={campaign} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(storeJsonLd(view)) }} />
-      </main>
+      </div>
       <StoreFooter view={view} categories={categories} />
       {store.is_active && <CartDrawer storeId={store.id} storeName={store.name} cartPath={storeCartPath(store.slug)} />}
     </StorefrontShell>

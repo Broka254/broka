@@ -9,7 +9,6 @@
 import Link from 'next/link'
 
 import { type CatalogueFilters, filtersQuery } from '@/lib/catalogue'
-import { APP_DOWNLOAD_URL } from '@/lib/config'
 import { asset, storeDetailsPath, storeShopPath } from '@/lib/links'
 import { PAY_RULE } from '@/lib/safety'
 import type { StoreView } from '@/lib/storefront'
@@ -41,16 +40,21 @@ export function StoreHeader({
   // A shop's departments in the bar, as a store's site has them: the
   // sections first, then what it sells. Departments link into the shop
   // filtered, so the bar is useful, not decoration.
-  const links = [
-    { key: 'home', label: 'Home', href: view.path },
-    { key: 'shop', label: 'Shop', href: shopPath },
-    ...view.sellCategories.slice(0, 4).map((c) => ({
-      key: `cat-${c}`,
-      label: c,
-      href: `${shopPath}${filtersQuery({ category: c })}`,
-    })),
-    { key: 'about', label: 'About', href: storeDetailsPath(store.slug) },
-  ]
+  const links = active === 'home'
+    ? [
+        { key: 'home', label: 'Home', href: view.path },
+        { key: 'about', label: 'About', href: storeDetailsPath(store.slug) },
+      ]
+    : [
+        { key: 'home', label: 'Home', href: view.path },
+        { key: 'shop', label: 'Shop', href: shopPath },
+        ...view.sellCategories.slice(0, 4).map((c) => ({
+          key: `cat-${c}`,
+          label: c,
+          href: `${shopPath}${filtersQuery({ category: c })}`,
+        })),
+        { key: 'about', label: 'About', href: storeDetailsPath(store.slug) },
+      ]
   return (
     <>
       <div className={styles.topbar}>
@@ -59,31 +63,32 @@ export function StoreHeader({
           <strong>{PAY_RULE}</strong>
           <span className={styles.topbarMore}>· Delivery or pickup agreed with the store</span>
         </p>
-        <a href={APP_DOWNLOAD_URL} rel="nofollow" className={styles.topbarApp}>
-          Get the app
-        </a>
       </div>
       <header className={styles.header}>
-        <div className={styles.headerInner}>
+        <div className={`${styles.headerInner} ${active === 'home' ? styles.homeHeaderInner : ''}`}>
           <Link href={view.path} className={styles.brand} aria-label={`${store.name} home`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={view.logo ?? asset('/logo.png')} alt="" className={styles.brandLogo} />
             <span className={styles.brandText}>
-              <span className={styles.brandName}>{store.name}</span>
+              <span className={`${styles.brandName} ${active === 'home' ? styles.homeBrandName : ''}`}>{store.name}</span>
               <span className={styles.brandTag}>Store on BROKA</span>
             </span>
           </Link>
-          <div className={styles.headerSearch}>
-            <CatalogueControls
-              basePath={searchBase ?? (active === 'shop' ? shopPath : view.path)}
-              storeName={store.name}
-              filters={store.is_active ? filters : undefined}
-            />
-          </div>
-          <nav className={styles.headerActions} aria-label="Store">
-            <ShareIcon storeId={store.id} url={view.url} title={store.name} />
-            {store.is_active && <CartButton storeId={store.id} />}
-          </nav>
+          {active !== 'home' && (
+            <>
+              <div className={styles.headerSearch}>
+                <CatalogueControls
+                  basePath={searchBase ?? (active === 'shop' ? shopPath : view.path)}
+                  storeName={store.name}
+                  filters={store.is_active ? filters : undefined}
+                />
+              </div>
+              <nav className={styles.headerActions} aria-label="Store">
+                <ShareIcon storeId={store.id} url={view.url} title={store.name} />
+                {store.is_active && <CartButton storeId={store.id} />}
+              </nav>
+            </>
+          )}
         </div>
         <nav className={styles.storeNav} aria-label="Store sections">
           <div className={styles.storeNavInner}>

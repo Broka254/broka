@@ -26,8 +26,10 @@ import { ProductBuyBox } from './ProductBuyBox'
 import { ProductGrid } from './ProductGrid'
 import { ShareButtons } from './ShareButtons'
 import { SiteHeader } from './SiteHeader'
+import { StoreLanding } from './StoreLanding'
 import { StoreDetails } from './StoreDetails'
 import { StoreHero } from './StoreHero'
+import { StoreHeader } from './StoreHeader'
 import { TrustChips } from './TrustChips'
 import { VisitBeacon } from './VisitBeacon'
 
@@ -108,6 +110,57 @@ const shop = (over: Partial<Store> = {}): Store => ({
   listing_count: 3,
   created_at: '2026-09-02T08:00:00',
   ...over,
+})
+
+describe('StoreLanding', () => {
+  it('uses the store logo or BROKA default and omits inert search, action icons and shop tabs on the homepage', () => {
+    render(<StoreHeader view={storeView(shop())} active="home" />)
+    const brand = screen.getByRole('link', { name: 'Clanix home' })
+    expect(brand.textContent).toContain('Clanix')
+    expect(brand.textContent).toContain('Store on BROKA')
+    expect(brand.querySelector('img')?.getAttribute('src')).toBe('/store-assets/logo.png')
+    expect(screen.queryByRole('search')).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Store' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Shop' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Electronics' })).toBeNull()
+    expect(screen.queryByText('Get the app')).toBeNull()
+  })
+
+  it('uses the merchant cover photo in the hero and links collection cards to filtered inventory', () => {
+    const laptop = { ...card('p1', 'Laptop'), image: '/laptop.webp', priceLabel: 'KES 25,000' }
+    render(
+      <StoreLanding
+        view={storeView(shop())}
+        storeId="s1"
+        products={[laptop, card('p2', 'Router')]}
+        categories={[{ name: 'Electronics', count: 2, subcategories: [{ id: 'networking', name: 'Networking', count: 2 }] }]}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Clanix' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Meet Clanix' }).getAttribute('href')).toBe('/store/clanix/about')
+    expect(screen.getByRole('link', { name: 'Meet Clanix' }).querySelector('img')?.getAttribute('src')).toBe(
+      'https://media.broka.co.ke/img/c1/large.webp',
+    )
+    expect(screen.getByRole('link', { name: /Networking/ }).getAttribute('href')).toBe('/store/clanix/shop?subcategory_id=networking')
+    expect(screen.getByRole('heading', { name: 'More to discover' })).toBeTruthy()
+    expect(screen.queryByText('New things are on the way.')).toBeNull()
+  })
+
+  it('uses real seller departments and a compact launch note when the shop has no products', () => {
+    render(
+      <StoreLanding
+        view={storeView(shop({ listing_count: 0 }))}
+        storeId="s1"
+        products={[]}
+        categories={[{ name: 'Electronics', count: 0 }]}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: /Explore collections/ }).getAttribute('href')).toBe('#collections-title')
+    expect(screen.getByRole('heading', { name: 'New things are on the way.' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Electronics' }).getAttribute('href')).toBe('/store/clanix/shop?category=Electronics')
+  })
 })
 
 describe('StoreHero', () => {

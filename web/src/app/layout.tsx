@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 
-import { Constellation } from '@/components/Constellation'
+import { BrandBackground } from '@/components/BrandBackground'
 import { OpenInApp } from '@/components/OpenInApp'
 import { SITE_URL } from '@/lib/config'
 import { DEFAULT_PREVIEW_IMAGE, asset } from '@/lib/links'
@@ -38,7 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <Constellation />
+        <BrandBackground />
         <OpenInApp />
         {children}
       </body>
